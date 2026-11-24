@@ -3,13 +3,6 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { ChatOpenAI } from "@langchain/openai";
 import { type AuthGatewayRouter, createAuthGatewayRouter } from "@oh-my-pi/pi-ai/auth-gateway";
-import {
-	type ConfiguredThinkingLevel,
-	concreteThinkingLevel,
-	resolveThinkingLevelForModel,
-	shouldDisableReasoning,
-	toReasoningEffort,
-} from "@oh-my-pi/pi-tui/thinking";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { getCompanyConfigError } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
@@ -24,6 +17,13 @@ import {
 import { Settings } from "../config/settings";
 import { discoverAuthStorage, initializeOfflineModelCommand, loadCliExtensionProviders } from "../sdk";
 import type { AuthStorage } from "../session/auth-storage";
+import {
+	concreteThinkingLevel,
+	resolveThinkingLevelForModel,
+	shouldDisableReasoning,
+	toReasoningEffort,
+} from "../thinking/levels";
+import type { ConfiguredThinkingLevel } from "../utils/render-utils";
 
 export interface OpenWikiModelPreview {
 	/** Origin of the selector, or automatic runtime selection when none is configured. */

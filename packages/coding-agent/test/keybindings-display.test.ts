@@ -1,22 +1,23 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import {
+	getKeybindings,
+	KeybindingsManager,
+	setKeybindings,
+} from "@oh-my-pi/pi-coding-agent/config/keybindings/keybindings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { keyText } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-coding-agent-shim";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { BashExecutionMessage, PythonExecutionMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getKeybindings, setKeybindings, type KeybindingsManager as TuiKeybindingsManager } from "@oh-my-pi/pi-tui";
-import { KeybindingsManager, setKeyHintPlatform } from "@oh-my-pi/pi-tui/app-keybindings";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { setKeyHintPlatform } from "@oh-my-pi/pi-coding-agent/ui/keys/format";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { initTheme } from "../src/ui/theme/service";
 import { createSessionStub } from "./helpers/interactive-mode-context";
+import { createModeTerminal, transcriptText } from "./helpers/mode-terminal";
 
 describe("legacy keyText", () => {
-	let previous: TuiKeybindingsManager;
+	let previous: KeybindingsManager;
 
 	beforeEach(() => {
 		previous = getKeybindings();
@@ -36,29 +37,18 @@ describe("legacy keyText", () => {
 });
 
 describe("display rebuilds during idle user execution", () => {
-	let mode: InteractiveMode | undefined;
-	let tempDir: TempDir;
-	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+	afterEach(() => resetSettingsForTest());
 
-	beforeEach(async () => {
-		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-		resetSettingsForTest();
-		tempDir = TempDir.createSync("@pi-display-execution-");
-		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		await initTheme(false);
-		cfgDisplayMode.set(settings, "detailed");
-	});
-
-	afterEach(() => {
-		mode?.stop();
-		mode = undefined;
-		tempDir.removeSync();
-		resetSettingsForTest();
-		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
-	});
-
-	for (const language of ["bash", "python"] as const) {
-		it(`keeps a running ${language} command visible through display changes and replays its completion once`, async () => {
+	it.each(["bash", "python"] as const)(
+		"preserves a live %s run across rebuild and replays its result once",
+		async language => {
+			using tempDir = TempDir.createSync("@omp-display-execution-");
+			resetSettingsForTest();
+			await Settings.init({ inMemory: true, cwd: tempDir.path() });
+			initTheme();
+			const settings = Settings.isolated();
+			cfgDisplayMode.set(settings, "detailed");
+			const manager = SessionManager.inMemory(tempDir.path());
 			const completion = Promise.withResolvers<void>();
 			let appendOutput: ((chunk: string) => void) | undefined;
 			const output = "STREAMED_EXECUTION_OUTPUT\nCOMPLETED_EXECUTION_OUTPUT\n";
@@ -74,13 +64,12 @@ describe("display rebuilds during idle user execution", () => {
 				displayOutputs: [],
 				stdinRequested: false,
 			};
-			const sessionManager = SessionManager.inMemory(tempDir.path());
-			const session = createSessionStub(sessionManager, settings, {
+			const session = createSessionStub(manager, settings, {
 				executeBash: async (command, onChunk, options) => {
 					appendOutput = onChunk;
 					await completion.promise;
 					const message: BashExecutionMessage = { ...result, role: "bashExecution", command, timestamp: 1 };
-					sessionManager.appendMessage(message);
+					manager.appendMessage(message);
 					options?.onRecorded?.(message);
 					return result;
 				},
@@ -88,47 +77,42 @@ describe("display rebuilds during idle user execution", () => {
 					appendOutput = onChunk;
 					await completion.promise;
 					const message: PythonExecutionMessage = { ...result, role: "pythonExecution", code, timestamp: 1 };
-					sessionManager.appendMessage(message);
+					manager.appendMessage(message);
 					options?.onRecorded?.(message);
 					return result;
 				},
 			});
-			const interactive = new InteractiveMode(session, "test");
-			mode = interactive;
-			interactive.ui.requestRender = vi.fn();
-			const rendered = () => Bun.stripANSI(interactive.chatContainer.render(120).join("\n"));
+			const term = createModeTerminal({ settings });
+			const mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, term.frame);
+			const render = () => transcriptText(mode.shell);
 			const running =
 				language === "bash"
-					? interactive.handleBashCommand("echo shell-command")
-					: interactive.handlePythonCommand("print('python-command')");
+					? mode.handleBashCommand("echo shell-command")
+					: mode.handlePythonCommand("print('python-command')");
 			try {
 				expect(session.isStreaming).toBe(false);
 				expect(appendOutput).toBeFunction();
-				expect(rendered()).toContain(`${language === "bash" ? "shell" : "python"}-command`);
-
-				// Drive the rebuild used by live display settings without starting a terminal.
-				cfgDisplayMode.set(settings, "clean");
-				interactive.rebuildChatFromMessages();
-				appendOutput?.("STREAMED_EXECUTION_OUTPUT\n");
-				expect(rendered()).toContain("STREAMED_EXECUTION_OUTPUT");
-				for (const display of ["compact", "detailed"] as const) {
+				appendOutput!("STREAMED_EXECUTION_OUTPUT\n");
+				for (const display of ["clean", "compact", "detailed"] as const) {
 					cfgDisplayMode.set(settings, display);
-					interactive.rebuildChatFromMessages();
-					expect(rendered().match(/STREAMED_EXECUTION_OUTPUT/g)).toHaveLength(1);
+					mode.rebuildChatFromMessages();
+					expect(render().match(/STREAMED_EXECUTION_OUTPUT/g)).toHaveLength(1);
 				}
-
 				completion.resolve();
 				await running;
-				expect(rendered().match(/COMPLETED_EXECUTION_OUTPUT/g)).toHaveLength(1);
+				expect(render().match(/COMPLETED_EXECUTION_OUTPUT/g)).toHaveLength(1);
 				for (let replay = 0; replay < 2; replay++) {
-					interactive.rebuildChatFromMessages();
-					expect(rendered().match(/STREAMED_EXECUTION_OUTPUT/g)).toHaveLength(1);
-					expect(rendered().match(/COMPLETED_EXECUTION_OUTPUT/g)).toHaveLength(1);
+					mode.rebuildChatFromMessages();
+					expect(render().match(/STREAMED_EXECUTION_OUTPUT/g)).toHaveLength(1);
+					expect(render().match(/COMPLETED_EXECUTION_OUTPUT/g)).toHaveLength(1);
 				}
 			} finally {
 				completion.resolve();
 				await running;
+				mode.stop();
+				await mode.shell.stop();
+				term.dispose();
 			}
-		});
-	}
+		},
+	);
 });

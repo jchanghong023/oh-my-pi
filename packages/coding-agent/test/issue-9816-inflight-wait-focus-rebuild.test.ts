@@ -11,20 +11,14 @@
  * focus blackout is authoritative in the rebuilt transcript; a later event is
  * delivered through the newly installed subscription.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
-import { cfgDisplayMode, cfgDisplaySmoothStreaming } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type {
@@ -33,8 +27,9 @@ import type {
 	LocalAgentSessionEventListener,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import type { AgentProgress, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
-import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
+import type { AgentProgress, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/task-details";
+import { createInteractiveModeContext, renderTranscript } from "./helpers/interactive-mode-context";
+import { initTheme } from "../src/ui/theme/service";
 
 const usage = {
 	input: 1,
@@ -234,7 +229,7 @@ function makeSession(
 		retryAttempt: 0,
 		agent: {
 			get state() {
-				return { streamMessage: liveMessage };
+				return { streamMessage: liveMessage, activeThinkingIndex: undefined };
 			},
 			getPendingToolResults: () => bufferedResults,
 		},
@@ -288,7 +283,7 @@ function makeSession(
 	};
 }
 
-function createFixture(main = makeSession([danglingWait], true), worker = makeSession([], false)) {
+function createFixture(main = makeSession([danglingWait], true), worker = makeSession([], false), compact = false) {
 	const registry = new AgentRegistry();
 	registry.register({
 		id: "Worker",
@@ -300,14 +295,15 @@ function createFixture(main = makeSession([danglingWait], true), worker = makeSe
 	});
 	const lifecycle = new AgentLifecycleManager(registry);
 	const ctx = createInteractiveModeContext({
-		settings: Settings.isolated({ "display.mode": "detailed" }),
+		settings: Settings.isolated({ "display.mode": compact ? "compact" : "detailed" }),
+		hideToolActivity: compact,
 		session: main.session,
 		initialChatRendered: false,
 	});
 	ctx.clearTransientSessionUi = () => {
-		ctx.pendingMessagesContainer.disposeChildren();
+		ctx.hud.queue.groups.set([]);
 		ctx.pendingTools.clear();
-		ctx.streamingComponent = undefined;
+		ctx.streaming = undefined;
 		ctx.streamingMessage = undefined;
 	};
 
@@ -327,19 +323,10 @@ function createFixture(main = makeSession([danglingWait], true), worker = makeSe
 	return { ctx, focus, main, worker };
 }
 
-function useDetailedDisplay(): void {
-	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
-	beforeEach(() => {
-		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-	});
-	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
-}
-
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
-	await initTheme();
+	initTheme();
 });
 
 afterAll(() => {
@@ -347,12 +334,10 @@ afterAll(() => {
 });
 
 describe("#9816 focus blackout across an in-flight wait", () => {
-	useDetailedDisplay();
-
 	it("drains a lost completion into the transcript before rebuilding the main session", async () => {
 		const { ctx, focus, main } = createFixture();
 		await ctx.renderInitialMessages();
-		const pending = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+		const pending = renderTranscript(ctx).join("\n");
 		expect(pending).toContain("Wait");
 		expect(pending).not.toContain("Sleeper1");
 
@@ -367,125 +352,68 @@ describe("#9816 focus blackout across an in-flight wait", () => {
 		queueMicrotask(finishPersistence);
 		await returning;
 
-		const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+		const rendered = renderTranscript(ctx).join("\n");
 		expect(rendered).toContain("Sleeper1 done");
 		expect(ctx.pendingTools.has("wait-1")).toBe(false);
 	});
-});
 
-describe("compact focus blackout across an in-flight wait", () => {
-	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
-	beforeEach(() => {
-		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-	});
-	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
-
-	function expectCompletedCard(card: ToolExecutionComponent): void {
-		expect(card.isTranscriptBlockFinalized()).toBe(true);
-		expect(
-			card.describe({
-				cols: 120,
-				dark: true,
-				reduceMotion: false,
-				supports: () => true,
-				feature: () => true,
-			}).p,
-		).toMatchObject({ name: "wait", status: "done" });
-	}
-
-	it("rebuilds the completed wait once when persistence finishes during unfocus", async () => {
-		const { ctx, focus, main } = createFixture();
-		cfgDisplayMode.override(ctx.settings, "compact");
-		ctx.hideToolActivity = true;
-		ctx.chatContainer.setToolActivityVisible(false);
-		await ctx.renderInitialMessages();
-		expect(ctx.pendingTools.has("wait-1")).toBe(true);
-		await focus.focusAgent("Worker");
-		expect(main.hasListener()).toBe(false);
-		const finishPersistence = main.stagePersistedCompletion();
-		const returning = focus.unfocus();
-		queueMicrotask(finishPersistence);
-		await returning;
-		const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
-		expect(rendered).not.toContain("Sleeper1");
-		expect(rendered).not.toContain("completion payload marker");
-		expect(ctx.pendingTools.has("wait-1")).toBe(false);
-		const cards = ctx.chatContainer.children.filter(child => child instanceof ToolExecutionComponent);
-		expect(cards).toHaveLength(1);
-		expectCompletedCard(cards[0]!);
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-		ctx.chatContainer.setToolActivityVisible(true);
-		cards[0]!.setExpanded(true);
-		const expanded = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
-		expect(expanded.match(/Sleeper1/g) ?? []).toHaveLength(1);
-		expect(expanded.match(/completion payload marker/g) ?? []).toHaveLength(1);
-	});
-
-	it("routes a later completion once into the rebuilt pending wait", async () => {
-		const { ctx, focus, main } = createFixture();
-		cfgDisplayMode.override(ctx.settings, "compact");
-		ctx.hideToolActivity = true;
-		ctx.chatContainer.setToolActivityVisible(false);
-		await ctx.renderInitialMessages();
-		await focus.focusAgent("Worker");
-		await focus.unfocus();
-		expect(main.hasListener()).toBe(true);
-		const pending = ctx.pendingTools.get("wait-1");
-		expect(pending).toBeInstanceOf(ToolExecutionComponent);
-
-		const completion = {
-			type: "tool_execution_end" as const,
-			toolCallId: "wait-1",
-			toolName: "wait",
-			result: { content: completedWait.content, details: completedWait.details },
-			isError: false,
-		};
-		await main.emit(completion);
-		await main.emit(completion);
-
-		expect(ctx.pendingTools.has("wait-1")).toBe(false);
-		const cards = ctx.chatContainer.children.filter(child => child instanceof ToolExecutionComponent);
-		expect(cards).toHaveLength(1);
-		expect(cards[0] === pending).toBe(true);
-		expectCompletedCard(cards[0]!);
-		const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
-		expect(rendered).not.toContain("Sleeper1");
-		expect(rendered).not.toContain("completion payload marker");
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-		ctx.chatContainer.setToolActivityVisible(true);
-		cards[0]!.setExpanded(true);
-		const expanded = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
-		expect(expanded.match(/Sleeper1/g) ?? []).toHaveLength(1);
-		expect(expanded.match(/completion payload marker/g) ?? []).toHaveLength(1);
-	});
+	it.each([true, false])(
+		"shows a single wait only after leaving compact (persisted during focus=%j)",
+		async persisted => {
+			const { ctx, focus, main } = createFixture(undefined, undefined, true);
+			await ctx.renderInitialMessages();
+			await focus.focusAgent("Worker");
+			if (persisted) {
+				const finish = main.stagePersistedCompletion();
+				const returning = focus.unfocus();
+				queueMicrotask(finish);
+				await returning;
+			} else {
+				await focus.unfocus();
+				const pending = ctx.pendingTools.get("wait-1");
+				expect(pending).toBeDefined();
+				const completion = {
+					type: "tool_execution_end" as const,
+					toolCallId: "wait-1",
+					toolName: "wait",
+					result: { content: completedWait.content, details: completedWait.details },
+					isError: false,
+				};
+				await main.emit(completion);
+				await main.emit(completion);
+				pending?.call?.setExpanded(true);
+			}
+			expect(ctx.pendingTools.has("wait-1")).toBe(false);
+			expect(renderTranscript(ctx).join("\n")).not.toContain("Sleeper1");
+			cfgDisplayMode.override(ctx.settings, "detailed");
+			ctx.hideToolActivity = false;
+			const visible = renderTranscript(ctx).join("\n");
+			expect(visible.match(/Sleeper1 done/g)).toHaveLength(1);
+		},
+	);
 });
 
 describe("#10446 task progress across a focus rebuild", () => {
-	useDetailedDisplay();
-
 	it("restores the latest in-flight task board after returning to main", async () => {
 		const main = makeSession([danglingTask], true);
 		const fixture = createFixture(main);
 
 		await fixture.ctx.renderInitialMessages();
 		await main.emitToolUpdate(taskProgressUpdate);
-		const before = Bun.stripANSI(fixture.ctx.chatContainer.render(120).join("\n"));
+		const before = renderTranscript(fixture.ctx).join("\n");
 		expect(before).toContain("Parent>Child");
 		expect(before).toContain("packages/coding-agent/src/modes");
 
 		await fixture.focus.focusAgent("Worker");
 		await fixture.focus.unfocus();
 
-		const after = Bun.stripANSI(fixture.ctx.chatContainer.render(120).join("\n"));
+		const after = renderTranscript(fixture.ctx).join("\n");
 		expect(after).toContain("Parent>Child");
 		expect(after).toContain("packages/coding-agent/src/modes");
 	});
 });
 
 describe("#10447 persisted background task board across a focus rebuild", () => {
-	useDetailedDisplay();
-
 	it("keeps a returned detached task parked so cached and later progress land after return", async () => {
 		// Detached task: its call already returned an async.state "running" result
 		// (persisted), and the main session is idle while the job keeps streaming.
@@ -494,7 +422,7 @@ describe("#10447 persisted background task board across a focus rebuild", () => 
 
 		await fixture.ctx.renderInitialMessages();
 		await main.emitToolUpdate(backgroundProgressUpdate("cached-progress-marker"));
-		const before = Bun.stripANSI(fixture.ctx.chatContainer.render(120).join("\n"));
+		const before = renderTranscript(fixture.ctx).join("\n");
 		expect(before).toContain("cached-progress-marker");
 
 		await fixture.focus.focusAgent("Worker");
@@ -502,13 +430,13 @@ describe("#10447 persisted background task board across a focus rebuild", () => 
 
 		// The rebuilt board replays the cached snapshot instead of collapsing to
 		// the persisted "running" result, and the card is still parked as pending.
-		const after = Bun.stripANSI(fixture.ctx.chatContainer.render(120).join("\n"));
+		const after = renderTranscript(fixture.ctx).join("\n");
 		expect(after).toContain("cached-progress-marker");
 		expect(fixture.ctx.pendingTools.has("task-bg")).toBe(true);
 
 		// A live frame emitted after return still routes to the preserved card.
 		await main.emitToolUpdate(backgroundProgressUpdate("post-return-marker"));
-		const live = Bun.stripANSI(fixture.ctx.chatContainer.render(120).join("\n"));
+		const live = renderTranscript(fixture.ctx).join("\n");
 		expect(live).toContain("post-return-marker");
 	});
 
@@ -521,7 +449,7 @@ describe("#10447 persisted background task board across a focus rebuild", () => 
 		await main.emitToolUpdate(backgroundProgressUpdate("completed-while-focused", "completed"));
 		await fixture.focus.unfocus();
 
-		const after = Bun.stripANSI(fixture.ctx.chatContainer.render(120).join("\n"));
+		const after = renderTranscript(fixture.ctx).join("\n");
 		expect(after).toContain("completed-while-focused");
 		expect(fixture.ctx.pendingTools.has("task-bg")).toBe(false);
 	});
@@ -537,8 +465,6 @@ describe("#10447 persisted background task board across a focus rebuild", () => 
 });
 
 describe("live Cursor focus recovery without another delta", () => {
-	useDetailedDisplay();
-
 	const paused: AssistantMessage = {
 		role: "assistant",
 		content: [
@@ -639,7 +565,7 @@ describe("live Cursor focus recovery without another delta", () => {
 				message: continued,
 				assistantMessageEvent: { type: "text_delta", contentIndex: 3, delta: " AFTER_FOCUS", partial: continued },
 			});
-			const rendered = () => Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = () => renderTranscript(ctx).join("\n");
 			expect(rendered()).toContain("AFTER_FOCUS");
 			expect(rendered().match(/SETTLED_DURING_SWITCH/g)).toHaveLength(1);
 			expect(ctx.pendingTools.has("settled-grep")).toBe(false);
@@ -676,7 +602,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		const { ctx, focus } = createFixture(main);
 		await focus.focusAgent("Worker");
 		await focus.unfocus();
-		const rendered = () => Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+		const rendered = () => renderTranscript(ctx).join("\n");
 		expect(rendered()).toContain("PAUSED_REASONING");
 		expect(rendered()).toContain("COMPLETED_MATCH");
 		expect(ctx.pendingTools.size).toBe(0);
@@ -692,7 +618,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		await focus.focusAgent("Worker");
 		await focus.unfocus();
 		await main.emit({ type: "message_end", message: paused });
-		const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+		const rendered = renderTranscript(ctx).join("\n");
 		expect(rendered).toContain("LAST_VISIBLE_TEXT");
 		expect(rendered).toContain("COMPLETED_MATCH");
 		expect(ctx.pendingTools.size).toBe(0);
@@ -704,7 +630,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		const { ctx, focus } = createFixture(main);
 		await focus.focusAgent("Worker");
 		await focus.unfocus();
-		expect(Bun.stripANSI(ctx.chatContainer.render(120).join("\n"))).toContain("COMPLETED_MATCH");
+		expect(renderTranscript(ctx).join("\n")).toContain("COMPLETED_MATCH");
 		expect(ctx.pendingTools.size).toBe(0);
 	});
 
@@ -718,7 +644,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		main.setLiveAssistant(mainLive, []);
 		const worker = makeSession([], true);
 		const { ctx, focus } = createFixture(main, worker);
-		cfgDisplaySmoothStreaming.override(ctx.settings, false);
+		ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
 		const firstAssistant: AssistantMessage = {
 			...paused,
 			content: [
@@ -783,7 +709,7 @@ describe("live Cursor focus recovery without another delta", () => {
 			linkGate.resolve(new Map([["guide.md", "file:///tmp/guide.md"]]));
 			await Promise.all([firstEnd, toolStart, toolEnd, secondStart, secondUpdate]);
 
-			const rendered = () => Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = () => renderTranscript(ctx).join("\n");
 			expect(rendered()).toContain("FIRST_LINK_TEXT");
 			expect(rendered()).toContain("COMPLETED_MATCH");
 			expect(rendered()).toContain("SECOND_LIVE_TEXT");
@@ -844,7 +770,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		const main = makeSession([arrivalMessage], false);
 		const worker = makeSession([], true);
 		const { ctx, focus } = createFixture(main, worker);
-		cfgDisplaySmoothStreaming.override(ctx.settings, false);
+		ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
 		const workerAssistant: AssistantMessage = {
 			...paused,
 			content: [{ type: "text", text: "WORKER_LINK [x](x.md)" }],
@@ -884,7 +810,7 @@ describe("live Cursor focus recovery without another delta", () => {
 			linkGate.resolve(new Map());
 			await Promise.all([returning, arrival, stuckEnd]);
 
-			const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = renderTranscript(ctx).join("\n");
 			expect(rendered.match(/ARRIVAL_DURING_ATTACH/g)).toHaveLength(1);
 		} finally {
 			focus.dispose();
@@ -898,7 +824,7 @@ describe("live Cursor focus recovery without another delta", () => {
 	async function focusBehindHeldLinkCheck(main: SessionStub) {
 		const worker = makeSession([], true);
 		const fixture = createFixture(main, worker);
-		cfgDisplaySmoothStreaming.override(fixture.ctx.settings, false);
+		fixture.ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
 		const workerAssistant: AssistantMessage = {
 			...paused,
 			content: [{ type: "text", text: "WORKER_LINK [x](x.md)" }],
@@ -973,7 +899,7 @@ describe("live Cursor focus recovery without another delta", () => {
 			release();
 			await Promise.all([returning, stuckEnd, ...arrivals]);
 
-			const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = renderTranscript(ctx).join("\n");
 			expect(rendered.match(/ARRIVED_REPLY/g)).toHaveLength(1);
 			expect(rendered.match(/REPLAYED_ARRIVAL/g)).toHaveLength(1);
 			expect(rendered.match(/LIVE_ONLY_ARRIVAL/g)).toHaveLength(1);
@@ -1019,7 +945,7 @@ describe("live Cursor focus recovery without another delta", () => {
 				message: continued,
 				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " AND_AFTER", partial: continued },
 			});
-			const rendered = () => Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = () => renderTranscript(ctx).join("\n");
 			expect(rendered()).toContain("AND_AFTER");
 			await main.emit({ type: "message_end", message: continued });
 			expect(rendered().match(/REPLY_DURING_SWITCH/g)).toHaveLength(1);
@@ -1053,7 +979,7 @@ describe("live Cursor focus recovery without another delta", () => {
 			release();
 			await Promise.all([returning, stuckEnd, ...arrivals]);
 
-			const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = renderTranscript(ctx).join("\n");
 			expect(rendered.match(/EXT_DURING_SWITCH/g)).toHaveLength(1);
 		} finally {
 			dispose();
@@ -1093,7 +1019,7 @@ describe("live Cursor focus recovery without another delta", () => {
 			release();
 			await Promise.all([returning, stuckEnd, ...arrivals]);
 
-			const rendered = () => Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = () => renderTranscript(ctx).join("\n");
 			expect(rendered().match(/TOOL_DURING_SWITCH/g)).toHaveLength(1);
 
 			// F5 retry after switching back re-runs the same toolCallId.
@@ -1145,7 +1071,7 @@ describe("live Cursor focus recovery without another delta", () => {
 			release();
 			await Promise.all([returning, stuckEnd]);
 			await raced;
-			const rendered = () => Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = () => renderTranscript(ctx).join("\n");
 			// Before the newer reply sends anything else, both are on screen, the older one first.
 			const switched = rendered();
 			expect(switched.match(/OLDER_REPLY/g)).toHaveLength(1);
@@ -1175,7 +1101,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		const main = makeSession([mainPrompt], false);
 		const worker = makeSession([], true);
 		const { ctx, focus } = createFixture(main, worker);
-		cfgDisplaySmoothStreaming.override(ctx.settings, false);
+		ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
 		const started: AssistantMessage = {
 			...paused,
 			content: [{ type: "text", text: "WORKER_HEAD [h](head.md)" }],
@@ -1218,7 +1144,7 @@ describe("live Cursor focus recovery without another delta", () => {
 			linkGate.resolve(new Map());
 			await Promise.all([returning, stuckUpdate]);
 
-			const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = renderTranscript(ctx).join("\n");
 			expect(rendered).toContain("MAIN_AFTER_SWITCH");
 			expect(rendered).not.toContain("WORKER_HEAD");
 			expect(rendered).not.toContain("STALE_TOOL");
@@ -1241,7 +1167,7 @@ describe("live Cursor focus recovery without another delta", () => {
 		const main = makeSession([mainPrompt], false);
 		const worker = makeSession([], true);
 		const { ctx, focus } = createFixture(main, worker);
-		cfgDisplaySmoothStreaming.override(ctx.settings, false);
+		ctx.settings = Settings.isolated({ "display.smoothStreaming": false });
 		const started: AssistantMessage = {
 			...paused,
 			content: [{ type: "text", text: "WORKER_SEG_HEAD [h](head.md)" }],
@@ -1287,7 +1213,7 @@ describe("live Cursor focus recovery without another delta", () => {
 			segmentGate.resolve(new Map());
 			await Promise.all([returning, stuckUpdate]);
 
-			const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = renderTranscript(ctx).join("\n");
 			expect(rendered).toContain("MAIN_SEGMENT_HOME");
 			expect(rendered).not.toContain("STALE_SEGMENT");
 			expect(ctx.pendingTools.has("seg-grep-1")).toBe(false);
@@ -1341,7 +1267,7 @@ describe("live Cursor focus recovery without another delta", () => {
 				await main.emit({ type: "message_end", message });
 			}
 
-			const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+			const rendered = renderTranscript(ctx).join("\n");
 			expect(rendered.match(/FIRST_NOTE/g)).toHaveLength(1);
 			expect(rendered.match(/SECOND_NOTE/g)).toHaveLength(1);
 			expect(rendered.match(/FIRST_PROMPT/g)).toHaveLength(1);

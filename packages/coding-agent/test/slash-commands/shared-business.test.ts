@@ -309,7 +309,7 @@ function ordinaryTaskDispatchFixture() {
 		ctx: {
 			settings,
 			sessionManager,
-			editor: { setText },
+			composer: { setText },
 			showStatus: runtime.output,
 			refreshSlashCommandState: runtime.refreshCommands,
 		},

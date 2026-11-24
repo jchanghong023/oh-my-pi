@@ -7,6 +7,7 @@ import { createAgentSession } from "../../src/sdk";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { composerBounds } from "../helpers/compact-screen-recording";
 import { contentText, createProviderFixture, MARKER } from "../spec-driven/provider-fixture";
 import { deadline, goalCliFixture } from "./goal-cli-fixture";
 import {
@@ -332,14 +333,18 @@ describe("Goal public management and history views", () => {
 						// Tab before the async popup is painted can merely open it (or
 						// dismiss a stale prefix). Ghost text is not an accepted completion.
 						const selected = new RegExp(`^❯\\s+(?:\\S+\\s+)?${candidate}(?:\\s|$)`, "mu");
+						const popup = (screen: string) => {
+							const { lines, end } = composerBounds(screen);
+							return end < 0 ? "" : lines.slice(end + 1).join("\n");
+						};
 						const ready = await eventually(
 							() => nativeDraftSnapshot(tui),
-							({ screen, cursor }) => nativeDraftMatches(screen, text, cursor) && selected.test(screen),
+							({ screen, cursor }) => nativeDraftMatches(screen, text, cursor) && selected.test(popup(screen)),
 						);
 						await tui("key", "press", "Tab");
 						await waitDraft(completed);
 						await clearNativeDraft(tui);
-						return ready.screen;
+						return popup(ready.screen);
 					};
 					const submit = async (text: string) => {
 						// tui-test submit appends text and Enter without acknowledging
@@ -506,7 +511,7 @@ describe("Goal public management and history views", () => {
 					).toEqual(noticeBytes);
 					await submit(`/${origin} drop`);
 					await tui("expect", "text", "Drop goal?", "--timeout", "30000");
-					await tui("key", "press", "Home", "Enter");
+					await tui("key", "press", "Enter");
 					await tui("expect", "text", "Goal dropped.", "--timeout", "30000");
 					const dropped = await read();
 					expect(mode(dropped).mode).toBe("none");

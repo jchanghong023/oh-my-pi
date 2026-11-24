@@ -1,176 +1,96 @@
-import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
-import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { cfgDisplayMode, cfgStatusLineSessionAccent } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import { Loader, type WorkingRowSpec } from "@oh-my-pi/pi-tui";
-import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import * as sessionColor from "@oh-my-pi/pi-tui/theme/session-color";
-import { adjustHsv, TempDir } from "@oh-my-pi/pi-utils";
-import { createSessionStub } from "./helpers/interactive-mode-context";
-
-type Harness = {
-	mode: InteractiveMode;
-	sessionManager: SessionManager;
-	tempDir: TempDir;
-};
-
-let harness: Harness | undefined;
-
-function defined<T>(value: T | undefined): T {
-	if (value === undefined) throw new Error("Expected value to be defined");
-	return value;
-}
 /**
- * ANSI of the loader's leading interrupt glyph for a session name: the dim
- * accent variant. Unlike `main`, which only surfaces inside the time-swept
- * shimmer band of the message, the glyph is painted every render, so it is
- * the deterministic marker for "this session's accent reached the loader".
+ * The working row's session accent follows the session mid-run, as the old loader re-read it per
+ * frame: a rename recolors the running row, and turning `statusLine.sessionAccent` off drops it.
  */
-function accentGlyphAnsi(sessionName: string): string {
-	const hex = sessionColor.getSessionAccentHex(sessionName, theme.sessionAccentInputs);
-	return defined(sessionColor.getSessionAccentAnsi(adjustHsv(hex, { s: 0.55, v: 0.65 })));
-}
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgStatusLineSessionAccent } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { UiNode } from "@oh-my-pi/pi-tui";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { initTheme } from "../src/ui/theme/service";
+import { createModeTerminal } from "./helpers/mode-terminal";
 
-async function createHarness(sessionName: string): Promise<Harness> {
-	if (harness) {
-		harness.mode.loadingAnimation?.stop();
-		harness.mode.loadingAnimation = undefined;
-		harness.mode.statusContainer.disposeChildren();
-		await harness.sessionManager.setSessionName(sessionName, "user");
-		return harness;
+function find(node: UiNode, role: string): UiNode | undefined {
+	if (node.props().role === role) return node;
+	for (const child of node.children()) {
+		const found = find(child, role);
+		if (found) return found;
 	}
-
-	const tempDir = TempDir.createSync("@pi-working-accent-");
-	// Settings.init keeps an instance an earlier file loaded (e.g. from the user's config).
-	resetSettingsForTest();
-	await Settings.init({ inMemory: true, cwd: tempDir.path() });
-	cfgDisplayMode.set(settings, "detailed");
-	await initTheme(false);
-	const sessionManager = SessionManager.inMemory(tempDir.path());
-	await sessionManager.setSessionName(sessionName, "user");
-	const session = createSessionStub(sessionManager, settings, {
-		isStreaming: true,
-		// No conversation to title: a bare /rename reports usage.
-		renameTitle: async () => null,
-	});
-	const mode = new InteractiveMode(session, "test");
-	harness = { mode, sessionManager, tempDir };
-	return harness;
+	return undefined;
 }
 
-function startStableLoader(mode: InteractiveMode): void {
-	mode.ensureLoadingAnimation();
-	mode.loadingAnimation?.stop();
-}
+describe("working row session accent", () => {
+	let tempDir: TempDir;
+	let authStorage: AuthStorage;
+	let session: AgentSession;
+	let mode: InteractiveMode;
 
-function renderLoader(mode: InteractiveMode): string {
-	return mode.statusContainer.render(120).join("\n");
-}
-
-afterEach(() => {
-	vi.restoreAllMocks();
-});
-
-afterAll(() => {
-	harness?.mode.stop();
-	harness?.tempDir.removeSync();
-	harness = undefined;
-	resetSettingsForTest();
-});
-
-describe("InteractiveMode working-message session accent", () => {
-	it("repaints the loader glyph after a session rename", async () => {
-		const initialName = "Alpha session";
-		const renamedName = "Beta session";
-		const { mode, sessionManager } = await createHarness(initialName);
-		const initialAnsi = accentGlyphAnsi(initialName);
-		const renamedAnsi = accentGlyphAnsi(renamedName);
-
-		startStableLoader(mode);
-		expect(renderLoader(mode)).toContain(initialAnsi);
-
-		await sessionManager.setSessionName(renamedName, "user");
-		mode.loadingAnimation?.setMessage("Renamed session");
-		expect(renderLoader(mode)).toContain(renamedAnsi);
+	beforeAll(async () => {
+		initTheme();
+		resetSettingsForTest();
+		tempDir = TempDir.createSync("@pi-working-accent-");
+		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		const modelRegistry = new ModelRegistry(authStorage);
+		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: Settings.isolated({ "display.mode": "detailed" }),
+			modelRegistry,
+		});
+		mode = new InteractiveMode(
+			session,
+			"test",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			createModeTerminal().frame,
+		);
 	});
 
-	it("toggles the visible session accent with the setting", async () => {
-		const sessionName = "Toggle session";
-		const { mode } = await createHarness(sessionName);
-		const accentAnsi = accentGlyphAnsi(sessionName);
+	afterAll(async () => {
+		mode?.stop();
+		await session?.dispose();
+		authStorage?.close();
+		tempDir?.removeSync();
+		resetSettingsForTest();
+	});
 
-		startStableLoader(mode);
-		expect(renderLoader(mode)).toContain(accentAnsi);
+	/** The running row's terminal accent (its main hex), or undefined without one. */
+	const accent = (): string | undefined => {
+		const row = mode.shell.surface
+			.dock()
+			.map(node => find(node, "omp.working"))
+			.find(node => node !== undefined);
+		if (!row) throw new Error("expected the working row");
+		return (row.props() as { term?: { accent?: { main: string } } }).term?.accent?.main;
+	};
+
+	it("recolors the running row when the session is renamed, and drops the accent when it is turned off", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		await session.sessionManager.setSessionName("Audit the parser", "user");
+		mode.ensureWorkingRow();
+		const first = accent();
+		expect(first).toMatch(/^#/);
+
+		await session.sessionManager.setSessionName("Ship the renderer", "user");
+		const renamed = accent();
+		expect(renamed).toMatch(/^#/);
+		expect(renamed).not.toBe(first);
 
 		cfgStatusLineSessionAccent.set(settings, false);
-		mode.loadingAnimation?.setMessage("Accent disabled");
-		expect(renderLoader(mode)).not.toContain(accentAnsi);
-
-		cfgStatusLineSessionAccent.set(settings, true);
-		mode.loadingAnimation?.setMessage("Accent enabled");
-		expect(renderLoader(mode)).toContain(accentAnsi);
-	});
-});
-
-describe("InteractiveMode working activity", () => {
-	it("preserves the active loader when blank /rename reports usage", async () => {
-		const { mode } = await createHarness("Active rename session");
-		mode.ensureLoadingAnimation();
-		const loader = defined(mode.loadingAnimation);
-		mode.setWorkingMessage("Active work");
-		expect(mode.session.isStreaming).toBe(true);
-
-		try {
-			const handled = await executeBuiltinSlashCommand("/rename", { ctx: mode });
-
-			expect(handled).toBe(true);
-			expect(mode.session.isStreaming).toBe(true);
-			expect(mode.loadingAnimation).toBe(loader);
-			expect(Bun.stripANSI(renderLoader(mode))).toContain("Active work");
-			expect(mode.lastStatus?.message).toContain("/rename <title>");
-		} finally {
-			loader.stop();
-		}
-	});
-
-	it("restarts a working loader detached by transient status cleanup", async () => {
-		const { mode } = await createHarness("Detached loader session");
-		mode.ensureLoadingAnimation();
-		const loader = defined(mode.loadingAnimation);
-		expect(loader.debugState()).toMatchObject({ running: true });
-
-		mode.statusContainer.disposeChildren();
-		expect(loader.debugState()).toMatchObject({ running: false });
-
-		mode.ensureLoadingAnimation();
-
-		expect(mode.loadingAnimation).toBe(loader);
-		expect(mode.statusContainer.children).toContain(loader);
-		expect(loader.debugState()).toMatchObject({ running: true });
-		loader.stop();
-	});
-
-	it("keeps the run's elapsed origin when a focus switch recreates the loader", async () => {
-		const { mode } = await createHarness("Focus round-trip session");
-		const runStartedAt = Date.now() - 90_000;
-		Object.defineProperty(mode.session, "runStartedAt", { configurable: true, value: runStartedAt });
-		const specs: (() => WorkingRowSpec)[] = [];
-		vi.spyOn(Loader.prototype, "setWorkingRow").mockImplementation(spec => {
-			specs.push(spec);
-		});
-
-		try {
-			mode.ensureLoadingAnimation();
-			// Session focus attach drops the loader, then synthesizes `agent_start`.
-			mode.clearTransientSessionUi();
-			mode.ensureLoadingAnimation();
-
-			expect(specs.map(spec => spec().startedAt)).toEqual([runStartedAt, runStartedAt]);
-		} finally {
-			mode.loadingAnimation?.stop();
-			Reflect.deleteProperty(mode.session, "runStartedAt");
-		}
+		mode.statusLine.reloadSettings();
+		expect(accent()).toBeUndefined();
+		mode.clearWorking();
 	});
 });

@@ -1,10 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { initTheme } from "../src/ui/theme/service";
+import type { LocalAgentSessionEvent as AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { vocalizer } from "@oh-my-pi/pi-coding-agent/tts/vocalizer";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
@@ -39,43 +38,40 @@ function messageUpdate(text: string): Extract<AgentSessionEvent, { type: "messag
 	} as unknown as Extract<AgentSessionEvent, { type: "message_update" }>;
 }
 
-function createStreamingFixture(offline?: string) {
+const ONLINE_WINDOW_MS = 50;
+
+function createStreamingFixture() {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const ctx = createInteractiveModeContext({
 		session: {
 			isStreaming: true,
-			subscribe: listener => {
+			subscribeLocal: listener => {
 				listeners.push(listener);
 				return () => {};
 			},
 		},
-		streamingComponent: new AssistantMessageComponent(),
 	});
-	const previousOffline = process.env.OMP_OFFLINE;
-	let controller: EventController;
-	try {
-		if (offline !== undefined) process.env.OMP_OFFLINE = offline;
-		controller = new EventController(ctx);
-	} finally {
-		if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
-		else process.env.OMP_OFFLINE = previousOffline;
-	}
+	ctx.streaming = ctx.presentAssistant();
+	// One streaming rebuild per handled update.
+	const draws = vi.spyOn(ctx, "noteDisplayableThinkingContent");
+	const controller = new EventController(ctx);
 	controller.subscribeToAgent();
 	const emit = (event: AgentSessionEvent) => {
 		for (const listener of listeners) void listener(event);
 	};
-	return { controller, ctx, ui: ctx.ui, emit };
+	return { controller, ctx, draws, emit };
 }
 async function flushMicrotasks(): Promise<void> {
 	for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
 beforeAll(async () => {
-	await initTheme(false);
+	initTheme();
 });
 
 describe("EventController message_update coalescing", () => {
 	let previousOffline: string | undefined;
+
 	beforeEach(async () => {
 		previousOffline = process.env.OMP_OFFLINE;
 		delete process.env.OMP_OFFLINE;
@@ -93,48 +89,43 @@ describe("EventController message_update coalescing", () => {
 	});
 
 	it.each([
-		["0", 50],
+		["0", ONLINE_WINDOW_MS],
 		[" YeS ", 100],
 	] as const)(
-		"coalesces cumulative updates without delaying the final snapshot in offline=%s",
+		"coalesces each window and immediately flushes the final snapshot (offline=%s)",
 		async (offline, interval) => {
-			const { ctx, ui, emit } = createStreamingFixture(offline);
+			process.env.OMP_OFFLINE = offline;
+			const { ctx, draws, emit } = createStreamingFixture();
 
-			emit(messageUpdate("tok1"));
-			emit(messageUpdate("tok1 tok2"));
-			emit(messageUpdate("tok1 tok2 tok3"));
-			emit(messageUpdate("tok1 tok2 tok3 tok4"));
-			emit(messageUpdate("tok1 tok2 tok3 tok4 tok5"));
-
+			for (const text of [
+				"tok1",
+				"tok1 tok2",
+				"tok1 tok2 tok3",
+				"tok1 tok2 tok3 tok4",
+				"tok1 tok2 tok3 tok4 tok5",
+			]) {
+				emit(messageUpdate(text));
+			}
 			vi.advanceTimersByTime(interval - 1);
-			expect(ui.requestRender).not.toHaveBeenCalled();
+			expect(draws).not.toHaveBeenCalled();
 			vi.advanceTimersByTime(1);
 			await flushMicrotasks();
-
-			expect(ui.requestRender).toHaveBeenCalledTimes(1);
-			expect((ctx.streamingMessage as AssistantMessage | undefined)?.content).toEqual([
-				{ type: "text", text: "tok1 tok2 tok3 tok4 tok5" },
-			]);
+			expect(draws).toHaveBeenCalledTimes(1);
+			expect(ctx.streamingMessage?.content).toEqual([{ type: "text", text: "tok1 tok2 tok3 tok4 tok5" }]);
 
 			emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6"));
 			emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6 tok7"));
 			vi.advanceTimersByTime(interval);
 			await flushMicrotasks();
-
-			expect(ui.requestRender).toHaveBeenCalledTimes(2);
-			expect((ctx.streamingMessage as AssistantMessage | undefined)?.content).toEqual([
-				{ type: "text", text: "tok1 tok2 tok3 tok4 tok5 tok6 tok7" },
-			]);
+			expect(draws).toHaveBeenCalledTimes(2);
+			expect(ctx.streamingMessage?.content).toEqual([{ type: "text", text: "tok1 tok2 tok3 tok4 tok5 tok6 tok7" }]);
 
 			emit(messageUpdate("final snapshot"));
 			emit({ type: "message_end", message: assistantMessage("final snapshot") } as Extract<
 				AgentSessionEvent,
 				{ type: "message_end" }
 			>);
-			expect((ctx.streamingMessage as AssistantMessage | undefined)?.content).toEqual([
-				{ type: "text", text: "final snapshot" },
-			]);
-			await flushMicrotasks();
+			expect(ctx.streamingMessage?.content).toEqual([{ type: "text", text: "final snapshot" }]);
 		},
 	);
 
@@ -163,7 +154,7 @@ describe("EventController message_update coalescing", () => {
 		emit(messageUpdate("one two "));
 		emit(messageUpdate("one two three "));
 
-		vi.advanceTimersByTime(50);
+		vi.advanceTimersByTime(ONLINE_WINDOW_MS);
 		await flushMicrotasks();
 
 		expect(pushDelta).toHaveBeenCalledTimes(3);
@@ -188,7 +179,7 @@ describe("EventController message_update coalescing", () => {
 		});
 
 		emit(messageUpdate("tok1 tok2"));
-		vi.advanceTimersByTime(50); // window fires; flush suspends on init (call 1)
+		vi.advanceTimersByTime(ONLINE_WINDOW_MS); // window fires; flush suspends on init (call 1)
 
 		emit({ type: "message_end", message: assistantMessage("tok1 tok2") } as Extract<
 			AgentSessionEvent,
@@ -223,7 +214,7 @@ describe("EventController message_update coalescing", () => {
 		});
 
 		emit(messageUpdate("tok1"));
-		vi.advanceTimersByTime(50); // window fires; flush run 1 suspends on gate 1
+		vi.advanceTimersByTime(ONLINE_WINDOW_MS); // window fires; flush run 1 suspends on gate 1
 
 		// Two non-update events land while the flush is still suspended.
 		emit({ type: "message_end", message: assistantMessage("tok1") } as Extract<

@@ -23,7 +23,10 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import {
+	AgentSession,
+	type LocalAgentSessionEvent as AgentSessionEvent,
+} from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { WakeSources } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type { AsyncJobSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -31,15 +34,25 @@ import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as runStatus from "@oh-my-pi/pi-coding-agent/utils/run-status";
 import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
-import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import type { UiNode } from "@oh-my-pi/pi-tui";
+import { bubbleEvent } from "@oh-my-pi/pi-tui/dispatch";
+import * as terminalSession from "@oh-my-pi/pi-tui/driver/session";
+import { initTheme } from "../../../src/ui/theme/service";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { VirtualTerminal } from "../../../../tui/test/virtual-terminal";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
+import { createModeTerminal, type ModeTerminal } from "../../helpers/mode-terminal";
 
 type AgentPause = Extract<AgentSessionEvent, { type: "agent_pause" }>;
 type AgentEnd = Extract<AgentSessionEvent, { type: "agent_end" }>;
+
+function findPath(nodes: readonly UiNode[], role: string): UiNode[] | undefined {
+	for (const node of nodes) {
+		if (node.props().role === role) return [node];
+		const child = findPath(node.children(), role);
+		if (child) return [node, ...child];
+	}
+	return undefined;
+}
 
 beforeAll(() => {
 	initTheme();
@@ -137,7 +150,7 @@ describe("EventController — run paused on outside work", () => {
 		const { ctx, wake } = makeAwaitingContext(["bg_1", "bg_2"], ["Scout"]);
 		const report = vi.spyOn(runStatus, "setRunStatus").mockImplementation(() => {});
 		const setWorkingMessage = vi.spyOn(ctx, "setWorkingMessage");
-		const ensureLoadingAnimation = vi.spyOn(ctx, "ensureLoadingAnimation");
+		const ensureWorkingRow = vi.spyOn(ctx, "ensureWorkingRow");
 		const markActivityEnd = vi.spyOn(ctx.statusLine, "markActivityEnd");
 		const controller = new EventController(ctx);
 
@@ -148,7 +161,7 @@ describe("EventController — run paused on outside work", () => {
 		// The run goes on: nothing reports a settled status or tears the run down.
 		expect(report).not.toHaveBeenCalled();
 		expect(markActivityEnd).not.toHaveBeenCalled();
-		expect(ensureLoadingAnimation).toHaveBeenCalled();
+		expect(ensureWorkingRow).toHaveBeenCalled();
 		const label = rowLabel(setWorkingMessage);
 		expect(label).toContain("bg_1");
 		expect(label).toContain("bg_2");
@@ -183,7 +196,7 @@ describe("EventController — run paused on outside work", () => {
 		const { ctx, abort, end } = makeAwaitingContext(["bg_1"]);
 		const report = vi.spyOn(runStatus, "setRunStatus").mockImplementation(() => {});
 		const markActivityEnd = vi.spyOn(ctx.statusLine, "markActivityEnd");
-		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const notify = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		const controller = new EventController(ctx);
 		const predict = vi.spyOn(controller.composerPrediction, "request");
 		await controller.handleEvent(yieldedPause());
@@ -221,13 +234,17 @@ describe("EventController — ending the wait on a real session", () => {
 	let session: AgentSession | undefined;
 	let manager: AsyncJobManager | undefined;
 	let authStorage: AuthStorage | undefined;
-	let mode: InteractiveMode | undefined;
 	const gates: Array<PromiseWithResolvers<string>> = [];
+	let mode: InteractiveMode | undefined;
+	let terminal: ModeTerminal | undefined;
 
 	afterEach(async () => {
 		for (const gate of gates.splice(0)) gate.resolve("done");
 		mode?.stop();
+		await mode?.shell.stop();
+		terminal?.dispose();
 		mode = undefined;
+		terminal = undefined;
 		await session?.dispose();
 		manager?.cancelAll();
 		await manager?.dispose();
@@ -239,9 +256,9 @@ describe("EventController — ending the wait on a real session", () => {
 		tempDir = undefined;
 	});
 
-	it.each(["Esc", "native Stop"])(
-		"shows a compact wait and lets %s end it without cancelling the job",
-		async method => {
+	it.each(["Escape", "native Stop"] as const)(
+		"ends the compact wait with %s without cancelling the job",
+		async action => {
 			tempDir = TempDir.createSync("@pi-async-wait-esc-");
 			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 			if (!model) throw new Error("Expected built-in anthropic model to exist");
@@ -274,51 +291,40 @@ describe("EventController — ending the wait on a real session", () => {
 			gates.push(gate);
 			manager.register("bash", "sleep 150", async () => await gate.promise, { ownerId: "Main" });
 
-			const terminal = new VirtualTerminal(120, 30);
-			const composer = new Composer({ terminal });
-			mode = new InteractiveMode(session, "test", () => {}, undefined, undefined, undefined, composer);
-			const events: AgentSessionEvent[] = [];
-			session.subscribe(event => events.push(event));
+			terminal = createModeTerminal({ columns: 120, rows: 30, settings: session.settings });
+			mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, terminal.frame);
 			await mode.init({ suppressWelcomeIntro: true });
+			mode.composer.setText("DRAFT_ANCHOR");
 			const controller = mode.eventController;
-			mode.editor.setText("DRAFT_ANCHOR");
-			const screen = () => terminal.getViewport().map(row => Bun.stripANSI(row));
+			const events: AgentSessionEvent[] = [];
+			const unsubscribe = session.subscribeLocal(event => events.push(event));
 			await session.prompt("start the long job");
 			await session.waitForIdle();
 			expect(events.some(event => event.type === "agent_pause" && event.yielded)).toBe(true);
 			expect(events.some(event => event.type === "agent_end")).toBe(false);
 			expect(mock.calls.length).toBe(1);
 			expect(controller.isAwaitingAsyncWork()).toBe(true);
-			await terminal.waitForRender(() => screen().some(row => row.includes("Waiting for")));
-			const rows = screen();
-			const draft = rows.findIndex(row => row.includes("DRAFT_ANCHOR"));
-			const waiting = rows.flatMap((row, index) => (row.includes("Waiting for") ? [index] : []));
-			// The activity dock directly precedes the input border, with one reserved blank below it.
-			expect(waiting).toEqual([draft - 3]);
+			await terminal.waitFor(rows => rows.some(row => row.includes("Waiting for")));
+			const waitingRows = terminal.screen();
+			expect(waitingRows.filter(row => row.includes("Waiting for"))).toHaveLength(1);
+			expect(waitingRows.findIndex(row => row.includes("Waiting for"))).toBeLessThan(
+				waitingRows.findIndex(row => row.includes("DRAFT_ANCHOR")),
+			);
 
-			if (method === "Esc") {
-				terminal.sendInput("\x1b");
+			if (action === "Escape") {
+				terminal.press("escape");
 			} else {
-				const dock = mode.compactThinkingPreview;
-				const view = dock.describe({
-					cols: 120,
-					reduceMotion: false,
-					dark: true,
-					supports: () => true,
-					feature: () => true,
-				});
-				const waitingRow = view.c?.[1];
-				expect(JSON.stringify(waitingRow)).toContain("Waiting for");
-				expect(JSON.stringify(waitingRow)).toContain('"click":"interrupt"');
-				dock.handleNativeEvent({ type: "action", key: "stop", act: "interrupt", mods: [] });
+				const stop = findPath(mode.shell.surface.dock(), "omp.compact.wait.stop");
+				expect(stop).toBeDefined();
+				bubbleEvent(stop!, { type: "action", key: "stop", act: "interrupt", mods: [] });
 			}
 			await session.waitForRunEnd();
 			// Let the dispatched `agent_end` finish its teardown.
 			await controller.runSerialized(async () => {});
 			expect(session.isRunActive).toBe(false);
 			expect(events.filter(event => event.type === "agent_end")).toHaveLength(1);
-			await terminal.waitForRender(() => screen().some(row => row.includes("Stopped waiting")));
-			expect(screen().join("\n")).not.toContain("Waiting for");
+			await terminal.waitFor(rows => rows.some(row => row.includes("Stopped waiting")));
+			expect(terminal.screen().join("\n")).not.toContain("Waiting for");
 
 			gate.resolve("JOB_FINISHED");
 			await manager.waitForAll();
@@ -330,6 +336,7 @@ describe("EventController — ending the wait on a real session", () => {
 				message => "customType" in message && message.customType === "async-result",
 			);
 			expect(results).toHaveLength(1);
+			unsubscribe();
 		},
 	);
 });

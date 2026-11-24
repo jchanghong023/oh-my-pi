@@ -10,11 +10,11 @@
  */
 import type { AgentMessage, AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort, ImageContent, Model, ServiceTier, ToolResultMessage, UsageReport } from "@oh-my-pi/pi-ai";
-import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
-import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
-import type { JobWidgetEntry } from "@oh-my-pi/pi-tui/tools/job-widget";
-import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { IrcMessage } from "../irc/irc-types";
+import type { JobWidgetEntry } from "../tools/details/job-widget";
+import type { TodoPhase } from "../tools/details/todo";
+import type { ToolResult } from "../ui/tools/contract";
+import type { ConfiguredThinkingLevel } from "../utils/render-utils";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { ModelRegistry } from "../config/model-registry";
@@ -244,7 +244,7 @@ export interface LiveToolOutputSnapshot {
 	args?: unknown;
 	intent?: string;
 	dispatchOrder: number;
-	result?: ToolRenderResult<unknown>;
+	result?: ToolResult<unknown>;
 	terminalAt?: number;
 	/** Absolute dismissal time once both the source and its active run have ended. */
 	expiresAt?: number;

@@ -897,7 +897,7 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/tui/test/composer-welcome-scrollback.test.ts",
 			"packages/tui/test/transcript-container.test.ts",
 			"packages/tui/test/transcript-seam-loss.test.ts",
-			"packages/tui/test/thinking-preview.test.ts",
+			"packages/coding-agent/test/ui/transcript/messages/assistant-message.test.tsx",
 			"packages/coding-agent/test/event-controller-thinking-preview.test.ts",
 			"packages/coding-agent/test/interactive-terminal-e2e.test.ts",
 			"packages/coding-agent/test/modes/utils/render-initial-messages.test.ts",

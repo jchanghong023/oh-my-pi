@@ -2,59 +2,31 @@ import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import * as uiHelpers from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import * as imageLoading from "@oh-my-pi/pi-coding-agent/utils/image-loading";
+import { imageAttachmentSource } from "@oh-my-pi/pi-coding-agent/utils/image-source";
 import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
+import { signal } from "@oh-my-pi/pi-tui";
+import { jsx } from "@oh-my-pi/pi-tui/jsx-runtime";
+import { createInteractiveModeContext, type ContextOverrides } from "./helpers/interactive-mode-context";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 const TINY_PNG = encodeRawPng(Uint8Array.of(0, 0, 0, 255), 1, 1, 4).toString("base64");
 
-interface ImageOwnershipHarness {
-	ctx: InteractiveModeContext;
-	editor: {
-		pendingImages: ImageContent[];
-		pendingImageLinks: (string | undefined)[];
-		imageLinks: (string | undefined)[] | undefined;
-		insertAtom: (text: string, label: string) => void;
-		pasteText: (text: string) => void;
-	};
-	focus: { current: Component | null };
+function createContext(sessionManager: SessionManager, overrides: ContextOverrides = {}) {
+	return createInteractiveModeContext({ sessionManager, ...overrides });
 }
 
-function createContext(sessionManager: SessionManager): ImageOwnershipHarness {
-	const editor = {
-		pendingImages: [] as ImageContent[],
-		pendingImageLinks: [] as (string | undefined)[],
-		imageLinks: undefined as (string | undefined)[] | undefined,
-		insertAtom: vi.fn(),
-		pasteText: vi.fn(),
-	};
-	const focus = { current: null as Component | null };
-	const ctx = {
-		editor,
-		sessionManager,
-		ui: { getFocused: () => focus.current, requestRender: vi.fn() },
-		showStatus: vi.fn(),
-	} as unknown as InteractiveModeContext;
-	return { ctx, editor, focus };
-}
-
-function expectUntouched({ ctx, editor }: ImageOwnershipHarness) {
-	expect(editor.pendingImages).toEqual([]);
-	expect(editor.pendingImageLinks).toEqual([]);
-	expect(editor.imageLinks).toBeUndefined();
-	expect(editor.insertAtom).not.toHaveBeenCalled();
-	expect(editor.pasteText).not.toHaveBeenCalled();
-	expect(ctx.showStatus).not.toHaveBeenCalled();
+function expectUntouched({ composer, showStatus }: ReturnType<typeof createContext>) {
+	expect(composer.pendingImages).toEqual([]);
+	expect(composer.pendingImageLinks).toEqual([]);
+	expect(composer.chips()).toEqual([]);
+	expect(composer.expandedText()).toBe("");
+	expect(showStatus).not.toHaveBeenCalled();
 }
 
 /** Pause the real dimension probe after chip preparation, immediately before draft commit. */
@@ -81,15 +53,15 @@ function pauseFinalDimensions() {
 	return { entered: entered.promise, release: () => release.resolve() };
 }
 
-function pauseImageLoad() {
+function pausePromptDimensions() {
 	const entered = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
-	const load = imageLoading.loadImageInput;
-	spyOn(imageLoading, "loadImageInput").mockImplementation(async options => {
-		const image = await load(options);
+	const metadata = Bun.Image.prototype.metadata;
+	spyOn(Bun.Image.prototype, "metadata").mockImplementation(async function (this: Bun.Image) {
+		const dimensions = await metadata.call(this);
 		entered.resolve();
 		await release.promise;
-		return image;
+		return dimensions;
 	});
 	return { entered: entered.promise, release: () => release.resolve() };
 }
@@ -118,50 +90,54 @@ describe("guarded image path paste ownership", () => {
 	});
 
 	it("does not append images, links, atoms or text when ownership expires during dimensions", async () => {
-		const harness = createContext(sessionManager);
+		const ctx = createContext(sessionManager);
 		const gate = pauseFinalDimensions();
 		let current = true;
-		const pending = new InputController(harness.ctx).handleImagePathPaste(imagePath, () => current);
+		const pending = new InputController(ctx).handleImagePathPaste(imagePath, () => current);
 		await gate.entered;
-		expectUntouched(harness);
+		expectUntouched(ctx);
 		current = false;
 		gate.release();
 		await pending;
-		expectUntouched(harness);
-		expect(harness.ctx.ui.requestRender).not.toHaveBeenCalled();
+		expectUntouched(ctx);
 	});
 
 	it("does not mutate the main draft when native focus moves during dimensions", async () => {
-		const harness = createContext(sessionManager);
+		const ctx = createContext(sessionManager);
 		const gate = pauseFinalDimensions();
-		const pending = new InputController(harness.ctx).handleImagePathPaste(imagePath, () => true);
+		const pending = new InputController(ctx).handleImagePathPaste(imagePath, () => true);
 		await gate.entered;
-		const newFocus = { render: () => [], pasteText: vi.fn() };
-		harness.focus.current = newFocus;
-		gate.release();
-		await pending;
-		expectUntouched(harness);
-		expect(newFocus.pasteText).not.toHaveBeenCalled();
+		const paste = spyOn(ctx.shell, "paste");
+		const prompt = ctx.shell.overlays.show(() => jsx("col", {}));
+		try {
+			gate.release();
+			await pending;
+			expectUntouched(ctx);
+			expect(paste).not.toHaveBeenCalled();
+		} finally {
+			prompt.close();
+		}
 	});
 
 	it("commits a current real PNG with dimensions, link and original attachment source", async () => {
-		const harness = createContext(sessionManager);
+		const ctx = createContext(sessionManager);
+		const { composer } = ctx;
 		const gate = pauseFinalDimensions();
-		const pending = new InputController(harness.ctx).handleImagePathPaste(imagePath, () => true);
+		const pending = new InputController(ctx).handleImagePathPaste(imagePath, () => true);
 		await gate.entered;
-		expectUntouched(harness);
+		expectUntouched(ctx);
 		gate.release();
 		await pending;
-		expect(harness.editor.pendingImages).toHaveLength(1);
-		const image = harness.editor.pendingImages[0]!;
+		expect(composer.pendingImages).toHaveLength(1);
+		const image = composer.pendingImages[0]!;
 		expect(image.data).toBe(TINY_PNG);
 		expect(image.mimeType).toBe("image/png");
 		expect(imageAttachmentSource(image)).toEqual({ path: imagePath, kind: "image" });
-		expect(harness.editor.pendingImageLinks).toEqual([imagePath]);
-		expect(harness.editor.imageLinks).toBe(harness.editor.pendingImageLinks);
-		expect(harness.editor.insertAtom).toHaveBeenCalledWith(expect.any(String), "[Image #1, 1x1]");
-		expect(harness.editor.pasteText).not.toHaveBeenCalled();
-		expect(harness.ctx.showStatus).not.toHaveBeenCalled();
+		expect(composer.pendingImageLinks).toEqual([imagePath]);
+		expect(composer.chips()).toHaveLength(1);
+		expect(composer.imageLink(composer.chips()[0]!)).toBe(imagePath);
+		expect(composer.expandedText().trimEnd()).toBe("[Image #1, 1x1]");
+		expect(ctx.showStatus).not.toHaveBeenCalled();
 	});
 
 	it("loads guarded local URLs from the owning session and keeps the relocation-safe source", async () => {
@@ -172,23 +148,24 @@ describe("guarded image path paste ownership", () => {
 			getSessionId: () => owningSession.getSessionId(),
 		});
 		await Bun.write(sourcePath, Buffer.from(TINY_PNG, "base64"));
-		const harness = createContext(owningSession);
-		await new InputController(harness.ctx).handleImagePathPaste(source, () => true);
-		expect(harness.editor.pendingImages).toHaveLength(1);
-		const image = harness.editor.pendingImages[0]!;
+		const ctx = createContext(owningSession);
+		const { composer } = ctx;
+		await new InputController(ctx).handleImagePathPaste(source, () => true);
+		expect(composer.pendingImages).toHaveLength(1);
+		const image = composer.pendingImages[0]!;
 		expect(image.data).toBe(TINY_PNG);
 		expect(imageAttachmentSource(image)).toEqual({ path: source, kind: "image" });
-		expect(harness.editor.insertAtom).toHaveBeenCalledWith(expect.any(String), "[Image #1, 1x1]");
-		const chipPath = harness.editor.pendingImageLinks[0];
+		expect(composer.expandedText().trimEnd()).toBe("[Image #1, 1x1]");
+		const chipPath = composer.pendingImageLinks[0];
 		expect(chipPath).toBeDefined();
 		expect(Buffer.from(await Bun.file(chipPath!).arrayBuffer()).toBase64()).toBe(TINY_PNG);
 	});
 
 	it("drops late clipboard fallback text and status after ownership expires", async () => {
-		const harness = createContext(sessionManager);
+		const ctx = createContext(sessionManager);
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<null>();
-		const controller = new InputController(harness.ctx, {
+		const controller = new InputController(ctx, {
 			readImage: () => {
 				entered.resolve();
 				return release.promise;
@@ -201,33 +178,47 @@ describe("guarded image path paste ownership", () => {
 		current = false;
 		release.resolve(null);
 		await pending;
-		expectUntouched(harness);
+		expectUntouched(ctx);
 	});
 
 	for (const reason of ["ownership expires", "focus moves"]) {
-		it(`does not attach to an image-accepting prompt when ${reason} during load`, async () => {
-			const harness = createContext(sessionManager);
-			const finishPaste = vi.fn();
-			const prompt = {
-				render: () => [],
-				acceptsImages: true,
-				attachImage: vi.fn(() => "[Image #1, 1x1]"),
-				pasteText: vi.fn(),
-				beginPaste: () => finishPaste,
-			};
-			harness.focus.current = prompt;
-			const gate = pauseImageLoad();
+		it(`does not attach to an image-accepting prompt when ${reason} during image preparation`, async () => {
+			const target = signal<ContextOverrides["promptPasteTarget"]>(undefined);
+			const ctx = createInteractiveModeContext({
+				sessionManager,
+				get promptPasteTarget() {
+					return target();
+				},
+			});
+			const prompt = ctx.shell.overlays.show(() => jsx("col", {}));
+			const attachImage = vi.fn();
+			const setText = vi.fn();
+			const paste = spyOn(ctx.shell, "paste");
+			target.set({ node: prompt.node, attachImage, setText });
+			expect(ctx.shell.focused()).toBe(prompt.node);
+			const gate = pausePromptDimensions();
 			let current = true;
-			const pending = new InputController(harness.ctx).handleImagePathPaste(imagePath, () => current);
-			await gate.entered;
-			if (reason === "ownership expires") current = false;
-			else harness.focus.current = null;
-			gate.release();
-			await pending;
-			expectUntouched(harness);
-			expect(prompt.attachImage).not.toHaveBeenCalled();
-			expect(prompt.pasteText).not.toHaveBeenCalled();
-			expect(finishPaste).toHaveBeenCalledWith(undefined);
+			const pending = new InputController(ctx).handleImagePathPaste(imagePath, () => current);
+			try {
+				await Promise.race([
+					gate.entered,
+					pending.then(() => {
+						throw new Error("Guarded image paste did not probe dimensions for the focused prompt");
+					}),
+				]);
+				if (reason === "ownership expires") current = false;
+				else ctx.shell.focus(ctx.composer.field);
+				gate.release();
+				await pending;
+				expectUntouched(ctx);
+				expect(attachImage).not.toHaveBeenCalled();
+				expect(setText).not.toHaveBeenCalled();
+				expect(paste).not.toHaveBeenCalled();
+			} finally {
+				gate.release();
+				target.set(undefined);
+				prompt.close();
+			}
 		});
 	}
 });

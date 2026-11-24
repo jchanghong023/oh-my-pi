@@ -1,7 +1,7 @@
 import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
-import type { Operation } from "@oh-my-pi/pi-tui/tools/edit";
-import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import type { Operation } from "../tools/details/edit";
+import type { ToolResult } from "../ui/tools/contract";
 import { toolOutputSource } from "./live-tool-output-text";
 
 export interface TurnToolDiff {
@@ -57,7 +57,7 @@ export class LatestTurnToolDiffs {
 
 		const args = toolName === "bash" ? this.#bashArgs.get(toolCallId) : undefined;
 		if (toolName === "bash") this.#bashArgs.delete(toolCallId);
-		const result: ToolRenderResult<unknown> | undefined = event.result;
+		const result: ToolResult<unknown> | undefined = event.result;
 		if (event.isError || event.cancelled || result?.isError) return;
 		const { name, details, dispatch, shellDetails } = toolOutputSource(toolName, result, args);
 		if (!details || details.isError === true || details.cancelled === true) return;

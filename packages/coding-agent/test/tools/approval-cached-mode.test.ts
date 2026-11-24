@@ -30,7 +30,7 @@ import { approvalTargetKey, approvalTreeSearchKey } from "@oh-my-pi/pi-coding-ag
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { OpenWikiReadTool, OpenWikiSearchTool } from "@oh-my-pi/pi-coding-agent/tools/openwiki";
-import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { shortenPath } from "@oh-my-pi/pi-coding-agent/utils/render-utils";
 import { getAgentDir, isRecord, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 /** Tool that keys `args.path` like read/write/edit do. */
@@ -447,8 +447,6 @@ describe("always-ask-cached wrapper cycle", () => {
 				getEditorText: () => "",
 				editor: async () => undefined,
 				addAutocompleteProvider: () => {},
-				setEditorComponent: () => {},
-				getEditorComponent: () => undefined,
 				get theme() {
 					return {} as never;
 				},

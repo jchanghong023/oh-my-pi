@@ -42,7 +42,6 @@ import {
 import Update from "@oh-my-pi/pi-coding-agent/commands/update";
 import { $which, removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import { canCreateSymlinks } from "./helpers/symlink-privilege";
 import { updateRepositoryTests } from "./helpers/update-repository-test";
 
@@ -2198,9 +2197,6 @@ describe("update-cli concurrent binary updates", () => {
 	const verify = async () => ({ ok: true, actual: version });
 
 	async function prepare(): Promise<{ dir: string; targetPath: string }> {
-		const loadedTheme = await getThemeByName("dark");
-		if (!loadedTheme) throw new Error("theme unavailable");
-		setThemeInstance(loadedTheme);
 		vi.spyOn(console, "log").mockImplementation(() => {});
 		const dir = await makeTempDir();
 		const targetPath = path.join(dir, "omp");

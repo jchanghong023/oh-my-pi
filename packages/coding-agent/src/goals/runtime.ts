@@ -2,7 +2,7 @@ import { escapeXmlText, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import goalBudgetLimitPrompt from "../prompts/goals/goal-budget-limit.md" with { type: "text" };
 import goalContinuationPrompt from "../prompts/goals/goal-continuation.md" with { type: "text" };
 import goalModeActivePrompt from "../prompts/goals/goal-mode-active.md" with { type: "text" };
-import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
+import type { Goal } from "../tools/details/goal";
 import type { GoalAutopilotRequest } from "./request-context";
 import type { GoalBudgetSteering, LocalGoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "./state";
 

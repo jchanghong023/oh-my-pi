@@ -104,8 +104,11 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 							await tui("type", command.slice(0, -1));
 							await eventually(
 								() => nativeDraftSnapshot(tui),
-								({ screen, cursor }) =>
-									nativeDraftMatches(screen, command.slice(0, -1), cursor) && selected.test(screen),
+								({ screen, cursor }) => {
+									if (!nativeDraftMatches(screen, command.slice(0, -1), cursor)) return false;
+									const { lines, end } = composerBounds(screen);
+									return selected.test(lines.slice(end + 1).join("\n"));
+								},
 							);
 							await tui("key", "press", "Tab");
 							// Tab inserts the exact /skill:<name> command plus a space.
@@ -116,7 +119,7 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 								() => nativeDraftSnapshot(tui),
 								({ screen, cursor }) =>
 									nativeDraftMatches(screen, completedDraft, cursor) &&
-									cursor.x === 3 + completedDraft.length + 1,
+									cursor.x === 3 + Bun.stringWidth(completedDraft) + 1,
 							);
 							await clearNativeDraft(tui);
 						}
@@ -158,11 +161,11 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 							() => nativeDraftSnapshot(tui),
 							({ screen, cursor }) => {
 								const { lines, start, end } = composerBounds(screen);
-								if (start < 0 || end <= start || cursor.y !== end) return false;
-								const input = lines[end]!.slice(3);
+								if (start < 0 || cursor.y <= start || cursor.y > end) return false;
+								const input = lines[cursor.y]!.slice(3);
 								return (
 									(cursor.x === 3 + turnMarker.length && input.startsWith(turnMarker)) ||
-									(end === start + 1 && input.startsWith("📄 #"))
+									(cursor.y === start + 1 && input.startsWith("📄 #"))
 								);
 							},
 						);

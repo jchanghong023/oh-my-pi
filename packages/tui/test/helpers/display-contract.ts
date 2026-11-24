@@ -1,5 +1,5 @@
-import type { TUI } from "../../src/tui";
-import type { VirtualTerminal } from "../virtual-terminal";
+import type { Vt } from "../driver-output/vt";
+import type { VtDriver } from "./vt-surface";
 
 export interface DisplayFrame {
 	event: string;
@@ -21,13 +21,14 @@ export class DisplayContract {
 		this.#seed = seed;
 	}
 
-	observe(event: string, terminal: VirtualTerminal, check?: (frame: DisplayFrame) => void): DisplayFrame {
+	observe(event: string, terminal: Vt, check?: (frame: DisplayFrame) => void): DisplayFrame {
+		const { x, y, visible } = terminal.term.cursor;
 		const frame: DisplayFrame = {
 			event,
-			columns: terminal.columns,
-			rows: terminal.rows,
-			viewport: terminal.getViewport(),
-			cursor: { ...terminal.getCursor(), visible: terminal.isCursorVisible() },
+			columns: terminal.term.columns,
+			rows: terminal.term.rows,
+			viewport: terminal.screen(),
+			cursor: { row: y, col: x, visible },
 		};
 		this.#frames.push(frame);
 		if (this.#frames.length > EVIDENCE_FRAMES) this.#frames.shift();
@@ -68,13 +69,13 @@ export class DisplayContract {
 	}
 
 	/**
-	 * Inspect every actual TUI frame write. The TUI isolates listener errors, so
-	 * retain the first failure and require checkpoints to call assertHealthy().
+	 * Inspect each actual frame. Keep the first failure without interrupting
+	 * the writer, so later checkpoints can report a transient corruption.
 	 */
-	watch(ui: TUI, terminal: VirtualTerminal, event: () => string, check?: (frame: DisplayFrame) => void): () => void {
-		return ui.addFrameWriteListener(() => {
+	watch(driver: VtDriver, event: () => string, check?: (frame: DisplayFrame) => void): () => void {
+		return driver.onPaint(() => {
 			try {
-				this.observe(event(), terminal, check);
+				this.observe(event(), driver.vt, check);
 			} catch (error) {
 				this.#failure ??= error instanceof Error ? error : new Error(String(error));
 			}

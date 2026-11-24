@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { MAX_IMAGE_INPUT_BYTES } from "@oh-my-pi/pi-tui/chat/image-loading";
+import { MAX_IMAGE_INPUT_BYTES } from "@oh-my-pi/pi-coding-agent/utils/image-input";
 import { type SketchServer, startSketchServer } from "../src/sketch/server";
 import { encodeRawPng } from "../src/utils/png-encode";
 

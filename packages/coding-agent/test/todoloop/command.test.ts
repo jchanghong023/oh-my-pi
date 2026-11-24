@@ -2,14 +2,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
-import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 import { executeBuiltinSlashCommand } from "../../src/slash-commands/builtin-registry";
 import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 import type { TodoLoopRunOptions, TodoLoopState } from "../../src/todoloop/runner";
-import { TodoLoopStatusBlock } from "../../src/todoloop/presentation";
-import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
+import { initTheme } from "../../src/ui/theme/service";
+import { attachTerminal, createInteractiveModeContext, renderTranscript } from "../helpers/interactive-mode-context";
 
 const dirs: string[] = [];
 async function harness() {
@@ -25,7 +23,6 @@ async function harness() {
 		attempt: 1,
 	}));
 	const ctx = createInteractiveModeContext({
-		editor: new CustomEditor(getEditorTheme()),
 		sessionManager: { getCwd: () => cwd },
 		session: { sessionId: "todo-owner", sessionGeneration: 0, runTodoLoop },
 		registerHostShutdown: () => () => {},
@@ -35,8 +32,8 @@ async function harness() {
 	return { cwd, ctx, execute, runTodoLoop };
 }
 
-beforeAll(async () => {
-	await initTheme(false);
+beforeAll(() => {
+	initTheme();
 });
 afterEach(async () => {
 	for (const dir of dirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
@@ -65,8 +62,7 @@ describe("native /todoloop command", () => {
 			expect(await h.execute(`"${relative}" --check`)).toBe(true);
 			expect(h.runTodoLoop).not.toHaveBeenCalled();
 			expect(await Bun.file(file).text()).toBe(content);
-			const block = h.ctx.chatContainer.children.find(child => child instanceof TodoLoopStatusBlock)!;
-			const rendered = block.render(120).join("\n");
+			const rendered = renderTranscript(h.ctx).join("\n");
 			expect(rendered).toContain("1/4");
 			expect(rendered).toContain("1/3");
 			for (const text of ["Finished", "Active", "Later", "[x] 8", "[ ] 2", "[ ] 1", "[ ] 9"])
@@ -79,7 +75,7 @@ describe("native /todoloop command", () => {
 			const first = rendered.split("\n").at(-1)!;
 			expect(first).toMatch(/group.*2/i);
 			expect(first).toMatch(/task.*2/i);
-			expect(h.ctx.statusContainer.children).toHaveLength(0);
+			expect(h.ctx.hud.widgets.above()).toHaveLength(0);
 		},
 	);
 
@@ -91,7 +87,7 @@ describe("native /todoloop command", () => {
 		await h.execute("complete.md --check");
 		expect(h.runTodoLoop).not.toHaveBeenCalled();
 		expect(await Bun.file(file).text()).toBe(content);
-		const rendered = h.ctx.chatContainer.children.map(child => child.render(120).join("\n")).join("\n");
+		const rendered = renderTranscript(h.ctx).join("\n");
 		expect(rendered).toContain("2/2 tasks");
 		expect(rendered).toContain("2/2 groups");
 		expect(rendered.split("\n").at(-1)).toMatch(/group.*none.*task.*none/i);
@@ -114,7 +110,7 @@ describe("native /todoloop command", () => {
 			const h = await harness();
 			if (content !== undefined) await Bun.write(path.join(h.cwd, "bad.md"), content);
 			await h.execute("bad.md --check");
-			const rendered = h.ctx.chatContainer.children.map(child => child.render(120).join("\n")).join("\n");
+			const rendered = renderTranscript(h.ctx).join("\n");
 			expect(rendered).toContain("file_error");
 			expect(h.runTodoLoop).not.toHaveBeenCalled();
 			if (content !== undefined) expect(await Bun.file(path.join(h.cwd, "bad.md")).text()).toBe(content);
@@ -125,17 +121,21 @@ describe("native /todoloop command", () => {
 		const h = await harness();
 		const finished = Promise.withResolvers<TodoLoopState>();
 		h.runTodoLoop.mockImplementation(() => finished.promise);
-		h.ctx.editor.setText("new draft");
+		h.ctx.composer.setText("new draft");
 		const filePath = path.join(h.cwd, "tasks with spaces.md");
 		await h.execute(`"${filePath}"`);
 		expect(h.runTodoLoop).toHaveBeenCalledTimes(1);
 		expect(h.runTodoLoop.mock.calls[0]![0].filePath).toBe(filePath);
-		expect(h.ctx.editor.getText()).toBe("new draft");
+		expect(h.ctx.composer.text()).toBe("new draft");
 		await h.execute(`"${filePath}"`);
 		expect(h.runTodoLoop).toHaveBeenCalledTimes(1);
 		const options = h.runTodoLoop.mock.calls[0]![0];
-		const block = h.ctx.statusContainer.children[0]!;
-		const before = block.render(100).join("\n");
+		const term = attachTerminal(h.ctx);
+		try {
+			expect(term.screen().join("\n")).toContain("TodoLoop");
+		} finally {
+			term.dispose();
+		}
 		Object.defineProperty(h.ctx.session, "sessionGeneration", { value: 1, configurable: true });
 		options.onState?.({
 			phase: "running",
@@ -146,7 +146,7 @@ describe("native /todoloop command", () => {
 			totalGroups: 3,
 			attempt: 2,
 		});
-		expect(block.render(100).join("\n")).toBe(before);
+		expect(h.ctx.hud.widgets.above()).toHaveLength(0);
 		finished.resolve({
 			phase: "stopped",
 			filePath,

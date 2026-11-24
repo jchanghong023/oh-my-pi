@@ -40,7 +40,7 @@ function createRuntime(settings = Settings.isolated()) {
 		runtime: {
 			ctx: {
 				settings,
-				editor: { setText },
+				composer: { setText },
 				showStatus,
 				showWarning,
 				session: { prompt },

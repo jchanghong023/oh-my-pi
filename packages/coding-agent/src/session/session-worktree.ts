@@ -5,8 +5,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { sanitizeDisplayLines, sanitizeDisplayWarnings, shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { $which, hashPath } from "@oh-my-pi/pi-utils";
+import { sanitizeDisplayLines, sanitizeDisplayWarnings, shortenPath } from "../utils/render-utils";
 import type { SettingValueOf } from "../config/registry";
 import type { Settings } from "../config/settings";
 import type { cfgWorktreeOnExit } from "../task/settings";

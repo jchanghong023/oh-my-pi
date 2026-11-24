@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import { expectVisibleDraft } from "../helpers/compact-screen-recording";
+import { composerBounds, expectVisibleDraft } from "../helpers/compact-screen-recording";
 import { createMixedChildren } from "../helpers/mixed-session-children";
 import { createMixedWorkspace } from "../helpers/mixed-session-workspace";
 import { contentText, MARKER, respond, type ModelRequest, type Reply } from "./provider-fixture";
@@ -420,7 +420,15 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				allowTools.resolve();
 				// The inline form preserves the nonempty composer and lets sending its draft skip the ask.
 				// Use the form-focus key instead of moving the cursor inside the draft.
-				await tui("expect", "text", "Alt+E 回答", "--timeout", "60000");
+				await tui("expect", "text", "Alt+E answers them", "--timeout", "60000");
+				// At 28 rows the long draft and the bottom of the ask fit, but
+				// the ask's heading can be above the viewport. Open room for it
+				// without sending or clearing the draft.
+				await tui("resize", "120", "48");
+				await screen.waitForVisualHandoff();
+				await screen.checkpoint("draft while the ask is pending", frame =>
+					expectVisibleDraft(frame, "MIXED_DRAFT_END", 120, 48),
+				);
 				await tui("key", "press", "Alt+E");
 				await tui("expect", "text", "MIXED_DECISION", "--timeout", "60000");
 				await tui("expect", "text", "Proceed", "--timeout", "30000");
@@ -430,9 +438,6 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				});
 				// Enter submits the single-question form without sending the composer draft.
 				await tui("key", "press", "Enter");
-				// Leave room for the transcript beside the long draft and both child docks.
-				await tui("resize", "120", "48");
-				await screen.waitForVisualHandoff();
 				await tui("expect", "text", "MIXED_PRECOMPACT_READY", "--timeout", "60000");
 				await tui("expect", "text", "MIXED_DRAFT_END", "--timeout", "30000");
 				await screen.checkpoint("tools and child docks settled", frame =>
@@ -1421,60 +1426,75 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 						30_000,
 					);
 				type Cell = { x: number; y: number; char: string; fg: string; bg: string; bold: boolean; dim: boolean };
-				const readRuns = async (text: string, ...markers: string[]) => {
-					const lines = text.split("\n");
-					const positions = markers.map(marker => {
-						const y = lines.findLastIndex(line => line.includes(marker));
-						expect(y, `Missing PTY text ${marker}`).toBeGreaterThanOrEqual(0);
-						const line = lines[y]!;
-						return { marker, y, x: Bun.stringWidth(line.slice(0, line.indexOf(marker))) };
-					});
-					const left = Math.min(...positions.map(({ x }) => x));
-					const top = Math.min(...positions.map(({ y }) => y));
-					const right = Math.max(...positions.map(({ x, marker }) => x + Bun.stringWidth(marker)));
-					const bottom = Math.max(...positions.map(({ y }) => y));
-					const raw = await tui("cells", `${left}`, `${top}`, `${right - left}`, `${bottom - top + 1}`, "--json");
+				// Reflow can move a row even after its text has appeared. Locate characters and
+				// sample their styles from the same emulator response.
+				const readCells = async (columns: number): Promise<Cell[][]> => {
+					const raw = await tui("cells", "0", "0", `${columns}`, `${height}`, "--json");
 					const { data } = JSON.parse(raw) as { data: { cells: Cell[] } };
-					return positions.map(({ marker, x, y }) => {
-						const cells = data.cells.filter(cell => cell.y === y);
-						let column = x;
-						return Array.from(marker, char => {
-							// Skip wide-glyph continuation cells rather than using UTF-16 string indexes.
-							const cell = cells.find(candidate => candidate.x === column);
-							expect(cell?.char, `PTY cell (${column}, ${y}) in ${marker}`).toBe(char);
-							column += Bun.stringWidth(char);
-							return cell!;
-						});
-					});
+					const rows: Cell[][] = Array.from({ length: height }, () => []);
+					for (const cell of data.cells) rows[cell.y]![cell.x] = cell;
+					return rows;
 				};
+				const cellRun = (row: Cell[], start: number, marker: string): Cell[] | undefined => {
+					const run: Cell[] = [];
+					let column = start;
+					for (const char of marker) {
+						const cell = row[column];
+						if (cell?.char !== char) return undefined;
+						run.push(cell);
+						column += Bun.stringWidth(char);
+					}
+					return run;
+				};
+				const readRuns = (columns: number, ...markers: string[]) =>
+					eventually(
+						async () => {
+							const rows = await readCells(columns);
+							const runs = markers.map(marker => {
+								for (let y = rows.length - 1; y >= 0; y--) {
+									const row = rows[y]!;
+									for (let x = 0; x < row.length; x++) {
+										const run = cellRun(row, x, marker);
+										if (run) return run;
+									}
+								}
+								return undefined;
+							});
+							return runs.every(run => run !== undefined) ? runs : undefined;
+						},
+						result => result !== undefined,
+						5_000,
+					).then(runs => {
+						if (runs === undefined) throw new Error(`Missing PTY cell runs: ${markers.join(", ")}`);
+						return runs;
+					});
 				const style = ({ fg, bold, dim }: Cell) => JSON.stringify([fg, bold, dim]);
 				const labelStyles = (cells: Cell[]) => cells.map(style).join("/");
-				const bashRuns = async (text: string, marker: string) => {
-					const [header, log, label, intent] = await readRuns(text, "运行中", marker, bashRunning, bash.intent);
+				const bashRuns = async (marker: string) => {
+					const [header, log, label, intent] = await readRuns(wide, "运行中", marker, bashRunning, bash.intent);
 					expect(header![0]!.x).toBe(1);
 					expect(log![0]!.x).toBe(header![0]!.x);
 					expect(label![0]!.x).toBe(header![0]!.x);
 					expect(intent![0]!.x).toBe(label![0]!.x + Bun.stringWidth(bashRunning) + 2);
 					return { label: label!, intent: intent! };
 				};
-				const expectAlignedGutter = async (screenText: string, marker: string) => {
-					const lines = screenText.split("\n");
-					const header = lines.findIndex(line => line.trimStart().startsWith("运行中"));
-					const body = lines.findIndex(line => line.includes(marker));
-					const status = lines.findIndex(line => line.trimStart().startsWith(bashRunning));
+				const expectAlignedGutter = async (marker: string) => {
+					// Require the activity label and intent to share the exact gutter and spacing.
+					const labels = ["运行中", marker, `${bashRunning}  ${bash.intent}`] as const;
+					const columns = 1 + Math.max(...labels.map(label => Bun.stringWidth(label)));
+					const rows = await readCells(columns);
+					const [header, body, status] = labels.map(label => rows.findIndex(row => cellRun(row, 1, label))) as [
+						number,
+						number,
+						number,
+					];
 					expect(header).toBeGreaterThanOrEqual(0);
 					expect(body).toBeGreaterThan(header);
 					expect(status).toBeGreaterThan(body);
-					const raw = await tui("cells", "0", `${header}`, "2", `${status - header + 1}`, "--json");
-					const { data } = JSON.parse(raw) as { data: { cells: Cell[] } };
-					const at = (x: number, y: number) => {
-						const cell = data.cells.find(cell => cell.x === x && cell.y === y);
-						if (!cell) throw new Error(`Missing PTY cell (${x}, ${y})`);
-						return cell.bg;
-					};
 					for (const y of [header, body]) {
-						expect(at(0, y)).toBe(at(0, status));
-						expect(at(1, y)).not.toBe(at(0, y));
+						const [gutter, content] = rows[y]!;
+						expect(gutter?.bg).toBe(rows[status]![0]!.bg);
+						expect(content!.bg).not.toBe(gutter!.bg);
 					}
 				};
 				await tui("submit", prompt);
@@ -1496,7 +1516,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 					// Plain Write returns a receipt, not an original Diff. Verify the change on disk.
 					expect(full.screen).not.toContain(source.evidence);
 					expect(await Bun.file(path.join(cwd, source.file)).text()).toBe(source.evidence);
-					const [label, pathRun, intent] = await readRuns(full.screen, writeDone, target, source.intent);
+					const [label, pathRun, intent] = await readRuns(wide, writeDone, target, source.intent);
 					expect(pathRun![0]!.y).toBe(intent![0]!.y);
 					expect(pathRun![0]!.x).toBeLessThan(intent![0]!.x);
 					const settledStyle = style(pathRun![0]!);
@@ -1508,7 +1528,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 						isCurrentWrite(text, line => !line.includes("fixture")),
 					);
 					expectVisibleDraft(files, draft, narrow, height);
-					const [narrowTarget] = await readRuns(files.screen, target);
+					const [narrowTarget] = await readRuns(narrow, target);
 					expect(style(narrowTarget![0]!)).toBe(settledStyle);
 					await tui("resize", String(wide), String(height));
 					if (index === 0) startSecondWrite.resolve();
@@ -1528,7 +1548,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				const sampleProgress = () =>
 					observe("Bash repeatedly updates its visible tail", text => running(text) && lastTick(text) >= 6);
 				const firstProgress = await sampleProgress();
-				const initial = await bashRuns(firstProgress.screen, tickPrefix);
+				const initial = await bashRuns(tickPrefix);
 				const progressSweeps = new Set([labelStyles(initial.label)]);
 				const staticIntent = labelStyles(initial.intent);
 				const seenTicks = new Set([lastTick(firstProgress.screen)]);
@@ -1537,7 +1557,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				await eventually(
 					async () => {
 						const frame = await sampleProgress();
-						const rendered = await bashRuns(frame.screen, tickPrefix);
+						const rendered = await bashRuns(tickPrefix);
 						progressSweeps.add(labelStyles(rendered.label));
 						expect(labelStyles(rendered.intent)).toBe(staticIntent);
 						expectVisibleDraft(frame, draft, wide, height);
@@ -1556,15 +1576,15 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				expect(tail.screen.split(command)).toHaveLength(2);
 				for (const marker of output.slice(-5)) expect(tail.screen).toContain(marker);
 				expect(tail.screen).not.toContain(output.at(-6)!);
-				await bashRuns(tail.screen, finalTail);
-				await expectAlignedGutter(tail.screen, finalTail);
+				await bashRuns(finalTail);
+				await expectAlignedGutter(finalTail);
 				expectVisibleDraft(tail, draft, wide, height);
 
 				const sweeps = new Set<string>();
 				await eventually(
 					async () => {
 						const frame = await observeTail("Bash stays running while readable output is quiet");
-						const rendered = await bashRuns(frame.screen, finalTail);
+						const rendered = await bashRuns(finalTail);
 						expect(labelStyles(rendered.intent)).toBe(staticIntent);
 						sweeps.add(labelStyles(rendered.label));
 						expectVisibleDraft(frame, draft, wide, height);
@@ -1574,15 +1594,16 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 					10_000,
 				);
 				await tui("resize", String(narrow), String(height));
-				const narrowTail = await observe(
-					"quiet Bash preview stays aligned at 48 columns",
-					text =>
-						text.split("\n").some(line => line.trimStart().startsWith("运行中")) &&
-						actionRows(text, bashRunning).some(line => line.includes(bash.intent)) &&
-						text.includes(finalTail),
-				);
-				await bashRuns(narrowTail.screen, finalTail);
-				await expectAlignedGutter(narrowTail.screen, finalTail);
+				const narrowTail = await observe("quiet Bash preview stays aligned at 48 columns", text => {
+					const { lines, end } = composerBounds(text);
+					return (
+						end >= 0 &&
+						Bun.stringWidth(lines[end]!.trimEnd()) === narrow &&
+						running(text) &&
+						text.includes(finalTail)
+					);
+				});
+				await expectAlignedGutter(finalTail);
 				expectVisibleDraft(narrowTail, draft, narrow, height);
 				exit.resolve();
 				startThinking.resolve();
@@ -1609,7 +1630,7 @@ test("compact PTY activity keeps path identity, output and thinking tails, and t
 				);
 				expect(thinking.screen).not.toContain("ACTIVITY_THINK_FIRST");
 				expect(thinking.screen).not.toContain("ACTIVITY_THINK_HEAD");
-				const [thinkingProse] = await readRuns(thinking.screen, "ACTIVITY_THINK_TAIL");
+				const [thinkingProse] = await readRuns(narrow, "ACTIVITY_THINK_TAIL");
 				expect(thinkingProse!.every(cell => !cell.dim && !settledForegrounds.has(cell.fg))).toBe(true);
 				expectVisibleDraft(thinking, draft, narrow, height);
 

@@ -727,6 +727,11 @@ function writeEmbeddedAddonFile(targetPath, content, mode) {
 	return publishNativeFile(tempPath, targetPath);
 }
 
+/**
+ * Refreshes the shared cache's activity time before probing. A directory the
+ * process cannot create or touch is fatal only when it must write an addon.
+ * The private offline cache has already been validated and refreshed.
+ */
 export function extractEmbeddedAddons({ files, targetDir, offlineCacheUid }) {
 	for (const file of files) {
 		if (!isSafeEmbeddedAddonFilename(file.filename)) {
@@ -736,12 +741,21 @@ export function extractEmbeddedAddons({ files, targetDir, offlineCacheUid }) {
 			throw new Error(`Unsafe embedded addon hash for ${file.filename}: ${file.hash}`);
 		}
 	}
+	let prepareError = null;
+	if (offlineCacheUid === undefined) {
+		try {
+			prepareNativeVersionDir(targetDir);
+		} catch (err) {
+			prepareError = err;
+		}
+	}
 	const writtenPaths = [];
 	for (const file of files) {
 		const targetPath = embeddedAddonPath(targetDir, file);
 		const addonDir = path.dirname(targetPath);
 		if (offlineCacheUid !== undefined) preparePrivateNativeCacheDirectory(targetDir, addonDir, offlineCacheUid);
 		if (isEmbeddedAddonFileCurrent(targetPath, file, offlineCacheUid)) continue;
+		if (prepareError) throw prepareError;
 		const content = Bun.zstdDecompressSync(fs.readFileSync(file.zstdPath));
 		if (content.length !== file.size) {
 			throw new Error(`Embedded addon size mismatch for ${file.filename}: expected ${file.size}, got ${content.length}`);
@@ -807,14 +821,6 @@ function maybeExtractEmbeddedAddon(ctx, errors, file) {
 	if (!file) return null;
 
 	startupMarker("native:extractEmbeddedAddon:start");
-	try {
-		if (ctx.offlineCacheUid === undefined) prepareNativeVersionDir(ctx.versionedDir);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		errors.push(`embedded addon dir: ${message}`);
-		return null;
-	}
-
 	try {
 		extractEmbeddedAddons({ files: [file], targetDir: ctx.versionedDir, offlineCacheUid: ctx.offlineCacheUid });
 		return embeddedAddonPath(ctx.versionedDir, file);

@@ -1,30 +1,23 @@
+import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
+import { DEFAULT_MAX_FPS, parseMaxFps } from "../config/frame-rate";
+import { MOTION_MODES, MOTION_PRESETS } from "../config/motion-presets";
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
-import { MOTION_MODES, MOTION_PRESETS } from "../config/motion-presets";
-import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
-import { cfgReadToolResultPreview } from "../tools/settings";
-import { cfgHideThinkingBlock } from "../session/settings";
-import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
-import { TREE_FILTER_MODES } from "@oh-my-pi/pi-tui/overlays/tree-selector";
+import { parseSpinnerInterval } from "../config/spinner-interval";
 import {
 	CONTEXT_LINE_MODE_VALUES,
 	CUSTOM_STATUS_LINE_DEFAULTS,
 	STATUS_LINE_PRESET_VALUES,
 	STATUS_LINE_SEGMENT_IDS,
 	STATUS_LINE_SEPARATOR_VALUES,
-} from "@oh-my-pi/pi-tui/status-line/schema";
-import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { setEditorGapComposerShape } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
-import { setEmojiAutocompleteEnabled } from "@oh-my-pi/pi-tui/prompt/prompt-action-autocomplete";
-import { WORD_COMPLETION_METHODS } from "@oh-my-pi/pi-tui/prompt/word-completion";
-import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
-import { setInlineImageMaxColumns, setInlineImageMaxRows } from "@oh-my-pi/pi-tui/render/render-utils";
-import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
-import { setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "@oh-my-pi/pi-tui/theme/theme";
-import { DEFAULT_MAX_FPS, parseMaxFps, setMaxFps } from "@oh-my-pi/pi-tui/frame-rate";
-import { setMotionEffects } from "@oh-my-pi/pi-tui/motion-effects";
-import { parseSpinnerInterval, setSpinnerInterval } from "@oh-my-pi/pi-tui/spinner-clock";
-import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
+} from "../config/status-line-schema";
+import { cfgHideThinkingBlock } from "../session/settings";
+import { cfgReadToolResultPreview } from "../tools/settings";
+import { formatKeyHint, formatKeyHints } from "../ui/keys/hints";
+import { setColorBlindMode, setSymbolPreset, setThemeSlot } from "../ui/theme/service";
+import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
+import { TREE_FILTER_MODES } from "./view-model/overlays/tree-selector";
+import { WORD_COMPLETION_METHODS } from "./view-model/prompt/word-completion";
 
 const EMPTY_UNKNOWN_RECORD: Record<string, unknown> = {};
 
@@ -75,7 +68,7 @@ export const cfgThemeDark = register({
 		options: "runtime",
 	},
 });
-effect(cfgThemeDark, name => setAutoThemeMapping("dark", name));
+effect(cfgThemeDark, name => setThemeSlot("dark", name));
 
 export const cfgThemeLight = register({
 	id: "theme.light",
@@ -89,7 +82,7 @@ export const cfgThemeLight = register({
 		options: "runtime",
 	},
 });
-effect(cfgThemeLight, name => setAutoThemeMapping("light", name));
+effect(cfgThemeLight, name => setThemeSlot("light", name));
 
 export const cfgSymbolPreset = register({
 	id: "symbolPreset",
@@ -140,7 +133,6 @@ export const cfgComposerShape = register({
 		options: "runtime",
 	},
 });
-effect(cfgComposerShape, setEditorGapComposerShape);
 
 export const cfgComposerTokenRate = register({
 	id: "composer.tokenRate",
@@ -350,7 +342,6 @@ export const cfgTuiMaxInlineImageColumns = register({
 	description:
 		"Maximum width in terminal columns for inline images (default 100). Set to 0 for unlimited (bounded only by terminal width).",
 });
-effect(cfgTuiMaxInlineImageColumns, setInlineImageMaxColumns);
 
 export const cfgTuiMaxInlineImageRows = register({
 	id: "tui.maxInlineImageRows",
@@ -359,7 +350,6 @@ export const cfgTuiMaxInlineImageRows = register({
 	description:
 		"Maximum height in terminal rows for inline images (default 20). Set to 0 to use only the viewport-based limit (60% of terminal height).",
 });
-effect(cfgTuiMaxInlineImageRows, setInlineImageMaxRows);
 
 export const cfgTuiMaxInlineImages = register({
 	id: "tui.maxInlineImages",
@@ -621,7 +611,6 @@ export const cfgTuiMaxFps = register({
 		],
 	},
 });
-effect(cfgTuiMaxFps, setMaxFps);
 
 export const cfgTuiHyperlinks = register({
 	id: "tui.hyperlinks",
@@ -636,9 +625,6 @@ export const cfgTuiHyperlinks = register({
 			"将路径和 URL 包装为 OSC 8 超链接，支持终端原生点击打开（auto：检测支持情况；off：从不；always：始终）",
 	},
 });
-// Also re-applied when a project-scoped reload (`/move`, cross-project resume, rollback) changes the
-// effective value, so pi-tui renderers gating on the shared flag track it the same instant path links do.
-effect(cfgTuiHyperlinks, applyHyperlinkSetting);
 
 export const cfgTuiMouse = register({
 	id: "tui.mouse",
@@ -717,11 +703,6 @@ export const cfgMotionResolved = combine(
 		};
 	},
 );
-effect(cfgMotionResolved, motion => {
-	setSpinnerInterval(motion.spinnerInterval);
-	setShimmerMode(motion.shimmer);
-	setMotionEffects(motion.effects);
-});
 
 export const cfgDisplayPinnedAgents = register({
 	id: "display.pinnedAgents",
@@ -807,7 +788,7 @@ export async function applyDisplayPreset(
 	if (hideThinking !== actualHideThinking)
 		overrides.push(`${cfgHideThinkingBlock.id}（${sources[cfgHideThinkingBlock.provenance(settings)]}）`);
 	if (mode !== actualMode) overrides.push(`${cfgDisplayMode.id}（${sources[cfgDisplayMode.provenance(settings)]}）`);
-	const thinking = actualHideThinking || actualMode === "clean" ? "隐藏" : "显示";
+	const thinking = actualHideThinking || actualMode !== "detailed" ? "隐藏" : "显示";
 	const tools = { clean: "隐藏", compact: "仅显示两行活动、临时输出和本轮文件差异", detailed: "详细" }[actualMode];
 	output.showWarning(
 		`显示偏好：${label}（${mode}）；当前：实时思考窗口${thinking}、工具${tools}；覆盖：${overrides.join("、")}`,
@@ -881,19 +862,17 @@ export const cfgDisplayAdvisorCollapsedLines = register({
 		],
 	},
 });
-effect(
-	combine({
-		hideToolActivity: cfgDisplayMode.map(mode => mode !== "detailed"),
-		shellVisualization: cfgDisplayShellVisualization,
-		readToolResultPreview: cfgReadToolResultPreview,
-		showImages: cfgTerminalShowImages,
-		cacheMissMarker: cfgDisplayCacheMissMarker,
-		showTokenUsage: cfgDisplayShowTokenUsage,
-		showTurnTime: cfgDisplayShowTurnTime,
-		advisorCollapsedLines: cfgDisplayAdvisorCollapsedLines,
-	}),
-	setChatTranscriptDisplayPreferences,
-);
+/** Transcript display preferences shared by the ANSI and native blocks. */
+export const cfgTranscriptDisplay = combine({
+	hideToolActivity: cfgDisplayMode.map(mode => mode !== "detailed"),
+	shellVisualization: cfgDisplayShellVisualization,
+	readToolResultPreview: cfgReadToolResultPreview,
+	showImages: cfgTerminalShowImages,
+	cacheMissMarker: cfgDisplayCacheMissMarker,
+	showTokenUsage: cfgDisplayShowTokenUsage,
+	showTurnTime: cfgDisplayShowTurnTime,
+	advisorCollapsedLines: cfgDisplayAdvisorCollapsedLines,
+});
 
 export const cfgDisplayCollapseCompacted = register({
 	id: "display.collapseCompacted",
@@ -1299,7 +1278,6 @@ export const cfgEmojiAutocomplete = register({
 		description: "根据 `:name:` 短代码推荐表情，并展开 `:D` 或 `:-)` 等文字表情",
 	},
 });
-effect(cfgEmojiAutocomplete, setEmojiAutocompleteEnabled);
 
 export const cfgPasteLargeMenuThreshold = register({
 	id: "paste.largeMenuThreshold",

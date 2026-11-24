@@ -1,5 +1,5 @@
 import { readShellWord } from "@oh-my-pi/pi-utils/shell";
-import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
+import type { LoopConditionConfig, LoopLimitRuntime } from "./view-model/status-line/loop";
 
 export type LoopLimitConfig =
 	| {

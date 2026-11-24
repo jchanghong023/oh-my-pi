@@ -1,17 +1,22 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-
-import { getSettingsForTab, TAB_GROUPS, type SettingsDisplayEntry } from "@oh-my-pi/pi-tui/overlays/settings-defs";
+import {
+	getSettingsForTab,
+	TAB_GROUPS,
+	type SettingsDisplayEntry,
+} from "@oh-my-pi/pi-coding-agent/config/settings-defs";
+import { jsx } from "@oh-my-pi/pi-tui/jsx-runtime";
+import { bubbleEvent } from "@oh-my-pi/pi-tui/dispatch";
+import { visibleWidth } from "@oh-my-pi/pi-tui/text/width";
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
-import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
-import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
-import { initTheme, setTheme } from "@oh-my-pi/pi-tui/theme";
+import { mountSettingsWindow, settingsScreen } from "../../helpers/settings-window";
 import { cfgRetryUsageAwareFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgAdvisorEnabled } from "@oh-my-pi/pi-coding-agent/advisor/settings";
+import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import "../../../src/ui/styles/overlays/composer-shape-preview";
 
-beforeAll(async () => {
-	await initTheme();
-});
+const restoreTheme = currentTheme();
+afterAll(() => setCurrentTheme(restoreTheme));
 
 describe("settings layout", () => {
 	beforeEach(async () => {
@@ -30,26 +35,18 @@ describe("settings layout", () => {
 			defaultValue: false,
 			ui: { tab: "appearance", group, label: path, description: "" },
 		});
-		const firstEntries = TAB_GROUPS.appearance.map((group, index) => entry(`group-${index}-first`, group));
-		const secondEntries = TAB_GROUPS.appearance.map((group, index) => entry(`group-${index}-second`, group));
-		const entries: SettingsDisplayEntry[] = [
+		const groups = TAB_GROUPS.appearance;
+		const entries = [
 			entry("external-first", "external"),
-			...firstEntries.reverse(),
+			...groups.map((group, index) => entry(`group-${index}-first`, group)).reverse(),
 			entry("ungrouped"),
-			...secondEntries.reverse(),
+			...groups.map((group, index) => entry(`group-${index}-second`, group)).reverse(),
 			entry("external-second", "external"),
-			{
-				path: "other-tab",
-				type: "boolean",
-				defaultValue: false,
-				ui: { tab: "model", group: TAB_GROUPS.model[0], label: "Other", description: "" },
-			},
-		];
-
-		const defs = getSettingsForTab(entries, "appearance");
-		expect(defs.map(def => def.path)).toEqual([
+			{ ...entry("other-tab"), ui: { tab: "model", label: "Other", description: "" } },
+		] satisfies SettingsDisplayEntry[];
+		expect(getSettingsForTab(entries, "appearance").map(def => def.path)).toEqual([
 			"ungrouped",
-			...TAB_GROUPS.appearance.flatMap((_, index) => [`group-${index}-first`, `group-${index}-second`]),
+			...groups.flatMap((_, index) => [`group-${index}-first`, `group-${index}-second`]),
 			"external-first",
 			"external-second",
 		]);
@@ -85,91 +82,85 @@ describe("settings layout", () => {
 			new Set(["retry.usageAwareFallback", "retry.usageReservePct", "retry.usageReservePolicy"]),
 		);
 		expect(defs.find(def => def.path === "retry.usageAwareFallback")?.type).toBe("boolean");
-		const reserveDefs = defs.filter(def => def.path !== "retry.usageAwareFallback");
-		for (const def of reserveDefs) expect(def.condition?.()).toBe(false);
+		const reserve = defs.filter(def => def.path !== "retry.usageAwareFallback");
+		for (const def of reserve) expect(def.condition?.()).toBe(false);
 		cfgRetryUsageAwareFallback.set(Settings.instance, true);
-		for (const def of reserveDefs) expect(def.condition?.()).toBe(true);
+		for (const def of reserve) expect(def.condition?.()).toBe(true);
 	});
 
-	it("keeps each wrapped status preview line inside the settings panel", () => {
-		const selector = new SettingsSelectorComponent(
-			{
-				availableThinkingLevels: [],
-				thinkingLevel: undefined,
-				availableThemes: ["dark", "light"],
-				providers: [],
-				settings: createSettingsHost(),
-				plugins: createPluginSettingsHost(process.cwd()),
-			},
-			{
-				onChange: () => {},
-				onCancel: () => {},
-				getStatusLinePreview: () => "preview first line\npreview second line",
-			},
+	it("keeps both status preview rows inside the settings frame", () => {
+		const previews = ["preview first line", "preview second line"];
+		const term = mountSettingsWindow(
+			{ callbacks: { describeStatusLinePreview: () => previews.map(text => jsx("text", { text })) } },
+			{ columns: 80 },
 		);
-		const lines = selector.render(80).map(line => Bun.stripANSI(line));
-		for (const text of ["preview first line", "preview second line"]) {
-			const line = lines.find(candidate => candidate.includes(text));
-			expect(line?.startsWith("│")).toBe(true);
-			expect(line?.endsWith("│")).toBe(true);
-			expect(line?.includes("\n")).toBe(false);
+		try {
+			const lines = settingsScreen(term).split("\n");
+			for (const text of previews) {
+				const line = lines.find(candidate => candidate.includes(text));
+				expect(line?.startsWith("│")).toBe(true);
+				expect(line?.endsWith("│")).toBe(true);
+				expect(visibleWidth(line!)).toBe(80);
+			}
+		} finally {
+			term.dispose();
 		}
 	});
 
-	it("applies the selected composer shape through the settings host", async () => {
-		await setTheme("dark");
-		const changes: Array<[string, unknown]> = [];
+	it("offers composer shapes and persists the selected machine value", () => {
 		const host = createSettingsHost();
 		host.set("composer.shape", "box");
-		const selector = new SettingsSelectorComponent(
-			{
-				availableThinkingLevels: [],
-				thinkingLevel: undefined,
-				availableThemes: ["dark", "light"],
-				providers: [],
-				settings: host,
-				plugins: createPluginSettingsHost(process.cwd()),
-			},
-			{
-				onChange: (path, value) => changes.push([path, value]),
-				onCancel: () => {},
-			},
-		);
-
-		selector.handleNativeEvent({ type: "activate", key: "", item: "composer.shape" });
-		// Cycle down to claude
-		selector.handleInput("\x1b[B");
-		selector.handleInput("\r");
-		expect(changes).toEqual([["composer.shape", "claude"]]);
-		expect(host.get("composer.shape")).toBe("claude");
+		const changes: Array<[string, unknown]> = [];
+		const term = mountSettingsWindow({
+			context: { settings: host },
+			callbacks: { onChange: (path, value) => changes.push([path, value]) },
+		});
+		try {
+			term.type("输入区形状");
+			term.press("enter");
+			const rendered = settingsScreen(term);
+			expect(rendered).toContain("输入区形状");
+			expect(rendered).toContain("Rounded Box");
+			expect(rendered).toContain("Claude Code");
+			expect(rendered).toContain("Preview:");
+			expect(rendered).toContain("Ask anything");
+			term.press("down");
+			term.press("enter");
+			expect(changes).toEqual([["composer.shape", "claude"]]);
+			expect(host.get("composer.shape")).toBe("claude");
+		} finally {
+			term.dispose();
+		}
 	});
 
-	it("persists worktree option machine values from keyboard and native selection", () => {
+	it("persists worktree machine values from keyboard and native selection", () => {
 		const host = createSettingsHost();
 		host.set("session.worktreeScope", "repo");
 		const changes: Array<[string, unknown]> = [];
-		const selector = new SettingsSelectorComponent(
-			{
-				availableThinkingLevels: [],
-				thinkingLevel: undefined,
-				availableThemes: ["titanium", "light"],
-				providers: [],
-				settings: host,
-				plugins: createPluginSettingsHost(process.cwd()),
-			},
-			{ onChange: (path, value) => changes.push([path, value]), onCancel: () => {} },
-		);
-		selector.handleNativeEvent({ type: "action", key: "", act: "page", value: "interaction", mods: [] });
-		selector.handleNativeEvent({ type: "activate", key: "", item: "session.worktreeScope" });
-		selector.handleInput("\x1b[A");
-		selector.handleInput("\r");
-		expect(host.get("session.worktreeScope")).toBe("directory");
-		expect(changes).toEqual([["session.worktreeScope", "directory"]]);
-		selector.handleNativeEvent({ type: "change", key: "", item: "session.worktreeScope", value: "repo" });
-		expect(host.get("session.worktreeScope")).toBe("repo");
-		expect(changes).toEqual([
-			["session.worktreeScope", "directory"],
-			["session.worktreeScope", "repo"],
-		]);
+		const term = mountSettingsWindow({
+			context: { settings: host },
+			callbacks: { onChange: (path, value) => changes.push([path, value]) },
+		});
+		try {
+			const path = "session.worktreeScope";
+			const root = term.surface.layer()[0]!;
+			bubbleEvent([root], { type: "action", key: "", act: "page", value: "interaction", mods: [] });
+			bubbleEvent([root], { type: "action", key: "", act: "edit", value: path, mods: [] });
+			const rendered = settingsScreen(term);
+			expect(rendered).toContain("当前目录");
+			expect(rendered).toContain("仓库工作树");
+			term.press("up");
+			term.press("enter");
+			expect(host.get(path)).toBe("directory");
+			expect(changes).toEqual([[path, "directory"]]);
+			bubbleEvent([root], { type: "change", key: "", item: path, value: "repo" });
+			expect(host.get(path)).toBe("repo");
+			expect(changes).toEqual([
+				[path, "directory"],
+				[path, "repo"],
+			]);
+		} finally {
+			term.dispose();
+		}
 	});
 });

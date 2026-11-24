@@ -1,28 +1,39 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { getCurrentThemeName, initTheme, setTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
-import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 import { cfgTasksTodoClearDelay } from "@oh-my-pi/pi-coding-agent/tools/settings";
-import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { getCurrentThemeName, initTheme, setTheme } from "../src/ui/theme/service";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { createTestTerminal } from "@oh-my-pi/pi-tui/testing/terminal";
+import { StatusHud, TodoHud } from "../src/ui/dock";
+import { createModeTerminal, type ModeTerminal, renderRows, transcriptText } from "./helpers/mode-terminal";
 import { assistantMsg } from "./utilities";
 
+/** The todo HUD's rows, plain. */
+function todoRows(mode: InteractiveMode, columns = 120): string[] {
+	return renderRows(() => TodoHud({ model: mode.hud.todo }), columns);
+}
+
+/** The status row's rows, plain. */
+function statusRows(mode: InteractiveMode, columns = 120): string[] {
+	return renderRows(() => StatusHud({ model: mode.hud.status }), columns);
+}
+
 function renderTodos(mode: InteractiveMode): string {
-	return Bun.stripANSI(mode.todoContainer.render(120).join("\n"));
+	return todoRows(mode).join("\n");
 }
 
 describe("InteractiveMode todo HUD persistence", () => {
@@ -32,11 +43,13 @@ describe("InteractiveMode todo HUD persistence", () => {
 	let mode: InteractiveMode;
 	let eventBus: EventBus;
 	let modelRegistry: ModelRegistry;
-	let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+	let terminal: ModeTerminal;
 
 	async function replaceMode(sessionManager?: SessionManager): Promise<void> {
 		if (mode) {
 			mode.stop();
+			await mode.shell.stop();
+			terminal.dispose();
 			await session.dispose();
 		}
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
@@ -55,11 +68,12 @@ describe("InteractiveMode todo HUD persistence", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, eventBus);
+		terminal = createModeTerminal();
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, eventBus, terminal.frame);
 	}
 
 	beforeAll(async () => {
-		await initTheme();
+		initTheme();
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-todo-clear-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -68,20 +82,17 @@ describe("InteractiveMode todo HUD persistence", () => {
 		await replaceMode();
 	});
 
-	beforeEach(() => {
-		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-	});
-
 	afterEach(() => {
 		session.setTodoPhases([]);
 		mode.setTodos([]);
 		vi.useRealTimers();
 		vi.restoreAllMocks();
-		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 	});
 
 	afterAll(async () => {
 		mode?.stop();
+		await mode?.shell.stop();
+		terminal?.dispose();
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
@@ -92,119 +103,9 @@ describe("InteractiveMode todo HUD persistence", () => {
 		cfgTasksTodoClearDelay.override(session.settings, todoClearDelay);
 	}
 
-	it.each(["detailed", "clean"] as const)("drops stale warnings on %s chat rebuild", async presentation => {
-		await replaceMode();
-		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
-		vi.spyOn(session, "hasBuiltInTool").mockImplementation(name => name === "todo");
-		cfgDisplayMode.override(session.settings, "compact");
-		await mode.init();
-		// Isolated settings do not own the host's process-wide display effect.
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-		const toolCallId = "todo-rebuild-failure";
-		const toolCall = {
-			...assistantMsg(""),
-			content: [{ type: "toolCall" as const, id: toolCallId, name: "todo", arguments: { todos: [] } }],
-			stopReason: "toolUse" as const,
-		};
-		const result = {
-			role: "toolResult" as const,
-			toolCallId,
-			toolName: "todo",
-			content: [{ type: "text" as const, text: "REBUILD_FAILURE_CAUSE\nFULL_REBUILD_FAILURE_DETAIL" }],
-			isError: true,
-			timestamp: Date.now(),
-		};
-		const final = assistantMsg("FINAL_ANSWER_AFTER_FAILED_TODO");
-		for (const message of [toolCall, result, final]) session.sessionManager.appendMessage(message);
-		const storedMessages = JSON.stringify(session.sessionManager.buildSessionContext().messages);
-		await mode.eventController.handleEvent({
-			type: "tool_execution_start",
-			toolCallId,
-			toolName: "todo",
-			args: { todos: [] },
-		});
-		await mode.eventController.handleEvent({
-			type: "tool_execution_end",
-			toolCallId,
-			toolName: "todo",
-			result: { content: result.content },
-			isError: true,
-		});
-		mode.addMessageToChat(final);
-		const compact = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
-		expect(compact).not.toContain("REBUILD_FAILURE_CAUSE");
-		expect(compact).not.toContain("FULL_REBUILD_FAILURE_DETAIL");
-		mode.rebuildChatFromMessages();
-		const compactRebuilt = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
-		expect(compactRebuilt).not.toContain("REBUILD_FAILURE_CAUSE");
-		expect(compactRebuilt).not.toContain("Warning:");
-
-		cfgDisplayMode.override(session.settings, presentation);
-		await Promise.resolve();
-		setChatTranscriptDisplayPreferences({ hideToolActivity: presentation === "clean" });
-		mode.hideToolActivity = presentation === "clean";
-		mode.chatContainer.setToolActivityVisible(!mode.hideToolActivity);
-		mode.rebuildChatFromMessages();
-		const rebuilt = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
-		expect(rebuilt).toContain("FINAL_ANSWER_AFTER_FAILED_TODO");
-		expect(rebuilt).not.toContain("Warning:");
-		if (presentation === "clean") expect(rebuilt).not.toContain("REBUILD_FAILURE_CAUSE");
-		// Revealing clean history must not resurrect a warning retained while hidden.
-		cfgDisplayMode.override(session.settings, "detailed");
-		await Promise.resolve();
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-		mode.hideToolActivity = false;
-		mode.chatContainer.setToolActivityVisible(true);
-		const detailed = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
-		expect(detailed.match(/REBUILD_FAILURE_CAUSE/g)).toHaveLength(1);
-		expect(detailed).toContain("FULL_REBUILD_FAILURE_DETAIL");
-		expect(detailed.indexOf("FULL_REBUILD_FAILURE_DETAIL")).toBeLessThan(
-			detailed.indexOf("FINAL_ANSWER_AFTER_FAILED_TODO"),
-		);
-		expect(detailed).not.toContain("Warning:");
-		mode.rebuildChatFromMessages();
-		expect(Bun.stripANSI(mode.chatContainer.render(180).join("\n"))).not.toContain("Warning:");
-		expect(JSON.stringify(session.sessionManager.buildSessionContext().messages)).toBe(storedMessages);
-	});
-
-	it("/clear retains a settled plan in the HUD and resumed state while retaining its history", async () => {
-		await replaceMode();
-		setTodoClearDelay(-1);
-		const phases: TodoPhase[] = [
-			{ name: "Prepare", tasks: [{ content: "verify upstream", status: "completed" }] },
-			{ name: "Merge", tasks: [{ content: "merge unnecessary changes", status: "abandoned" }] },
-		];
-		session.sessionManager.appendMessage(assistantMsg("No merge is needed."));
-		const sourceId = session.sessionManager.appendCustomEntry("user_todo_edit", { phases });
-		session.setTodoPhases(phases);
-		mode.setTodos(phases);
-		mode.setTodoExpanded(true);
-		const sessionId = session.sessionManager.getSessionId();
-		const file = session.sessionManager.getSessionFile()!;
-		expect(renderTodos(mode)).toContain("verify upstream");
-		expect(renderTodos(mode)).toContain("merge unnecessary changes");
-
-		await mode.handleResetContextCommand();
-
-		expect(session.getTodoPhases()).toEqual(phases);
-		expect(renderTodos(mode)).toContain("verify upstream");
-		expect(renderTodos(mode)).toContain("merge unnecessary changes");
-		expect(session.sessionManager.getSessionId()).toBe(sessionId);
-		expect(session.sessionManager.getBranch().find(entry => entry.id === sourceId)).toMatchObject({
-			type: "custom",
-			data: { phases },
-		});
-		await session.sessionManager.flush();
-		await replaceMode(await SessionManager.open(file));
-		await mode.reloadTodos();
-		mode.setTodoExpanded(true);
-		expect(session.getTodoPhases()).toEqual(phases);
-		expect(renderTodos(mode)).toContain("verify upstream");
-		expect(renderTodos(mode)).toContain("merge unnecessary changes");
-	});
-
-	for (const status of ["pending", "in_progress"] as const) {
-		it(`/clear retains the entire plan when a task is ${status}, including after resume`, async () => {
+	it.each(["completed", "pending", "in_progress"] as const)(
+		"/clear preserves a %s plan and its persisted snapshot",
+		async status => {
 			await replaceMode();
 			setTodoClearDelay(-1);
 			const phases: TodoPhase[] = [
@@ -215,31 +116,98 @@ describe("InteractiveMode todo HUD persistence", () => {
 						{ content: "cancelled task", status: "abandoned" },
 					],
 				},
-				{
-					name: "Remaining work",
-					tasks: [{ content: "remaining task", status }],
-				},
+				{ name: "Remaining work", tasks: [{ content: "remaining task", status }] },
 			];
-			session.sessionManager.appendMessage(assistantMsg("Work remains."));
-			session.sessionManager.appendCustomEntry("user_todo_edit", { phases });
+			const manager = session.sessionManager;
+			manager.appendMessage(assistantMsg("History before clear"));
+			const entry = manager.appendCustomEntry("user_todo_edit", { phases });
 			session.setTodoPhases(phases);
 			mode.setTodos(phases);
 			mode.setTodoExpanded(true);
-			const file = session.sessionManager.getSessionFile()!;
+			const id = manager.getSessionId();
 
 			await mode.handleResetContextCommand();
 
 			expect(session.getTodoPhases()).toEqual(phases);
+			expect(manager.getSessionId()).toBe(id);
+			expect(manager.getBranch().find(candidate => candidate.id === entry)).toMatchObject({
+				type: "custom",
+				data: { phases },
+			});
+			await manager.flush();
+			await replaceMode(await SessionManager.open(manager.getSessionFile()!));
+			setTodoClearDelay(-1);
+			await mode.reloadTodos();
+			mode.setTodoExpanded(true);
+			expect(session.getTodoPhases()).toEqual(phases);
 			expect(renderTodos(mode)).toContain("remaining task");
 			expect(renderTodos(mode)).toContain("finished task");
 			expect(renderTodos(mode)).toContain("cancelled task");
-			await session.sessionManager.flush();
-			await replaceMode(await SessionManager.open(file));
-			await mode.reloadTodos();
-			expect(session.getTodoPhases()).toEqual(phases);
-			expect(renderTodos(mode)).toContain("remaining task");
-		});
-	}
+		},
+	);
+
+	it.each(["detailed", "clean"] as const)(
+		"drops transient Todo warnings on a %s history rebuild",
+		async presentation => {
+			await replaceMode();
+			const settings = session.settings;
+			cfgDisplayMode.override(settings, "compact");
+			mode.hideToolActivity = true;
+			vi.spyOn(session, "hasBuiltInTool").mockImplementation(name => name === "todo");
+			const call = {
+				...assistantMsg(""),
+				content: [{ type: "toolCall" as const, id: "todo-failure", name: "todo", arguments: { todos: [] } }],
+				stopReason: "toolUse" as const,
+			};
+			const content = [{ type: "text" as const, text: "REBUILD_FAILURE_CAUSE\nFULL_REBUILD_FAILURE_DETAIL" }];
+			const result = {
+				role: "toolResult" as const,
+				toolCallId: "todo-failure",
+				toolName: "todo",
+				content,
+				isError: true,
+				timestamp: 2,
+			};
+			const answer = assistantMsg("FINAL_ANSWER_AFTER_FAILED_TODO");
+			await mode.eventController.handleEvent({
+				type: "tool_execution_start",
+				toolCallId: "todo-failure",
+				toolName: "todo",
+				args: { todos: [] },
+			});
+			await mode.eventController.handleEvent({
+				type: "tool_execution_end",
+				toolCallId: "todo-failure",
+				toolName: "todo",
+				result: { content },
+				isError: true,
+			});
+			const render = () => transcriptText(mode.shell, 180);
+			expect(render()).not.toContain("REBUILD_FAILURE_CAUSE");
+			for (const message of [call, result, answer]) session.sessionManager.appendMessage(message);
+			const snapshot = structuredClone(session.sessionManager.buildSessionContext().messages);
+
+			cfgDisplayMode.override(settings, presentation);
+			mode.hideToolActivity = presentation === "clean";
+			mode.rebuildChatFromMessages();
+			expect(render()).toContain("FINAL_ANSWER_AFTER_FAILED_TODO");
+			expect(render()).not.toContain("Warning:");
+			if (presentation === "clean") expect(render()).not.toContain("REBUILD_FAILURE_CAUSE");
+
+			cfgDisplayMode.override(settings, "detailed");
+			mode.hideToolActivity = false;
+			mode.toolOutputExpanded = true;
+			mode.rebuildChatFromMessages();
+			const detailed = render();
+			expect(detailed.match(/REBUILD_FAILURE_CAUSE/g)).toHaveLength(1);
+			expect(detailed).toContain("FULL_REBUILD_FAILURE_DETAIL");
+			expect(detailed.indexOf("FULL_REBUILD_FAILURE_DETAIL")).toBeLessThan(
+				detailed.indexOf("FINAL_ANSWER_AFTER_FAILED_TODO"),
+			);
+			expect(detailed).not.toContain("Warning:");
+			expect(session.sessionManager.buildSessionContext().messages).toEqual(snapshot);
+		},
+	);
 
 	it("clears closed todos from the panel instantly without mutating session history", async () => {
 		vi.useFakeTimers();
@@ -376,7 +344,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 	it("keeps a matching todo open and the plan visible when its subagent completes", async () => {
 		await replaceMode();
 		setTodoClearDelay(0);
-		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 		const phases: TodoPhase[] = [
 			{ name: "Implementation", tasks: [{ content: "Fix review comments", status: "pending" }] },
 		];
@@ -593,9 +561,10 @@ describe("InteractiveMode todo HUD anchor", () => {
 	let authStorage: AuthStorage;
 	let session: AgentSession;
 	let mode: InteractiveMode;
+	let term: ModeTerminal;
 
 	beforeAll(async () => {
-		await initTheme();
+		initTheme();
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-todo-hud-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -611,7 +580,10 @@ describe("InteractiveMode todo HUD anchor", () => {
 			settings: Settings.isolated({}),
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test");
+		// The compact todo follows the terminal's height: the shell runs on a terminal the tests resize.
+		term = createModeTerminal({ columns: 120, rows: 24 });
+		await term.start();
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, term.frame);
 	});
 
 	afterEach(() => {
@@ -622,6 +594,8 @@ describe("InteractiveMode todo HUD anchor", () => {
 
 	afterAll(async () => {
 		mode?.stop();
+		await mode?.shell.stop();
+		term?.dispose();
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
@@ -644,10 +618,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 			},
 		]);
 
-		const lines = mode.todoContainer
-			.render(80)
-			.flatMap(line => line.split("\n"))
-			.map(line => Bun.stripANSI(line));
+		const lines = todoRows(mode, 80);
 
 		// Lightened: no boxed top/bottom rules.
 		expect(lines.some(line => line === "─".repeat(80))).toBe(false);
@@ -660,11 +631,11 @@ describe("InteractiveMode todo HUD anchor", () => {
 		// is visible while the stage still has open work.
 		expect(lines.some(line => line.includes("I. Foundation") && line.includes("1/3"))).toBe(true);
 		const secondLine = lines.find(line => line.includes("second task"));
-		expect(secondLine).toContain(theme.tree.branch);
-		expect(secondLine).toContain(theme.checkbox.unchecked);
+		expect(secondLine).toContain(currentTheme().symbols.symbol("tree.branch"));
+		expect(secondLine).toContain(currentTheme().symbols.symbol("checkbox.unchecked"));
 		expect(lines.some(line => line.includes("third task"))).toBe(true);
 		const firstLine = lines.find(line => line.includes("first task"));
-		expect(firstLine).toContain(theme.checkbox.checked);
+		expect(firstLine).toContain(currentTheme().symbols.symbol("checkbox.checked"));
 		// Upcoming stage: header with its own progress, but collapsed (no task rows).
 		expect(lines.some(line => line.includes("II. Verification") && line.includes("0/1"))).toBe(true);
 		expect(lines.some(line => line.includes("run tests"))).toBe(false);
@@ -674,7 +645,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 
 	it("renders nothing when there are no todos", () => {
 		mode.setTodos([]);
-		expect(mode.todoContainer.render(80)).toHaveLength(0);
+		expect(todoRows(mode, 80)).toHaveLength(0);
 	});
 
 	it("keeps the summed progress bar but omits the roman numeral for a single-phase list", () => {
@@ -687,10 +658,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 				],
 			},
 		]);
-		const lines = mode.todoContainer
-			.render(80)
-			.flatMap(line => line.split("\n"))
-			.map(line => Bun.stripANSI(line));
+		const lines = todoRows(mode, 80);
 		// One stage still renders the compact title; progress belongs to the
 		// tree spine and tail.
 		const root = lines.find(line => line.includes("TODO"));
@@ -702,10 +670,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 	});
 
 	it("caps the visible stage list and summarizes the hidden ones in an overflow row", () => {
-		const stage = (name: string): TodoPhase => ({
-			name,
-			tasks: [{ content: `${name} task`, status: "pending" }],
-		});
+		const stage = (name: string): TodoPhase => ({ name, tasks: [{ content: `${name} task`, status: "pending" }] });
 		mode.setTodos([
 			stage("Discovery"),
 			stage("Two"),
@@ -715,10 +680,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 			stage("Six"),
 			stage("Seven"),
 		]);
-		const lines = mode.todoContainer
-			.render(80)
-			.flatMap(line => line.split("\n"))
-			.map(line => Bun.stripANSI(line));
+		const lines = todoRows(mode, 80);
 		// Active stage + four following stages render; the rest collapse into a
 		// trailing "… n more stages" row.
 		expect(lines.some(line => line.includes("II. Two"))).toBe(true);
@@ -748,13 +710,25 @@ describe("InteractiveMode todo HUD anchor", () => {
 			},
 		]);
 
-		const styled = mode.todoContainer.render(60);
+		const styledTerm = createTestTerminal(() => ({ main: TodoHud({ model: mode.hud.todo }) }), {
+			columns: 60,
+			rows: 200,
+			theme: currentTheme(),
+		});
+		const styled = [...styledTerm.rows()];
+		styledTerm.dispose();
+		while (styled.length > 0 && Bun.stripANSI(styled.at(-1)!).trim() === "") styled.pop();
 		const rows = styled.map(row => Bun.stripANSI(row).trimEnd());
 		const pad = " ".repeat(rows.find(row => row.trim() === "TODO")!.indexOf("TODO"));
 		// Rows after the first of the logical row that starts at `head` and ends at `end`.
 		const continuations = (head: string, end: string): string[] =>
 			rows.slice(rows.findIndex(row => row.includes(head)) + 1, rows.findIndex(row => row.includes(end)) + 1);
-		const { branch, last, vertical } = theme.tree;
+		const symbols = currentTheme().symbols;
+		const [branch, last, vertical] = [
+			symbols.symbol("tree.branch"),
+			symbols.symbol("tree.last"),
+			symbols.symbol("tree.vertical"),
+		];
 		const spine = `${pad} ${vertical}  `;
 
 		// A stage name hangs beneath itself, the progress spine running on beside it.
@@ -797,8 +771,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 		const original = getCurrentThemeName() ?? "dark";
 		try {
 			await setTheme(original === "light" ? "dark" : "light");
-			// A theme switch invalidates components without rebuilding the todo rows.
-			mode.todoContainer.invalidate();
+			// A theme switch repaints the rows without rebuilding them.
 			expect(renderTodos(mode)).toBe(before);
 		} finally {
 			await setTheme(original);
@@ -830,21 +803,19 @@ describe("InteractiveMode todo HUD anchor", () => {
 	});
 
 	describe("compact todo for small terminal height (< 18 rows)", () => {
-		function setTerminalRows(rows: number): void {
-			Object.defineProperty(mode.ui.terminal, "rows", {
-				get: () => rows,
-				configurable: true,
-			});
+		/** Resize the terminal to `rows` and wait for the shell to see it. */
+		async function setTerminalRows(rows: number): Promise<void> {
+			term.resize(120, rows);
+			await term.waitFor(() => mode.shell.size().rows === rows);
 		}
 
-		afterEach(() => {
-			setTerminalRows(24);
-			mode.loadingAnimation = undefined;
-			mode.statusContainer.disposeChildren();
+		afterEach(async () => {
+			await setTerminalRows(24);
+			mode.clearWorking();
 		});
 
-		it("renders todo as a single line item aligned to the right when terminal height < 18", () => {
-			setTerminalRows(15);
+		it("renders todo as a single line item aligned to the right when terminal height < 18", async () => {
+			await setTerminalRows(15);
 			mode.setTodos([
 				{
 					name: "Phase 1",
@@ -856,11 +827,11 @@ describe("InteractiveMode todo HUD anchor", () => {
 				},
 			]);
 
-			// todoContainer is empty in compact mode
-			expect(mode.todoContainer.render(100)).toHaveLength(0);
+			// The todo HUD is empty in compact mode
+			expect(todoRows(mode, 100)).toHaveLength(0);
 
-			// statusContainer renders the compact right-aligned todo above editor
-			const rendered = mode.statusContainer.render(100);
+			// The status row renders the compact right-aligned todo above the editor
+			const rendered = statusRows(mode, 100);
 			expect(rendered.length).toBeGreaterThan(0);
 			const lastLine = Bun.stripANSI(rendered[rendered.length - 1] ?? "");
 			expect(lastLine).toContain("TODO 1/3");
@@ -870,8 +841,8 @@ describe("InteractiveMode todo HUD anchor", () => {
 			expect(lastLine.startsWith(" ")).toBe(true);
 		});
 
-		it("places compact todo on the right side of the active loader / intent spinner", () => {
-			setTerminalRows(14);
+		it("places compact todo on the right side of the active loader / intent spinner", async () => {
+			await setTerminalRows(14);
 			mode.setTodos([
 				{
 					name: "Tasks",
@@ -882,12 +853,12 @@ describe("InteractiveMode todo HUD anchor", () => {
 				},
 			]);
 
-			mode.ensureLoadingAnimation();
+			mode.ensureWorkingRow();
 			mode.setWorkingMessage("Reading src/index.ts (esc to interrupt)");
 
-			expect(mode.todoContainer.render(120)).toHaveLength(0);
+			expect(todoRows(mode, 120)).toHaveLength(0);
 
-			const rendered = mode.statusContainer.render(120);
+			const rendered = statusRows(mode, 120);
 			expect(rendered.length).toBeGreaterThanOrEqual(2);
 			const lastLine = Bun.stripANSI(rendered[rendered.length - 1] ?? "");
 			// Left side has the intent spinner/message
@@ -899,8 +870,8 @@ describe("InteractiveMode todo HUD anchor", () => {
 			expect(lastLine.indexOf("Reading src/index.ts")).toBeLessThan(lastLine.indexOf("TODO 0/2"));
 		});
 
-		it("shows completed summary when all tasks are done in compact mode", () => {
-			setTerminalRows(16);
+		it("shows completed summary when all tasks are done in compact mode", async () => {
+			await setTerminalRows(16);
 			mode.setTodos([
 				{
 					name: "Tasks",
@@ -911,13 +882,13 @@ describe("InteractiveMode todo HUD anchor", () => {
 				},
 			]);
 
-			const rendered = mode.statusContainer.render(100);
+			const rendered = statusRows(mode, 100);
 			const lastLine = Bun.stripANSI(rendered[rendered.length - 1] ?? "");
 			expect(lastLine).toContain("TODO 2/2");
 			expect(lastLine).toContain("done");
 		});
 
-		it("switches dynamically between multi-line HUD and compact single line on resize", () => {
+		it("switches dynamically between multi-line HUD and compact single line on resize", async () => {
 			mode.setTodos([
 				{
 					name: "Tasks",
@@ -926,22 +897,22 @@ describe("InteractiveMode todo HUD anchor", () => {
 			]);
 
 			// Terminal >= 18 rows: full tree HUD
-			setTerminalRows(24);
-			expect(mode.todoContainer.render(100).length).toBeGreaterThan(0);
-			expect(mode.statusContainer.render(100)).toHaveLength(0);
+			await setTerminalRows(24);
+			expect(todoRows(mode, 100).length).toBeGreaterThan(0);
+			expect(statusRows(mode, 100)).toHaveLength(0);
 
 			// Terminal < 18 rows: compact mode
-			setTerminalRows(15);
-			expect(mode.todoContainer.render(100)).toHaveLength(0);
-			expect(mode.statusContainer.render(100).length).toBeGreaterThan(0);
-			const compactLine = Bun.stripANSI(mode.statusContainer.render(100).slice(-1)[0] ?? "");
+			await setTerminalRows(15);
+			expect(todoRows(mode, 100)).toHaveLength(0);
+			expect(statusRows(mode, 100).length).toBeGreaterThan(0);
+			const compactLine = Bun.stripANSI(statusRows(mode, 100).slice(-1)[0] ?? "");
 			expect(compactLine).toContain("TODO 0/1");
 			expect(compactLine).toContain("Refactor router");
 
 			// Resize back >= 18 rows
-			setTerminalRows(24);
-			expect(mode.todoContainer.render(100).length).toBeGreaterThan(0);
-			expect(mode.statusContainer.render(100)).toHaveLength(0);
+			await setTerminalRows(24);
+			expect(todoRows(mode, 100).length).toBeGreaterThan(0);
+			expect(statusRows(mode, 100)).toHaveLength(0);
 		});
 	});
 });

@@ -30,7 +30,6 @@ import {
 	procmgr,
 } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
-import { isLightTheme } from "@oh-my-pi/pi-tui/theme/theme";
 import { JSONC, YAML } from "bun";
 import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
@@ -72,6 +71,7 @@ import {
 	resetSettingsInstancesForTest,
 	withActiveSettings as runWithActiveSettings,
 } from "./settings-context";
+import { isLightTheme } from "../ui/theme/service";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
@@ -2426,6 +2426,46 @@ export class Settings {
 		this.#updateRuntimeModelRoleOverride(role, undefined);
 	}
 
+	/** Replace roles in the configured storage layer and synchronize runtime overrides. */
+	replaceModelRoles(modelRoles: ReadOnlyDict<string>): void {
+		const project = cfgModelRoleStorage.get(this) === "project";
+		const roles = new Set([...Object.keys(this.getModelRoles()), ...Object.keys(modelRoles)]);
+		for (const role of roles) {
+			const value = Object.hasOwn(modelRoles, role) ? modelRoles[role] : undefined;
+			if (project) {
+				if (value !== undefined) this.setProjectModelRole(role, value);
+				else if (this.getProjectModelRole(role) || this.getModelRoleProvenance(role) === "runtime") {
+					this.clearProjectModelRole(role);
+				}
+			} else if (
+				value !== undefined ||
+				this.getGlobalModelRole(role) !== undefined ||
+				this.getModelRoleProvenance(role) === "runtime"
+			) {
+				this.setModelRole(role, value);
+			}
+		}
+	}
+
+	/**
+	 * Detached in-memory copy with {@link replaceModelRoles} applied: same layer precedence, no saves,
+	 * no notifications. Read its roles and their provenance; never write through it.
+	 */
+	previewModelRoles(modelRoles: ReadOnlyDict<string>): Settings {
+		const preview = new Settings({ inMemory: true, cwd: this.#cwd, agentDir: this.#agentDir }, { projection: true });
+		preview.#parent = this.#parent;
+		// The role mutators replace their layer's modelRoles map instead of editing it in place.
+		preview.#global = { ...this.#global };
+		preview.#project = { ...this.#project };
+		preview.#configOverlay = this.#configOverlay;
+		preview.#overrides = { ...this.#overrides };
+		preview.#savedRuntimeModelRoleOverrides = new Map(this.#savedRuntimeModelRoleOverrides);
+		preview.#defaultModelRoles = this.#defaultModelRoles;
+		preview.#remerge();
+		preview.replaceModelRoles(modelRoles);
+		return preview;
+	}
+
 	/**
 	 * Get a model role (helper for modelRoles record).
 	 */
@@ -2440,25 +2480,6 @@ export class Settings {
 	/** Source language used when resolving automatic dictation models. */
 	getDictationLanguage(): string {
 		return cfgSttLanguage.get(this);
-	}
-
-	/** Process default that would be effective after clearing this role in model-role storage. */
-	getProcessModelRoleAfterClear(role: ModelRole | string): string | undefined {
-		// A project assignment, including a clear, blocks process defaults. In
-		// project storage, clearing a runtime override also records a project clear.
-		if (this.#hasProjectModelRoleAssignment(role)) return undefined;
-		if (cfgModelRoleStorage.get(this) === "project") {
-			return this.getModelRoleProvenance(role) === "default" ? this.#processModelRole(role) : undefined;
-		}
-		// A global clear removes this instance's global/runtime values, but not
-		// a config-overlay assignment or an inherited configured role.
-		if (
-			this.#modelRoleLayerOwns(this.#configOverlay, role) ||
-			(this.#parent && this.#parent.getModelRoleProvenance(role) !== "default")
-		) {
-			return undefined;
-		}
-		return this.#processModelRole(role);
 	}
 
 	#processModelRole(role: ModelRole | string): string | undefined {

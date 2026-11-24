@@ -156,6 +156,20 @@ export function normalizeToolNames(names: Iterable<string>): string[] {
 	return out;
 }
 
+/**
+ * Presentation order of an enabled tool set: built-ins keep their given order, then every other
+ * tool sorted by name. MCP servers connect and extensions register tools at arbitrary times, so
+ * arrival order would otherwise reach the provider tool array, `eval`'s tool-name list and the
+ * tool-command docs, and change the cached request prefix between launches (issue #20327).
+ * Applied by `SessionTools` on every tool-set change and by the SDK's initial presentation.
+ */
+export function presentationOrder(names: readonly string[], isBuiltIn: (name: string) => boolean): string[] {
+	const builtIns: string[] = [];
+	const others: string[] = [];
+	for (const name of names) (isBuiltIn(name) ? builtIns : others).push(name);
+	return builtIns.concat(others.sort());
+}
+
 /** The name the model calls tool `name` by (its custom wire name when it declares one), for prompts that reference it. */
 export function toolWireName(registry: ReadonlyMap<string, AgentTool>, name: string): string {
 	const tool = registry.get(name);

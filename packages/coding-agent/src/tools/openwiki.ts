@@ -3,7 +3,6 @@ import path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { prettifyError, type ZodError } from "zod";
 import { getOpenWikiConfigDirectory } from "../openwiki/home";
 import { loadOpenWikiVendor } from "../openwiki/vendor-loader";
@@ -12,6 +11,7 @@ import readDescription from "../prompts/tools/openwiki-read.md" with { type: "te
 import workspacesDescription from "../prompts/tools/openwiki-list-workspaces.md" with { type: "text" };
 import wikisDescription from "../prompts/tools/openwiki-list-wikis.md" with { type: "text" };
 import type { ToolSession } from ".";
+import { ToolError } from "./tool-errors";
 
 const searchSchema = type({
 	query: type("string").describe("Repository question or concept; non-empty after trimming, at most 2000 characters"),

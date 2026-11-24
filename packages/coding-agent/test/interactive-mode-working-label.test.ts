@@ -3,11 +3,11 @@
  * on every tick and kept to one terminal row. Without the clamp a long list of
  * job ids wrapped the working row onto a second line at narrow widths.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { ToolCall } from "@oh-my-pi/pi-ai";
-import { setStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { bindEffects } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -15,570 +15,175 @@ import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
-import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { cfgHideThinkingBlock, cfgProseOnlyThinking } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
+import { describeTree } from "@oh-my-pi/pi-tui/testing/corpus";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { DisplayContract, type DisplayFrame } from "../../tui/test/helpers/display-contract";
-import { withoutTerminalMultiplexer } from "../../tui/test/helpers/terminal-multiplexer";
-import { VirtualRenderScheduler } from "../../tui/test/virtual-render-scheduler";
-import { VirtualTerminal } from "../../tui/test/virtual-terminal";
-import { createAssistantMessage } from "./helpers/agent-session-setup";
-import { applyRenderFixtureEvent } from "./helpers/interactive-mode-context";
+import { initTheme } from "../src/ui/theme/service";
+import { StatusHud } from "../src/ui/dock";
+import { createModeTerminal, type ModeTerminal, renderRows } from "./helpers/mode-terminal";
 
-withoutTerminalMultiplexer();
 const COLUMNS = 40;
-
-const nativeContext: DescribeContext = {
-	cols: COLUMNS,
-	reduceMotion: false,
-	dark: true,
-	supports: () => true,
-	feature: () => true,
-};
-
-function nativeRoles(child: NativeChild): string[] {
-	const node = "k" in child ? child : child.describe?.(nativeContext);
-	if (!node) return [];
-	const role = node.p && "role" in node.p ? node.p.role : undefined;
-	return [...(role ? [role] : []), ...(node.c ?? []).flatMap(nativeRoles)];
-}
-
-interface StageGeometry {
-	input: number | undefined;
-	cursor: DisplayFrame["cursor"];
-	occupied: boolean[];
-	anchors: { row: number; line: string }[];
-}
 
 describe("InteractiveMode live working label", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let session: AgentSession;
 	let mode: InteractiveMode;
-	let focusedSession: AgentSession;
-	let suitePreferences: typeof chatTranscriptDisplayPreferences;
-	let previousPreferences: typeof chatTranscriptDisplayPreferences;
-
-	beforeEach(() => {
-		previousPreferences = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-		cfgDisplayMode.override(mode.settings, "compact");
-	});
-
-	afterEach(() => {
-		mode.loadingAnimation?.stop();
-		mode.loadingAnimation = undefined;
-		mode.statusContainer.disposeChildren();
-		cfgDisplayMode.clearOverride(mode.settings);
-		setChatTranscriptDisplayPreferences(previousPreferences);
-		setSystemTime();
-	});
+	let terminal: ModeTerminal;
 
 	beforeAll(async () => {
-		suitePreferences = { ...chatTranscriptDisplayPreferences };
-		await initTheme();
+		initTheme();
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-working-label-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("ascend", "qwen3.8-flash-next");
-		if (!model) throw new Error("Expected retained ascend/qwen3.8-flash-next presentation model");
+		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated(),
+			settings: Settings.isolated({ "display.mode": "detailed" }),
 			modelRegistry,
 		});
-		focusedSession = new AgentSession({
-			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.inMemory(tempDir.path()),
-			settings: Settings.isolated(),
-			modelRegistry,
-		});
-		mode = new InteractiveMode(session, "test");
-		Object.defineProperty(mode.ui.terminal, "columns", { get: () => COLUMNS, configurable: true });
+		terminal = createModeTerminal();
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, terminal.frame);
 	});
 
 	afterAll(async () => {
 		mode.stop();
+		await mode.shell.stop();
+		terminal.dispose();
 		await session.dispose();
-		await focusedSession.dispose();
 		authStorage.close();
 		resetSettingsForTest();
 		await tempDir.remove();
-		setChatTranscriptDisplayPreferences(suitePreferences);
 	});
 
 	it("keeps a long live label on one row", () => {
 		const jobs = ["bg_1", "bg_2", "bg_3", "bg_4", "bg_5", "bg_6"];
-		mode.ensureLoadingAnimation();
+		mode.ensureWorkingRow();
 		mode.setWorkingMessage(() => `Waiting for ${jobs.length} background jobs: ${jobs.join(", ")}`);
 
-		const rows = mode.statusContainer
-			.render(COLUMNS)
-			.map(line => Bun.stripANSI(line).trimEnd())
+		const rows = renderRows(() => StatusHud({ model: mode.hud.status }), COLUMNS)
+			.map(line => line.trimEnd())
 			.filter(line => line.length > 0);
 		expect(rows).toHaveLength(1);
 		expect(rows[0]).toContain("Waiting for 6 background jobs");
 		expect(Bun.stringWidth(rows[0] ?? "")).toBeLessThanOrEqual(COLUMNS);
 	});
 
-	it("shares the status spinner's motion for live compact model stages", async () => {
-		const terminal = new VirtualTerminal(100, 29);
-		const composer = new Composer({ terminal, tuiOptions: { renderScheduler: new VirtualRenderScheduler() } });
+	it("projects live model activity through the compact dock without duplicating the working row", async () => {
+		const settings = Settings.isolated();
+		cfgDisplayMode.set(settings, "compact");
+		const unbind = bindEffects(settings);
 		const current = new AgentSession({
 			agent: new Agent({ initialState: { model: session.model!, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.inMemory(tempDir.path()),
-			settings: Settings.isolated(),
+			settings,
 			modelRegistry: session.modelRegistry,
 		});
-		cfgDisplayMode.override(current.settings, "compact");
-		const live = new InteractiveMode(current, "test", undefined, undefined, undefined, undefined, composer);
+		const term = createModeTerminal({ columns: 100, rows: 29, settings });
+		const live = new InteractiveMode(current, "test", undefined, undefined, undefined, undefined, term.frame);
+		const roles = () =>
+			JSON.stringify(
+				live.shell.surface.dock().map(node => describeTree(node, staticEnvironment(currentTheme()), 100)),
+			);
+		const drain = () => live.eventController.runSerialized(async () => {});
+		const marker = "LIVE_THOUGHT_MARKER";
+		const rawThought = `Early reasoning\n${marker}\n\`\`\`ts\nconst INTERNAL_CODE_MARKER = 1;\n\`\`\``;
+		const empty: AssistantMessage = {
+			role: "assistant",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			content: [],
+			stopReason: "stop",
+			timestamp: 1,
+		};
+		const thinkingStart: AssistantMessage = { ...empty, content: [{ type: "thinking", thinking: "" }] };
+		const thinking: AssistantMessage = { ...empty, content: [{ type: "thinking", thinking: rawThought }] };
 		try {
 			await live.init({ suppressWelcomeIntro: true });
-			const { agent } = current;
-			const drain = () => live.eventController.runSerialized(async () => {});
-			const activity = () => live.compactThinkingPreview.render(COLUMNS);
-			const shimmerWords = (node: NativeNode): string[] => [
-				...(node.k === "shimmer" ? (node.p?.spans ?? []).map(span => span.t) : []),
-				...(node.c ?? []).flatMap(child => ("k" in child ? shimmerWords(child) : [])),
-			];
-			const shimmering = () => shimmerWords(live.compactThinkingPreview.describe(nativeContext));
-			const ansi = () => Bun.stripANSI(live.statusContainer.render(COLUMNS).join("\n"));
-			const roles = () => nativeRoles(live.statusContainer.describe(nativeContext)!);
-
-			setSystemTime(8_000);
-			agent.state.isStreaming = true;
-			agent.emitExternalEvent({ type: "agent_start" });
-			agent.emitExternalEvent({ type: "turn_start" });
+			current.agent.state.isStreaming = true;
+			current.agent.emitExternalEvent({ type: "agent_start" });
+			current.agent.emitExternalEvent({ type: "turn_start" });
 			await drain();
-			expect(live.statusLine.getTurnElapsedMs()).toBe(0);
-			expect(shimmering()).toEqual(["模型：等待响应"]);
+			await term.waitFor(rows => rows.some(line => line.includes("等待响应")));
+			expect(roles()).toContain('"omp.compact.activity"');
+			expect(roles()).not.toContain('"omp.working"');
 
-			const marker = "LIVE_THOUGHT_MARKER";
-			const empty = { ...createAssistantMessage(""), content: [] };
-			const thinkingStart = { ...empty, content: [{ type: "thinking" as const, thinking: "" }] };
-			const thought = { ...empty, content: [{ type: "thinking" as const, thinking: marker }] };
-			agent.emitExternalEvent({ type: "message_start", message: empty });
-			agent.emitExternalEvent({
+			current.agent.emitExternalEvent({ type: "message_start", message: empty });
+			current.agent.emitExternalEvent({
 				type: "message_update",
 				message: thinkingStart,
 				assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: thinkingStart },
 			});
-			agent.emitExternalEvent({
+			current.agent.emitExternalEvent({
 				type: "message_update",
-				message: thought,
-				assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: marker, partial: thought },
+				message: thinking,
+				assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: rawThought, partial: thinking },
 			});
 			await drain();
+			await term.waitFor(rows => rows.some(line => line.includes("正在思考") && line.includes(marker)));
+			expect(term.screen().filter(line => line.includes(marker))).toHaveLength(1);
+			expect(term.scrollback().join("\n")).not.toContain(marker);
+			expect(roles()).not.toContain('"omp.working"');
+			expect(term.screen().join("\n")).not.toContain("INTERNAL_CODE_MARKER");
+			cfgProseOnlyThinking.set(settings, false);
+			await term.waitFor(rows => rows.some(line => line.includes("正在思考") && line.includes("```")));
+			expect(term.screen().join("\n")).not.toContain(marker);
+			cfgProseOnlyThinking.set(settings, true);
+			await term.waitFor(rows => rows.some(line => line.includes(marker)));
 
-			// The model label animates immediately without moving or recoloring the thinking prose.
-			expect(live.statusLine.getTurnElapsedMs()).toBe(0);
-			expect(shimmering()).toEqual(["模型：正在思考"]);
-			const running = activity();
-			expect(Bun.stripANSI(running[0]!)).toContain("模型：正在思考");
-			expect(Bun.stripANSI(running[0]!)).toContain(marker);
-			expect(running.slice(1)).toEqual(["", ""]);
-			expect(live.statusContainer.render(COLUMNS)).toEqual([]);
-			expect(roles()).not.toContain("omp.working");
-			setSystemTime(8_500);
-			const animated = activity();
-			expect(animated.map(line => Bun.stripANSI(line))).toEqual(running.map(line => Bun.stripANSI(line)));
-			expect(animated[0]).not.toEqual(running[0]);
+			term.press("alt+p");
+			await term.waitFor(
+				rows => rows.some(line => line.includes("正在思考")) && !rows.some(line => line.includes(marker)),
+			);
+			expect(cfgHideThinkingBlock.get(settings)).toBe(true);
+			term.press("alt+p");
+			await term.waitFor(rows => rows.some(line => line.includes(marker)));
+			expect(cfgHideThinkingBlock.get(settings)).toBe(false);
+			expect(thinking.content).toEqual([{ type: "thinking", thinking: rawThought }]);
 
-			agent.emitExternalEvent({
+			current.agent.emitExternalEvent({
 				type: "message_update",
-				message: thought,
-				assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: marker, partial: thought },
+				message: thinking,
+				assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: rawThought, partial: thinking },
 			});
 			await drain();
-			// Finishing thinking removes its prose; only the current model stage can animate.
-			const waiting = Bun.stripANSI(activity()[0]!);
-			expect(waiting).toContain("模型：等待响应");
-			expect(waiting).not.toContain(marker);
-			expect(waiting).not.toContain("思考完成");
-			expect(shimmering()).toEqual(["模型：等待响应"]);
+			await term.waitFor(
+				rows => rows.some(line => line.includes("等待响应")) && !rows.some(line => line.includes(marker)),
+			);
 
-			agent.emitExternalEvent({ type: "message_end", message: thought });
-			await drain();
-			expect(live.statusLine.getTurnElapsedMs()).toBe(500);
-			expect(shimmering()).toEqual([]);
-			expect(activity()).toEqual(["", "", ""]);
+			live.setWorkingMessage("custom activity");
+			await term.waitFor(rows => rows.some(line => line.includes("custom activity")));
+			expect(roles()).toContain('"omp.working"');
+			live.setWorkingMessage();
 
-			// The independent working row returns outside compact while the run is still open.
-			for (const displayMode of ["clean", "detailed"] as const) {
-				cfgDisplayMode.override(current.settings, displayMode);
+			for (const presentation of ["clean", "detailed", "compact"] as const) {
+				cfgDisplayMode.set(settings, presentation);
 				await Promise.resolve();
-				expect(ansi()).toContain("处理中…");
-				expect(roles()).toContain("omp.working");
+				expect(roles().includes('"omp.compact.activity"')).toBe(presentation === "compact");
+				expect(roles().includes('"omp.working"')).toBe(presentation !== "compact");
 			}
-			cfgDisplayMode.override(current.settings, "compact");
-			await Promise.resolve();
-			expect(live.statusContainer.render(COLUMNS)).toEqual([]);
-			expect(roles()).not.toContain("omp.working");
 		} finally {
 			live.stop();
+			await live.shell.stop();
+			term.dispose();
+			unbind();
 			current.agent.state.isStreaming = false;
-			setSystemTime();
 			await current.dispose();
 		}
 	});
-
-	it("shows no tool elapsed time and stays static with shimmer disabled", async () => {
-		const terminal = new VirtualTerminal(100, 29);
-		const scheduler = new VirtualRenderScheduler();
-		const composer = new Composer({ terminal, tuiOptions: { renderScheduler: scheduler } });
-		const current = new AgentSession({
-			agent: new Agent({ initialState: { model: session.model!, systemPrompt: ["Test"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.inMemory(tempDir.path()),
-			settings: Settings.isolated(),
-			modelRegistry: session.modelRegistry,
-		});
-		cfgDisplayMode.override(current.settings, "compact");
-		const live = new InteractiveMode(current, "test", undefined, undefined, undefined, undefined, composer);
-		const contract = new DisplayContract(2113);
-		let fakeTimers = false;
-		try {
-			await live.init({ suppressWelcomeIntro: true });
-			setShimmerMode("disabled");
-			vi.useFakeTimers();
-			fakeTimers = true;
-			setSystemTime(10_000);
-			const start = { type: "agent_start" as const };
-			applyRenderFixtureEvent(current.agent.state, start);
-			await live.eventController.handleEvent(start);
-			live.ensureLoadingAnimation();
-			const dispatch = {
-				type: "tool_execution_start" as const,
-				toolCallId: "idle-clock",
-				toolName: "bash",
-				args: { command: "IDLE_CLOCK_MARKER" },
-			};
-			applyRenderFixtureEvent(current.agent.state, dispatch);
-			await live.eventController.handleEvent(dispatch);
-			await scheduler.settle(terminal);
-			const dockRows = () => live.compactThinkingPreview.render(COLUMNS).map(line => Bun.stripANSI(line));
-			const before = contract.observe("idle start", terminal).viewport.join("\n");
-			expect(before).toContain("IDLE_CLOCK_MARKER");
-			expect(before).toContain("正在执行");
-			expect(before).not.toContain("处理中…");
-			const dockBefore = dockRows();
-			for (let tick = 0; tick < 20; tick++) {
-				vi.advanceTimersByTime(125);
-				await scheduler.advance(terminal, 125);
-			}
-			const after = contract.observe("idle later", terminal).viewport.join("\n");
-			expect(after).toContain("IDLE_CLOCK_MARKER");
-			expect(after).not.toContain("处理中…");
-			// The dock row itself stays static with no tool elapsed timer (the status bar keeps its own clock).
-			expect(dockRows()).toEqual(dockBefore);
-			expect(dockRows().join("\n")).not.toMatch(/\d+(?:\.\d+)?(?:ms|s|m)\b/);
-			contract.assertHealthy();
-		} finally {
-			live.stop();
-			if (fakeTimers) vi.useRealTimers();
-			setSystemTime();
-			setShimmerMode("classic");
-			await current.dispose();
-		}
-	});
-
-	it("keeps custom activity visible for a focused agent in compact and detailed modes", async () => {
-		session.agent.state.pendingToolCalls.add("parent-call");
-		const message = createAssistantMessage("focused reply");
-		applyRenderFixtureEvent(focusedSession.agent.state, { type: "message_start", message });
-		Object.defineProperty(mode, "viewSession", { configurable: true, value: focusedSession });
-		try {
-			mode.ensureLoadingAnimation();
-			for (const displayMode of ["compact", "detailed"] as const) {
-				cfgDisplayMode.override(mode.settings, displayMode);
-				await Promise.resolve();
-				mode.setWorkingMessage("custom activity");
-				const rendered = Bun.stripANSI(mode.statusContainer.render(COLUMNS).join("\n"));
-				expect(rendered).toContain("custom activity");
-				expect(nativeRoles(mode.statusContainer.describe(nativeContext)!)).toContain("omp.working");
-			}
-			cfgDisplayMode.override(mode.settings, "compact");
-			mode.setWorkingMessage();
-			expect(mode.statusContainer.render(COLUMNS)).toEqual([]);
-			expect(nativeRoles(mode.statusContainer.describe(nativeContext)!)).not.toContain("omp.working");
-		} finally {
-			delete (mode as unknown as { viewSession?: AgentSession }).viewSession;
-			session.agent.state.pendingToolCalls.clear();
-			applyRenderFixtureEvent(focusedSession.agent.state, { type: "message_end", message });
-		}
-	});
-
-	it.each([1, 18])(
-		"keeps resumed transcript geometry stable through streamed tool calls (%i old paragraphs)",
-		async oldParagraphs => {
-			const preferences = { ...chatTranscriptDisplayPreferences };
-			setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-			const terminal = new VirtualTerminal(100, 29);
-			const scheduler = new VirtualRenderScheduler();
-			const composer = new Composer({
-				terminal,
-				tuiOptions: { renderScheduler: scheduler },
-			});
-			const manager = SessionManager.inMemory(tempDir.path());
-			const current = new AgentSession({
-				agent: new Agent({
-					initialState: { model: session.model!, systemPrompt: ["Test"], tools: [], messages: [] },
-				}),
-				sessionManager: manager,
-				settings: Settings.isolated(),
-				modelRegistry: session.modelRegistry,
-			});
-			cfgDisplayMode.override(current.settings, "compact");
-			const live = new InteractiveMode(current, "test", undefined, undefined, undefined, undefined, composer);
-			const contract = new DisplayContract(2112);
-			let unwatch = () => {};
-			let fakeTimers = false;
-			try {
-				const oldAnswer = [
-					...Array.from({ length: oldParagraphs - 1 }, (_, i) => `Old response paragraph ${i + 1}.`),
-					"OLD_RESUMED_ANSWER",
-				].join("\n\n");
-				manager.appendMessage(createAssistantMessage(oldAnswer));
-				await live.init({ suppressWelcomeIntro: true });
-				await live.renderInitialMessages();
-				live.showStatus("Resumed session");
-				const prompt = { role: "user" as const, content: "NEW_RESUMED_PROMPT", timestamp: Date.now() };
-				manager.appendMessage(prompt);
-				await live.eventController.handleEvent({ type: "message_start", message: prompt });
-				live.editor.setText("DRAFT_INPUT_MARKER");
-				await scheduler.settle(terminal);
-
-				// The scheduler clocks TUI writes; fake timers also advance any live activity animation.
-				vi.useFakeTimers();
-				fakeTimers = true;
-				const start = { type: "agent_start" as const };
-				applyRenderFixtureEvent(current.agent.state, start);
-				await live.eventController.handleEvent(start);
-				let phase = "tool stream";
-				let phaseBaseline: StageGeometry | undefined;
-				let streamingFrames = 0;
-				const stageGeometry = (frame: DisplayFrame): StageGeometry => {
-					expect(frame.viewport.join("\n")).not.toContain("处理中…");
-					const input = frame.viewport.flatMap((line, row) => (line.includes("DRAFT_INPUT_MARKER") ? [row] : []));
-					expect(input).toHaveLength(1);
-					return {
-						input: input[0],
-						cursor: frame.cursor,
-						// Tool activity may change horizontally; occupied rows and retained transcript text may not.
-						occupied: frame.viewport.slice(0, input[0]).map(line => Boolean(line.trim())),
-						anchors: frame.viewport.flatMap((line, row) =>
-							/Old response paragraph|OLD_RESUMED_ANSWER|Resumed session|NEW_RESUMED_PROMPT/.test(line)
-								? [{ row, line }]
-								: [],
-						),
-					};
-				};
-				unwatch = contract.watch(
-					live.ui,
-					terminal,
-					() => phase,
-					frame => {
-						streamingFrames++;
-						if (phaseBaseline) expect(stageGeometry(frame)).toEqual(phaseBaseline);
-					},
-				);
-				const stablePhase = async (name: string) => {
-					phaseBaseline = undefined;
-					phase = `${name}: settle`;
-					await scheduler.settle(terminal);
-					contract.assertHealthy();
-					phaseBaseline = stageGeometry(contract.observe(`${name}: baseline`, terminal));
-					for (let tick = 0; tick < 3; tick++) {
-						phase = `${name}: activity tick ${tick}`;
-						vi.advanceTimersByTime(125);
-						await scheduler.advance(terminal, 125);
-						contract.assertHealthy();
-						phase = `${name}: irrelevant update ${tick}`;
-						await live.eventController.handleEvent({
-							type: "tool_execution_update",
-							toolCallId: "already-retired-unrelated",
-							toolName: "grep",
-							args: {},
-							partialResult: { content: [{ type: "text", text: "" }] },
-						});
-						await scheduler.settle(terminal);
-						contract.assertHealthy();
-						phase = `${name}: full repaint ${tick}`;
-						live.ui.requestRender(true);
-						await scheduler.settle(terminal);
-						contract.assertHealthy();
-					}
-					phaseBaseline = undefined;
-				};
-				const calls: ToolCall[] = [
-					{ type: "toolCall", id: "resume-1", name: "grep", arguments: { pattern: "one", i: "EARLY_ONE" } },
-					{ type: "toolCall", id: "resume-2", name: "grep", arguments: { pattern: "two", i: "EARLY_TWO" } },
-					{ type: "toolCall", id: "resume-3", name: "grep", arguments: { pattern: "three", i: "EARLY_THREE" } },
-					{
-						type: "toolCall",
-						id: "resume-4",
-						name: "grep",
-						arguments: { pattern: "four", i: "LAST_GREP_MARKER" },
-					},
-					{ type: "toolCall", id: "resume-5", name: "read", arguments: { path: "last-read-marker.ts" } },
-				];
-				for (const call of calls) {
-					const empty = createAssistantMessage("");
-					empty.content = [];
-					applyRenderFixtureEvent(current.agent.state, { type: "message_start", message: empty });
-					await live.eventController.handleEvent({ type: "message_start", message: empty });
-					await stablePhase(`${call.id} message start`);
-					const partialCall: ToolCall = { ...call, arguments: {} };
-					setStreamingPartialJson(partialCall, "");
-					const partial = createAssistantMessage("");
-					partial.content = [partialCall];
-					partial.stopReason = "toolUse";
-					const callStart = {
-						type: "message_update" as const,
-						message: partial,
-						assistantMessageEvent: { type: "toolcall_start" as const, contentIndex: 0, partial },
-					};
-					applyRenderFixtureEvent(current.agent.state, callStart);
-					await live.eventController.handleEvent(callStart);
-					await stablePhase(`${call.id} arguments start`);
-					const serialized = JSON.stringify(call.arguments);
-					const split = Math.max(1, Math.floor(serialized.length / 2));
-					for (const [index, json] of [serialized.slice(0, split), serialized].entries()) {
-						partialCall.arguments = index === 0 ? {} : call.arguments;
-						setStreamingPartialJson(partialCall, json);
-						const delta = {
-							type: "message_update" as const,
-							message: partial,
-							assistantMessageEvent: {
-								type: "toolcall_delta" as const,
-								contentIndex: 0,
-								delta: index === 0 ? json : serialized.slice(split),
-								partial,
-							},
-						};
-						applyRenderFixtureEvent(current.agent.state, delta);
-						await live.eventController.handleEvent(delta);
-						await stablePhase(`${call.id} arguments delta ${index}`);
-					}
-					const message = createAssistantMessage("");
-					message.content = [call];
-					message.stopReason = "toolUse";
-					const update = {
-						type: "message_update" as const,
-						message,
-						assistantMessageEvent: {
-							type: "toolcall_end" as const,
-							contentIndex: 0,
-							toolCall: call,
-							partial: message,
-						},
-					};
-					applyRenderFixtureEvent(current.agent.state, update);
-					await live.eventController.handleEvent(update);
-					await stablePhase(`${call.id} arguments finalized`);
-					manager.appendMessage(message);
-					applyRenderFixtureEvent(current.agent.state, { type: "message_end", message });
-					await live.eventController.handleEvent({ type: "message_end", message });
-					await stablePhase(`${call.id} message end`);
-					const toolStart = {
-						type: "tool_execution_start" as const,
-						toolCallId: call.id,
-						toolName: call.name,
-						args: call.arguments,
-					};
-					applyRenderFixtureEvent(current.agent.state, toolStart);
-					await live.eventController.handleEvent(toolStart);
-					await stablePhase(`${call.id} execution start`);
-					const result = { content: [{ type: "text" as const, text: "completed" }] };
-					const toolEnd = {
-						type: "tool_execution_end" as const,
-						toolCallId: call.id,
-						toolName: call.name,
-						result,
-						isError: false,
-					};
-					applyRenderFixtureEvent(current.agent.state, toolEnd);
-					await live.eventController.handleEvent(toolEnd);
-					manager.appendMessage({
-						role: "toolResult",
-						toolCallId: call.id,
-						toolName: call.name,
-						...result,
-						isError: false,
-						timestamp: Date.now(),
-					});
-					await stablePhase(`${call.id} execution complete`);
-				}
-				live.setWorkingMessage();
-				live.ui.requestRender();
-				await scheduler.settle(terminal);
-
-				const markers = [
-					...(oldParagraphs === 1 ? ["OLD_RESUMED_ANSWER"] : []),
-					"Resumed session",
-					"NEW_RESUMED_PROMPT",
-					"last-read-marker.ts",
-					"DRAFT_INPUT_MARKER",
-				];
-				const geometry = (frame: DisplayFrame) => {
-					const rows = markers.map(marker => {
-						const found = frame.viewport.flatMap((line, index) => (line.includes(marker) ? [index] : []));
-						expect(found).toHaveLength(1);
-						return found[0]!;
-					});
-					return { rows, cursor: frame.cursor };
-				};
-				const baseline = geometry(contract.observe("waiting baseline", terminal));
-				expect(baseline.rows).toEqual([...baseline.rows].sort((a, b) => a - b));
-				expect(streamingFrames).toBeGreaterThan(0);
-				unwatch();
-				phase = "working tick";
-				let frames = 0;
-				unwatch = contract.watch(
-					live.ui,
-					terminal,
-					() => phase,
-					frame => {
-						frames++;
-						expect(geometry(frame)).toEqual(baseline);
-					},
-				);
-				for (let tick = 0; tick < 12; tick++) {
-					phase = `activity timer ${tick}`;
-					vi.advanceTimersByTime(125);
-					await scheduler.advance(terminal, 125);
-					contract.assertHealthy();
-					phase = `irrelevant tool update ${tick}`;
-					await live.eventController.handleEvent({
-						type: "tool_execution_update",
-						toolCallId: "already-retired-unrelated",
-						toolName: "grep",
-						args: {},
-						partialResult: { content: [{ type: "text", text: "" }] },
-					});
-					await scheduler.settle(terminal);
-					contract.assertHealthy();
-					phase = `full repaint ${tick}`;
-					live.ui.requestRender(true);
-					await scheduler.settle(terminal);
-					contract.assertHealthy();
-				}
-				expect(frames).toBeGreaterThan(0);
-			} finally {
-				unwatch();
-				live.stop();
-				if (fakeTimers) vi.useRealTimers();
-				await current.dispose();
-				setChatTranscriptDisplayPreferences(preferences);
-			}
-		},
-	);
 });

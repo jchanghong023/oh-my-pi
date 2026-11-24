@@ -16,7 +16,7 @@ import type { Settings } from "../config/settings";
 import commitSystemPrompt from "../prompts/system/commit-message-system.md" with { type: "text" };
 import { journalCompletion, type ModelUsageLedger } from "../session/model-usage-journal";
 import { cfgProvidersThinkingProbe } from "../session/settings";
-import { concreteThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
+import { concreteThinkingLevel, toReasoningEffort } from "../thinking/levels";
 
 const COMMIT_SYSTEM_PROMPT = prompt.render(commitSystemPrompt);
 const MAX_DIFF_CHARS = 4000;

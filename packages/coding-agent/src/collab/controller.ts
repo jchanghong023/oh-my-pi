@@ -12,9 +12,10 @@
  */
 import { randomBytes } from "node:crypto";
 import { logger } from "@oh-my-pi/pi-utils";
-import { sanitizeDisplayLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
-import { TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
+import { sanitizeDisplayLine } from "../extensibility/inventory/display-text";
 import type { InteractiveModeContext } from "../modes/types";
+import { TRUNCATE_LENGTHS } from "../utils/render-utils";
+import { truncateToWidth } from "../utils/text-width";
 import { CollabGuestLink } from "./guest";
 import { CollabHost, CollabHostStoppedError, CollabRelayUnavailableError } from "./host";
 import { NumberedRoomClient, NumberedRoomError } from "./numbered-room";

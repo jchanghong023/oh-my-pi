@@ -1,108 +1,134 @@
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { afterAll, afterEach, describe, expect, it } from "bun:test";
+import { getOAuthProviders, getStoredOAuthProviders, type OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { OAuthSelectorComponent } from "@oh-my-pi/pi-tui/overlays/oauth-selector";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { OAuthSelector, type OAuthSelectorAuthSource } from "../../../src/ui/overlays/pickers/oauth-selector";
+import { mountOverlay } from "../../helpers/overlay-terminal";
 
 import { cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 
-beforeAll(async () => {
-	await initTheme();
-});
+const restoreTheme = currentTheme();
+afterAll(() => setCurrentTheme(restoreTheme));
 
 const authStorage = {
 	credentials: { has: (_providerId: string) => false },
 	keys: { source: (_providerId: string) => undefined },
-} as unknown as AuthStorage;
+} as unknown as OAuthSelectorAuthSource;
 
-describe("OAuthSelectorComponent", () => {
+/**
+ * Type `query` into the selector, then press Enter when `confirm`; answers the screen before the
+ * Enter and the providers picked.
+ */
+function search(
+	mode: "login" | "logout",
+	auth: OAuthSelectorAuthSource,
+	query: string,
+	options: {
+		confirm?: boolean;
+		disabledProviders?: readonly string[];
+		providers?: OAuthProviderInfo[];
+		maxHeight?: number;
+	} = {},
+): { rendered: string; selected: string[] } {
+	const selected: string[] = [];
+	const term = mountOverlay(
+		() =>
+			OAuthSelector({
+				mode,
+				auth,
+				providers: options.providers,
+				maxHeight: () => options.maxHeight,
+				...(options.disabledProviders ? { disabledProviders: options.disabledProviders } : {}),
+				onSelect: providerId => selected.push(providerId),
+				onCancel: () => {},
+			}),
+		{ columns: 80 },
+	);
+	try {
+		term.type(query);
+		const rendered = term.screen().join("\n");
+		if (options.confirm) term.press("enter");
+		return { rendered, selected };
+	} finally {
+		term.dispose();
+	}
+}
+
+/** Auth with a stored OpenCode Go key. */
+const storedOpencodeGo = {
+	credentials: { has: (providerId: string) => providerId === "opencode-go" },
+	keys: {
+		source: (providerId: string) => (providerId === "opencode-go" ? { kind: "api_key", concrete: true } : undefined),
+	},
+} as unknown as OAuthSelectorAuthSource;
+
+describe("OAuth selector", () => {
 	it("fuzzy-filters overflowing provider lists from typed input", () => {
 		const providers = getOAuthProviders();
 		expect(providers.length).toBeGreaterThan(10);
 		const target = providers.find(provider => provider.available && provider.id === "vllm");
 		if (!target) throw new Error("Expected the available vllm login entry");
 
-		const selected: string[] = [];
-		const component = new OAuthSelectorComponent(
-			"login",
-			authStorage,
-			providerId => selected.push(providerId),
-			() => {},
-		);
-
-		for (const char of target.id) {
-			component.handleInput(char);
-		}
-
-		const rendered = component
-			.render(80)
-			.map(line => Bun.stripANSI(line))
-			.join("\n");
+		const { rendered, selected } = search("login", authStorage, target.id, { confirm: true });
 		expect(rendered).toContain(target.name);
-		expect(rendered).toContain("搜索：");
 		expect(rendered).toContain(target.id);
-
-		component.handleInput("\n");
 		expect(selected).toEqual([target.id]);
 	});
 
 	it("does not offer env-only providers as logout targets", () => {
-		const selected: string[] = [];
-		const component = new OAuthSelectorComponent(
-			"logout",
-			{
-				credentials: { list: () => [], has: (_providerId: string) => false },
-				keys: {
-					source: (providerId: string) =>
-						providerId === "opencode-go" || providerId === "opencode-zen"
-							? { kind: "api_key", concrete: true }
-							: undefined,
-				},
-			} as unknown as AuthStorage,
-			providerId => selected.push(providerId),
-			() => {},
-		);
-
-		for (const char of "opencode-go") {
-			component.handleInput(char);
-		}
-
-		component.handleInput("\n");
+		const auth = {
+			credentials: { has: (_providerId: string) => false },
+			keys: {
+				source: (providerId: string) =>
+					providerId === "opencode-go" || providerId === "opencode-zen"
+						? { kind: "api_key", concrete: true }
+						: undefined,
+			},
+		} as unknown as OAuthSelectorAuthSource;
+		const { rendered, selected } = search("logout", auth, "opencode-go", { confirm: true });
+		expect(rendered).toContain("没有可退出登录的已存 Provider 凭据");
 		expect(selected).toEqual([]);
 	});
 
 	it("offers stored providers as logout targets", () => {
-		const selected: string[] = [];
-		const component = new OAuthSelectorComponent(
-			"logout",
-			{
-				credentials: {
-					list: () => [{ provider: "anthropic" }],
-					has: (providerId: string) => providerId === "anthropic",
-				},
-				keys: {
-					source: (providerId: string) =>
-						providerId === "anthropic" ? { kind: "api_key", concrete: true } : undefined,
-				},
-			} as unknown as AuthStorage,
-			providerId => selected.push(providerId),
-			() => {},
-		);
-
-		for (const char of "anthropic") {
-			component.handleInput(char);
-		}
-
-		const rendered = component
-			.render(80)
-			.map(line => Bun.stripANSI(line))
-			.join("\n");
-		expect(rendered).toContain("Anthropic");
+		const { rendered, selected } = search("logout", storedOpencodeGo, "opencode-go", { confirm: true });
+		expect(rendered).toContain("OpenCode Go");
 		expect(rendered).toContain("已登录");
+		expect(selected).toEqual(["opencode-go"]);
+	});
 
-		component.handleInput("\n");
-		expect(selected).toEqual(["anthropic"]);
+	it("offers one real canonical key per stored provider, including retired and disabled providers", () => {
+		const canonical = "openai-codex";
+		const alias = "openai-codex-device";
+		// Retired Gemini CLI keeps its stored credential id; Antigravity CLI is a separate login.
+		const retired = "google-gemini-cli";
+		const auth = {
+			credentials: {
+				has: (id: string) => id === canonical || id === retired,
+				list: () =>
+					[canonical, canonical, retired].map((provider, id) => ({
+						provider,
+						id,
+						credential: { type: "oauth" as const, access: "fixture", refresh: "fixture", expires: 0 },
+						disabledCause: null,
+					})),
+			},
+			keys: { source: () => undefined },
+		};
+		const providers = getStoredOAuthProviders(auth.credentials);
+		expect(providers.map(provider => provider.id)).toEqual([canonical, retired]);
+
+		const disabledProviders = [canonical, alias];
+		// Force a one-row list so these two stored providers exercise the picker's search.
+		const maxHeight = 3;
+		for (const id of [canonical, retired]) {
+			const { selected } = search("logout", auth, id, { confirm: true, providers, disabledProviders, maxHeight });
+			expect(selected).toEqual([id]);
+		}
+		expect(search("logout", auth, alias, { confirm: true, providers, maxHeight }).selected).toEqual([]);
+		expect(search("login", auth, alias, { confirm: true }).selected).toEqual([alias]);
+		expect(getOAuthProviders().some(provider => provider.id === retired)).toBe(false);
+		expect(search("login", auth, retired, { confirm: true }).selected).toEqual([]);
 	});
 
 	describe("disabledProviders", () => {
@@ -121,20 +147,9 @@ describe("OAuthSelectorComponent", () => {
 			resetSettingsForTest();
 			await Settings.init({ inMemory: true, overrides: { disabledProviders: [victim.id] } });
 
-			const component = new OAuthSelectorComponent(
-				"login",
-				authStorage,
-				() => {},
-				() => {},
-				{ disabledProviders: cfgDisabledProviders.get(settings) },
-			);
-			for (const char of victim.id) {
-				component.handleInput(char);
-			}
-			const rendered = component
-				.render(80)
-				.map(line => Bun.stripANSI(line))
-				.join("\n");
+			const { rendered } = search("login", authStorage, victim.id, {
+				disabledProviders: cfgDisabledProviders.get(settings),
+			});
 			expect(rendered).not.toContain(victim.name);
 		});
 
@@ -146,20 +161,9 @@ describe("OAuthSelectorComponent", () => {
 			resetSettingsForTest();
 			await Settings.init({ inMemory: true, overrides: { disabledProviders: ["openai-codex"] } });
 
-			const component = new OAuthSelectorComponent(
-				"login",
-				authStorage,
-				() => {},
-				() => {},
-				{ disabledProviders: cfgDisabledProviders.get(settings) },
-			);
-			for (const char of alias.id) {
-				component.handleInput(char);
-			}
-			const rendered = component
-				.render(80)
-				.map(line => Bun.stripANSI(line))
-				.join("\n");
+			const { rendered } = search("login", authStorage, alias.id, {
+				disabledProviders: cfgDisabledProviders.get(settings),
+			});
 			expect(rendered).not.toContain(alias.name);
 		});
 
@@ -167,32 +171,11 @@ describe("OAuthSelectorComponent", () => {
 			resetSettingsForTest();
 			await Settings.init({ inMemory: true, overrides: { disabledProviders: ["opencode-go"] } });
 
-			const selected: string[] = [];
-			const component = new OAuthSelectorComponent(
-				"logout",
-				{
-					credentials: {
-						list: () => [{ provider: "opencode-go" }],
-						has: (providerId: string) => providerId === "opencode-go",
-					},
-					keys: {
-						source: (providerId: string) =>
-							providerId === "opencode-go" ? { kind: "api_key", concrete: true } : undefined,
-					},
-				} as unknown as AuthStorage,
-				providerId => selected.push(providerId),
-				() => {},
-				{ disabledProviders: cfgDisabledProviders.get(settings) },
-			);
-			for (const char of "opencode-go") {
-				component.handleInput(char);
-			}
-			const rendered = component
-				.render(80)
-				.map(line => Bun.stripANSI(line))
-				.join("\n");
+			const { rendered, selected } = search("logout", storedOpencodeGo, "opencode-go", {
+				disabledProviders: cfgDisabledProviders.get(settings),
+				confirm: true,
+			});
 			expect(rendered).toContain("OpenCode Go");
-			component.handleInput("\r");
 			expect(selected).toEqual(["opencode-go"]);
 		});
 	});

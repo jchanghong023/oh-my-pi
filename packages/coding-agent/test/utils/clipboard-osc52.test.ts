@@ -44,10 +44,10 @@ describe("copyToClipboard OSC 52 routing", () => {
 	it.each([
 		["linux", undefined],
 		["win32", "1"],
-	] as const)("does not overwrite the clipboard outside offline Linux (%s, %s)", (platform, offline) => {
+	] as const)("does not overwrite the clipboard outside offline Linux (%s, %s)", async (platform, offline) => {
 		Object.defineProperty(process, "platform", { value: platform, configurable: true });
 		if (offline !== undefined) process.env.OMP_OFFLINE = offline;
-		harness = startActiveTerminal();
+		harness = await startActiveTerminal();
 
 		expect(requestOfflineBrowserUrlCopy("http://127.0.0.1:1234/private/")).toBe(false);
 		expect(harness.routed).toEqual([]);
@@ -60,7 +60,7 @@ describe("copyToClipboard OSC 52 routing", () => {
 		vi.spyOn(natives, "copyToClipboard").mockImplementation(() => {
 			throw new Error("X11 clipboard unavailable");
 		});
-		harness = startActiveTerminal();
+		harness = await startActiveTerminal();
 		const server = startSketchServer();
 		try {
 			expect(requestOfflineBrowserUrlCopy(server.url)).toBe(true);
@@ -78,7 +78,7 @@ describe("copyToClipboard OSC 52 routing", () => {
 	});
 
 	it("writes OSC 52 through the active terminal, never straight to stdout", async () => {
-		harness = startActiveTerminal();
+		harness = await startActiveTerminal();
 
 		await copyToClipboard("probe");
 
@@ -87,7 +87,7 @@ describe("copyToClipboard OSC 52 routing", () => {
 	});
 
 	it("writes OSC 52 straight to stdout once the terminal has stopped", async () => {
-		harness = startActiveTerminal();
+		harness = await startActiveTerminal();
 		harness.stop();
 
 		await copyToClipboard("probe");

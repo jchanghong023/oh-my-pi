@@ -1,8 +1,8 @@
 import { PipeStreams, type PipeStreamInfo } from "@oh-my-pi/pi-natives";
-import { collapseCommand } from "@oh-my-pi/pi-tui/apps/ps-data";
-import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { shellStreamId } from "@oh-my-pi/pi-tui/tools/shell-steps";
 import { truncate } from "@oh-my-pi/pi-utils";
+import { collapseCommand } from "../cli/ps-model";
+import { shellStreamId } from "../tools/shell-steps";
+import { shortenPath } from "../utils/render-utils";
 import type { JobTextChunk, JobTextSource } from "./types";
 
 /**

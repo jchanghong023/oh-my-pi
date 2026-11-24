@@ -22,9 +22,10 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { closeSessionIndex, listSessionRecaps } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/ui/theme/service";
 import { setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { drive, driveTurn, elapse, flush, until, wait } from "../helpers/fake-clock";
+import { createModeTerminal, transcriptText } from "../helpers/mode-terminal";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 const RECAP = "Reworked the login flow; next: wire the focused token-refresh test.";
@@ -75,8 +76,8 @@ describe("InteractiveMode idle recap", () => {
 	let dir: TempDir;
 	const cleanups: (() => Promise<void> | void)[] = [];
 
-	beforeAll(async () => {
-		await initTheme();
+	beforeAll(() => {
+		initTheme();
 	});
 
 	beforeEach(async () => {
@@ -126,9 +127,11 @@ describe("InteractiveMode idle recap", () => {
 				sideStreamFn: sessionModels.side.stream,
 			});
 		const session = newSession(models);
-		const mode = new InteractiveMode(session, "test");
+		const terminal = createModeTerminal();
+		const mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, terminal.frame);
 		cleanups.push(async () => {
 			mode.stop();
+			terminal.dispose();
 			await session.dispose();
 			authStorage.close();
 		});
@@ -168,8 +171,7 @@ describe("InteractiveMode idle recap", () => {
 		return { mode, session, models, spawnAgent, startup, releaseStartup: () => draftRestore.resolve(null) };
 	}
 
-	const screen = (mode: InteractiveMode): string => Bun.stripANSI(mode.chatContainer.render(120).join("\n"));
-	const shown = (mode: InteractiveMode, text: string): number => screen(mode).split(text).length - 1;
+	const shown = (mode: InteractiveMode, text: string): number => transcriptText(mode.shell).split(text).length - 1;
 	const journal = (session: AgentSession): string[] =>
 		listSessionRecaps({ sessionIds: [session.sessionManager.getSessionId()] }).map(row => row.recap);
 
@@ -192,14 +194,14 @@ describe("InteractiveMode idle recap", () => {
 		await runTurn(session);
 
 		// The recap is due in a second; the draft arrives before that.
-		mode.editor.setText("half-written draft");
+		mode.composer.setText("half-written draft");
 		await flush();
 		await elapse(3 * RECAP_DELAY_MS);
 		expect(models.side.calls).toHaveLength(0);
 		expect(journal(session)).toEqual([]);
 
 		// Whitespace is not a draft.
-		mode.editor.setText("  ");
+		mode.composer.setText("  ");
 		await flush();
 		await elapse(RECAP_DELAY_MS);
 		await until(() => shown(mode, RECAP) > 0, "the recap on screen");

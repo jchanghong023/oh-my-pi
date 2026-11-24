@@ -30,8 +30,8 @@ import type { SkillsSettings } from "../../../extensibility/settings";
 import { loadSkillCatalog } from "../../../extensibility/skills";
 import { readDisabledServers, readEnabledServers } from "../../../mcp/config-writer";
 import type { MCPDroppedServer } from "../../../mcp/transforms";
-import { commandPreview } from "@oh-my-pi/pi-tui/overlays/extensions/inspector-model";
-import { inferMcpTransport } from "@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime";
+import { commandPreview } from "../../../extensibility/inventory/inspector-model";
+import { inferMcpTransport } from "../../../extensibility/inventory/mcp-runtime";
 import {
 	type DisabledReason,
 	type Extension,
@@ -39,7 +39,7 @@ import {
 	type ExtensionState,
 	makeExtensionId,
 	sourceFromMeta,
-} from "@oh-my-pi/pi-tui/overlays/extensions/types";
+} from "../../../extensibility/inventory/types";
 
 /**
  * Provider-level gate for one discovered item: the whole-provider switch, plus

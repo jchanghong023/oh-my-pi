@@ -1,7 +1,6 @@
-import { matchesKey } from "@oh-my-pi/pi-tui";
-import { formatVisionMarker, referencedAttachments } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import { offlineFromEnv } from "../cli/args";
 import { InternalUrlRouter } from "../internal-urls/router";
+import { compactImageMarkers, formatVisionMarker } from "../modes/view-model/prompt/composer-attachments";
 import type { AgentSession } from "../session/agent-session";
 import { startSketchServer, type SketchServer } from "../sketch/server";
 import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
@@ -34,26 +33,24 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Draw in a local browser canvas and attach the PNG to your draft",
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
-			const { editor, session, sessionManager } = ctx;
+			const { composer, session, sessionManager } = ctx;
 			// Enter may already have removed the command; never clear newer typing or
 			// turn the slash invocation itself back into ordinary prompt text.
-			if (!runtime.draftDetached && editor.getExpandedText().trim() === command.text.trim()) editor.setText("");
+			if (!runtime.draftDetached && composer.expandedText().trim() === command.text.trim()) composer.setText("");
 			const missing = (runtime.input?.images ?? []).flatMap((image, index) =>
-				editor.pendingImages.includes(image) ? [] : [{ image, link: runtime.input?.imageLinks?.[index] }],
+				composer.pendingImages.includes(image) ? [] : [{ image, link: runtime.input?.imageLinks?.[index] }],
 			);
-			const currentText = editor.getExpandedText();
-			const refs = referencedAttachments(currentText, new Map());
+			const currentText = composer.expandedText();
+			const refs = compactImageMarkers(currentText, composer.pendingImages.length);
 			const unreferenced = (runtime.input?.images ?? []).flatMap(image => {
-				const index = editor.pendingImages.indexOf(image) + 1;
-				return index > 0 && !refs.image.has(index) && !refs.video.has(index)
-					? [formatVisionMarker("image", index)]
-					: [];
+				const index = composer.pendingImages.indexOf(image);
+				return index >= 0 && refs && !refs.keep.includes(index) ? [formatVisionMarker("image", index + 1)] : [];
 			});
 			if (unreferenced.length)
-				editor.setCollapsedText([unreferenced.join(" "), currentText].filter(Boolean).join("\n\n"));
+				composer.setCollapsedText([unreferenced.join(" "), currentText].filter(Boolean).join("\n\n"));
 			if (missing.length) {
 				restoreDetachedDraft(
-					editor,
+					composer,
 					missing.map((_, index) => formatVisionMarker("image", index + 1)).join(" "),
 					missing.map(item => item.image),
 					missing.map(item => item.link),
@@ -69,12 +66,12 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const generation = session.sessionGeneration;
 			const view = ctx.viewSession;
 			const focusedAgentId = ctx.focusedAgentId;
-			const focus = ctx.ui.getFocused();
-			if (focus && focus !== editor) {
+			const focus = ctx.shell.focused();
+			if (focus && focus !== composer.field) {
 				ctx.showWarning("Return to the main composer before opening a sketch.");
 				return;
 			}
-			const images = editor.pendingImages;
+			const draftGeneration = composer.draftGeneration;
 			let cancelled = false;
 			let server: SketchServer | undefined;
 			let removeInput: (() => void) | undefined;
@@ -97,25 +94,22 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				session.sessionGeneration === generation &&
 				ctx.viewSession === view &&
 				ctx.focusedAgentId === focusedAgentId &&
-				ctx.editor === editor &&
-				editor.pendingImages === images &&
-				ctx.ui.getFocused() === focus;
+				ctx.composer === composer &&
+				composer.draftGeneration === draftGeneration &&
+				ctx.shell.focused() === focus;
 			state.current = owned;
 			try {
 				server = startSketchServer();
 				removeSessionChange = session.registerSessionChangeCallback(owned.cancel);
-				removeInput = ctx.ui.addInputListener(
-					data => {
-						if (!isCurrent()) {
-							owned.cancel();
-							return undefined;
-						}
-						if (!matchesKey(data, "escape")) return undefined;
+				removeInput = ctx.shell.interceptInput(event => {
+					if (!isCurrent()) {
 						owned.cancel();
-						return { consume: true };
-					},
-					{ prepend: true },
-				);
+						return false;
+					}
+					if (event.type !== "key" || event.key.kind === "release" || event.key.id !== "escape") return false;
+					owned.cancel();
+					return true;
+				});
 				ctx.setHookStatus(statusKey, "Sketch open · Esc to cancel");
 				const copyRequested = requestOfflineBrowserUrlCopy(server.url);
 				const offline = offlineFromEnv();

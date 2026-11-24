@@ -1,9 +1,17 @@
 import { resolveExtraCa, withExtraCaInit } from "@oh-my-pi/pi-utils";
-import { coworkFetch } from "../providers/cowork-fetch";
+import type * as CoworkFetchModule from "../providers/cowork-fetch";
 import { withInferenceUserAgent } from "../providers/inference-headers";
 import type { Api, FetchImpl, Model, StreamOptions } from "../types";
 import { getProxyForProvider, withProxyInit } from "./proxy";
 import { createFetchRequestDebugSession, isRequestDebugEnabled } from "./request-debug";
+
+// Keep cowork-fetch's Node network dependencies off the CLI startup path.
+let coworkFetchPromise: Promise<typeof CoworkFetchModule.coworkFetch> | undefined;
+const lazyCoworkFetch: FetchImpl = async (input, init) => {
+	coworkFetchPromise ??= import("../providers/cowork-fetch").then(m => m.coworkFetch);
+	const fn = await coworkFetchPromise;
+	return fn(input, init);
+};
 
 /** Stamped on a fetch already built by {@link transportFetch}. */
 const TRANSPORT_FETCH = Symbol("omp.transportFetch");
@@ -37,7 +45,8 @@ export function transportFetch(
 	const stamped = given?.[TRANSPORT_FETCH];
 	if (given && stamped) return suppressRawDebug && typeof stamped === "function" ? stamped() : given;
 	const base =
-		given ?? (model.provider === "anthropic" && model.api === "anthropic-messages" ? coworkFetch : globalThis.fetch);
+		given ??
+		(model.provider === "anthropic" && model.api === "anthropic-messages" ? lazyCoworkFetch : globalThis.fetch);
 	return buildTransportFetch(model, base, getProxyForProvider(model.provider), beforeDispatch, suppressRawDebug);
 }
 

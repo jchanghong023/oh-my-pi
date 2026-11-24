@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings/keybindings";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import type { ExtensionFactory, InputEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
-import { getEditorTheme } from "@oh-my-pi/pi-tui/theme/tui-adapters";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -19,14 +17,15 @@ import type { BlobPutOptions, BlobPutResult } from "@oh-my-pi/pi-coding-agent/se
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { Composer } from "../src/ui/composer/composer";
+import { createInputHarness } from "./helpers/input-harness";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
-const ENTER = "\r";
-const FOLLOW_UP = "\x1b[13;5u";
+const ENTER = "enter";
+const FOLLOW_UP = "ctrl+enter";
 const originalImage: ImageContent = { type: "image", mimeType: "image/png", data: "b3JpZ2luYWw=" };
 const newerImage: ImageContent = { type: "image", mimeType: "image/jpeg", data: "bmV3ZXI=" };
 const transformedImage: ImageContent = { type: "image", mimeType: "image/jpeg", data: "cmVwbGFjZW1lbnQ=" };
-// The real paste consumer fully decodes PNGs; the IDAT checksum must match its pixel data.
 const pastedPng = Buffer.from(
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
 	"base64",
@@ -56,17 +55,21 @@ async function createHarness(factory: ExtensionFactory) {
 		"native-input-test",
 	);
 	const runner = new ExtensionRunner([extension], runtime, process.cwd(), sessionManager, {} as ModelRegistry);
-	const editor = new CustomEditor(getEditorTheme());
-	const prompt = vi.fn(async (_text: string, _options?: PromptOptions) => true);
+	const editor = new Composer();
+	const input = createInputHarness();
+	const prompt = vi.fn(async (_text: string, options?: PromptOptions) => {
+		options?.onPromptAdmitted?.();
+		return true;
+	});
 	const session = {
-		sessionManager,
 		extensionRunner: runner,
 		isStreaming: true,
 		isCompacting: false,
 		queuedMessageCount: 0,
+		prompt,
+		sessionManager,
 		customCommands: [],
 		promptTemplates: [],
-		prompt,
 		followUp: vi.fn(async (_text: string, _images?: ImageContent[]) => {}),
 		buildUserSkillPrompt: buildSkillPromptMessage,
 		promptCustomMessage: vi.fn(async () => true),
@@ -74,7 +77,9 @@ async function createHarness(factory: ExtensionFactory) {
 		prewarmModelConnection: vi.fn(),
 	};
 	const ctx = {
-		editor,
+		composer: editor,
+		...input.context,
+		shell: { focused: () => editor.field, host: undefined, overlays: { open: () => false } },
 		session,
 		viewSession: session,
 		sessionManager,
@@ -82,13 +87,6 @@ async function createHarness(factory: ExtensionFactory) {
 		settings: Settings.isolated({}),
 		keybindings: KeybindingsManager.inMemory(),
 		dictationSpaceHold: vi.fn(),
-		ui: {
-			requestRender: vi.fn(),
-			addInputListener: vi.fn(),
-			addStartListener: vi.fn(),
-			getFocused: () => editor,
-			terminal: { write: vi.fn() },
-		},
 		compactionQueuedMessages: [],
 		skillCommands: new Map<string, Skill>(),
 		fileSlashCommands: new Set<string>(),
@@ -104,37 +102,42 @@ async function createHarness(factory: ExtensionFactory) {
 		updateEditorBorderColor: vi.fn(),
 		updatePendingMessagesDisplay: vi.fn(),
 		syncIdleMaintenanceView: vi.fn(),
-		flushPendingBashComponents: vi.fn(),
+		rebuildChatFromMessages: vi.fn(),
+		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
+		flushPendingExecRuns: vi.fn(),
 		showStatus: vi.fn(),
 		showError: vi.fn(),
-		rebuildChatFromMessages: vi.fn(),
 		handleClearCommand: vi.fn(),
 		resetDisplayAfterAppearanceRefresh: vi.fn(),
 		shutdown: vi.fn(async () => {}),
 		clearEditor: () => editor.clearDraft(),
+		focusAsk: () => false,
 		withLocalSubmission: async <T>(_text: string, submit: () => Promise<T>) => submit(),
 		isGuidedGoalInterviewActive: () => false,
-		handleDevInput: async () => false,
-		isDevInputRoute: () => false,
 	} as unknown as InteractiveModeContext;
 	const helpers = new UiHelpers(ctx);
 	ctx.queueCompactionMessage = (text, mode, images, options) =>
 		helpers.queueCompactionMessage(text, mode, images, options);
 	const controller = new InputController(ctx);
+	ctx.isKnownSlashCommand = text => helpers.isKnownSlashCommand(text);
 	ctx.handleQueueCommand = (message, detached) => controller.handleQueueCommand(message, detached);
 	controller.setupKeyHandlers();
 	controller.setupEditorSubmitHandler();
 	const onSubmit = editor.onSubmit;
 	let enterCompletion: Promise<void> | undefined;
-	editor.onSubmit = (...args: Parameters<NonNullable<typeof onSubmit>>) => {
-		enterCompletion = Promise.resolve(onSubmit?.(...args));
+	editor.onSubmit = text => {
+		enterCompletion = Promise.resolve(onSubmit?.(text));
 		return enterCompletion;
 	};
 	const followUp = vi.spyOn(controller, "handleFollowUp");
+	function press(key: string): void {
+		input.press(ctx, key, key === ENTER ? { raw: "\r" } : undefined);
+	}
 	function pressSubmit(key: string): Promise<void> {
 		enterCompletion = undefined;
 		const followUpCount = followUp.mock.calls.length;
-		editor.handleInput(key);
+		press(key);
 		if (key === ENTER && enterCompletion) return enterCompletion;
 		if (key === FOLLOW_UP && followUp.mock.calls.length === followUpCount + 1) {
 			return followUp.mock.results[followUpCount].value as Promise<void>;
@@ -142,9 +145,7 @@ async function createHarness(factory: ExtensionFactory) {
 		throw new Error("The editor did not dispatch the submit key");
 	}
 	function draftWithImage(text = "original [Image #1]", image = originalImage, link = "local://original.png") {
-		editor.pendingImages = [image];
-		editor.pendingImageLinks = [link];
-		editor.imageLinks = editor.pendingImageLinks;
+		replaceImages(editor, [image], [link]);
 		editor.setText(text);
 	}
 	return {
@@ -155,6 +156,7 @@ async function createHarness(factory: ExtensionFactory) {
 		runner,
 		blobs,
 		generatedMessages,
+		press,
 		pressSubmit,
 		draftWithImage,
 		controller,
@@ -162,140 +164,176 @@ async function createHarness(factory: ExtensionFactory) {
 	};
 }
 
+/** Replace the composer's pending images and their links. */
+function replaceImages(composer: Composer, images: ImageContent[], links: (string | undefined)[]): void {
+	composer.pendingImages.splice(0, composer.pendingImages.length, ...images);
+	composer.pendingImageLinks.splice(0, composer.pendingImageLinks.length, ...links);
+}
+
 let settingsState: SettingsTestState | undefined;
 beforeEach(async () => {
 	settingsState = beginSettingsTest();
-	// Pasting reads the global image policy, not only ctx.settings.
 	await Settings.init({ inMemory: true });
 });
 afterEach(() => {
+	vi.restoreAllMocks();
 	restoreSettingsTestState(settingsState);
 	settingsState = undefined;
 });
 
 describe("interactive native input ingress", () => {
-	for (const [label, key] of [
-		["Enter", ENTER],
-		["Ctrl+Enter", FOLLOW_UP],
-	] as const) {
-		for (const starts of [true, false]) {
-			it(`${label} Team ${starts ? "success consumes only its submission" : "validation restores its submission"} after a paste during an async hook`, async () => {
-				using temp = TempDir.createSync("@omp-team-input-images-");
-				const imagePath = `${temp.path()}/newer.png`;
-				await Bun.write(imagePath, pastedPng);
-				const entered = Promise.withResolvers<void>();
-				const release = Promise.withResolvers<void>();
-				const seen: InputEvent[] = [];
-				const h = await createHarness(pi => {
-					pi.on("input", async event => {
-						seen.push(event);
-						entered.resolve();
-						await release.promise;
-					});
+	for (const key of [ENTER, FOLLOW_UP]) {
+		it.each([true, false])(`${key} Team preserves a newer real paste when dispatch succeeds=%j`, async starts => {
+			using temp = TempDir.createSync("@omp-team-input-images-");
+			const imagePath = temp.join("newer.png");
+			await Bun.write(imagePath, pastedPng);
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const seen: InputEvent[] = [];
+			const h = await createHarness(pi => {
+				pi.on("input", async event => {
+					seen.push(event);
+					entered.resolve();
+					await release.promise;
 				});
-				const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
-				const register = vi.fn(() => "bg_team_images");
-				const appendCustomMessage = vi.fn(async () => {});
-				Object.assign(h.session, {
-					model: starts ? model : undefined,
-					modelRegistry: { getAvailable: () => [model], authStorage: undefined },
-					sessionManager: h.ctx.sessionManager,
-					registerSessionChangeCallback: () => () => {},
-					asyncJobManager: { register },
-					appendCustomMessage,
-				});
-				h.draftWithImage("/team inspect [Image #1] attachment://1");
-				const submitting = h.pressSubmit(key);
-				await entered.promise;
-				try {
-					expect(h.editor.pendingImages).toEqual([]);
-					expect(h.editor.pendingImageLinks).toEqual([]);
-					h.editor.setText("newer ");
-					await h.controller.handleImagePathPaste(imagePath);
-					const newerText = h.editor.getExpandedText();
-					expect(newerText.trimEnd()).toMatch(/^newer \[Image #1(?:,[^\]]+)?\]$/);
-					const pasted = h.editor.pendingImages[0]!;
-					const pastedLink = h.editor.pendingImageLinks[0];
-					expect(h.editor.pendingImages).toHaveLength(1);
-					expect(pasted).not.toBe(originalImage);
-					expect(pastedLink).toBe(imagePath);
-					release.resolve();
-					await submitting;
-
-					expect(seen).toEqual([
-						{
-							type: "input",
-							source: "interactive",
-							text: "/team inspect [Image #1] attachment://1",
-							images: [originalImage],
-						},
-					]);
-					const restoredText = h.editor.getExpandedText();
-					expect(restoredText).toContain(newerText);
-					expect(Array.from(restoredText.matchAll(/\[Image #(\d+)/g), match => Number(match[1]))).toEqual(
-						starts ? [1] : [2, 1],
-					);
-					expect(h.editor.pendingImages[0]).toBe(pasted);
-					expect(h.editor.pendingImages).toHaveLength(starts ? 1 : 2);
-					if (!starts) expect(h.editor.pendingImages[1]).toBe(originalImage);
-					expect(h.editor.pendingImageLinks).toEqual(starts ? [pastedLink] : [pastedLink, "local://original.png"]);
-					expect(register).toHaveBeenCalledTimes(starts ? 1 : 0);
-					expect(appendCustomMessage).toHaveBeenCalledTimes(starts ? 1 : 0);
-					expect(h.prompt).not.toHaveBeenCalled();
-					if (starts) expect(h.ctx.showError).not.toHaveBeenCalled();
-				} finally {
-					release.resolve();
-					await submitting;
-				}
 			});
-		}
+			const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
+			const register = vi.fn(() => "bg_team_images");
+			const appendCustomMessage = vi.fn(async () => {});
+			Object.assign(h.session, {
+				model: starts ? model : undefined,
+				modelRegistry: { getAvailable: () => [model], authStorage: undefined },
+				registerSessionChangeCallback: () => () => {},
+				asyncJobManager: { register },
+				appendCustomMessage,
+			});
+			const submitted = "/team inspect [Image #1] attachment://1";
+			h.draftWithImage(submitted);
+			const submitting = h.pressSubmit(key);
+			await entered.promise;
+			try {
+				expect(h.editor.pendingImages).toEqual([]);
+				expect(h.editor.pendingImageLinks).toEqual([]);
+				h.editor.setText("newer ");
+				await h.controller.handleImagePathPaste(imagePath);
+				const newer = h.editor.expandedText();
+				expect(newer.trimEnd()).toMatch(/^newer \[Image #1(?:,[^\]]+)?\]$/);
+				const pasted = h.editor.pendingImages[0];
+				const link = h.editor.pendingImageLinks[0];
+				expect(pasted).toBeDefined();
+				expect(pasted).not.toBe(originalImage);
+				expect(link).toBe(imagePath);
+				release.resolve();
+				await submitting;
+
+				expect(seen).toEqual([{ type: "input", source: "interactive", text: submitted, images: [originalImage] }]);
+				const restored = h.editor.expandedText();
+				expect(restored).toContain(newer);
+				expect(Array.from(restored.matchAll(/\[Image #(\d+)/g), match => Number(match[1]))).toEqual(
+					starts ? [1] : [2, 1],
+				);
+				expect(h.editor.pendingImages).toEqual(starts ? [pasted] : [pasted, originalImage]);
+				expect(h.editor.pendingImageLinks).toEqual(starts ? [link] : [link, "local://original.png"]);
+				expect(register).toHaveBeenCalledTimes(starts ? 1 : 0);
+				expect(appendCustomMessage).toHaveBeenCalledTimes(starts ? 1 : 0);
+				expect(h.prompt).not.toHaveBeenCalled();
+				if (starts) expect(h.ctx.showError).not.toHaveBeenCalled();
+			} finally {
+				release.resolve();
+				await submitting;
+			}
+		});
 	}
 
-	it.each([false, true])(
-		"Ctrl+Enter Team compaction replay restores its detached images beside a real newer paste (retry=%j)",
-		async willRetry => {
-			using temp = TempDir.createSync("@omp-team-queued-images-");
-			const imagePath = `${temp.path()}/newer.png`;
-			await Bun.write(imagePath, pastedPng);
-			const h = await createHarness(() => {});
-			h.ctx.isKnownSlashCommand = text => h.helpers.isKnownSlashCommand(text);
-			h.session.isCompacting = true;
-			h.draftWithImage("/team inspect [Image #1] attachment://1");
-			await h.pressSubmit(FOLLOW_UP);
-			expect(h.ctx.compactionQueuedMessages).toEqual([
-				{
-					text: "/team inspect [Image #1] attachment://1",
-					mode: "followUp",
-					images: [originalImage],
-					imageLinks: ["local://original.png"],
-					draftDetached: true,
-				},
-			]);
-			expect(h.ctx.compactionQueuedMessages[0]!.images![0]).toBe(originalImage);
-			h.editor.setText("newer ");
-			await h.controller.handleImagePathPaste(imagePath);
-			const newerText = h.editor.getExpandedText();
-			expect(newerText.trimEnd()).toMatch(/^newer \[Image #1(?:,[^\]]+)?\]$/);
-			const pasted = h.editor.pendingImages[0]!;
-			const pastedLink = h.editor.pendingImageLinks[0];
-			expect(h.editor.pendingImages).toHaveLength(1);
-			expect(pasted).not.toBe(originalImage);
-			expect(pastedLink).toBe(imagePath);
-			h.session.isCompacting = false;
-			await h.helpers.flushCompactionQueue({ willRetry });
+	it.each([false, true])("restores a compacting Team submission beside a newer paste (retry=%j)", async willRetry => {
+		using temp = TempDir.createSync("@omp-team-queued-images-");
+		const imagePath = temp.join("newer.png");
+		await Bun.write(imagePath, pastedPng);
+		const h = await createHarness(() => {});
+		const text = "/team inspect [Image #1] attachment://1";
+		h.session.isCompacting = true;
+		h.draftWithImage(text);
+		await h.pressSubmit(FOLLOW_UP);
+		expect(h.ctx.compactionQueuedMessages).toEqual([
+			expect.objectContaining({
+				text,
+				mode: "followUp",
+				images: [originalImage],
+				imageLinks: ["local://original.png"],
+			}),
+		]);
+		h.editor.setText("newer ");
+		await h.controller.handleImagePathPaste(imagePath);
+		const newer = h.editor.expandedText();
+		const pasted = h.editor.pendingImages[0];
+		expect(newer.trimEnd()).toMatch(/^newer \[Image #1(?:,[^\]]+)?\]$/);
+		expect(pasted).toBeDefined();
+		h.session.isCompacting = false;
+		await h.helpers.flushCompactionQueue({ willRetry });
 
-			expect(h.ctx.compactionQueuedMessages).toEqual([]);
-			const restoredText = h.editor.getExpandedText();
-			expect(restoredText).toContain(newerText);
-			expect(Array.from(restoredText.matchAll(/\[Image #(\d+)/g), match => Number(match[1]))).toEqual([2, 1]);
-			expect(h.editor.pendingImages[0]).toBe(pasted);
-			expect(h.editor.pendingImages[1]).toBe(originalImage);
-			expect(h.editor.pendingImageLinks).toEqual([pastedLink, "local://original.png"]);
-			expect(h.editor.imageLinks).toEqual(h.editor.pendingImageLinks);
-			expect(h.ctx.showError).toHaveBeenCalledWith(expect.stringContaining("会话模型"));
-			expect(h.prompt).not.toHaveBeenCalled();
-		},
-	);
+		expect(h.ctx.compactionQueuedMessages).toEqual([]);
+		const restored = h.editor.expandedText();
+		expect(restored).toContain(newer);
+		expect(Array.from(restored.matchAll(/\[Image #(\d+)/g), match => Number(match[1]))).toEqual([2, 1]);
+		expect(h.editor.pendingImages).toEqual([pasted, originalImage]);
+		expect(h.editor.pendingImageLinks).toEqual([imagePath, "local://original.png"]);
+		expect(h.ctx.showError).toHaveBeenCalledWith(expect.stringContaining("会话模型"));
+		expect(h.prompt).not.toHaveBeenCalled();
+	});
+
+	for (const command of ["/goal", "/goal-autopilot"]) {
+		it.each([true, false])(
+			`${command} protects newer typing and pasted images when dispatch succeeds=%j`,
+			async starts => {
+				const hookEntered = Promise.withResolvers<void>();
+				const releaseHook = Promise.withResolvers<void>();
+				const dispatchEntered = Promise.withResolvers<void>();
+				const releaseDispatch = Promise.withResolvers<void>();
+				const h = await createHarness(pi => {
+					pi.on("input", async () => {
+						hookEntered.resolve();
+						await releaseHook.promise;
+					});
+				});
+				const dispatch = vi.fn(async () => {
+					dispatchEntered.resolve();
+					await releaseDispatch.promise;
+					if (!starts) throw new Error("goal setup failed");
+					return true;
+				});
+				h.ctx.handleGoalModeCommand = dispatch;
+				h.draftWithImage(`${command} set original [Image #1]`);
+				const submitted = h.pressSubmit(ENTER);
+				await hookEntered.promise;
+				try {
+					h.draftWithImage("newer [Image #1]", newerImage, "local://newer.jpg");
+					releaseHook.resolve();
+					await dispatchEntered.promise;
+					expect(h.editor.expandedText()).toBe("newer [Image #1]");
+					h.editor.pendingImages.push(transformedImage);
+					h.editor.pendingImageLinks.push("local://during-dispatch.jpg");
+					const newer = "newer [Image #1] still typing [Image #2]";
+					h.editor.setText(newer);
+					releaseDispatch.resolve();
+					await submitted;
+
+					expect(h.editor.expandedText()).toBe(starts ? newer : `${command} set original [Image #3]\n\n${newer}`);
+					const images = [newerImage, transformedImage];
+					const links = ["local://newer.jpg", "local://during-dispatch.jpg"];
+					expect(h.editor.pendingImages).toEqual(starts ? images : [...images, originalImage]);
+					expect(h.editor.pendingImageLinks).toEqual(starts ? links : [...links, "local://original.png"]);
+					expect(dispatch).toHaveBeenCalledTimes(1);
+					expect(h.ctx.showError).toHaveBeenCalledTimes(starts ? 0 : 1);
+					if (!starts) expect(h.ctx.showError).toHaveBeenCalledWith("goal setup failed");
+					expect(h.prompt).not.toHaveBeenCalled();
+				} finally {
+					releaseHook.resolve();
+					releaseDispatch.resolve();
+					await submitted;
+				}
+			},
+		);
+	}
 
 	it("Ctrl+Enter chains partial text/image transforms and restores materialized images after rejection", async () => {
 		const seen: InputEvent[] = [];
@@ -334,7 +372,6 @@ describe("interactive native input ingress", () => {
 		if (!link) throw new Error("transformed image has no restored link");
 		expect(link.endsWith(".jpg")).toBe(true);
 		expect(h.blobs.get(link)?.toString()).toBe("replacement");
-		expect(h.editor.imageLinks).toEqual([link]);
 		expect(h.ctx.showError).toHaveBeenCalledWith("queue rejected");
 	});
 
@@ -353,14 +390,12 @@ describe("interactive native input ingress", () => {
 		const submitting = h.pressSubmit(FOLLOW_UP);
 		await entered.promise;
 		const repeated = h.pressSubmit(FOLLOW_UP);
-		h.editor.pendingImages = [transformedImage];
-		h.editor.pendingImageLinks = ["local://new.jpeg"];
-		h.editor.imageLinks = h.editor.pendingImageLinks;
+		replaceImages(h.editor, [transformedImage], ["local://new.jpeg"]);
 		h.editor.setText("new draft [Image #1]");
 		release.resolve();
 		await Promise.all([submitting, repeated]);
 		expect(seen).toEqual(["original [Image #1]"]);
-		expect(h.editor.getText()).toBe("new draft [Image #1]");
+		expect(h.editor.expandedText()).toBe("new draft [Image #1]");
 		expect(h.editor.pendingImages).toEqual([transformedImage]);
 		expect(h.editor.pendingImageLinks).toEqual(["local://new.jpeg"]);
 	});
@@ -382,7 +417,7 @@ describe("interactive native input ingress", () => {
 			h.editor.setText("keep this draft");
 			release.resolve();
 			await submitting;
-			expect(h.editor.getText()).toBe("keep this draft");
+			expect(h.editor.expandedText()).toBe("keep this draft");
 			expect(h.editor.pendingImages).toEqual([]);
 		});
 	}
@@ -407,7 +442,7 @@ describe("interactive native input ingress", () => {
 		expect(h.ctx.compactionQueuedMessages).toEqual([
 			{ text: "queued after compaction", mode: "followUp", images: undefined, draftDetached: true },
 		]);
-		expect(h.editor.getText()).toBe("new draft");
+		expect(h.editor.expandedText()).toBe("new draft");
 	});
 
 	it("Ctrl+Enter /queue queues the attachments of its detached draft", async () => {
@@ -434,7 +469,7 @@ describe("interactive native input ingress", () => {
 		release.resolve();
 		await submitting;
 
-		expect(h.editor.getExpandedText()).toBe("/queue inspect [Image #2]\n\nnewer [Image #1]");
+		expect(h.editor.expandedText()).toBe("/queue inspect [Image #2]\n\nnewer [Image #1]");
 		expect(h.editor.pendingImages).toEqual([newerImage, originalImage]);
 		expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg", "local://original.png"]);
 		expect(h.ctx.showError).toHaveBeenCalledWith("queue rejected");
@@ -461,7 +496,7 @@ describe("interactive native input ingress", () => {
 			["first [Image #1]", [originalImage]],
 			["second", undefined],
 		]);
-		expect(h.editor.getExpandedText()).toBe("=> second\n\nnewer [Image #1]");
+		expect(h.editor.expandedText()).toBe("=> second\n\nnewer [Image #1]");
 		expect(h.editor.pendingImages).toEqual([newerImage]);
 		expect(h.ctx.showError).toHaveBeenCalledWith("queue rejected");
 	});
@@ -482,7 +517,7 @@ describe("interactive native input ingress", () => {
 		release.resolve();
 		await submitting;
 		expect(h.session.followUp.mock.calls).toEqual([["inspect the result", undefined]]);
-		expect(h.editor.getExpandedText()).toBe("newer [Image #1]");
+		expect(h.editor.expandedText()).toBe("newer [Image #1]");
 		expect(h.editor.pendingImages).toEqual([originalImage]);
 		expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
@@ -505,7 +540,7 @@ describe("interactive native input ingress", () => {
 		await submitting;
 
 		expect(h.session.followUp.mock.calls).toEqual([["inspect [Image #1]", [originalImage]]]);
-		expect(h.editor.getExpandedText()).toBe("/queue inspect [Image #2]\n\nnewer [Image #1]");
+		expect(h.editor.expandedText()).toBe("/queue inspect [Image #2]\n\nnewer [Image #1]");
 		expect(h.editor.pendingImages).toEqual([newerImage, originalImage]);
 		expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg", "local://original.png"]);
 		expect(h.ctx.showError).toHaveBeenCalledWith("queue rejected");
@@ -528,84 +563,8 @@ describe("interactive native input ingress", () => {
 		release.resolve();
 		await submitting;
 
-		expect(h.editor.getText()).toBe("same text");
+		expect(h.editor.expandedText()).toBe("same text");
 	});
-
-	for (const command of ["/goal", "/goal-autopilot"]) {
-		it(`Enter ${command} preserves the next text/image draft typed during a blocked input hook`, async () => {
-			const entered = Promise.withResolvers<void>();
-			const release = Promise.withResolvers<void>();
-			const h = await createHarness(pi => {
-				pi.on("input", async () => {
-					entered.resolve();
-					await release.promise;
-				});
-			});
-			const handleGoalModeCommand = vi.fn(async () => true);
-			h.ctx.handleGoalModeCommand = handleGoalModeCommand;
-			h.draftWithImage(`${command} set original [Image #1]`);
-			const submitting = h.pressSubmit(ENTER);
-			await entered.promise;
-			h.draftWithImage("newer [Image #1]", newerImage, "local://newer.jpg");
-			release.resolve();
-			await submitting;
-
-			expect(h.editor.getExpandedText()).toBe("newer [Image #1]");
-			expect(h.editor.pendingImages).toEqual([newerImage]);
-			expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg"]);
-			expect(h.editor.imageLinks).toEqual(["local://newer.jpg"]);
-			expect(h.ctx.showError).not.toHaveBeenCalled();
-			expect(h.prompt).not.toHaveBeenCalled();
-		});
-
-		it(`Enter ${command} merges a failed submission with text/images typed during interception and dispatch`, async () => {
-			const hookEntered = Promise.withResolvers<void>();
-			const releaseHook = Promise.withResolvers<void>();
-			const dispatchEntered = Promise.withResolvers<void>();
-			const releaseDispatch = Promise.withResolvers<void>();
-			const h = await createHarness(pi => {
-				pi.on("input", async () => {
-					hookEntered.resolve();
-					await releaseHook.promise;
-				});
-			});
-			const handleGoalModeCommand = vi.fn(async () => {
-				dispatchEntered.resolve();
-				await releaseDispatch.promise;
-				throw new Error("goal setup failed");
-			});
-			h.ctx.handleGoalModeCommand = handleGoalModeCommand;
-			h.draftWithImage(`${command} set original [Image #1]`);
-			const submitting = h.pressSubmit(ENTER);
-			await hookEntered.promise;
-			h.draftWithImage("newer [Image #1]", newerImage, "local://newer.jpg");
-			releaseHook.resolve();
-			await dispatchEntered.promise;
-			const draftDuringDispatch = h.editor.getExpandedText();
-			h.editor.pendingImages.push(transformedImage);
-			h.editor.pendingImageLinks.push("local://during-dispatch.jpg");
-			h.editor.imageLinks = h.editor.pendingImageLinks;
-			h.editor.setText(`${draftDuringDispatch} still typing [Image #2]`);
-			releaseDispatch.resolve();
-			await submitting;
-
-			expect(draftDuringDispatch).toBe("newer [Image #1]");
-			expect(h.editor.getExpandedText()).toBe(
-				`${command} set original [Image #3]\n\nnewer [Image #1] still typing [Image #2]`,
-			);
-			expect(h.editor.pendingImages).toEqual([newerImage, transformedImage, originalImage]);
-			expect(h.editor.pendingImageLinks).toEqual([
-				"local://newer.jpg",
-				"local://during-dispatch.jpg",
-				"local://original.png",
-			]);
-			expect(h.editor.imageLinks).toEqual(h.editor.pendingImageLinks);
-			expect(handleGoalModeCommand).toHaveBeenCalledTimes(1);
-			expect(h.ctx.showError).toHaveBeenCalledTimes(1);
-			expect(h.ctx.showError).toHaveBeenCalledWith("goal setup failed");
-			expect(h.prompt).not.toHaveBeenCalled();
-		});
-	}
 
 	it("Ctrl+Enter restores a rejected submission alongside newer text and image attachments", async () => {
 		const entered = Promise.withResolvers<void>();
@@ -620,14 +579,12 @@ describe("interactive native input ingress", () => {
 		h.draftWithImage();
 		const submitting = h.pressSubmit(FOLLOW_UP);
 		await entered.promise;
-		h.editor.pendingImages = [transformedImage];
-		h.editor.pendingImageLinks = ["local://new.jpeg"];
-		h.editor.imageLinks = h.editor.pendingImageLinks;
+		replaceImages(h.editor, [transformedImage], ["local://new.jpeg"]);
 		h.editor.setText("new draft [Image #1]");
 		release.resolve();
 		await submitting;
-		expect(h.editor.getExpandedText()).toContain("original [Image #2]");
-		expect(h.editor.getExpandedText()).toContain("new draft [Image #1]");
+		expect(h.editor.expandedText()).toContain("original [Image #2]");
+		expect(h.editor.expandedText()).toContain("new draft [Image #1]");
 		expect(h.editor.pendingImages).toEqual([transformedImage, originalImage]);
 		expect(h.editor.pendingImageLinks).toEqual(["local://new.jpeg", "local://original.png"]);
 	});
@@ -661,21 +618,18 @@ describe("interactive native input ingress", () => {
 		h.draftWithImage("/skill:review original [Image #1]");
 		const submitting = h.pressSubmit(FOLLOW_UP);
 		await entered.promise;
-		h.editor.pendingImages = [transformedImage];
-		h.editor.pendingImageLinks = ["local://new.jpeg"];
-		h.editor.imageLinks = h.editor.pendingImageLinks;
+		replaceImages(h.editor, [transformedImage], ["local://new.jpeg"]);
 		h.editor.setText("new draft [Image #1]");
 		release.resolve();
 		await dispatchEntered.promise;
-		const draftDuringDispatch = h.editor.getText();
+		const draftDuringDispatch = h.editor.expandedText();
 		h.editor.setText(`${draftDuringDispatch} still typing`);
 		dispatchRelease.resolve();
 		await submitting;
 		expect(draftDuringDispatch).toBe("new draft [Image #1]");
-		expect(h.editor.getExpandedText()).toBe("/skill:review original [Image #2]\n\nnew draft [Image #1] still typing");
+		expect(h.editor.expandedText()).toBe("/skill:review original [Image #2]\n\nnew draft [Image #1] still typing");
 		expect(h.editor.pendingImages).toEqual([transformedImage, originalImage]);
 		expect(h.editor.pendingImageLinks).toEqual(["local://new.jpeg", "local://original.png"]);
-		expect(h.editor.imageLinks).toEqual(["local://new.jpeg", "local://original.png"]);
 	});
 
 	it("Ctrl+Enter restores a rejected builtin /new alongside a newer draft", async () => {
@@ -699,13 +653,12 @@ describe("interactive native input ingress", () => {
 		release.resolve();
 		await submitting;
 
-		expect(h.editor.getExpandedText()).toBe("/new\n\nnewer [Image #1]");
+		expect(h.editor.expandedText()).toBe("/new\n\nnewer [Image #1]");
 		expect(h.editor.pendingImages).toEqual([originalImage, transformedImage]);
 		const link = h.editor.pendingImageLinks[1];
 		if (!link) throw new Error("transformed image has no restored link");
 		expect(h.blobs.get(link)?.toString()).toBe("replacement");
 		expect(h.editor.pendingImageLinks).toEqual(["local://original.png", link]);
-		expect(h.editor.imageLinks).toEqual(["local://original.png", link]);
 		expect(h.ctx.showError).toHaveBeenCalledWith("new session rejected");
 		expect(h.prompt).not.toHaveBeenCalled();
 	});
@@ -733,10 +686,9 @@ describe("interactive native input ingress", () => {
 			images: [originalImage],
 			imageLinks: ["local://original.png"],
 		});
-		expect(h.editor.getExpandedText()).toBe("/plan fix [Image #2]\n\nnewer [Image #1]");
+		expect(h.editor.expandedText()).toBe("/plan fix [Image #2]\n\nnewer [Image #1]");
 		expect(h.editor.pendingImages).toEqual([newerImage, originalImage]);
 		expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg", "local://original.png"]);
-		expect(h.editor.imageLinks).toEqual(["local://newer.jpg", "local://original.png"]);
 		expect(h.prompt).not.toHaveBeenCalled();
 	});
 
@@ -792,7 +744,7 @@ describe("interactive native input ingress", () => {
 
 			await h.pressSubmit(ENTER);
 
-			expect(h.editor.getExpandedText()).toBe(`/${command} fix this block [Image #1]`);
+			expect(h.editor.expandedText()).toBe(`/${command} fix this block [Image #1]`);
 			expect(h.editor.pendingImages).toEqual([originalImage]);
 			expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
 
@@ -800,7 +752,7 @@ describe("interactive native input ingress", () => {
 			h.editor.setText(`/${command} just text`);
 			await h.pressSubmit(ENTER);
 
-			expect(h.editor.getExpandedText()).toBe(`/${command} just text`);
+			expect(h.editor.expandedText()).toBe(`/${command} just text`);
 		},
 	);
 
@@ -823,7 +775,7 @@ describe("interactive native input ingress", () => {
 
 		expect(run).not.toHaveBeenCalled();
 		expect(showWarning).toHaveBeenCalledWith(`/${command} takes text only; remove the images to run it`);
-		expect(h.editor.getExpandedText()).toBe(`/${command} look at this [Image #1]`);
+		expect(h.editor.expandedText()).toBe(`/${command} look at this [Image #1]`);
 		expect(h.editor.pendingImages).toEqual([originalImage]);
 		expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
@@ -840,7 +792,7 @@ describe("interactive native input ingress", () => {
 
 		expect(run).not.toHaveBeenCalled();
 		expect(h.ctx.showStatus).toHaveBeenCalledWith("/tan is host-only during a collab session");
-		expect(h.editor.getExpandedText()).toBe("/tan fix this block [Image #1]");
+		expect(h.editor.expandedText()).toBe("/tan fix this block [Image #1]");
 		expect(h.editor.pendingImages).toEqual([originalImage]);
 		expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
 	});
@@ -866,7 +818,7 @@ describe("interactive native input ingress", () => {
 		release.resolve();
 		await submitting;
 
-		expect(h.editor.getExpandedText()).toBe("newer [Image #1]");
+		expect(h.editor.expandedText()).toBe("newer [Image #1]");
 		expect(h.editor.pendingImages).toEqual([newerImage]);
 
 		await h.pressSubmit(ENTER);
@@ -899,12 +851,12 @@ describe("interactive native input ingress", () => {
 			h.draftWithImage("newer [Image #1]");
 			releaseHook.resolve();
 			await commandEntered.promise;
-			const duringCommand = h.editor.getExpandedText();
+			const duringCommand = h.editor.expandedText();
 			h.editor.setText(`${duringCommand} still typing`);
 			releaseCommand.resolve();
 			await submitting;
 			expect(duringCommand).toBe("newer [Image #1]");
-			expect(h.editor.getExpandedText()).toBe("newer [Image #1] still typing");
+			expect(h.editor.expandedText()).toBe("newer [Image #1] still typing");
 			expect(h.editor.pendingImages).toEqual([originalImage]);
 			expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
 			expect(h.prompt).not.toHaveBeenCalled();
@@ -928,7 +880,7 @@ describe("interactive native input ingress", () => {
 			expect(downstream).not.toHaveBeenCalled();
 			expect(h.ctx.handleClearCommand).not.toHaveBeenCalled();
 			expect(h.prompt).not.toHaveBeenCalled();
-			expect(h.editor.getText()).toBe("");
+			expect(h.editor.expandedText()).toBe("");
 		});
 
 		it(`${label} consumes transformed-empty input before compaction queueing`, async () => {
@@ -942,10 +894,9 @@ describe("interactive native input ingress", () => {
 
 			expect(h.ctx.compactionQueuedMessages).toEqual([]);
 			expect(h.prompt).not.toHaveBeenCalled();
-			expect(h.editor.getText()).toBe("");
+			expect(h.editor.expandedText()).toBe("");
 			expect(h.editor.pendingImages).toEqual([]);
 			expect(h.editor.pendingImageLinks).toEqual([]);
-			expect(h.editor.imageLinks).toBeUndefined();
 		});
 
 		it(`${label} excludes focused chat and its command restrictions from main-session hooks`, async () => {
@@ -991,10 +942,9 @@ describe("interactive native input ingress", () => {
 			"text only",
 			expect.objectContaining({ streamingBehavior: "followUp", images: [] }),
 		]);
-		expect(h.editor.getText()).toBe("text only");
+		expect(h.editor.expandedText()).toBe("text only");
 		expect(h.editor.pendingImages).toEqual([]);
 		expect(h.editor.pendingImageLinks).toEqual([]);
-		expect(h.editor.imageLinks).toBeUndefined();
 	});
 
 	it("Enter dispatches input once, while continue shortcuts bypass input handlers as resumes", async () => {
@@ -1042,12 +992,16 @@ describe("interactive native input ingress", () => {
 
 		await h.pressSubmit(FOLLOW_UP);
 
+		const [imageLink] = h.blobs.keys();
+		if (!imageLink) throw new Error("transformed image has no queued link");
+		expect(imageLink.endsWith(".jpg")).toBe(true);
+		expect(h.blobs.get(imageLink)?.toString()).toBe("replacement");
 		expect(h.ctx.compactionQueuedMessages).toEqual([
 			{
 				text: "/skill:review changed [Image #1]",
 				mode: "followUp",
 				images: [transformedImage],
-				imageLinks: [expect.stringContaining(".jpg")],
+				imageLinks: [imageLink],
 				draftDetached: true,
 			},
 		]);
@@ -1073,10 +1027,10 @@ describe("interactive native input ingress", () => {
 		const submitting = h.pressSubmit(FOLLOW_UP);
 		await entered.promise;
 		try {
-			h.editor.handleInput("\x1bl");
-			h.editor.handleInput("\x1b");
-			h.editor.handleInput("\x03");
-			h.editor.handleInput("\x03");
+			h.press("alt+l");
+			h.press("escape");
+			h.press("ctrl+c");
+			h.press("ctrl+c");
 			expect(h.ctx.resetDisplayAfterAppearanceRefresh).toHaveBeenCalled();
 			expect(h.session.abort).toHaveBeenCalledTimes(1);
 			expect(h.ctx.shutdown).toHaveBeenCalledTimes(1);

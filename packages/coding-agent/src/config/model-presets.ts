@@ -13,13 +13,14 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import type { ModelRoleLookup } from "@oh-my-pi/pi-tui/overlays/model-browser";
-import { AUTO_THINKING, type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../thinking/levels";
+import type { ConfiguredThinkingLevel } from "../utils/render-utils";
+import type { ModelRoleLookup } from "../modes/view-model/overlays/model-browser";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
 import { cfgDefaultThinkingLevel } from "../session/settings";
 import { pickDefaultAvailableModel, resolveModelRoleValue, scopeAllowList } from "./model-resolver";
-import { cfgModelPresets, cfgModelRoleStorage, type ModelPreset } from "./model-settings";
+import { cfgModelPresets, type ModelPreset } from "./model-settings";
 import type { Settings, SettingProvenance } from "./settings";
 
 /** Preset names: a letter, then letters, digits, `-` or `_` (the model hub's role-name rule). */
@@ -215,12 +216,28 @@ export type ModelPresetSwitchResult =
 
 export type ModelPresetSession = Pick<
 	AgentSession,
-	"setModel" | "setThinkingLevel" | "getAvailableModels" | "scopedModels" | "modelRegistry"
+	| "setModel"
+	| "setThinkingLevel"
+	| "getAvailableModels"
+	| "scopedModels"
+	| "scopedModelsFromSettings"
+	| "refreshScopedModels"
+	| "modelRegistry"
 >;
 
-function presetCandidates(session: ModelPresetSession): Model[] {
-	const scoped = session.scopedModels;
-	return scoped.length > 0 ? scopeAllowList(scoped) : session.getAvailableModels();
+/**
+ * Models a role assignment may resolve to: an explicit session scope (`--models`), else the `enabledModels`
+ * allowlist with role aliases read through `roleLookup`, else every available model. A scope derived from
+ * `enabledModels` is skipped because a role change can outdate it.
+ */
+export function roleModelCandidates(
+	session: Pick<ModelPresetSession, "getAvailableModels" | "scopedModels" | "scopedModelsFromSettings">,
+	roleLookup?: ModelRoleLookup,
+): Model[] {
+	if (!session.scopedModelsFromSettings && session.scopedModels.length > 0) {
+		return scopeAllowList(session.scopedModels);
+	}
+	return session.getAvailableModels(roleLookup);
 }
 
 function errorMessage(error: unknown): string {
@@ -236,8 +253,8 @@ function pickAutomaticDefault(session: ModelPresetSession, candidates: Model[]):
 }
 
 /**
- * Resolve the default before or after applying a preset. A process default
- * is a preference, not a requirement: if unusable, try automatic selection.
+ * Resolve a default model and thinking selector against the prospective role assignments.
+ * An implicit process default is a preference; fall back to automatic selection if unusable.
  * Without an explicit `:level` on the selector, the preset's own `defaultThinkingLevel`
  * applies even when a higher layer still decides the setting — the switch is for this
  * session; the shadowing layer is reported separately.
@@ -251,7 +268,7 @@ function resolvePresetDefault(
 		roleValue,
 		implicit,
 		roleLookup,
-	}: { roleValue: string | undefined; implicit: boolean; roleLookup?: ModelRoleLookup },
+	}: { roleValue: string | undefined; implicit: boolean; roleLookup: ModelRoleLookup },
 ): { model: Model; thinkingLevel: ConfiguredThinkingLevel | undefined } | string {
 	const fallbackLevel =
 		preset.defaultThinkingLevel ?? parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings));
@@ -270,37 +287,6 @@ function resolvePresetDefault(
 	}
 	const model = pickAutomaticDefault(session, candidates);
 	return model ? { model, thinkingLevel: fallbackLevel } : "no model with configured credentials is available";
-}
-
-/** Write the preset's roles into the model hub's storage scope, clearing roles it leaves out. */
-function writePresetRoles(settings: Settings, preset: ModelPreset): void {
-	const project = cfgModelRoleStorage.get(settings) === "project";
-	const roles = new Set([...Object.keys(settings.getModelRoles()), ...Object.keys(preset.modelRoles)]);
-	if (project) {
-		for (const role of roles) {
-			const value = Object.hasOwn(preset.modelRoles, role) ? preset.modelRoles[role] : undefined;
-			if (value !== undefined) settings.setProjectModelRole(role, value);
-			else if (settings.getProjectModelRole(role) || settings.getModelRoleProvenance(role) === "runtime") {
-				settings.clearProjectModelRole(role);
-			}
-		}
-	} else {
-		for (const role of roles) {
-			if (Object.hasOwn(preset.modelRoles, role)) {
-				settings.setModelRole(role, preset.modelRoles[role]);
-				continue;
-			}
-			// Skip roles neither the global layer nor a runtime override owns:
-			// deleting them would dirty the save queue without changing anything.
-			if (settings.getGlobalModelRole(role) === undefined && settings.getModelRoleProvenance(role) !== "runtime") {
-				continue;
-			}
-			settings.setModelRole(role, undefined);
-		}
-	}
-	if (preset.defaultThinkingLevel !== undefined) {
-		cfgDefaultThinkingLevel.set(settings, preset.defaultThinkingLevel);
-	}
 }
 
 function shadowedRoles(settings: Settings, preset: ModelPreset): ModelPresetShadowedRole[] {
@@ -329,9 +315,9 @@ function shadowedThinking(settings: Settings, preset: ModelPreset): ModelPresetS
  * Apply preset `name`: persist its roles and thinking level, then switch the
  * live session to the resulting default model and thinking level.
  *
- * The preset's own default is checked before anything is written, so a preset
- * whose model is gone leaves settings untouched. A live switch that still fails
- * afterwards is reported as `failed`, never as a completed switch.
+ * Both the preset's own default and the effective default are checked against
+ * the prospective scope before anything is written. A live switch that still
+ * fails afterwards is reported as `failed`, never as a completed switch.
  */
 export async function applyModelPreset(
 	settings: Settings,
@@ -354,31 +340,40 @@ async function applyModelPresetLocked(
 	const lookup = getModelPreset(settings, name);
 	if (lookup.kind !== "found") return lookup;
 	const { preset } = lookup;
-	const candidates = presetCandidates(session);
-
+	const prospective = settings.previewModelRoles(preset.modelRoles);
+	const roleLookup: ModelRoleLookup = prospective;
+	const candidates = roleModelCandidates(session, roleLookup);
 	const presetDefault = Object.hasOwn(preset.modelRoles, "default") ? preset.modelRoles.default : undefined;
-	// A selector alias must see the preset's assignments rather than the
-	// assignments it is about to replace.
-	const roleLookup = {
-		getModelRole: (role: string) =>
-			Object.hasOwn(preset.modelRoles, role) ? preset.modelRoles[role] : settings.getModelRole(role),
-	};
-	const preflight = resolvePresetDefault(settings, session, candidates, preset, {
-		roleValue: presetDefault ?? settings.getProcessModelRoleAfterClear("default"),
-		implicit: presetDefault === undefined,
+	const effectiveDefault = roleLookup.getModelRole("default");
+	const source = prospective.getModelRoleProvenance("default");
+	if (presetDefault && presetDefault !== effectiveDefault) {
+		const result = resolvePresetDefault(settings, session, candidates, preset, {
+			roleValue: presetDefault,
+			implicit: false,
+			roleLookup,
+		});
+		if (typeof result === "string") return { kind: "unavailable", reason: result };
+	}
+	const live = resolvePresetDefault(settings, session, candidates, preset, {
+		roleValue: effectiveDefault,
+		implicit: source === "default",
 		roleLookup,
 	});
-	if (typeof preflight === "string") return { kind: "unavailable", reason: preflight };
+	if (typeof live === "string") {
+		const reason =
+			source !== "default" && effectiveDefault !== undefined && effectiveDefault !== presetDefault
+				? `${live} (default set by ${SOURCE_LABELS[source]})`
+				: live;
+		return { kind: "unavailable", reason };
+	}
 
-	writePresetRoles(settings, preset);
+	settings.replaceModelRoles(preset.modelRoles);
+	if (preset.defaultThinkingLevel !== undefined) {
+		cfgDefaultThinkingLevel.set(settings, preset.defaultThinkingLevel);
+	}
+	if (session.scopedModelsFromSettings) await session.refreshScopedModels();
 	const shadowed = shadowedRoles(settings, preset);
 	const thinkingShadow = shadowedThinking(settings, preset);
-
-	const live = resolvePresetDefault(settings, session, candidates, preset, {
-		roleValue: settings.getModelRole("default"),
-		implicit: settings.getModelRoleProvenance("default") === "default",
-	});
-	if (typeof live === "string") return { kind: "failed", reason: live, shadowed };
 	try {
 		await session.setModel(live.model, "default", { persist: false });
 	} catch (error) {

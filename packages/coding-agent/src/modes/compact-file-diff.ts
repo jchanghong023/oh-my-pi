@@ -1,15 +1,16 @@
 import * as path from "node:path";
-import { type Component, matchesKey } from "@oh-my-pi/pi-tui";
-import { renderDiff } from "@oh-my-pi/pi-tui/chrome/diff";
-import { ScrollView } from "@oh-my-pi/pi-tui/components/scroll-view";
-import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { rowsText } from "@oh-my-pi/pi-tui/native/spans";
-import { replaceTabs, shortenPath, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
-import { getThemeEpoch, theme } from "@oh-my-pi/pi-tui/theme";
-import { editToolRenderer, type EditRenderContext } from "@oh-my-pi/pi-tui/tools/edit";
-import { getPaddingX, padding } from "@oh-my-pi/pi-tui/utils";
+import { UiNode } from "@oh-my-pi/pi-tui";
+import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
+import { renderBlock } from "@oh-my-pi/pi-tui/term/render";
+import { renderDiff, wrapDiffRow } from "@oh-my-pi/pi-tui/text/diff";
+import { replaceTabs, spaces, truncate } from "@oh-my-pi/pi-tui/text/width";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { TurnToolDiff } from "../session/latest-turn-tool-diffs";
+import type { EditCard, EditTerm } from "../ui/tools/edit";
+import "../ui/styles/tools/block";
+import "../ui/styles/tools/edit";
+import { shortenPath } from "../utils/render-utils";
 import { cfgDisplayMode } from "./settings";
 import type { InteractiveModeContext } from "./types";
 
@@ -25,18 +26,34 @@ function fileAction(change: TurnToolDiff): string {
 }
 
 /** Editor chrome: its rows can never be retired into terminal history. */
-export class CompactFileDiff implements Component {
-	readonly #scroll = new ScrollView([], { height: 0, scrollbar: "auto" });
+export class CompactFileDiff {
+	#offset = 0;
+	#maxOffset = 0;
+	#page = 0;
 	#diffRows = new WeakMap<TurnToolDiff, readonly string[]>();
-	#cachedTheme = -1;
+	#cachedTheme?: ReturnType<typeof currentTheme>;
 	#expanded?: readonly TurnToolDiff[];
-	#lastSource?: readonly TurnToolDiff[];
-	#preview?: { file: TurnToolDiff; cwd: string; context: EditRenderContext; card: Component };
-	#body?: { count: number; cwd: string; theme: number; rows: number };
+	#expandedRows?: {
+		source: readonly TurnToolDiff[];
+		count: number;
+		width: number;
+		cwd: string;
+		theme: ReturnType<typeof currentTheme>;
+		rows: string[];
+	};
+	#preview?: {
+		file: TurnToolDiff;
+		cwd: string;
+		width: number;
+		height: number;
+		theme: ReturnType<typeof currentTheme>;
+		rows: readonly string[];
+	};
 
 	constructor(
-		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "ui" | "editor" | "settings">,
+		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "shell" | "composer" | "settings">,
 		private readonly availableRows: () => number,
+		private readonly onChange: () => void = () => {},
 	) {}
 
 	#source(): readonly TurnToolDiff[] | undefined {
@@ -45,37 +62,25 @@ export class CompactFileDiff implements Component {
 			: undefined;
 	}
 
-	#clearBody(): void {
-		if (!this.#body) return;
-		this.#body = undefined;
-		this.#scroll.setLines([]);
-	}
-
 	close(): void {
-		const focused = this.ctx.ui.getFocused() === this;
-		if (!this.#expanded && !focused) return;
+		if (!this.#expanded) return;
 		this.#expanded = undefined;
-		this.#clearBody();
-		if (focused) this.ctx.ui.setFocus(this.ctx.editor);
-		this.ctx.ui.requestRender();
+		this.#offset = 0;
+		this.#maxOffset = 0;
+		this.onChange();
 	}
 
 	clear(): void {
 		this.close();
-		this.#lastSource = undefined;
+		this.#expandedRows = undefined;
 		this.#preview = undefined;
 	}
 
 	sync(source = this.#source(), availableRows = this.availableRows()): void {
-		if (this.#lastSource !== source) {
-			this.#lastSource = source;
-			this.#clearBody();
-			this.#preview = undefined;
-		}
 		if (
 			!this.#expanded ||
 			source !== this.#expanded ||
-			this.ctx.ui.terminal.columns < 2 ||
+			this.ctx.shell.size().columns < 2 ||
 			availableRows < 2 ||
 			!source.length
 		) {
@@ -93,26 +98,54 @@ export class CompactFileDiff implements Component {
 		}
 		if (
 			!source ||
-			this.ctx.ui.terminal.columns < 2 ||
+			this.ctx.shell.size().columns < 2 ||
 			availableRows < 2 ||
-			this.ctx.ui.getFocused() !== this.ctx.editor
+			this.ctx.shell.focused() !== this.ctx.composer.field
 		)
 			return false;
 		if (source.length === 0) return false;
 		this.#expanded = source;
-		this.#scroll.scrollToTop();
-		this.ctx.ui.setFocus(this);
-		this.ctx.ui.requestRender();
+		this.#offset = 0;
+		this.onChange();
 		return true;
 	}
 
-	handleInput(data: string): void {
-		// An overlay can restore its prior focus after the underlying turn changed.
+	handleKey(key: string): boolean {
 		this.sync();
-		if (!this.#expanded) {
-			this.ctx.editor.handleInput(data);
-		} else if (matchesKey(data, "escape")) this.close();
-		else if (this.#scroll.handleScrollKey(data)) this.ctx.ui.requestRender();
+		if (!this.#expanded || this.ctx.shell.focused() !== this.ctx.composer.field) return false;
+		if (key === "escape") {
+			this.close();
+			return true;
+		}
+		let next: number;
+		switch (key) {
+			case "home":
+				next = 0;
+				break;
+			case "end":
+				next = this.#maxOffset;
+				break;
+			case "up":
+				next = this.#offset - 1;
+				break;
+			case "down":
+				next = this.#offset + 1;
+				break;
+			case "pageUp":
+				next = this.#offset - this.#page;
+				break;
+			case "pageDown":
+				next = this.#offset + this.#page;
+				break;
+			default:
+				return false;
+		}
+		next = Math.max(0, Math.min(this.#maxOffset, next));
+		if (next !== this.#offset) {
+			this.#offset = next;
+			this.onChange();
+		}
+		return true;
 	}
 
 	/** The original tool diff accessible in the dock for this call and path. */
@@ -129,41 +162,69 @@ export class CompactFileDiff implements Component {
 		}
 		const latest = source[source.length - 1]!;
 		if (path.relative(file, path.resolve(cwd, latest.path)) !== "") return undefined;
-		const bodyWidth = width - Math.min(getPaddingX(1), width - 1);
+		const bodyWidth = width - Math.min(1, width - 1);
 		if (!this.#previewRows(latest, cwd, bodyWidth, height).length) return undefined;
-		return latest.toolCallId === toolCallId ? latest.diff : source.findLast(matches)?.diff;
+		return matches(latest) ? latest.diff : source.findLast(matches)?.diff;
 	}
 
 	#previewRows(file: TurnToolDiff, cwd: string, width: number, height: number): readonly string[] {
-		if (height < 1) return [];
-		// Only framed edits need space for two borders and a body row.
-		if (file.op !== "delete" && height < 3) return [];
-		if (this.#preview?.file !== file || this.#preview.cwd !== cwd) {
-			const context: EditRenderContext = {
-				renderDiff: diff => renderDiff(diff, { filePath: file.path }),
-				compactDiffPreviewRows: Math.max(1, height - 2),
-			};
-			const card = editToolRenderer.renderResult(
-				{
-					content: [],
-					details: file,
-				},
-				{ expanded: false, isPartial: false, renderContext: context },
-				theme,
-				{ path: displayPath(cwd, file.path) },
-			);
-			this.#preview = { file, cwd, context, card };
-		}
-		this.#preview.context.compactDiffPreviewRows = Math.max(1, height - 2);
-		const rows = this.#preview.card.render(width);
-		// Extremely narrow widths may wrap the code gutter itself. Never split the frame.
-		return rows.length <= height ? rows : [];
+		const theme = currentTheme();
+		const cached = this.#preview;
+		if (
+			cached?.file === file &&
+			cached.cwd === cwd &&
+			cached.width === width &&
+			cached.height === height &&
+			cached.theme === theme
+		)
+			return cached.rows;
+		const inline = !file.diff || file.op === "delete";
+		if (height < 1 || (!inline && (height < 3 || width < 8))) return [];
+		const body: EditCard["body"] = inline
+			? []
+			: [
+					{
+						k: "raw",
+						text: this.#rows(file)
+							.flatMap(line => wrapDiffRow(line, width - 2))
+							.slice(0, height - 2)
+							.join("\n"),
+					},
+				];
+		const card: EditCard = {
+			kind: inline ? "inline" : "card",
+			title: fileAction(file),
+			path: displayPath(cwd, file.path),
+			rename: file.move ? displayPath(cwd, file.move) : undefined,
+			link: {
+				path: path.resolve(cwd, file.path),
+				rename: file.move ? path.resolve(cwd, file.move) : undefined,
+				line: file.firstChangedLine,
+			},
+			icon: file.op === "delete" ? "delete" : file.move ? "move" : "edit",
+			phase: "success",
+			body,
+		};
+		const node = new UiNode("tool", {
+			role: "omp.tool.edit",
+			name: "edit",
+			status: "done",
+			term: { look: "edit", margin: false, edit: { cards: [card] } satisfies EditTerm },
+		});
+		const rows = renderBlock(node, width, { env: staticEnvironment(theme) }).rows;
+		this.#preview = { file, cwd, width, height, theme, rows };
+		return rows;
 	}
 
 	#rows(change: TurnToolDiff): readonly string[] {
+		const theme = currentTheme();
+		if (this.#cachedTheme !== theme) {
+			this.#cachedTheme = theme;
+			this.#diffRows = new WeakMap();
+		}
 		let lines = this.#diffRows.get(change);
 		if (lines) return lines;
-		lines = change.diff ? renderDiff(change.diff, { filePath: change.path }).split("\n") : [];
+		lines = change.diff ? renderDiff(change.diff, { path: change.path, theme }) : [];
 		this.#diffRows.set(change, lines);
 		return lines;
 	}
@@ -174,41 +235,41 @@ export class CompactFileDiff implements Component {
 		this.sync(source, maxRows);
 		if (!source || maxRows < 1) return [];
 		const latest = source.at(-1);
-		if (!latest) {
-			this.#preview = undefined;
-			return [];
-		}
-		const left = padding(Math.min(getPaddingX(1), width - 1));
+		if (!latest) return [];
+		const left = spaces(Math.min(1, width - 1));
 		const bodyWidth = width - left.length;
 		const cwd = this.ctx.viewSession.sessionManager.getCwd();
 		const expanded = this.#expanded;
-		const epoch = getThemeEpoch();
-		if (this.#cachedTheme !== epoch) {
-			this.#cachedTheme = epoch;
-			this.#diffRows = new WeakMap();
-			this.#preview = undefined;
-		}
+		const theme = currentTheme();
 		if (!expanded) {
 			const preview = this.#previewRows(latest, cwd, bodyWidth, maxRows);
 			return preview.length
 				? preview.map(line => left + line)
-				: [left + theme.fg("accent", truncateToWidth(displayPath(cwd, latest.path), bodyWidth))];
+				: [left + theme.fg("accent", truncate(displayPath(cwd, latest.path), bodyWidth))];
 		}
-		if (this.#body?.count !== source.length || this.#body.cwd !== cwd || this.#body.theme !== epoch) {
-			const lines: string[] = [];
+		let entry = this.#expandedRows;
+		if (
+			!entry ||
+			entry.source !== source ||
+			entry.count !== source.length ||
+			entry.width !== bodyWidth ||
+			entry.cwd !== cwd ||
+			entry.theme !== theme
+		) {
+			const rows: string[] = [];
 			for (const change of source) {
-				const icon = change.op === "delete" ? `${theme.styledSymbol("tool.delete", "accent")} ` : "";
-				lines.push(`${icon}${theme.fg("accent", `${fileAction(change)} ${displayPath(cwd, change.path)}`)}`);
-				for (const line of this.#rows(change)) lines.push(line);
+				const target = displayPath(cwd, change.path);
+				const destination = change.move ? ` → ${displayPath(cwd, change.move)}` : "";
+				rows.push(theme.fg("accent", truncate(`${fileAction(change)} ${target}${destination}`, bodyWidth)));
+				for (const line of this.#rows(change)) rows.push(...wrapDiffRow(line, bodyWidth));
 			}
-			this.#scroll.setLines(lines);
-			this.#body = { count: source.length, cwd, theme: epoch, rows: lines.length };
+			entry = { source, count: source.length, width: bodyWidth, cwd, theme, rows };
+			this.#expandedRows = entry;
 		}
-		this.#scroll.setHeight(Math.min(maxRows, this.#body.rows));
-		return this.#scroll.render(bodyWidth).map(line => left + line);
-	}
-
-	describe(cx: DescribeContext): NativeNode {
-		return rowsText(this.render(cx.cols));
+		const { rows: lines } = entry;
+		this.#page = Math.min(maxRows, lines.length);
+		this.#maxOffset = Math.max(0, lines.length - this.#page);
+		this.#offset = Math.min(this.#offset, this.#maxOffset);
+		return lines.slice(this.#offset, this.#offset + this.#page).map(line => left + line);
 	}
 }

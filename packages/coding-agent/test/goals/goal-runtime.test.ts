@@ -6,8 +6,8 @@ import {
 	renderGoalPrompt,
 	renderTrustedObjective,
 } from "@oh-my-pi/pi-coding-agent/goals/runtime";
-import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
-import type { LocalGoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "@oh-my-pi/pi-coding-agent/goals/state";
+import type { GoalRuntimeEvent, GoalTokenUsage, LocalGoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
+import type { Goal } from "@oh-my-pi/pi-coding-agent/tools/details/goal";
 import { escapeXmlText } from "@oh-my-pi/pi-utils";
 
 function createUsage(overrides: Partial<GoalTokenUsage> = {}): GoalTokenUsage {

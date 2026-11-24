@@ -14,11 +14,11 @@ import reviewBeforeCompletion from "../../prompts/goals/goal-autopilot-review.md
 
 import type { ToolSession } from "../../tools";
 
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolError } from "../../tools/tool-errors";
 
 import { goalAutopilotRequest } from "../request-context";
 import { completionBudgetReport, remainingTokens } from "../runtime";
-import type { Goal, GoalToolDetails } from "@oh-my-pi/pi-tui/tools/goal";
+import type { Goal, GoalToolDetails } from "../../tools/details/goal";
 
 const goalSchema = type({
 	op: type("'create' | 'get' | 'complete' | 'pause' | 'resume' | 'drop'").describe("goal operation"),

@@ -16,7 +16,7 @@ import { buildRunnerDeps } from "@oh-my-pi/pi-coding-agent/team/controller";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@oh-my-pi/pi-coding-agent/task/types";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
+import { SessionObserverRegistry } from "@oh-my-pi/pi-coding-agent/task/session-observer-registry";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 describe("team modelMatches", () => {

@@ -1,5 +1,5 @@
-import { MAX_IMAGE_INPUT_BYTES } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { decodeBase64ImageData, parseImageMetadata } from "@oh-my-pi/pi-utils";
+import { MAX_IMAGE_INPUT_BYTES } from "../utils/image-input";
 import sketchHtml from "./sketch.html" with { type: "text" };
 
 // Bun's text loader returns a string, but its ambient *.html type describes

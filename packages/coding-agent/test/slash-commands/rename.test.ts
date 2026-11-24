@@ -69,7 +69,7 @@ function createRuntime(
 		session,
 		sessionManager,
 		settings,
-		editor: { setText: () => {}, addToHistory: () => {} },
+		composer: { setText: () => {}, addToHistory: () => {} },
 		showStatus: () => {},
 		showError: () => {},
 	});

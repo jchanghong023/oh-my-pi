@@ -12,7 +12,6 @@ import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { renderOrchestrateNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
 import { cfgMagicKeywordsEnabled } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -27,8 +26,10 @@ import {
 	executeBuiltinSlashCommand,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/details/todo";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { initTheme } from "../../src/ui/theme/service";
+import { createModeTerminal } from "../helpers/mode-terminal";
 
 function createToolSession(cwd: string, settings: Settings, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -108,7 +109,15 @@ async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
 		toolRegistry,
 		rebuildSystemPrompt: async () => ({ systemPrompt: ["Test"] }),
 	});
-	const mode = new InteractiveMode(session, "test");
+	const mode = new InteractiveMode(
+		session,
+		"test",
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		createModeTerminal().frame,
+	);
 	const toolSession = createToolSession(tempDir.path(), settings, {
 		getGoalModeState: () => session.getLocalGoalModeState(),
 		getGoalRuntime: () => session.goalRuntime,
@@ -134,6 +143,11 @@ async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
 			resetSettingsForTest();
 		},
 	};
+}
+
+/** Replace a draft array's contents in place (the composer's pending images are read-only references). */
+function replace<T>(target: T[], items: readonly T[]): void {
+	target.splice(0, target.length, ...items);
 }
 
 async function toolNamesFor(harness: GoalHarness): Promise<string[]> {
@@ -560,7 +574,7 @@ describe("InteractiveMode goal mode integration", () => {
 	);
 
 	it("toggles goal tool exposure when goal mode enters and pauses", async () => {
-		const previousTools = harness.session.getEnabledToolNames();
+		const previousTools = harness.session.getEnabledToolNames().sort();
 		expect(await toolNamesFor(harness)).not.toContain("goal");
 
 		await harness.mode.handleGoalModeCommand("Ship the release");
@@ -575,7 +589,7 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(harness.mode.goalModeEnabled).toBe(false);
 		expect(harness.mode.goalModePaused).toBe(true);
 		expect(harness.session.getLocalGoalModeState()?.goal.status).toBe("paused");
-		expect(harness.session.getEnabledToolNames()).toEqual(previousTools);
+		expect(harness.session.getEnabledToolNames().sort()).toEqual(previousTools);
 		expect(await toolNamesFor(harness)).not.toContain("goal");
 	});
 
@@ -705,7 +719,7 @@ describe("InteractiveMode goal mode integration", () => {
 		const file = harness.session.sessionFile;
 		if (!file) throw new Error("expected saved session");
 		expect(await harness.session.switchSession(file)).toBe(true);
-		vi.spyOn(harness.mode.statusLine, "watchBranch").mockImplementation(() => {});
+		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 		await harness.mode.init({ suppressWelcomeIntro: true });
 		expect(harness.mode.goalModeEnabled).toBe(false);
 		expect(harness.mode.goalModePaused).toBe(true);
@@ -747,7 +761,7 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	it("restores only each saved session's strict auto marker when reopening and switching", async () => {
-		vi.spyOn(harness.mode.statusLine, "watchBranch").mockImplementation(() => {});
+		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 		await harness.mode.init({ suppressWelcomeIntro: true });
 		await executeBuiltinSlashCommand("/goal-autopilot Saved automatic objective", { ctx: harness.mode });
 		await harness.session.sessionManager.ensureOnDisk();
@@ -781,7 +795,7 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	it("restores the selected branch's goal mode instead of leaking a later replacement", async () => {
-		vi.spyOn(harness.mode.statusLine, "watchBranch").mockImplementation(() => {});
+		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 		await harness.mode.init({ suppressWelcomeIntro: true });
 		await executeBuiltinSlashCommand("/goal Ordinary branch objective", { ctx: harness.mode });
 		const ordinaryEntry = harness.session.sessionManager.appendMessage({
@@ -811,7 +825,7 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	it("reconciles auto orchestration on public tree navigation and stops it on an ordinary or empty branch", async () => {
-		vi.spyOn(harness.mode.statusLine, "watchBranch").mockImplementation(() => {});
+		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 		await harness.mode.init({ suppressWelcomeIntro: true });
 		const emptyNode = harness.session.sessionManager.appendModeChange("none");
 		await executeBuiltinSlashCommand("/goal Ordinary tree objective", { ctx: harness.mode });
@@ -967,9 +981,9 @@ describe("InteractiveMode goal mode integration", () => {
 		const images: ImageContent[] = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
 		const imageLinks = ["file:///shot.png"];
 		const commandText = "/goal [Image #1, 10x10] fix this";
-		harness.mode.editor.setText(commandText);
-		harness.mode.editor.pendingImages = images;
-		harness.mode.editor.pendingImageLinks = imageLinks;
+		harness.mode.composer.setText(commandText);
+		replace(harness.mode.composer.pendingImages, images);
+		replace(harness.mode.composer.pendingImageLinks, imageLinks);
 		vi.spyOn(harness.session.goalRuntime, "createGoal").mockRejectedValueOnce(new Error("goal setup failed"));
 		const showError = vi.spyOn(harness.mode, "showError");
 
@@ -979,16 +993,16 @@ describe("InteractiveMode goal mode integration", () => {
 		});
 
 		expect(showError).toHaveBeenCalledWith("goal setup failed");
-		expect(harness.mode.editor.getText()).toBe(commandText);
-		expect(harness.mode.editor.pendingImages).toEqual(images);
-		expect(harness.mode.editor.pendingImageLinks).toEqual(imageLinks);
+		expect(harness.mode.composer.text()).toBe(commandText);
+		expect(harness.mode.composer.pendingImages).toEqual(images);
+		expect(harness.mode.composer.pendingImageLinks).toEqual(imageLinks);
 	});
 
 	it("keeps images pasted while delayed plan setup completes in the later draft", async () => {
 		const submittedImages: ImageContent[] = [{ type: "image", data: "b2xk", mimeType: "image/png" }];
 		const submittedLinks = ["file:///submitted.png"];
-		harness.mode.editor.pendingImages = submittedImages;
-		harness.mode.editor.pendingImageLinks = submittedLinks;
+		replace(harness.mode.composer.pendingImages, submittedImages);
+		replace(harness.mode.composer.pendingImageLinks, submittedLinks);
 		const waiter = await armInputWaiter(harness.mode);
 		const setupStarted = Promise.withResolvers<void>();
 		const continueSetup = Promise.withResolvers<void>();
@@ -1005,23 +1019,23 @@ describe("InteractiveMode goal mode integration", () => {
 		});
 		await setupStarted.promise;
 		const laterImage: ImageContent = { type: "image", data: "bmV3", mimeType: "image/png" };
-		harness.mode.editor.pendingImages = [laterImage];
-		harness.mode.editor.pendingImageLinks = ["file:///later.png"];
+		replace(harness.mode.composer.pendingImages, [laterImage]);
+		replace(harness.mode.composer.pendingImageLinks, ["file:///later.png"]);
 		continueSetup.resolve();
 		await command;
 		await waiter.inputPromise;
 
 		expect(waiter.getResolvedInput()?.images).toBe(submittedImages);
-		expect(harness.mode.editor.pendingImages).toEqual([laterImage]);
-		expect(harness.mode.editor.pendingImageLinks).toEqual(["file:///later.png"]);
+		expect(harness.mode.composer.pendingImages).toEqual([laterImage]);
+		expect(harness.mode.composer.pendingImageLinks).toEqual(["file:///later.png"]);
 	});
 
 	it("keeps a later draft when a preserve-draft submission is cancelled", () => {
 		const submittedImage: ImageContent = { type: "image", data: "b2xk", mimeType: "image/png" };
 		const laterImage: ImageContent = { type: "image", data: "bmV3", mimeType: "image/png" };
-		harness.mode.editor.setText("later draft");
-		harness.mode.editor.pendingImages = [laterImage];
-		harness.mode.editor.pendingImageLinks = ["file:///later.png"];
+		harness.mode.composer.setText("later draft");
+		replace(harness.mode.composer.pendingImages, [laterImage]);
+		replace(harness.mode.composer.pendingImageLinks, ["file:///later.png"]);
 
 		harness.mode.startPendingSubmission(
 			{ text: "submitted draft", images: [submittedImage], imageLinks: ["file:///submitted.png"] },
@@ -1029,9 +1043,9 @@ describe("InteractiveMode goal mode integration", () => {
 		);
 
 		expect(harness.mode.cancelPendingSubmission()).toBe(true);
-		expect(harness.mode.editor.getText()).toBe("later draft");
-		expect(harness.mode.editor.pendingImages).toEqual([laterImage]);
-		expect(harness.mode.editor.pendingImageLinks).toEqual(["file:///later.png"]);
+		expect(harness.mode.composer.text()).toBe("later draft");
+		expect(harness.mode.composer.pendingImages).toEqual([laterImage]);
+		expect(harness.mode.composer.pendingImageLinks).toEqual(["file:///later.png"]);
 	});
 
 	it("includes escaped live todo state in hidden goal context during continuations", async () => {
@@ -1385,7 +1399,7 @@ describe("InteractiveMode goal mode integration", () => {
 
 	it("returns the completion report from the goal tool and exits goal mode before the next turn rebuild", async () => {
 		await harness.mode.init({ suppressWelcomeIntro: true });
-		const previousTools = harness.session.getEnabledToolNames();
+		const previousTools = harness.session.getEnabledToolNames().sort();
 		await harness.mode.handleGoalModeCommand("Ship the release");
 		await harness.mode.handleGoalModeCommand("budget 50");
 		const appendCustomEntry = vi.spyOn(harness.session.sessionManager, "appendCustomEntry");
@@ -1421,7 +1435,7 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(harness.mode.goalModeEnabled).toBe(false);
 		expect(harness.mode.goalModePaused).toBe(false);
 		expect(harness.session.getLocalGoalModeState()).toBeUndefined();
-		expect(harness.session.getEnabledToolNames()).toEqual(previousTools);
+		expect(harness.session.getEnabledToolNames().sort()).toEqual(previousTools);
 		expect(await toolNamesFor(harness)).not.toContain("goal");
 		expect(appendCustomEntry).toHaveBeenCalledWith(
 			"goal-completed",

@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, mock, test } from "bun:test";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
+import { initTheme } from "../src/ui/theme/service";
 
 beforeAll(() => {
 	initTheme();
@@ -33,7 +33,7 @@ function makeCtx(initialQueue: CompactionQueuedMessage[], loopPrompt: string | u
 			promptCustomMessage: mock(async () => true),
 			dropQueuedMessages: () => {},
 		},
-		editor: { setText: () => {} },
+		composer: { setText: () => {} },
 		compactionQueuedMessages: [...initialQueue],
 		skillCommands: new Map(),
 		fileSlashCommands: new Set<string>(),

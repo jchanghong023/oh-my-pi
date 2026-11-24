@@ -679,7 +679,7 @@ Apple Intelligence。若要不带 bridge 构建，使用
 | **[@oh-my-pi/pi-catalog](packages/catalog)**                                  | 模型目录：内置模型数据库、provider 描述符与身份信息 |
 | **[@oh-my-pi/pi-agent-core](packages/agent)**                                 | 带工具调用与状态管理的 agent 运行时 |
 | **[@oh-my-pi/pi-coding-agent](packages/coding-agent)**                        | 交互式编码 agent 的 CLI 与 SDK |
-| **[@oh-my-pi/pi-tui](packages/tui)**                                          | 支持差分渲染的终端 UI 库 |
+| **[@oh-my-pi/pi-tui](packages/tui)**                                          | 终端 UI 库：同一视图树可渲染为终端文本行或原生 TSP |
 | **[@oh-my-pi/pi-natives](packages/natives)**                                  | grep、shell、image、text、语法高亮等能力的 N-API 绑定 |
 | **[@oh-my-pi/omp-stats](packages/stats)**                                     | 面向 AI 使用统计的本地可观测性面板 |
 | **[@oh-my-pi/omptype](packages/omptype)**                                     | 兼容 ArkType 的 schema 校验，带惰性 JIT 编译 |

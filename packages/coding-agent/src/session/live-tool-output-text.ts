@@ -1,10 +1,10 @@
-import { plainText } from "@oh-my-pi/pi-tui/native/spans";
-import { sanitizeDisplayLines } from "@oh-my-pi/pi-tui/render/render-utils";
-import { type BashToolDetails, shellToolCommands, stripBashNotices } from "@oh-my-pi/pi-tui/tools/bash";
-import { resultText } from "@oh-my-pi/pi-tui/tools/native-view";
-import { type OutputMeta, stripOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
-import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
+import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { type BashToolDetails, shellToolCommands, stripBashNotices } from "../tools/details/bash";
+import { type OutputMeta, stripOutputNotice } from "../tools/output-meta-format";
+import type { ToolResult } from "../ui/tools/contract";
+import { resultText } from "../ui/tools/default";
+import { sanitizeDisplayLines } from "../utils/render-utils";
 import type { LiveToolOutputSnapshot } from "./agent-session-handle";
 
 /** A compact preview row must contain a Unicode letter or number, not just decoration. */
@@ -13,7 +13,7 @@ export function isToolOutputRow(row: string): boolean {
 }
 
 /** A sole command carries the inner tool identity; compound shell calls remain Bash. */
-export function toolOutputSource(toolName: string, result?: ToolRenderResult<unknown>, args?: unknown) {
+export function toolOutputSource(toolName: string, result?: ToolResult<unknown>, args?: unknown) {
 	const details = isRecord(result?.details) ? result.details : undefined;
 	const shellDetails = toolName === "bash" ? (details as BashToolDetails | undefined) : undefined;
 	const fields = isRecord(args) ? args : undefined;
@@ -46,7 +46,7 @@ export function mayBeCoveredByFileDiff(call: LiveToolOutputSnapshot): boolean {
 }
 
 /** Actual displayable compact Output, using the same output boundaries as the tool renderers. */
-export function toolOutputText(toolName: string, result: ToolRenderResult<unknown>, args?: unknown): string {
+export function toolOutputText(toolName: string, result: ToolResult<unknown>, args?: unknown): string {
 	const { name, details, shellDetails } = toolOutputSource(toolName, result, args);
 	if (name === "todo") return "";
 	const raw = resultText(result);
@@ -67,7 +67,7 @@ export function toolOutputText(toolName: string, result: ToolRenderResult<unknow
 	let size = 0;
 	let indent = Number.POSITIVE_INFINITY;
 	for (const row of lines) {
-		const line = plainText(row);
+		const line = stripEscapes(row);
 		if (!isToolOutputRow(line)) continue;
 		lines[size++] = line;
 		indent = Math.min(indent, line.length - line.trimStart().length);

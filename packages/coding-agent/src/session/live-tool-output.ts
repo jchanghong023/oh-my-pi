@@ -1,5 +1,5 @@
-import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import type { ToolResult } from "../ui/tools/contract";
 import type { LocalAgentSessionEvent } from "./agent-session-events";
 import type { LiveToolOutputPreview, LiveToolOutputProjection, LiveToolOutputSnapshot } from "./agent-session-handle";
 import { mayBeCoveredByFileDiff, toolOutputText } from "./live-tool-output-text";
@@ -10,12 +10,12 @@ import { mayBeCoveredByFileDiff, toolOutputText } from "./live-tool-output-text"
  * applied to an earlier valid body.
  */
 function withOutputFacts(
-	body: ToolRenderResult<unknown>,
-	previous: ToolRenderResult<unknown> | undefined,
-	incoming: ToolRenderResult<unknown>,
+	body: ToolResult<unknown>,
+	previous: ToolResult<unknown> | undefined,
+	incoming: ToolResult<unknown>,
 	cancelled: boolean,
 	isError: boolean | undefined,
-): ToolRenderResult<unknown> {
+): ToolResult<unknown> {
 	const source = isRecord(body.details) ? body.details : undefined;
 	const before = isRecord(previous?.details) ? previous.details : undefined;
 	const update = isRecord(incoming.details) ? incoming.details : undefined;
@@ -142,8 +142,7 @@ export class LiveToolOutputState {
 		const call = this.#calls.get(event.toolCallId);
 		// The first overall terminal result is authoritative over late progress and startup receipts.
 		if (!call || call.terminalAt !== undefined) return;
-		const result: ToolRenderResult<unknown> =
-			event.type === "tool_execution_update" ? event.partialResult : event.result;
+		const result: ToolResult<unknown> = event.type === "tool_execution_update" ? event.partialResult : event.result;
 		const details = isRecord(result.details) ? result.details : undefined;
 		const async = isRecord(details?.async) ? details.async : undefined;
 		const updateArgs = event.type === "tool_execution_update" ? event.args : undefined;

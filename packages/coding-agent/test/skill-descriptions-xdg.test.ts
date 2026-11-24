@@ -6,6 +6,7 @@ import * as path from "node:path";
 import * as agentCore from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { __resetProfileSnapshotForTests, getAgentDir, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
+import { cfgOffline } from "../src/config/auxiliary-model-policy";
 import { ModelRegistry } from "../src/config/model-registry";
 import { resolveRoleChain, resolveRoleSelection } from "../src/config/model-resolver";
 import { cfgDisabledProviders } from "../src/config/model-settings";
@@ -657,6 +658,45 @@ describe("skill description compressor model selection", () => {
 		expect(fixture({ default: "ascend/qwen3.8-flash-next", smol: "ascend/qwen-aw-35b" }).compressor.modelKey()).toBe(
 			"ascend/qwen-aw-35b",
 		);
+	});
+
+	it("keeps offline requests on the session model's provider, and sends none without one", () => {
+		const { registry, settings } = fixture({ smol: "skill-offline/probe", tiny: "ascend/qwen3.8-flash-next" });
+		registry.registerProvider("skill-offline", {
+			baseUrl: "https://example.invalid/v1",
+			api: "openai-completions",
+			apiKey: "test-key",
+			models: [
+				{
+					id: "probe",
+					name: "Probe",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 8192,
+					maxTokens: 1024,
+				},
+			],
+		});
+		let sessionProvider: string | undefined = "ascend";
+		const compressor = createSkillDescriptionCompressor(registry, settings, {
+			getSessionProvider: () => sessionProvider,
+		});
+		expect(compressor.modelKey()).toBe("skill-offline/probe");
+
+		cfgOffline.set(settings, true);
+		// Offline reads only the session provider's catalog, never all of them.
+		const all = spyOn(registry, "getAvailable").mockImplementation(() => {
+			throw new Error("Offline selection must not read every catalog");
+		});
+		const scoped = spyOn(registry, "getAvailableForProviders");
+		expect(compressor.modelKey()).toBe("ascend/qwen3.8-flash-next");
+		expect(scoped.mock.calls.map(([providers]) => [...providers])).toEqual([["ascend"]]);
+		expect(all).not.toHaveBeenCalled();
+		sessionProvider = "skill-offline";
+		expect(compressor.modelKey()).toBe("skill-offline/probe");
+		sessionProvider = undefined;
+		expect(compressor.modelKey()).toBeUndefined();
 	});
 });
 

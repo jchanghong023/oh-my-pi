@@ -6,9 +6,9 @@
  * When its text disagrees with the tracking, the tracking wins — an invalid
  * recommendation is dropped here with an explicit note.
  */
-import { stripInlineMarkdown } from "@oh-my-pi/pi-tui/overlays/plan-toc";
 import { normalizeHtmlEntitiesForTerminal } from "@oh-my-pi/pi-tui/utils/html-entities";
 import { Lexer } from "@oh-my-pi/pi-utils/marked";
+import { stripInlineMarkdown } from "../plan-mode/plan-toc";
 import type { TeamAlignmentOutput, TeamProposalRecord, TeamSynthesisOutput } from "./types";
 
 /** Fixed closing contract, verbatim from openspec/specs/team-discussion/spec.md §2.7. */

@@ -1,28 +1,26 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { stripVTControlCharacters } from "node:util";
+/**
+ * The status line's background-job badge: running jobs beside the running
+ * subagents, a task job counted once its subagent is not yet registered.
+ */
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { AsyncJobType } from "@oh-my-pi/pi-coding-agent/async";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
-import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
-import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import type { JobWidgetEntry, JobWidgetView } from "@oh-my-pi/pi-tui/tools/job-widget";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AsyncJobSnapshotItem } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
-import { StatusLineTestComponents } from "./helpers/status-line";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import { statusSegs } from "../src/ui/status/status-line";
+import { disposeStatusLines, lineText, statusLine, statusSession } from "./helpers/session-status-line";
 
-let settingsState: SettingsTestState | undefined;
-const statusLines = new StatusLineTestComponents();
-
-beforeEach(async () => {
-	settingsState = beginSettingsTest();
+beforeAll(async () => {
+	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
-	await initTheme();
+});
+
+afterAll(() => {
+	resetSettingsForTest();
 });
 
 afterEach(() => {
-	statusLines.dispose();
-	restoreSettingsTestState(settingsState);
-	settingsState = undefined;
+	disposeStatusLines();
 });
 
 function runningJob(type: AsyncJobType, index: number): AsyncJobSnapshotItem {
@@ -37,116 +35,55 @@ function runningJob(type: AsyncJobType, index: number): AsyncJobSnapshotItem {
 	};
 }
 
-function makeComponent(
-	running: AsyncJobSnapshotItem[],
-	widgets: () => readonly JobWidgetEntry[] = () => [],
-): StatusLineComponent {
-	const messages: unknown[] = [];
-	const model = { id: "test-model", name: "Test Model", contextWindow: 100_000 };
-	const session = {
-		state: { messages, model },
-		messages,
-		model,
-		contextUsageRevision: 0,
-		systemPrompt: [],
-		agent: { state: { tools: [] } },
-		skills: [],
-		isStreaming: false,
-		isAutoThinking: false,
-		autoResolvedThinkingLevel: () => undefined,
-		isFastModeActive: () => false,
-		isAdvisorActive: () => false,
-		getAdvisorStatusOverview: () => ({ configured: false, advisors: [] }),
-		getAsyncJobSnapshot: () => ({ running }),
-		getRunningJobWidgets: widgets,
-		settings: { get: () => false },
-		modelRegistry: { isUsingSubscription: () => false },
-		sessionManager: {
-			getSessionName: () => undefined,
-			getUsageStatistics: () => ({
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				orchestrationInput: 0,
-				orchestrationOutput: 0,
-				orchestrationCacheRead: 0,
-				premiumRequests: 0,
-				cost: 0,
-			}),
-		},
-		getContextUsage: () => undefined,
-	} as unknown as ConstructorParameters<typeof StatusLineComponent>[0];
-	const component = statusLines.track(new StatusLineComponent(session, statusLineHost));
-	component.updateSettings({
+function makeLine(running: AsyncJobSnapshotItem[]) {
+	const model = { id: "test-model", name: "Test Model", contextWindow: 100_000, input: ["text"] };
+	return statusLine(statusSession({ model, getAsyncJobSnapshot: () => ({ running }) }), {
 		preset: "custom",
 		leftSegments: [],
 		rightSegments: [],
 		separator: "none",
 		transparent: true,
 	});
-	return component;
 }
 
 describe("status-line background-job badge", () => {
 	it("keeps running subagents in the configured group instead of moving them to the right", () => {
-		const component = makeComponent([runningJob("task", 0)]);
-		component.updateSettings({
+		const line = makeLine([runningJob("task", 0)]);
+		line.previewSettings({
 			preset: "custom",
 			leftSegments: ["model", "subagents", "context_pct"],
 			rightSegments: [],
 		});
-		component.setRunningSubagents(["task-0"]);
+		line.setRunningSubagents(["task-0"]);
+		const badge = `${currentTheme().symbols.icon("agents")} 1`;
+		const first = lineText(line, 240);
+		expect(first.split(badge)).toHaveLength(2);
+		expect(first.indexOf(badge)).toBeLessThan(first.indexOf("100K"));
+		const side = () => statusSegs(line.settings(), line.facts()).find(segment => segment.key === "subagents")?.side;
+		expect(side()).toBe("left");
 
-		const content = stripVTControlCharacters(component.getTopBorder(240).content);
-		const badge = `${theme.icon.agents} 1`;
-		expect(content.split(badge)).toHaveLength(2);
-		expect(content.indexOf(badge)).toBeLessThan(content.indexOf("100K"));
-		const leftBadge = component.describePreview().c?.find(child => "k" in child && child.key === "subagents");
-		expect(leftBadge && "k" in leftBadge ? leftBadge.p : undefined).toMatchObject({ side: "left" });
-
-		component.updateSettings({ preset: "custom", leftSegments: ["model"], rightSegments: ["subagents"] });
-		const customContent = stripVTControlCharacters(component.getTopBorder(120).content);
-		expect(customContent.split(badge)).toHaveLength(2);
-		expect(customContent.indexOf(badge)).toBeGreaterThan(customContent.indexOf("Test Model"));
-		const rightBadge = component.describePreview().c?.find(child => "k" in child && child.key === "subagents");
-		expect(rightBadge && "k" in rightBadge ? rightBadge.p : undefined).toMatchObject({ side: "right" });
+		line.previewSettings({ preset: "custom", leftSegments: ["model"], rightSegments: ["subagents"] });
+		const second = lineText(line, 120);
+		expect(second.split(badge)).toHaveLength(2);
+		expect(second.indexOf(badge)).toBeGreaterThan(second.indexOf("Test Model"));
+		expect(side()).toBe("right");
 	});
 
 	it("counts non-task jobs without duplicating running task subagents", () => {
-		const running = [runningJob("task", 0), runningJob("bash", 1), runningJob("eval", 2)];
-		const component = makeComponent(running);
-		component.setRunningSubagents(["task-0"]);
-
-		const content = stripVTControlCharacters(component.getTopBorder(120).content);
-		expect(content).toContain(`${theme.icon.agents} 1`);
-		expect(content).toContain(`${theme.icon.job} 2`);
-	});
-
-	it("appends the freshest widget's headline and spark, and redraws when its data moves", () => {
-		const spark = (values: number[], last: string): JobWidgetView => ({
-			title: "loadtest",
-			headline: { text: last, trend: { text: "▲ 15%", tone: "success" } },
-			blocks: [{ kind: "spark", label: "tok/s", values, min: 0, max: 200, last }],
-			state: "live",
-			updatedAt: values.length,
-		});
-		let entries: JobWidgetEntry[] = [
-			{ id: "bash-1", type: "bash", view: spark([100, 200], "200 tok/s") },
-			{ id: "bash-2", type: "bash", view: { ...spark([10], "10 tok/s"), updatedAt: 0 } },
-		];
-		const component = makeComponent([runningJob("bash", 1), runningJob("bash", 2)], () => entries);
-		const top = () => stripVTControlCharacters(component.getTopBorder(120).content);
-		expect(top()).toContain(`${theme.icon.job} 2 200 tok/s ▲ 15% ▅█`);
-		entries = [{ id: "bash-1", type: "bash", view: spark([100, 200, 50], "50 tok/s") }, entries[1]!];
-		expect(top()).toContain(`${theme.icon.job} 2 50 tok/s ▲ 15% ▅█▃`);
+		const line = makeLine([runningJob("task", 0), runningJob("bash", 1), runningJob("eval", 2)]);
+		line.setRunningSubagents(["task-0"]);
+		expect(line.facts().subagents).toBe(1);
+		expect(line.facts().jobs).toBe(2);
 	});
 
 	it("counts queued task jobs before their subagent is registered", () => {
-		const component = makeComponent([runningJob("task", 0)]);
-		component.setRunningSubagents([]);
-		const content = stripVTControlCharacters(component.getTopBorder(120).content);
-		expect(content).toContain(`${theme.icon.job} 1`);
+		const line = makeLine([runningJob("task", 0)]);
+		line.setRunningSubagents([]);
+		expect(line.facts().jobs).toBe(1);
+	});
+
+	it("counts every running non-task job", () => {
+		const line = makeLine([runningJob("bash", 1), runningJob("eval", 2)]);
+		expect(line.facts().jobs).toBe(2);
 	});
 });

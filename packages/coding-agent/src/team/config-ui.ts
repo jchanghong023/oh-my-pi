@@ -1,6 +1,9 @@
-import { type Component, type OverlayHandle, matchesKey, wrapLiteralLine } from "@oh-my-pi/pi-tui";
+import { jsx, type KeyEvent, signal } from "@oh-my-pi/pi-tui";
+import { wrapChars } from "@oh-my-pi/pi-tui/text/width";
 import { getActiveProfile, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { InteractiveModeContext } from "../modes/types";
+import type { OverlayHandle } from "../ui/shell/overlays";
+import "../ui/styles/apps/screen/look";
 import { TeamConfigError, TeamConfigService } from "./config";
 import type { TeamConfigSnapshot, TeamMemberSlot, TeamModelRef } from "./config-types";
 import { cfgTeamMembers } from "./settings";
@@ -19,14 +22,16 @@ export function showTeamConfig(ctx: InteractiveModeContext): void {
 	new TeamConfigPanel(ctx).open();
 }
 
-class TeamConfigPanel implements Component {
+class TeamConfigPanel {
 	readonly #session;
 	readonly #settings;
 	readonly #sessionId: string;
 	readonly #service: TeamConfigService;
 	readonly #profile = getActiveProfile();
+	readonly #viewRevision = signal(0);
 	#handle?: OverlayHandle;
 	#unsubscribe?: () => void;
+	#unsubscribeSessionChange?: () => void;
 	#closed = false;
 	#draft: DraftMember[] | null = null;
 	#baseline = "null";
@@ -66,8 +71,31 @@ class TeamConfigPanel implements Component {
 		return JSON.stringify(this.#draft) !== this.#baseline;
 	}
 	open(): void {
-		this.#handle = this.ctx.ui.showOverlay(this, { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 });
-		this.ctx.ui.setFocus(this);
+		this.#handle = this.ctx.shell.overlays.show(
+			() =>
+				jsx("overlay", {
+					size: "full",
+					role: "omp.app.screen",
+					page: {},
+					children: jsx("col", {
+						onKey: (key: KeyEvent) => this.#handleKey(key),
+						children: () => {
+							this.#viewRevision();
+							const { columns, rows } = this.ctx.shell.size();
+							return this.#rows(columns, rows).map(text => jsx("text", { text, wrap: "none" }));
+						},
+					}),
+				}),
+			{
+				focus: root => root.children()[0] ?? root,
+				onClose: () => {
+					this.#closed = true;
+					this.#unsubscribe?.();
+					this.#unsubscribeSessionChange?.();
+				},
+			},
+		);
+		this.#unsubscribeSessionChange = this.#session.registerSessionChangeCallback(() => this.#close());
 		this.#unsubscribe = this.#settings.onEffectiveChange(
 			[cfgTeamMembers],
 			() => {
@@ -75,6 +103,7 @@ class TeamConfigPanel implements Component {
 				this.#message = this.#dirty()
 					? "检测到外部配置变化；保留草稿。R 重读并比较后才可基于新版本保存。"
 					: "检测到外部配置变化；正在重读。";
+				this.#refresh();
 				void this.#read(false);
 			},
 			{ includeUserChanges: true },
@@ -82,12 +111,11 @@ class TeamConfigPanel implements Component {
 		void this.#read(true);
 	}
 	#close(): void {
-		this.#closed = true;
-		this.#unsubscribe?.();
-		this.#handle?.hide();
-		this.ctx.ui.requestRender();
+		this.#handle?.close();
 	}
-	invalidate(): void {}
+	#refresh(): void {
+		this.#viewRevision.set(this.#viewRevision.peek() + 1);
+	}
 	async #read(adoptRevision: boolean): Promise<void> {
 		const generation = ++this.#readGeneration;
 		const clientRevision = String(this.#clientRevision);
@@ -128,7 +156,7 @@ class TeamConfigPanel implements Component {
 			if (this.#current() && generation === this.#readGeneration)
 				this.#message = `读取失败：${printable(error instanceof Error ? error.message : error)}`;
 		}
-		if (this.#current()) this.ctx.ui.requestRender();
+		if (this.#current()) this.#refresh();
 	}
 	async #preview(): Promise<void> {
 		const clientRevision = String(++this.#clientRevision);
@@ -151,25 +179,22 @@ class TeamConfigPanel implements Component {
 			if (this.#current() && generation === this.#readGeneration && clientRevision === String(this.#clientRevision))
 				this.#message = `预览失败：${printable(error instanceof Error ? error.message : error)}`;
 		}
-		if (this.#current()) this.ctx.ui.requestRender();
+		if (this.#current()) this.#refresh();
 	}
 	#changed(): void {
 		this.#selected = Math.max(0, Math.min(this.#selected, (this.#draft?.length ?? 0) - 1));
 		this.#followSelection = true;
 		void this.#preview();
-		this.ctx.ui.requestRender();
+		this.#refresh();
 	}
 	#pick(replace: boolean): void {
 		const selected = replace ? this.#draft?.[this.#selected] : undefined;
 		const index = this.#selected;
-		this.#handle?.setHidden(true);
 		const resume = () => {
 			if (!this.#current()) {
 				this.#close();
 				return;
 			}
-			this.#handle?.setHidden(false);
-			this.ctx.ui.setFocus(this);
 			void this.#read(false);
 		};
 		this.ctx.showModelSelector({
@@ -216,14 +241,17 @@ class TeamConfigPanel implements Component {
 		if (!this.#snapshot || this.#saving) return;
 		if (!this.#revision || !this.#snapshot.writableScopes.includes("user")) {
 			this.#message = "当前配置不可安全写入，请先修复读取问题并 R 重读。";
+			this.#refresh();
 			return;
 		}
 		if (this.#draft?.some(member => "rawSelector" in member)) {
 			this.#message = "旧槽位尚未解析：请替换或删除后保存。";
+			this.#refresh();
 			return;
 		}
 		if (this.#snapshot.revision !== this.#revision) {
 			this.#message = "版本冲突：草稿保留。请 R 重读并比较后再保存。";
+			this.#refresh();
 			return;
 		}
 		const members: TeamModelRef[] | null =
@@ -236,7 +264,7 @@ class TeamConfigPanel implements Component {
 		++this.#clientRevision;
 		++this.#readGeneration;
 		this.#message = "正在保存；Esc 可退出。退出不代表撤销已提交写入，请重新打开核实结果。";
-		this.ctx.ui.requestRender();
+		this.#refresh();
 		try {
 			const result = await this.#service.setConfig({ scope: "user", expectedRevision: this.#revision, members });
 			if (!this.#current()) return;
@@ -260,39 +288,41 @@ class TeamConfigPanel implements Component {
 			}
 		} finally {
 			this.#saving = false;
-			if (this.#current()) this.ctx.ui.requestRender();
+			if (this.#current()) this.#refresh();
 		}
 	}
 
-	handleInput(data: string): void {
+	#handleKey(key: KeyEvent): boolean {
+		if (key.kind === "release") return false;
+		const data = key.id;
 		if (!this.#current()) {
 			this.#close();
-			return;
+			return true;
 		}
 		if (this.#confirmDiscard) {
-			if (data === "y" || data === "Y") this.#close();
-			else if (data === "n" || data === "N" || matchesKey(data, "escape")) this.#confirmDiscard = false;
-			this.ctx.ui.requestRender();
-			return;
+			if (data === "y" || data === "shift+y") this.#close();
+			else if (data === "n" || data === "shift+n" || data === "escape") this.#confirmDiscard = false;
+			this.#refresh();
+			return true;
 		}
-		if (matchesKey(data, "escape") || data === "q") {
+		if (data === "escape" || data === "q") {
 			if (this.#dirty() || this.#saving) this.#confirmDiscard = true;
 			else this.#close();
-		} else if (matchesKey(data, "pageUp")) {
+		} else if (data === "pageUp") {
 			this.#scroll = Math.max(0, this.#scroll - 8);
 			this.#followSelection = false;
-		} else if (matchesKey(data, "pageDown")) {
+		} else if (data === "pageDown") {
 			this.#scroll += 8;
 			this.#followSelection = false;
-		} else if (data === "v" || data === "V") {
+		} else if (data === "v" || data === "shift+v") {
 			this.#showAdvanced = !this.#showAdvanced;
 			this.#followSelection = false;
 		} else if (!this.#saving && this.#snapshot) {
 			const draft = this.#draft ?? [];
-			if (matchesKey(data, "up")) {
+			if (data === "up") {
 				this.#selected = Math.max(0, this.#selected - 1);
 				this.#followSelection = true;
-			} else if (matchesKey(data, "down")) {
+			} else if (data === "down") {
 				this.#selected = Math.min(Math.max(0, draft.length - 1), this.#selected + 1);
 				this.#followSelection = true;
 			} else if (data === "a") this.#pick(false);
@@ -308,7 +338,7 @@ class TeamConfigPanel implements Component {
 				this.#draft = draft;
 				this.#selected++;
 				this.#changed();
-			} else if (draft.length && (data === "d" || matchesKey(data, "delete"))) {
+			} else if (draft.length && (data === "d" || data === "delete")) {
 				draft.splice(this.#selected, 1);
 				this.#draft = draft;
 				this.#changed();
@@ -322,16 +352,14 @@ class TeamConfigPanel implements Component {
 				}
 			}
 		}
-		this.ctx.ui.requestRender();
+		this.#refresh();
+		return true;
 	}
 
-	render(width: number): string[] {
-		if (!this.#current()) {
-			this.#close();
-			return [];
-		}
+	#rows(width: number, height: number): string[] {
+		if (!this.#current()) return [];
 		const lines: string[] = [];
-		const add = (line: string) => lines.push(...wrapLiteralLine(printable(line), Math.max(1, width)));
+		const add = (line: string) => lines.push(...wrapChars(printable(line), Math.max(1, width)));
 		const snapshot = this.#snapshot;
 		add(`Team 配置 ${this.#dirty() ? "[未保存]" : ""}`);
 		add(this.#message);
@@ -392,8 +420,8 @@ class TeamConfigPanel implements Component {
 		const footer = this.#confirmDiscard
 			? "放弃草稿并退出？Y 放弃 / N 留在面板（保存中退出不撤销写入）"
 			: `↑↓ 槽位 a 添加 e 替换 u 上移 j 下移 c 复制 d 删除 | 0 默认[] s 保存 r 重读比较 Esc 取消 | v 高级详情（${this.#showAdvanced ? "收起" : "展开"}） PgUp/PgDn 滚动`;
-		const footerLines = wrapLiteralLine(footer, Math.max(1, width));
-		const capacity = Math.max(1, (this.ctx.ui.terminal.rows || 24) - footerLines.length);
+		const footerLines = wrapChars(footer, Math.max(1, width));
+		const capacity = Math.max(1, height - footerLines.length);
 		if (this.#followSelection) {
 			if (selectedRow < this.#scroll) this.#scroll = selectedRow;
 			else if (selectedRow >= this.#scroll + capacity) this.#scroll = selectedRow - capacity + 1;

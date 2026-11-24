@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
-import { type Component } from "@oh-my-pi/pi-tui";
+import { signal } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { parseDocument } from "yaml";
 import { ModelRegistry } from "../../src/config/model-registry";
@@ -11,10 +11,12 @@ import type { InteractiveModeContext } from "../../src/modes/types";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { TeamConfigService } from "../../src/team/config";
 import { showTeamConfig } from "../../src/team/config-ui";
+import { initTheme } from "../../src/ui/theme/service";
+import { createModeTerminal, type ModeTerminal, pressKey } from "../helpers/mode-terminal";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 // Exercise the public overlay consumer with real catalog, YAML, preview and CAS.
-// The terminal host is captured, not the panel's draft or private implementation.
+// Drive the real Shell overlay; only the model picker callback is captured.
 const originalGetConfig = TeamConfigService.prototype.getConfig;
 describe("Team configuration editor", () => {
 	let state: SettingsTestState;
@@ -23,9 +25,8 @@ describe("Team configuration editor", () => {
 	let settings: Settings;
 	let registry: ModelRegistry;
 	let ctx: InteractiveModeContext;
-	let panel: Component & { handleInput(data: string): void };
+	let terminal: ModeTerminal;
 	let picker: Parameters<InteractiveModeContext["showModelSelector"]>[0];
-	let hidden: boolean;
 	let file: string;
 	let reads: Mock<TeamConfigService["getConfig"]>;
 	let saves: Mock<TeamConfigService["setConfig"]>;
@@ -63,31 +64,27 @@ describe("Team configuration editor", () => {
 		settings = await Settings.loadIsolated({ agentDir, cwd });
 		auth = await AuthStorage.create(":memory:");
 		registry = new ModelRegistry(auth, path.join(agentDir, "models.yml"), { settings });
-		hidden = false;
+		initTheme();
+		terminal = createModeTerminal({ columns: 120, rows: 40 });
+		await terminal.start();
 		picker = undefined;
+		const liveSettings = signal(settings);
 		ctx = {
 			session: {
 				modelRegistry: registry,
 				get model() {
 					throw new Error("Global Team editor must not consume a chat model");
 				},
+				registerSessionChangeCallback: () => () => {},
 			},
-			settings,
+			get settings() {
+				return liveSettings();
+			},
+			set settings(value: Settings) {
+				liveSettings.set(value);
+			},
 			sessionManager: { getSessionId: () => "editor-session" },
-			ui: {
-				terminal: { rows: 200 },
-				showOverlay: (component: Component) => {
-					panel = component as typeof panel;
-					return {
-						hide: () => {
-							hidden = true;
-						},
-						setHidden: () => {},
-					};
-				},
-				setFocus: () => {},
-				requestRender: () => {},
-			},
+			shell: terminal.frame.shell,
 			showModelSelector: (options: typeof picker) => {
 				picker = options;
 			},
@@ -96,11 +93,10 @@ describe("Team configuration editor", () => {
 		saves = vi.spyOn(TeamConfigService.prototype, "setConfig");
 	});
 
-	afterEach(() => {
-		if (panel && !hidden) {
-			panel.handleInput("\x1b");
-			panel.handleInput("y");
-		}
+	afterEach(async () => {
+		terminal?.frame.shell.overlays.closeAll();
+		await terminal?.frame.shell.stop();
+		terminal?.dispose();
 		vi.restoreAllMocks();
 		auth?.close();
 		restoreSettingsTestState(state);
@@ -119,13 +115,18 @@ describe("Team configuration editor", () => {
 	async function open() {
 		showTeamConfig(ctx);
 		await flush();
+		await terminal.settle();
 	}
-	const screen = () => panel.render(120).join("\n");
+	const press = (key: string) => pressKey(ctx.shell, key);
+	const screen = async () => {
+		await terminal.settle();
+		return terminal.screen().join("\n");
+	};
 	const members = async () => parseDocument(await Bun.file(file).text()).toJS().team.members;
 
 	it("hides advanced storage and run details by default and never presents a chat main model", async () => {
 		await open();
-		const rendered = screen();
+		const rendered = await screen();
 		expect(rendered).toContain("有序草稿");
 		expect(rendered).toContain("deepseek/team-a");
 		expect(rendered).not.toContain("用户原值");
@@ -137,15 +138,16 @@ describe("Team configuration editor", () => {
 	it("toggles advanced read-only details with v and V without saving or exposing a chat model", async () => {
 		await open();
 		const before = await Bun.file(file).text();
-		panel.handleInput("v");
-		const expanded = screen();
+		press("v");
+		const expanded = await screen();
 		for (const detail of ["用户原值", "当前有效名单", "实际运行槽位", "拟保存用户名单", "预计运行槽位"]) {
 			expect(expanded).toContain(detail);
 		}
 		expect(expanded).not.toContain("主模型（对齐/综合）");
-		panel.handleInput("V");
-		expect(screen()).not.toContain("用户原值");
-		expect(screen()).not.toContain("拟保存用户名单");
+		press("shift+v");
+		const collapsed = await screen();
+		expect(collapsed).not.toContain("用户原值");
+		expect(collapsed).not.toContain("拟保存用户名单");
 		expect(saves).not.toHaveBeenCalled();
 		expect(await Bun.file(file).text()).toBe(before);
 	});
@@ -153,10 +155,12 @@ describe("Team configuration editor", () => {
 	it("keeps long rosters keyboard-scrollable in a narrow terminal without writing settings", async () => {
 		await Bun.write(file, `team:\n  members: [${Array.from({ length: 53 }, () => "deepseek/team-a").join(", ")}]\n`);
 		await open();
-		Object.defineProperty(ctx.ui.terminal, "rows", { value: 12 });
-		const initial = panel.render(28);
-		for (let index = 0; index < 40; index++) panel.handleInput("\x1b[B");
-		const selected = panel.render(28);
+		terminal.resize(28, 12);
+		await terminal.settle();
+		const initial = terminal.screen();
+		for (let index = 0; index < 40; index++) press("down");
+		await terminal.settle();
+		const selected = terminal.screen();
 		expect(selected.length).toBeLessThanOrEqual(12);
 		expect(selected).not.toEqual(initial);
 		expect(selected.join("\n")).toContain("41.");
@@ -167,14 +171,14 @@ describe("Team configuration editor", () => {
 	it("keeps ordered duplicates local until one complete save and preserves unrelated YAML", async () => {
 		await open();
 		const before = await Bun.file(file).text();
-		panel.handleInput("c"); // A A B A; selected duplicate is slot 2.
-		panel.handleInput("j"); // A B A A
-		panel.handleInput("d"); // A B A
-		panel.handleInput("u"); // A A B
+		press("c"); // A A B A; selected duplicate is slot 2.
+		press("j"); // A B A A
+		press("d"); // A B A
+		press("u"); // A A B
 		await flush();
 		expect(await Bun.file(file).text()).toBe(before);
 		expect(saves).not.toHaveBeenCalled();
-		panel.handleInput("s");
+		press("s");
 		await flush();
 		expect(saves).toHaveBeenCalledTimes(1);
 		expect(saves.mock.calls[0]![0].members).toEqual([first, first, second]);
@@ -186,7 +190,7 @@ describe("Team configuration editor", () => {
 	it("uses the full Team candidate pool in selectOnly mode and replaces without switching a chat model", async () => {
 		await open();
 		const before = await Bun.file(file).text();
-		panel.handleInput("e");
+		press("e");
 		if (!picker?.selectOnly) throw new Error("Expected native selectOnly model picker");
 		expect(
 			picker.selectOnly
@@ -197,7 +201,7 @@ describe("Team configuration editor", () => {
 		picker.selectOnly.onSelect("deepseek/team-b");
 		await flush();
 		expect(await Bun.file(file).text()).toBe(before);
-		panel.handleInput("s");
+		press("s");
 		await flush();
 		expect(await members()).toEqual(["deepseek/team-b", "deepseek/team-b", "deepseek/team-a"]);
 	});
@@ -205,26 +209,26 @@ describe("Team configuration editor", () => {
 	it("requires explicit discard or staying in the panel and never saves cancellation or reset", async () => {
 		await open();
 		const before = await Bun.file(file).text();
-		panel.handleInput("0");
+		press("0");
 		await flush();
-		panel.handleInput("\x1b");
-		expect(hidden).toBe(false);
-		expect(screen()).toContain("放弃草稿");
-		panel.handleInput("n");
-		expect(hidden).toBe(false);
-		panel.handleInput("\x1b");
-		panel.handleInput("y");
-		expect(hidden).toBe(true);
+		press("escape");
+		expect(ctx.shell.overlays.open()).toBe(true);
+		expect(await screen()).toContain("放弃草稿");
+		press("n");
+		expect(ctx.shell.overlays.open()).toBe(true);
+		press("escape");
+		press("y");
+		expect(ctx.shell.overlays.open()).toBe(false);
 		expect(saves).not.toHaveBeenCalled();
 		expect(await Bun.file(file).text()).toBe(before);
 	});
 
 	it("saves an explicit empty roster only after confirmation", async () => {
 		await open();
-		panel.handleInput("0");
+		press("0");
 		await flush();
 		expect(saves).not.toHaveBeenCalled();
-		panel.handleInput("s");
+		press("s");
 		await flush();
 		expect(await members()).toEqual([]);
 		expect(saves.mock.calls[0]![0].members).toEqual([]);
@@ -233,34 +237,34 @@ describe("Team configuration editor", () => {
 	it("retains an unresolved selector at its position and blocks saving until it is repaired", async () => {
 		await Bun.write(file, "team:\n  members: [deepseek/team-a, retired/raw, deepseek/team-a]\n");
 		await open();
-		expect(screen()).toContain("2. retired/raw");
-		panel.handleInput("s");
+		expect(await screen()).toContain("2. retired/raw");
+		press("s");
 		await flush();
 		expect(saves).not.toHaveBeenCalled();
-		panel.handleInput("\x1b[B");
-		panel.handleInput("d");
+		press("down");
+		press("d");
 		await flush();
-		panel.handleInput("s");
+		press("s");
 		await flush();
 		expect(await members()).toEqual(["deepseek/team-a", "deepseek/team-a"]);
 	});
 
 	it("preserves a dirty draft across external updates and requires reread before retrying the save", async () => {
 		await open();
-		panel.handleInput("c");
+		press("c");
 		await flush();
 		const external = new TeamConfigService({ getSettings: () => settings, getModelRegistry: () => registry });
 		const current = await external.getConfig();
 		await external.setConfig({ scope: "user", expectedRevision: current.revision!, members: [second] });
 		await flush();
 		const calls = saves.mock.calls.length;
-		panel.handleInput("s");
+		press("s");
 		await flush();
 		expect(saves).toHaveBeenCalledTimes(calls);
 		expect(await members()).toEqual(["deepseek/team-b"]);
-		panel.handleInput("r");
+		press("r");
 		await flush();
-		panel.handleInput("s");
+		press("s");
 		await flush();
 		expect(await members()).toEqual(["deepseek/team-a", "deepseek/team-a", "deepseek/team-b", "deepseek/team-a"]);
 	});
@@ -285,9 +289,9 @@ describe("Team configuration editor", () => {
 		release.resolve();
 		expect(await rejectedRead).toMatchObject({ code: "execution_failed" });
 		await Promise.resolve();
-		expect(panel.render(120)).toEqual([]);
-		expect(hidden).toBe(true);
-		panel.handleInput("s");
+		expect(await screen()).not.toContain("Team 配置");
+		press("s");
+		expect(ctx.shell.overlays.open()).toBe(false);
 		expect(saves).not.toHaveBeenCalled();
 	});
 
@@ -315,9 +319,9 @@ describe("Team configuration editor", () => {
 			release.resolve();
 			await flush();
 		}
-		expect(panel.render(120)).toEqual([]);
-		expect(hidden).toBe(true);
-		panel.handleInput("s");
+		expect(await screen()).not.toContain("Team 配置");
+		press("s");
+		expect(ctx.shell.overlays.open()).toBe(false);
 		expect(saves).not.toHaveBeenCalled();
 	});
 });

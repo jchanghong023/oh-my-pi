@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { cfgStartupQuiet } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { StartupChangelogSelection } from "@oh-my-pi/pi-coding-agent/utils/changelog";
-import { cfgStartupQuiet } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import * as themeModule from "@oh-my-pi/pi-tui/theme";
+import * as themeService from "@oh-my-pi/pi-coding-agent/ui/theme/service";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import { createTestTerminal } from "@oh-my-pi/pi-tui/testing/terminal";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { createModeTerminal } from "./helpers/mode-terminal";
 
 /**
  * The startup header is built once, while the auto theme may still be on its
@@ -30,10 +34,11 @@ const startupChangelog: StartupChangelogSelection = {
 	categoryCounts: { Fixed: 1 },
 };
 
-/** Opening SGR sequence `theme.fg(color, ...)` emits under the active theme. */
+const DARK_TRUECOLOR = { truecolor: true, colors: 16_777_216, dark: true } as const;
+
+/** Opening SGR sequence `fg(color, ...)` emits under the active theme. */
 function fgPrefix(color: "accent" | "warning"): string {
-	const styled = themeModule.theme.fg(color, "\u0001");
-	return styled.slice(0, styled.indexOf("\u0001"));
+	return currentTheme().fgSgr(color);
 }
 
 describe("InteractiveMode startup header after the terminal reports a light background", () => {
@@ -43,24 +48,13 @@ describe("InteractiveMode startup header after the terminal reports a light back
 	let tempDir: TempDir;
 
 	beforeEach(async () => {
-		vi.spyOn(process.stdout, "write").mockReturnValue(true);
-		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
-		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
-		vi.spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
-		if (typeof process.stdin.setRawMode === "function") {
-			vi.spyOn(process.stdin, "setRawMode").mockReturnValue(process.stdin);
-		}
-
 		// Auto theme resolves dark before the terminal's appearance reply arrives.
-		themeModule.stopThemeWatcher();
-		themeModule.onTerminalAppearanceChange("dark");
-		await themeModule.initTheme(false, undefined, undefined, "dark", "light");
+		themeService.initTheme({ dark: "dark", light: "light", capabilities: DARK_TRUECOLOR });
 
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-interactive-mode-startup-header-theme-");
-		await Settings.init({ inMemory: true, cwd: tempDir.path() });
-		// Keep startup changelog visible for the theme-change assertions.
-		cfgStartupQuiet.set(Settings.instance, false);
+		const settings = await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		cfgStartupQuiet.set(settings, false);
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
@@ -68,11 +62,19 @@ describe("InteractiveMode startup header after the terminal reports a light back
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated(),
+			settings,
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test");
-		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		mode = new InteractiveMode(
+			session,
+			"test",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			createModeTerminal({ settings }).frame,
+		);
+		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 	});
 
 	afterEach(async () => {
@@ -82,43 +84,39 @@ describe("InteractiveMode startup header after the terminal reports a light back
 		authStorage?.close();
 		tempDir?.removeSync();
 		resetSettingsForTest();
-		themeModule.stopThemeWatcher();
-		themeModule.onTerminalAppearanceChange("dark");
-		const dark = await themeModule.getThemeByName("dark");
-		if (dark) themeModule.setThemeInstance(dark);
+		themeService.initTheme({ dark: "dark", light: "light", capabilities: DARK_TRUECOLOR });
 	});
 
 	/** Report a light background and resolve once the mode has handled the theme swap. */
 	async function switchTerminalToLight(): Promise<void> {
-		const epochBefore = themeModule.getThemeEpoch();
-		const handled = Promise.withResolvers<void>();
-		vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {
-			if (themeModule.getThemeEpoch() !== epochBefore) handled.resolve();
-		});
-		themeModule.onTerminalAppearanceChange("light", {});
-		await handled.promise;
-		expect(themeModule.getCurrentThemeName()).toBe("light");
+		expect(await themeService.setTerminalAppearance("light")).toBe(true);
+		expect(themeService.getCurrentThemeName()).toBe("light");
 	}
 
+	/** The transcript row showing `text`, with its escapes, painted in the active theme. */
 	function renderedLine(text: string): string {
-		const line = mode.ui.render(120).find(row => Bun.stripANSI(row).includes(text));
+		const term = createTestTerminal(() => ({ main: mode.shell.transcript.nodes }), {
+			columns: 120,
+			rows: 200,
+			theme: currentTheme(),
+		});
+		const line = term.rows().find(row => Bun.stripANSI(row).includes(text));
+		term.dispose();
 		if (line === undefined) throw new Error(`Expected a rendered row containing ${JSON.stringify(text)}`);
 		return line;
 	}
 
 	it("recolors the What's New heading", async () => {
-		const headers = vi.spyOn(mode.composer, "setHeaderExtras");
 		await mode.init();
 		mode.showStartupChangelog(startupChangelog);
 		const darkAccent = fgPrefix("accent");
-		const headingText = Bun.stripANSI(headers.mock.lastCall![1]![1]!.render(120).join("\n")).trim();
-		expect(renderedLine(headingText)).toContain(darkAccent);
+		expect(renderedLine("What's New")).toContain(darkAccent);
 
 		await switchTerminalToLight();
 		const lightAccent = fgPrefix("accent");
 		expect(lightAccent).not.toBe(darkAccent);
 
-		const heading = renderedLine(headingText);
+		const heading = renderedLine("What's New");
 		expect(heading).toContain(lightAccent);
 		expect(heading).not.toContain(darkAccent);
 	});

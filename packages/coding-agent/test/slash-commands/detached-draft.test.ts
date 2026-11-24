@@ -15,8 +15,8 @@ function createHarness(draft: string): Harness {
 	const toggleRecording = vi.fn(async () => {});
 	const emitNotice = vi.fn<InteractiveModeContext["session"]["emitNotice"]>(() => {});
 	const ctx = createInteractiveModeContext({
-		editor: {
-			getText: () => text,
+		composer: {
+			text: () => text,
 			setText: (next: string) => {
 				text = next;
 			},

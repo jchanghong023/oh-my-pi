@@ -16,20 +16,13 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { cfgDisplayMode, cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import type { PendingTool } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
-import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
-
-import { cfgDisplayMode, cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { isSettled } from "@oh-my-pi/pi-tui";
+import { createInteractiveModeContext, renderTranscript } from "./helpers/interactive-mode-context";
 
 const usage = {
 	input: 1,
@@ -43,7 +36,14 @@ const usage = {
 /** Assistant turn persisted mid-execution: toolCall present, no toolResult. */
 const danglingAssistant = {
 	role: "assistant",
-	content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "sleep 60" } }],
+	content: [
+		{
+			type: "toolCall",
+			id: "call-1",
+			name: "bash",
+			arguments: { command: "sleep 60" },
+		},
+	],
 	api: "anthropic-messages",
 	provider: "anthropic",
 	model: "claude-sonnet-4-5",
@@ -52,51 +52,51 @@ const danglingAssistant = {
 	timestamp: Date.now(),
 } as unknown as AgentMessage;
 
-function createFixture(opts: { isStreaming: boolean; displayMode?: "compact" | "detailed" }) {
+function createFixture(opts: { isStreaming: boolean; compact?: boolean }) {
 	const ctx = createInteractiveModeContext({
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "display.mode": opts.compact ? "compact" : "detailed" }),
+		hideToolActivity: opts.compact ?? false,
 		session: { isStreaming: opts.isStreaming },
 	});
-	cfgDisplayMode.override(ctx.settings, opts.displayMode ?? "detailed");
 	const helpers = new UiHelpers(ctx);
 	ctx.addMessageToChat = helpers.addMessageToChat.bind(helpers);
 	const controller = new EventController(ctx);
 	ctx.eventController = controller;
-	return { ctx, helpers, controller, chatContainer: ctx.chatContainer };
+	return { ctx, helpers, controller };
 }
 
-function pendingComponents(chatContainer: TranscriptContainer): ToolExecutionComponent[] {
-	return chatContainer.children.filter(
-		(child): child is ToolExecutionComponent => child instanceof ToolExecutionComponent,
-	);
-}
+const imageMarks = (ctx: ReturnType<typeof createFixture>["ctx"]) =>
+	renderTranscript(ctx)
+		.join("\n")
+		.match(/\[Image: image\/png\]/g);
 
 describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
-	const created: ToolExecutionComponent[] = [];
+	const created: PendingTool[] = [];
 
 	beforeAll(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
-		await initTheme();
 	});
 
 	afterEach(() => {
-		for (const component of created.splice(0)) component.seal();
+		for (const tool of created.splice(0)) tool.seal();
 		vi.restoreAllMocks();
 	});
 
 	it("renders a dangling toolCall as pending, tracks it, and routes the live result into it", async () => {
-		const { ctx, helpers, controller, chatContainer } = createFixture({ isStreaming: true });
+		const { ctx, helpers, controller } = createFixture({ isStreaming: true });
 
-		helpers.renderSessionContext({ messages: [danglingAssistant] } as SessionContext);
+		helpers.renderSessionContext({
+			messages: [danglingAssistant],
+		} as SessionContext);
 
-		const [component] = pendingComponents(chatContainer);
+		// Still awaiting its result: the block stays live and the map keeps
+		// routing events into it after the rebuild.
+		const component = ctx.pendingTools.get("call-1")!;
 		expect(component).toBeDefined();
 		created.push(component);
-		// Still awaiting its result: the block stays in the live region and the
-		// map keeps routing events into it after the rebuild.
-		expect(component.isTranscriptBlockFinalized()).toBe(false);
-		expect(ctx.pendingTools.get("call-1")).toBe(component);
+		expect(ctx.shell.transcript.blocks()).toContain(component.block);
+		expect(isSettled(component.block.node)).toBe(false);
 
 		// The tool finishes after the rebuild: the result must land in the same
 		// rebuilt component instead of being dropped.
@@ -108,58 +108,48 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 			isError: false,
 		});
 
-		expect(component.isTranscriptBlockFinalized()).toBe(true);
+		expect(isSettled(component.block.node)).toBe(true);
 		expect(ctx.pendingTools.size).toBe(0);
+		expect(renderTranscript(ctx).join("\n")).toContain("done");
 	});
 
-	it("routes a late failed Bash result exactly once after a compact rebuild", async () => {
-		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-		const { ctx, helpers, controller, chatContainer } = createFixture({ isStreaming: true, displayMode: "compact" });
-		ctx.hideToolActivity = true;
-		chatContainer.setToolActivityVisible(false);
-		try {
-			helpers.renderSessionContext({ messages: [danglingAssistant] } as SessionContext);
-			const [component] = pendingComponents(chatContainer);
-			expect(component).toBeDefined();
-			created.push(component);
-			expect(ctx.pendingTools.get("call-1")).toBe(component);
-			const completion = {
-				type: "tool_execution_end" as const,
-				toolCallId: "call-1",
-				toolName: "bash",
-				result: {
-					content: [{ type: "text" as const, text: "LATE_FAILURE_MARKER\nCommand exited with code 1" }],
-					details: { exitCode: 1 },
-				},
-				isError: true,
-			};
-			await controller.handleEvent(completion);
-			await controller.handleEvent(completion);
-			expect(ctx.pendingTools.size).toBe(0);
-			expect(pendingComponents(chatContainer)).toEqual([component]);
-			expect(component.isTranscriptBlockFinalized()).toBe(true);
-			const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
-			expect(rendered).not.toContain("LATE_FAILURE_MARKER");
-			expect(rendered).not.toContain("sleep 60");
-			cfgDisplayMode.override(ctx.settings, "detailed");
-			ctx.hideToolActivity = false;
-			setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-			chatContainer.setToolActivityVisible(true);
-			const detailed = Bun.stripANSI(chatContainer.render(120).join("\n"));
-			expect(detailed.match(/LATE_FAILURE_MARKER/g)).toHaveLength(1);
-		} finally {
-			setChatTranscriptDisplayPreferences(previous);
-		}
+	it("routes a late failed Bash result once, even while its rebuilt card is hidden in compact", async () => {
+		const { ctx, helpers, controller } = createFixture({ isStreaming: true, compact: true });
+		helpers.renderSessionContext({ messages: [danglingAssistant] } as SessionContext);
+		const tool = ctx.pendingTools.get("call-1")!;
+		expect(tool).toBeDefined();
+		created.push(tool);
+		const event = {
+			type: "tool_execution_end" as const,
+			toolCallId: "call-1",
+			toolName: "bash",
+			result: {
+				content: [{ type: "text" as const, text: "LATE_FAILURE_MARKER\nCommand exited with code 1" }],
+				details: { exitCode: 1 },
+			},
+			isError: true,
+		};
+		await controller.handleEvent(event);
+		await controller.handleEvent(event);
+		expect(ctx.pendingTools.has("call-1")).toBe(false);
+		expect(isSettled(tool.block.node)).toBe(true);
+		const compact = renderTranscript(ctx).join("\n");
+		expect(compact).not.toContain("sleep 60");
+		expect(compact).not.toContain("LATE_FAILURE_MARKER");
+
+		cfgDisplayMode.override(ctx.settings, "detailed");
+		ctx.hideToolActivity = false;
+		tool.call?.setExpanded(true);
+		expect(
+			renderTranscript(ctx)
+				.join("\n")
+				.match(/LATE_FAILURE_MARKER/g),
+		).toHaveLength(1);
 	});
 
 	for (const arrival of ["buffered", "live", "persisted", "during-replay"] as const) {
 		it(`keeps replayed read images visible after ${arrival} completion`, async () => {
-			const protocol = Object.getOwnPropertyDescriptor(TERMINAL, "imageProtocol")!;
-			const previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-			setChatTranscriptDisplayPreferences({ hideToolActivity: false, showImages: true });
-			Object.defineProperty(TERMINAL, "imageProtocol", { value: null });
-			const { ctx, helpers, controller, chatContainer } = createFixture({ isStreaming: true });
+			const { ctx, helpers, controller } = createFixture({ isStreaming: true });
 			const showImages = cfgTerminalShowImages.get(ctx.settings);
 			cfgTerminalShowImages.set(ctx.settings, true);
 			try {
@@ -167,7 +157,12 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 					role: "assistant",
 					content: [
 						{ type: "text", text: "Inspecting the image." },
-						{ type: "toolCall", id: "image-read", name: "read", arguments: { path: "pixel.png" } },
+						{
+							type: "toolCall",
+							id: "image-read",
+							name: "read",
+							arguments: { path: "pixel.png" },
+						},
 						{ type: "text", text: "Continuing after the read." },
 					],
 					api: "anthropic-messages",
@@ -197,7 +192,11 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 					let completion: Promise<void> | undefined;
 					const messages: AgentMessage[] = [assistant];
 					for (let i = 0; i < 100; i++) {
-						messages.push({ role: "user", content: `Replay message ${i}`, timestamp: i + 3 });
+						messages.push({
+							role: "user",
+							content: `Replay message ${i}`,
+							timestamp: i + 3,
+						});
 					}
 					await helpers.renderSessionContextIncrementally({ messages } as SessionContext, {}, () => {
 						completion ??= controller.handleEvent({
@@ -216,9 +215,7 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 				}
 				controller.restorePendingToolResults();
 				if (arrival !== "live") {
-					expect(Bun.stripANSI(chatContainer.render(120).join("\n")).match(/\[Image: image\/png\]/g)).toHaveLength(
-						1,
-					);
+					expect(imageMarks(ctx)).toHaveLength(1);
 					expect(ctx.pendingTools.size).toBe(0);
 				}
 				await controller.handleEvent({
@@ -228,27 +225,26 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 					result: { content: result.content },
 					isError: false,
 				});
-				expect(Bun.stripANSI(chatContainer.render(120).join("\n")).match(/\[Image: image\/png\]/g)).toHaveLength(1);
+				expect(imageMarks(ctx)).toHaveLength(1);
 				expect(ctx.pendingTools.size).toBe(0);
 			} finally {
 				cfgTerminalShowImages.set(ctx.settings, showImages);
-				setChatTranscriptDisplayPreferences(previousDisplayPreferences);
-				Object.defineProperty(TERMINAL, "imageProtocol", protocol);
 			}
 		});
 	}
 
-	it("seals dangling toolCalls on idle rebuilds instead of leaving a live spinner", () => {
-		const { ctx, helpers, chatContainer } = createFixture({ isStreaming: false });
+	it("seals dangling toolCalls on idle rebuilds instead of leaving a live spinner", async () => {
+		const { ctx, helpers } = createFixture({ isStreaming: false });
 
-		helpers.renderSessionContext({ messages: [danglingAssistant] } as SessionContext);
+		helpers.renderSessionContext({
+			messages: [danglingAssistant],
+		} as SessionContext);
+		await Promise.resolve();
 
-		const [component] = pendingComponents(chatContainer);
-		expect(component).toBeDefined();
-		created.push(component);
 		// No result is coming: the block freezes as history and live tracking
 		// stays empty so historical components never receive live events.
-		expect(component.isTranscriptBlockFinalized()).toBe(true);
+		expect(renderTranscript(ctx).join("\n")).toContain("sleep 60");
+		expect(ctx.shell.transcript.blocks().every(block => isSettled(block.node))).toBe(true);
 		expect(ctx.pendingTools.size).toBe(0);
 	});
 });

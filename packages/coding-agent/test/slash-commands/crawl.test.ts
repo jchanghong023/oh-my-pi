@@ -202,7 +202,7 @@ describe("/crawl", () => {
 				session: h.session,
 				sessionManager: h.runtime.sessionManager,
 				settings: h.runtime.settings,
-				editor: { setText: () => {} },
+				composer: { setText: () => {} },
 				showStatus: (text: string) => h.messages.push(text),
 			},
 		} as unknown as TuiSlashCommandRuntime;

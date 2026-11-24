@@ -36,7 +36,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
-import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
+import { AUTO_THINKING } from "@oh-my-pi/pi-coding-agent/thinking/levels";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
@@ -666,7 +666,7 @@ describe("AgentSession prewalk", () => {
 			settings: created.settings,
 			collabGuest: false,
 			showStatus: vi.fn(),
-			editor: { setText: vi.fn() },
+			composer: { setText: vi.fn() },
 			refreshSlashCommandState: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		expect(await executeBuiltinSlashCommand("/prewalk off", { ctx })).toBe(true);
@@ -1629,7 +1629,7 @@ describe("AgentSession prewalk", () => {
 			settings,
 			collabGuest: false,
 			showStatus,
-			editor: { setText: vi.fn() },
+			composer: { setText: vi.fn() },
 			refreshSlashCommandState: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		const runtime = { ctx } satisfies TuiSlashCommandRuntime;
@@ -1732,7 +1732,7 @@ describe("AgentSession prewalk", () => {
 			settings,
 			collabGuest: false,
 			showStatus,
-			editor: { setText: vi.fn() },
+			composer: { setText: vi.fn() },
 			refreshSlashCommandState: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		const runtime = { ctx } satisfies TuiSlashCommandRuntime;
@@ -1797,7 +1797,7 @@ describe("AgentSession prewalk", () => {
 			settings,
 			collabGuest: false,
 			showStatus,
-			editor: { setText: vi.fn() },
+			composer: { setText: vi.fn() },
 			refreshSlashCommandState: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		return { session: created, settings, showStatus, runtime: { ctx } satisfies TuiSlashCommandRuntime };

@@ -2,12 +2,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import * as loopCondition from "@oh-my-pi/pi-coding-agent/modes/loop-condition";
 import type { LoopConditionVerdict } from "@oh-my-pi/pi-coding-agent/modes/loop-condition";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -16,6 +15,8 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { getTestModel } from "./helpers/model-fixtures";
 
 import { cfgLoopMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { initTheme } from "../src/ui/theme/service";
+import { createModeTerminal } from "./helpers/mode-terminal";
 
 async function flushMicrotasks(): Promise<void> {
 	await Promise.resolve();
@@ -45,14 +46,21 @@ describe("InteractiveMode loop auto-submit", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test");
-		mode.ui.requestRender = vi.fn();
+		mode = new InteractiveMode(
+			session,
+			"test",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			createModeTerminal().frame,
+		);
 	});
 
 	beforeEach(() => {
-		cfgLoopMode.set(settings, "prompt");
+		cfgLoopMode.set(session.settings, "prompt");
 		vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
-		vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});
+		vi.spyOn(mode, "ensureWorkingRow").mockImplementation(() => {});
 	});
 
 	afterEach(async () => {
@@ -106,7 +114,7 @@ describe("InteractiveMode loop auto-submit", () => {
 
 	it("does not recompact when a compact loop turn starts another prompt before resubmitting", async () => {
 		vi.useFakeTimers();
-		cfgLoopMode.set(settings, "compact");
+		cfgLoopMode.set(session.settings, "compact");
 		let streaming = false;
 		Object.defineProperty(session, "isCompacting", { configurable: true, get: () => false });
 		Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
@@ -201,7 +209,7 @@ describe("InteractiveMode loop auto-submit", () => {
 
 	it("disables reset loops when vibe blocks the session transition", async () => {
 		vi.useFakeTimers();
-		cfgLoopMode.set(settings, "reset");
+		cfgLoopMode.set(session.settings, "reset");
 		mode.vibeModeEnabled = true;
 		mode.loopModeEnabled = true;
 		mode.loopPrompt = "do not resubmit";
@@ -220,41 +228,41 @@ describe("InteractiveMode loop auto-submit", () => {
 	});
 
 	it("reports waiting, running, paused, resumed, and disabled loop states", async () => {
-		const setLoopModeStatus = vi.spyOn(mode.statusLine, "setLoopModeStatus");
+		const loopStatus = () => mode.statusLine.facts().loop;
 
 		await mode.handleLoopCommand("3");
-		expect(setLoopModeStatus).toHaveBeenLastCalledWith({
+		expect(loopStatus()).toEqual({
 			state: "waiting",
 			limit: { kind: "iterations", initial: 3, remaining: 3 },
 		});
 
 		mode.setLoopPrompt("repeat this");
-		expect(setLoopModeStatus).toHaveBeenLastCalledWith({
+		expect(loopStatus()).toEqual({
 			state: "running",
 			limit: { kind: "iterations", initial: 3, remaining: 3 },
 		});
 
 		mode.pauseLoop();
-		expect(setLoopModeStatus).toHaveBeenLastCalledWith({
+		expect(loopStatus()).toEqual({
 			state: "paused",
 			limit: { kind: "iterations", initial: 3, remaining: 3 },
 		});
 
 		mode.setLoopPrompt("resume this");
-		expect(setLoopModeStatus).toHaveBeenLastCalledWith({
+		expect(loopStatus()).toEqual({
 			state: "running",
 			limit: { kind: "iterations", initial: 3, remaining: 3 },
 		});
 
 		mode.disableLoopMode();
-		expect(setLoopModeStatus).toHaveBeenLastCalledWith(undefined);
+		expect(loopStatus()).toBeUndefined();
 	});
 
 	it("cycles LoopN prompts in order and stops instead of resuming after an interrupt", async () => {
 		vi.useFakeTimers();
 		new InputController(mode).setupEditorSubmitHandler();
 		pendingInput = mode.getUserInput();
-		await mode.editor.onSubmit?.('/loopn "first prompt" "second" "third"');
+		await mode.composer.onSubmit?.('/loopn "first prompt" "second" "third"');
 		expect((await pendingInput).text).toBe("first prompt");
 		mode.cancelPendingSubmission();
 
@@ -310,7 +318,7 @@ describe("InteractiveMode loop auto-submit", () => {
 		});
 
 		it("does not recompact while waiting for compact maintenance to settle", async () => {
-			cfgLoopMode.set(settings, "compact");
+			cfgLoopMode.set(session.settings, "compact");
 			let streaming = false;
 			Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
 			const compact = vi.spyOn(mode, "handleCompactCommand").mockImplementation(async () => {
@@ -336,6 +344,8 @@ describe("InteractiveMode loop auto-submit", () => {
 
 			beforeEach(() => {
 				vi.spyOn(mode, "updatePendingMessagesDisplay").mockImplementation(() => {});
+				// The controlled prompt owns completion; there is no real agent turn to drain.
+				vi.spyOn(session, "waitForIdle").mockResolvedValue();
 			});
 
 			afterEach(async () => {
@@ -369,7 +379,7 @@ describe("InteractiveMode loop auto-submit", () => {
 
 				new InputController(mode).setupEditorSubmitHandler();
 				const resolved = waitForNextInput();
-				await mode.editor.onSubmit?.("/loop 3 queued first turn");
+				await mode.composer.onSubmit?.("/loop 3 queued first turn");
 				await flushMicrotasks();
 				expect(mode.compactionQueuedMessages).toEqual([
 					{ text: "queued first turn", mode: "steer", images: undefined, draftDetached: true },
@@ -654,7 +664,7 @@ describe("InteractiveMode loop auto-submit", () => {
 		// exercised instead of assigned directly.
 		it("disables a reset loop when vibe is enabled while the condition is in flight", async () => {
 			vi.useFakeTimers();
-			cfgLoopMode.set(settings, "reset");
+			cfgLoopMode.set(session.settings, "reset");
 			idleSession();
 			const pending = Promise.withResolvers<LoopConditionVerdict>();
 			vi.spyOn(loopCondition, "evaluateLoopCondition").mockImplementation(async () => await pending.promise);
@@ -685,7 +695,7 @@ describe("InteractiveMode loop auto-submit", () => {
 		// entering transition, not just the settled flag.
 		it("disables a reset loop when the condition resolves during vibe activation", async () => {
 			vi.useFakeTimers();
-			cfgLoopMode.set(settings, "reset");
+			cfgLoopMode.set(session.settings, "reset");
 			idleSession();
 			const pending = Promise.withResolvers<LoopConditionVerdict>();
 			vi.spyOn(loopCondition, "evaluateLoopCondition").mockImplementation(async () => await pending.promise);
@@ -740,7 +750,7 @@ describe("InteractiveMode loop auto-submit", () => {
 		pendingInput = mode.getUserInput();
 		void pendingInput.then(input => resolved.push(input));
 
-		await mode.editor.onSubmit?.("/skill:recap go");
+		await mode.composer.onSubmit?.("/skill:recap go");
 
 		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
 		expect(mode.loopPrompt).toBe("/skill:recap go");

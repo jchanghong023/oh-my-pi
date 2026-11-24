@@ -2,6 +2,7 @@ import { expect } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { truncate } from "@oh-my-pi/pi-tui/text/width";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import { composerBounds, CompactScreenRecording } from "../helpers/compact-screen-recording";
@@ -54,29 +55,41 @@ async function nativeDraftSnapshot(tui: (...args: string[]) => Promise<string>) 
 	};
 }
 
-function nativeDraftMatches(screen: string, expected: string, cursor?: { x: number; y: number }): boolean {
+function nativeDraftMatches(screen: string, expected: string, cursor: { x: number; y: number }): boolean {
 	const { lines, start, end } = composerBounds(screen);
-	if (start < 0 || end <= start) return false;
-	if (cursor) {
-		if (!expected) return cursor.y === start + 1 && cursor.x === 3;
-		if (cursor.y !== end) return false;
-	}
-	const rows = lines.slice(start + 1, end + 1);
+	if (start < 0 || cursor.y <= start || cursor.y > end) return false;
+	// On narrow terminals the box puts unbordered status overflow between
+	// its top border and the first input row. It is not part of the draft.
+	let first = start + 1;
+	while (first < end && lines[first]!.startsWith("   ")) first++;
+	if (cursor.y < first) return false;
+	if (!expected) return cursor.y === first && cursor.x === 3;
+	// With the IME-safe caret, the last input row can be above a separate
+	// bottom rule instead of sharing the rule itself.
+	if (cursor.y < end && (cursor.y !== end - 1 || !/^╰─[ ─]*╯\s*$/u.test(lines[end]!))) return false;
+	const rows = lines.slice(first, cursor.y + 1);
 	let remaining = expected;
 	for (const [index, row] of rows.entries()) {
 		const last = index === rows.length - 1;
-		const border = last ? /─?╯\s*$/u : /[│█]\s*$/u;
-		const limit = row.search(border);
-		if (!row.startsWith(last ? "╰─ " : "│  ") || limit < 3) return false;
-		if (cursor && last && (cursor.x < 3 || cursor.x > limit)) return false;
-		const text = row.slice(3, cursor && last ? cursor.x : limit);
-		const input = text.trimEnd();
+		const bottom = first + index === end;
+		const limit = row.search(bottom ? /─?╯\s*$/u : /[│█]\s*$/u);
+		if (!row.startsWith(bottom ? "╰─ " : "│  ") || limit < 3) return false;
+		const content = row.slice(3, limit);
+		let input = content.trimEnd();
+		if (last) {
+			// PTY cursor coordinates count cells, not UTF-16 code units.
+			const cells = cursor.x - 3;
+			if (cells < 0 || cells > Bun.stringWidth(content)) return false;
+			input = truncate(content, cells, "");
+			if (Bun.stringWidth(input) !== cells) return false;
+			input = input.trimEnd();
+		}
 		// Submitted control commands are one logical line. Extra blank rows
 		// mean another draft/keypress was merged into it, not exact restoration.
 		if (!input || !remaining.startsWith(input)) return false;
 		remaining = remaining.slice(input.length);
 		// Word wrapping omits the boundary space from the painted row.
-		if (index < rows.length - 1 && remaining.startsWith(" ")) remaining = remaining.slice(1);
+		if (!last && remaining.startsWith(" ")) remaining = remaining.slice(1);
 	}
 	return remaining.length === 0;
 }

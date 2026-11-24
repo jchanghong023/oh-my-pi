@@ -382,9 +382,6 @@ const forkCodingAgentFiles = new Set([
 	"test/modes/utils/render-initial-messages.test.ts",
 	"test/status-line-usage.test.ts",
 	"test/status-line-time-spent.test.ts",
-	"test/status-line-transparent.test.ts",
-	"test/status-line-segment-padding.test.ts",
-	"test/status-line-brand-fade.test.ts",
 	"test/agent-session-auto-compaction-progress-guard.test.ts",
 	"test/agent-session-compaction.test.ts",
 	"test/agent-session-goal-midrun-compaction.test.ts",
@@ -405,6 +402,7 @@ const forkCodingAgentFiles = new Set([
 	"test/cli/openwiki.test.ts",
 	"test/commit-conventional.test.ts",
 	"test/compact-status-spacing.test.ts",
+	"test/compact-tool-summary.test.ts",
 	"test/compaction-speculation.test.ts",
 	"test/composer-prediction-controller.test.ts",
 	"test/config-cli-revision-contract.test.ts",
@@ -433,6 +431,14 @@ const forkCodingAgentFiles = new Set([
 	"test/modes/components/settings-layout.test.ts",
 	"test/modes/controllers/input-controller-tool-expansion.test.ts",
 	"test/modes/controllers/jobs-command.test.ts",
+	"test/modes/controllers/jobs-report.test.ts",
+	"test/ui/composer/composer.test.ts",
+	"test/ui/overlays/pickers/jobs-panel.test.tsx",
+	"test/ui/overlays/pickers/tree-selector.test.tsx",
+	"test/ui/status/status-line.test.ts",
+	"test/ui/tools/web-search.test.ts",
+	"test/ui/transcript/messages/assistant-message.test.tsx",
+	"test/ui/transcript/messages/async-cards.test.tsx",
 	"test/modes/goal-autopilot-websocket.test.ts",
 	"test/native-pipe-fallback-contract.test.ts",
 	"test/online-tiny-candidates.test.ts",
@@ -505,15 +511,7 @@ const forkPackageFiles: Record<string, string[]> = {
 		"test/composer-welcome-scrollback.test.ts",
 		"test/transcript-container.test.ts",
 		"test/transcript-seam-loss.test.ts",
-		"test/thinking-preview.test.ts",
-		"test/status-line-profile.test.ts",
-		"test/editor-ime-eligibility.test.ts",
-		"test/emergency-restore-altscreen.test.ts",
-		"test/jobs-panel.test.ts",
-		"test/oauth-selector.test.ts",
-		"test/timeline-picker-native.test.ts",
-		"test/transcript-render-helpers.test.ts",
-		"test/web-search-render.test.ts",
+		"test/driver-session/session.test.ts",
 	],
 	"packages/snapcompact": ["test/snapcompact.test.ts"],
 };
@@ -653,7 +651,7 @@ async function collectTestsUnder(root: string, baseDir: string, all = false): Pr
 		const relative = path.relative(baseDir, filePath).split(path.sep).join("/");
 		if (
 			!entry.isFile() ||
-			!(entry.name.endsWith(".test.ts") || (all && /(?:\.|_)(?:test|spec)\.(?:js|jsx|ts|tsx)$/.test(entry.name)))
+			!(/\.test\.tsx?$/.test(entry.name) || (all && /(?:\.|_)(?:test|spec)\.(?:js|jsx|ts|tsx)$/.test(entry.name)))
 		) {
 			continue;
 		}
@@ -792,7 +790,7 @@ async function codingAgentTestCommands(
 ): Promise<TestCommand[]> {
 	const partition = await getCodingAgentTestPartition(all);
 	const testFiles = partition[bucket].filter(file =>
-		forkOnly ? isForkCodingAgentTest(file) : all || file.endsWith(".test.ts"),
+		forkOnly ? isForkCodingAgentTest(file) : all || /\.test\.tsx?$/.test(file),
 	);
 	if (testFiles.length === 0) {
 		if (forkOnly) return [];

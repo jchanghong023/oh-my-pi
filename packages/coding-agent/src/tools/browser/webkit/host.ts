@@ -12,10 +12,9 @@
  * visible, focused window either way.
  */
 import * as path from "node:path";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { logger, readLines, withTimeout } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
-import { ToolAbortError } from "../../tool-errors";
+import { ToolAbortError, ToolError } from "../../tool-errors";
 import { gracefulKillTreeOnce } from "../attach";
 import type { TernInputStep } from "../tern/keys";
 import { TernSocketClient, type TernTransport, type TernTransportEvents } from "../tern/wire";

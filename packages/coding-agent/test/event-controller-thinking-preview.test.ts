@@ -4,16 +4,14 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { setStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { CompactFileDiff } from "@oh-my-pi/pi-coding-agent/modes/compact-file-diff";
 import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-thinking-preview";
 import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
-import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
+import { cfgDisplayMode, cfgDisplayShimmer, cfgTuiSpinnerInterval } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { type ModelStage, nextModelStage } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import type {
 	LiveToolOutputPreview,
@@ -23,57 +21,85 @@ import type { TurnToolDiff } from "@oh-my-pi/pi-coding-agent/session/latest-turn
 import { LiveToolOutputState } from "@oh-my-pi/pi-coding-agent/session/live-tool-output";
 import { toolOutputText } from "@oh-my-pi/pi-coding-agent/session/live-tool-output-text";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Loader, setSpinnerInterval, spinnerInterval } from "@oh-my-pi/pi-tui";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
-import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line/component";
-import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
-import { formatDuration } from "@oh-my-pi/pi-utils";
+import { Reconciler } from "@oh-my-pi/pi-tui/native/reconcile";
+import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
+import { renderBlock } from "@oh-my-pi/pi-tui/term/render";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import type { TspNode } from "@oh-my-pi/pi-wire";
+import { AppFrame } from "../src/modes/interactive/frame";
+import { initTheme } from "../src/ui/theme/service";
+import { ReadGroup } from "../src/ui/transcript/read-group";
 import {
 	applyRenderFixtureEvent,
 	createInteractiveModeContext,
 	createSessionStub,
+	renderTranscript,
 } from "./helpers/interactive-mode-context";
 
-function nativeRows(node: NativeNode): readonly string[] {
-	if (node.k === "rows" && node.p) return node.p.lines;
-	if (node.k === "card") {
-		return (node.c ?? []).flatMap(child => {
-			if (!("k" in child)) throw new Error("Expected native card content");
-			return [...nativeRows(child)];
-		});
+function nativeDockRows(width: number, view: CompactThinkingPreview | CompactToolOutputPreview): readonly string[] {
+	const activity = view instanceof CompactThinkingPreview ? view : undefined;
+	const output = view instanceof CompactToolOutputPreview ? view : undefined;
+	if (activity && activity.render(width).length === 0) return [];
+	const frame = new AppFrame({ version: "test", shape: "box", quiet: true });
+	vi.spyOn(frame.shell, "size").mockReturnValue({ columns: width, rows: 40 });
+	frame.mountCompactPresentation(
+		() => true,
+		columns => activity?.rows(columns) ?? [],
+		columns => output?.render(columns) ?? [],
+		() => [],
+		() => false,
+		() => "classic",
+		() => {},
+	);
+	const native = new Reconciler(
+		frame.shell.surface,
+		"frame",
+		{ cols: () => width, rows: () => 40, hasFeature: () => true },
+		() => {},
+	);
+	try {
+		type NativeProps = { role?: string; lines?: string[]; text?: string; spans?: { t: string }[] };
+		const nodes = new Map<string, TspNode>();
+		const children = new Map<string, string[]>();
+		const textOps = new Map<string, string>();
+		let target: string | undefined;
+		const role = activity ? "omp.compact.activity" : "omp.compact.output";
+		const add = (parent: string, node: TspNode): void => {
+			nodes.set(node.id, node);
+			if ((node.p as NativeProps | undefined)?.role === role) target = node.id;
+			const siblings = children.get(parent);
+			if (siblings) siblings.push(node.id);
+			else children.set(parent, [node.id]);
+			// An add carries the entire new subtree, not one op per descendant.
+			for (const child of node.c ?? []) add(node.id, child);
+		};
+		for (const op of native.reconcile().ops) {
+			if (op[0] === "text") {
+				const [, id, mode, text] = op;
+				textOps.set(id, mode === "append" ? (textOps.get(id) ?? "") + text : text);
+				continue;
+			}
+			if (op[0] !== "add") continue;
+			const [, , parent, , node] = op;
+			add(parent, node);
+		}
+		if (!target) throw new Error(`Missing native ${role} rows`);
+		if (output) return (nodes.get(target)?.p as NativeProps | undefined)?.lines ?? [];
+		const text = (id: string): string => {
+			const p = nodes.get(id)?.p as NativeProps | undefined;
+			return (
+				p?.spans?.map(span => span.t).join("") ??
+				textOps.get(id) ??
+				p?.text ??
+				children.get(id)?.map(text).join("") ??
+				""
+			);
+		};
+		return (children.get(target) ?? []).map(id => text(id).trimEnd());
+	} finally {
+		native.dispose();
+		frame.shell.surface.dispose();
 	}
-	if (node.k === "text") return (node.p?.text ?? node.p?.spans?.map(span => span.t).join("") ?? "").split("\n");
-	if (node.k !== "col" || !node.c) throw new Error("Expected dock rows or native activity column");
-	const text = (child: NativeNode): string => {
-		if (child.k === "rows") return child.p?.lines.join("") ?? "";
-		if (child.k === "shimmer" || child.k === "text") {
-			return child.p?.text ?? child.p?.spans?.map(span => span.t).join("") ?? "";
-		}
-		if (child.k === "elapsed") return formatDuration(child.p?.stopped ?? child.p?.age ?? 0);
-		if (child.k === "row" && child.c) {
-			return child.c
-				.map(part => {
-					if (!("k" in part)) throw new Error("Expected native row node");
-					return text(part);
-				})
-				.join("");
-		}
-		throw new Error("Expected native activity text");
-	};
-	return node.c.map(child => {
-		if (!("k" in child)) throw new Error("Expected native activity node");
-		return text(child);
-	});
-}
-
-function hasNativeKind(node: NativeNode, kind: string): boolean {
-	return node.k === kind || (node.c ?? []).some(child => "k" in child && hasNativeKind(child, kind));
 }
 
 type MessageUpdate = Extract<AgentSessionEvent, { type: "message_update" }>;
@@ -199,48 +225,21 @@ function liveSession(message: AssistantMessage | null = null, activeThinkingInde
 
 const eventControllers: EventController[] = [];
 const focusControllers: SessionFocusController[] = [];
-const statusLines: StatusLineComponent<AgentSession>[] = [];
 const outputPreviews: CompactToolOutputPreview[] = [];
 const activityDocks: CompactThinkingPreview[] = [];
-let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 
 function focusFixture(fileDiffRows?: () => number) {
 	const main = liveSession();
-	const statusLine = new StatusLineComponent<AgentSession>(main.session, statusLineHost);
-	statusLines.push(statusLine);
-	const ctx = createInteractiveModeContext({ session: main.session, statusLine });
+	const ctx = createInteractiveModeContext({ session: main.session, hideToolActivity: true }, fileDiffRows);
 	cfgDisplayMode.set(ctx.settings, "compact");
-	const fileDiff = fileDiffRows && new CompactFileDiff(ctx, fileDiffRows);
-	const output = new CompactToolOutputPreview(
-		ctx,
-		undefined,
-		fileDiff ? (callId, file, width) => fileDiff.coveredDiff(callId, file, width) : undefined,
-	);
-	const dock = new CompactThinkingPreview(ctx, undefined, width => output.compactActivity(width));
+	const { compactThinkingPreview: dock, compactToolOutputPreview: output } = ctx;
 	outputPreviews.push(output);
 	activityDocks.push(dock);
-	ctx.ui.scheduleAfter = (delay, callback) => {
-		const timer = setTimeout(callback, delay);
-		return { cancel: () => clearTimeout(timer) };
-	};
-	ctx.ensureLoadingAnimation = () => {
-		if (ctx.loadingAnimation) return;
-		const loader = new Loader(
-			ctx.ui,
-			value => value,
-			value => value,
-		);
-		loader.stop();
-		ctx.loadingAnimation = loader;
-	};
-	ctx.clearTransientSessionUi = () => {
-		ctx.loadingAnimation?.stop();
-		ctx.loadingAnimation = undefined;
-		dock.clear();
-	};
-	ctx.hideToolActivity = true;
-	ctx.chatContainer.setToolActivityVisible(false);
-	const controller = new EventController(ctx);
+	const controller = new EventController(ctx, event => {
+		dock.observe(event);
+		output.observe(event);
+		ctx.refreshCompactPresentation();
+	});
 	eventControllers.push(controller);
 	ctx.eventController = controller;
 	const registry = new AgentRegistry();
@@ -251,35 +250,18 @@ function focusFixture(fileDiffRows?: () => number) {
 		get: () => focus.target ?? ctx.session,
 	});
 	focusControllers.push(focus);
-	Object.assign(ctx, { compactThinkingPreview: dock, compactToolOutputPreview: output });
 	return {
 		ctx,
 		focus,
 		dock,
 		output,
 		outputRows: (width = 120) =>
-			[
-				output.render(width),
-				nativeRows(
-					output.describe({
-						cols: width,
-						reduceMotion: false,
-						dark: true,
-						supports: () => true,
-						feature: () => true,
-					}),
-				),
-			].map(rows => rows.map(row => Bun.stripANSI(row).trimEnd())),
+			[output.render(width), nativeDockRows(width, output)].map(rows =>
+				rows.map(row => Bun.stripANSI(row).trimEnd()),
+			),
 		previewView: (width = 120) => {
-			const cx: DescribeContext = {
-				cols: width,
-				reduceMotion: false,
-				dark: true,
-				supports: () => true,
-				feature: () => true,
-			};
 			const ansi = output.render(width).map(row => Bun.stripANSI(row).trimEnd());
-			const native = nativeRows(output.describe(cx)).map(row => Bun.stripANSI(row).trimEnd());
+			const native = nativeDockRows(width, output).map(row => Bun.stripANSI(row).trimEnd());
 			// Content assertions exclude the shared transcript gutter, not the tool's own indentation.
 			const content = (line: string) => line.replace(/^ /, "");
 			return {
@@ -301,30 +283,20 @@ function focusFixture(fileDiffRows?: () => number) {
 			});
 		},
 		rendered: () => Bun.stripANSI(dock.render(60).join("\n")).trimEnd(),
-		nativeRendered: () => {
-			const node = dock.describe({
-				cols: 60,
-				reduceMotion: false,
-				dark: true,
-				supports: () => true,
-				feature: () => true,
-			});
-			return Bun.stripANSI(nativeRows(node).join("\n")).trimEnd();
-		},
+		nativeRendered: (width = 60) => Bun.stripANSI(nativeDockRows(width, dock).join("\n")).trimEnd(),
+		nativeRows: (width = 60) => nativeDockRows(width, dock),
 		rows: (width = 60) => dock.render(width),
 	};
 }
 
-beforeAll(async () => {
-	await initTheme(false);
+beforeAll(() => {
+	initTheme();
 });
 
 beforeEach(async () => {
-	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true, overrides: { "display.smoothStreaming": false } });
 	vi.useFakeTimers();
-	setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 });
 
 afterEach(() => {
@@ -332,32 +304,14 @@ afterEach(() => {
 	for (const output of outputPreviews.splice(0)) output.clear();
 	for (const controller of focusControllers.splice(0)) controller.dispose();
 	for (const controller of eventControllers.splice(0)) controller.dispose();
-	for (const statusLine of statusLines.splice(0)) statusLine.dispose();
 	vi.useRealTimers();
 	setSystemTime();
 	vi.restoreAllMocks();
-	setShimmerMode("classic");
-	setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 	resetSettingsForTest();
 });
 
 describe("compact action dock", () => {
-	const cx = (cols = 60): DescribeContext => ({
-		cols,
-		reduceMotion: false,
-		dark: true,
-		supports: () => true,
-		feature: () => true,
-	});
 	const plain = (rows: readonly string[]) => rows.map(row => Bun.stripANSI(row));
-	const shimmerWords = (node: NativeNode): string[] => [
-		...(node.k === "shimmer" ? [node.p?.spans?.map(span => span.t).join("") ?? ""] : []),
-		...(node.c ?? []).flatMap(child => ("k" in child ? shimmerWords(child) : [])),
-	];
-	const spanStyles = (node: NativeNode): [string, string | undefined][] => [
-		...(node.k === "text" ? (node.p?.spans ?? []).map(span => [span.t, span.s] as [string, string | undefined]) : []),
-		...(node.c ?? []).flatMap(child => ("k" in child ? spanStyles(child) : [])),
-	];
 
 	it("keeps the path legible and distinguishes a settled file action", async () => {
 		const h = focusFixture();
@@ -371,6 +325,7 @@ describe("compact action dock", () => {
 			args: { path: "workspace/src/config.ts", i: "Checking presets" },
 			intent: "Checking presets",
 		});
+		const theme = currentTheme();
 		const running = plain(h.dock.render(80));
 		expect(running[0]).toBe("");
 		expect(running[1]).toContain("Agent：正在读取  workspace/src/config.ts · Checking presets");
@@ -378,12 +333,6 @@ describe("compact action dock", () => {
 		expect(h.dock.render(80)[1]).toContain(
 			theme.fg("dim", "workspace/") + theme.fg("text", "src/config.ts") + theme.fg("dim", " · Checking presets"),
 		);
-		expect(spanStyles(h.dock.describe(cx(80)))).toEqual([
-			["Agent：正在读取", "muted"],
-			["workspace/", "dim"],
-			["src/config.ts", "text"],
-			[" · Checking presets", "dim"],
-		]);
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "a",
@@ -395,11 +344,7 @@ describe("compact action dock", () => {
 		expect(done[1]).toBe(" Agent：上次读取完成  workspace/src/config.ts · Checking presets");
 		expect(h.dock.render(80)[1]).toContain(theme.fg("dim", "Agent：上次读取完成"));
 		expect(h.dock.render(80)[1]).toContain(theme.fg("dim", "workspace/src/config.ts · Checking presets"));
-		expect(spanStyles(h.dock.describe(cx(80)))).toEqual([
-			["Agent：上次读取完成", "dim"],
-			["workspace/src/config.ts · Checking presets", "dim"],
-		]);
-		for (const rows of [h.dock.render(80), nativeRows(h.dock.describe(cx(80)))]) {
+		for (const rows of [h.dock.render(80), h.nativeRows(80)]) {
 			expect(rows).toHaveLength(3);
 			expect(rows[2]).toBe("");
 			expect(Bun.stripANSI(rows[1]!)).toBe(done[1]!);
@@ -467,11 +412,8 @@ describe("compact action dock", () => {
 		expect(row).toStartWith(" Agent：上次执行失败  ");
 		expect(row).toContain("false");
 		expect(row).not.toContain("boom");
-		expect(h.rows()[1]).toContain(theme.getFgAnsi("error"));
-		expect(spanStyles(h.dock.describe(cx()))).toEqual([
-			["Agent：上次执行失败", "error"],
-			["false", "dim"],
-		]);
+		expect(h.rows()[1]).toContain(currentTheme().fg("error", "Agent：上次执行失败"));
+		expect(h.nativeRendered()).toBe(h.rendered());
 		// A live tool replaces the settled one on the Agent row.
 		await live.emit({
 			type: "tool_execution_start",
@@ -582,7 +524,7 @@ describe("compact action dock", () => {
 		message.content = [{ type: "thinking", thinking: "firstpart secondpart thirdpart final-tail\n \t\n" }];
 		await live.emit(update(message, "thinking_delta"));
 		const width = 45;
-		for (const rows of [h.dock.render(width), nativeRows(h.dock.describe(cx(width)))]) {
+		for (const rows of [h.dock.render(width), h.nativeRows(width)]) {
 			expect(plain(rows)[0]).toContain("final-tail");
 			expect(plain(rows)[1]).toMatch(/A.*\+1/);
 		}
@@ -592,22 +534,14 @@ describe("compact action dock", () => {
 		h.ctx.hideThinkingBlock = false;
 		expect(h.rendered()).toContain("final-tail");
 		expect(h.nativeRendered()).toBe(h.rendered());
-		const wait = new Loader(
-			h.ctx.ui,
-			value => value,
-			value => value,
-			"Waiting for a job",
-		);
-		wait.stop();
-		const dock = new CompactThinkingPreview(h.ctx, () => wait);
+		const dock = new CompactThinkingPreview(h.ctx, () => "Waiting for a job");
 		try {
 			const rows = plain(dock.render(60));
 			expect(rows[0]).toContain("正在思考");
 			expect(rows[1]).toContain("Waiting for a job");
 			expect(rows.join("")).not.toContain("正在执行");
-			setSystemTime(Date.now() + 1500);
 			expect(rows[1]).toContain("Agent：");
-			expect(shimmerWords(dock.describe(cx()))).toEqual(shimmerWords(wait.describe(cx())));
+			expect(plain(nativeDockRows(60, dock))).toEqual(rows);
 		} finally {
 			dock.clear();
 		}
@@ -615,23 +549,43 @@ describe("compact action dock", () => {
 
 	it("starts model shimmer with the spinner and keeps it through streamed thinking and replies", async () => {
 		const h = focusFixture();
+		const theme = currentTheme();
+		const env = staticEnvironment(theme);
+		const assertShimmer = (label: string, detail = "") => {
+			const activity = h.ctx.shell.surface
+				.dock()
+				.flatMap(node => node.children())
+				.find(node => node.props().role === "omp.compact.activity");
+			if (!activity) throw new Error("Missing terminal compact activity");
+			const ansiFrames = new Set<string>();
+			for (let elapsed = 100; elapsed < 1_400; elapsed += 80) {
+				env.setNow(10_000 + elapsed);
+				ansiFrames.add(renderBlock(activity, 60, { env }).rows[0]!);
+			}
+			expect(ansiFrames.size).toBeGreaterThan(1);
+			expect([...ansiFrames].some(frame => frame.includes(theme.fgSgr("accent")))).toBe(true);
+			expect(new Set([...ansiFrames].map(frame => Bun.stripANSI(frame).trim()))).toEqual(
+				new Set([detail ? `${label}  ${detail}` : label]),
+			);
+		};
 		setSystemTime(10_000);
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
 		await live.emit({ type: "agent_start" });
 		await live.emit({ type: "turn_start" });
-		expect(h.ctx.statusLine.getTurnElapsedMs()).toBe(0);
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：等待响应"]);
+		expect(h.rendered()).toContain("模型：等待响应");
+		assertShimmer("模型：等待响应");
 
 		const reason = thinkingMessage("First thought");
 		await live.emit(update(reason, "thinking_delta"));
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在思考"]);
+		expect(h.nativeRendered()).toContain("模型：正在思考");
 		setSystemTime(10_100);
 		reason.content = [{ type: "thinking", thinking: "Latest thought" }];
 		await live.emit(update(reason, "thinking_delta"));
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在思考"]);
-		expect(spanStyles(h.dock.describe(cx()))).toContainEqual(["Latest thought", "text"]);
+		expect(h.rendered()).toContain("Latest thought");
+		expect(h.nativeRendered()).toBe(h.rendered());
+		assertShimmer("模型：正在思考", "Latest thought");
 
 		const reply = thinkingMessage("", 2);
 		reply.content = [{ type: "text", text: "Reply" }];
@@ -640,22 +594,11 @@ describe("compact action dock", () => {
 			message: reply,
 			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Reply", partial: reply },
 		});
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在生成回复"]);
-		expect(shimmerWords(h.dock.describe({ ...cx(), reduceMotion: true }))).toEqual([]);
-		const ansiFrames = new Set<string>();
-		for (let elapsed = 100; elapsed < 1000; elapsed += 80) {
-			setSystemTime(10_000 + elapsed);
-			ansiFrames.add(h.rows()[0]!);
-		}
-		expect(ansiFrames.size).toBeGreaterThan(1);
-		expect([...ansiFrames].some(frame => frame.includes(`\x1b[1m${theme.getFgAnsi("accent")}`))).toBe(true);
-		expect([...ansiFrames].map(frame => Bun.stripANSI(frame).trim())).toEqual(
-			Array(ansiFrames.size).fill("模型：正在生成回复"),
-		);
+		expect(h.rendered()).toContain("模型：正在生成回复");
+		assertShimmer("模型：正在生成回复");
 		await live.emit({ type: "message_end", message: reply });
 		await live.emit({ type: "agent_end", messages: [reply] });
-		expect(h.ctx.statusLine.getTurnElapsedMs()).toBeNull();
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
+		expect(h.rendered()).not.toContain("模型：");
 	});
 
 	it("keeps running tools animated as output changes, without animating completed tools", async () => {
@@ -671,7 +614,7 @@ describe("compact action dock", () => {
 			toolName: "bash",
 			args: { command: "echo probe" },
 		});
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["Agent：正在执行"]);
+		expect(h.rendered()).toContain("Agent：正在执行");
 		for (const text of ["First line", "Second line"]) {
 			await live.emit({
 				type: "tool_execution_update",
@@ -681,7 +624,7 @@ describe("compact action dock", () => {
 				partialResult: { content: [{ type: "text", text }] },
 			});
 			expect(h.previewView().body).toContain(text);
-			expect(shimmerWords(h.dock.describe(cx()))).toEqual(["Agent：正在执行"]);
+			expect(h.nativeRendered()).toContain("Agent：正在执行");
 		}
 		await live.emit({
 			type: "tool_execution_end",
@@ -691,7 +634,7 @@ describe("compact action dock", () => {
 			isError: false,
 		});
 		await live.emit({ type: "turn_start" });
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：等待响应"]);
+		expect(h.rendered()).toContain("模型：等待响应");
 		const settled = h.rows()[1];
 		setSystemTime(11_200);
 		expect(h.rows()[1]).toBe(settled);
@@ -707,19 +650,14 @@ describe("compact action dock", () => {
 		await live.emit({ type: "agent_start" });
 		await live.emit({ type: "tool_execution_start", toolCallId: "read", toolName: "read", args: { path: "a.ts" } });
 		await live.emit(update(thinkingMessage("Thinking"), "thinking_delta"));
-		const interval = spinnerInterval();
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在思考", "Agent：正在读取"]);
-		try {
-			setSpinnerInterval(0);
-			expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
-			const staticRows = h.rows();
-			setSystemTime(11_500);
-			expect(h.rows()).toEqual(staticRows);
-		} finally {
-			setSpinnerInterval(interval);
-		}
+		expect(h.rendered()).toContain("模型：正在思考");
+		expect(h.rendered()).toContain("Agent：正在读取");
+		cfgTuiSpinnerInterval.set(h.ctx.settings, 0);
+		const staticRows = h.rows();
+		setSystemTime(11_500);
+		expect(h.rows()).toEqual(staticRows);
 		await h.focus.focusAgent(MAIN_AGENT_ID);
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual([]);
+		expect(h.rendered()).not.toContain("Agent：正在读取");
 	});
 
 	it("honors disabled shimmer with static readable state words", async () => {
@@ -728,7 +666,7 @@ describe("compact action dock", () => {
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		setShimmerMode("disabled");
+		cfgDisplayShimmer.set(h.ctx.settings, "disabled");
 		await live.emit({ type: "agent_start" });
 		await live.emit({
 			type: "tool_execution_start",
@@ -740,7 +678,7 @@ describe("compact action dock", () => {
 		setSystemTime(25_500);
 		expect(h.rows()).toEqual(first);
 		expect(plain(first)[1]).toBe(" Agent：正在读取  a.ts");
-		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
+		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
 	it("shows the actual command folded to one line and tail-truncated, without output or elapsed", async () => {
@@ -786,16 +724,14 @@ describe("compact action dock", () => {
 				args: { path, i: "LONG INTENT MUST NOT CROWD OUT THE PATH" },
 			});
 		}
-		for (const rows of [h.dock.render(40), nativeRows(h.dock.describe(cx(40)))]) {
+		for (const rows of [h.dock.render(40), h.nativeRows(40)]) {
 			const [top, bottom] = plain(rows);
 			expect(top).toBe("");
 			expect(bottom).toContain("backend/config.ts");
 			expect(rows.join("")).not.toContain("INTENT");
 			expect(rows.every(row => Bun.stringWidth(row) <= 40)).toBe(true);
 		}
-		const styles = spanStyles(h.dock.describe(cx(40)));
-		expect(styles).toContainEqual(["backend/config.ts", "text"]);
-		expect(styles.filter(([value, tone]) => value.endsWith("…") && tone === "dim")).toHaveLength(1);
+		expect(h.rows(40)[1]).toContain(currentTheme().fg("text", "backend/config.ts"));
 	});
 
 	it("uses Bash intent only while the same call's command is visible and never hides a command without intent", async () => {
@@ -814,7 +750,7 @@ describe("compact action dock", () => {
 				toolName: "bash",
 				args: { command: "echo raw", i: "Describe action" },
 			});
-			for (const rows of [dock.render(60), nativeRows(dock.describe(cx(60)))]) {
+			for (const rows of [dock.render(60), nativeDockRows(60, dock)]) {
 				expect(plain(rows)[1]).toContain("Describe action");
 				expect(plain(rows)[1]).not.toContain("echo raw");
 			}
@@ -861,7 +797,7 @@ describe("compact action dock", () => {
 			args: { command: "printf hello" },
 		});
 		for (const width of [32, 12, 8, 4, 1, 0]) {
-			for (const rows of [h.dock.render(width), nativeRows(h.dock.describe(cx(width)))]) {
+			for (const rows of [h.dock.render(width), h.nativeRows(width)]) {
 				expect(rows.every(row => Bun.stringWidth(row) <= Math.max(width, 0))).toBe(true);
 			}
 		}
@@ -998,7 +934,7 @@ describe("compact action dock", () => {
 		await live.emit({ type: "agent_end", messages: [] });
 		const retained = h.rows();
 		expect(plain(retained)[1]).toBe(" Agent：上次读取完成  keep.ts");
-		expect(hasNativeKind(h.dock.describe(cx()), "shimmer")).toBe(false);
+		expect(h.nativeRendered()).toBe(h.rendered());
 		setSystemTime(Date.now() + 500);
 		expect(h.rows()).toEqual(retained);
 		await h.focus.focusAgent(MAIN_AGENT_ID);
@@ -1017,7 +953,7 @@ describe("compact action dock", () => {
 		if (change === "display tier") {
 			cfgDisplayMode.set(h.ctx.settings, "clean");
 			expect(h.dock.render(60)).toEqual([]);
-			expect(nativeRows(h.dock.describe(cx()))).toEqual([]);
+			expect(h.nativeRows()).toEqual([]);
 		} else {
 			await h.focus.focusAgent(MAIN_AGENT_ID);
 			expect(h.rendered()).not.toContain("old reasoning");
@@ -1051,8 +987,7 @@ describe("compact action dock", () => {
 			result: { content: [{ type: "text", text: "written" }], details: { op: "create", newText: body } },
 			isError: false,
 		});
-		const chat = () => Bun.stripANSI(h.ctx.chatContainer.render(120).join("\n"));
-		expect(chat()).not.toContain("line 60");
+		expect(renderTranscript(h.ctx).join("\n")).not.toContain("line 60");
 	});
 
 	it("does not display parameter generation as a running action", async () => {
@@ -1071,7 +1006,7 @@ describe("compact action dock", () => {
 		});
 		expect(h.rendered()).not.toContain("正在读取");
 		expect(h.rendered()).toContain("模型：正在准备调用");
-		expect(shimmerWords(h.dock.describe(cx()))).toEqual(["模型：正在准备调用"]);
+		expect(h.nativeRendered()).toContain("模型：正在准备调用");
 		await live.emit({
 			type: "tool_execution_start",
 			toolCallId: "prep",
@@ -1161,93 +1096,43 @@ describe("compact action dock", () => {
 });
 
 describe("execution-only read group activity", () => {
-	it("starts and times a read created by its first execution event (P2-23)", async () => {
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-		let now = 100;
-		vi.spyOn(performance, "now").mockImplementation(() => now);
+	it("starts and settles a read created by its first execution event", async () => {
 		const ctx = createInteractiveModeContext();
 		cfgDisplayMode.set(ctx.settings, "detailed");
 		const controller = new EventController(ctx);
 		eventControllers.push(controller);
-		const toolCx: DescribeContext = {
-			cols: 80,
-			reduceMotion: false,
-			dark: true,
-			supports: kind => kind === "tool",
-			feature: () => true,
-		};
-		try {
-			// No message_update preview precedes this event (e.g. focus/join mid-tool).
-			await controller.handleEvent({
-				type: "tool_execution_start",
-				toolCallId: "execution-only-read",
-				toolName: "read",
-				args: { path: "src/execution-only.ts" },
-			});
-			const group = ctx.pendingTools.get("execution-only-read");
-			if (!(group instanceof ReadToolGroupComponent)) throw new Error("Expected a grouped read");
-			const live = group.describe(toolCx);
-			expect(live.k).toBe("tool");
-			expect(live.k === "tool" ? live.p : undefined).toMatchObject({ status: "running", age: 0 });
-			now = 600;
-			const elapsed = group.describe(toolCx);
-			expect(elapsed.k === "tool" ? elapsed.p : undefined).toMatchObject({ status: "running", age: 500 });
-			group.setToolActivityVisible(false);
-			expect(group.render(80)).toEqual([]);
-			const hidden = group.describe(toolCx);
-			expect(hidden.k === "tool" ? hidden.p : undefined).toMatchObject({
-				hidden: true,
-				status: "running",
-				age: 500,
-			});
-			group.setToolActivityVisible(true);
-			const visible = group.describe(toolCx);
-			expect(visible.k === "tool" ? visible.p : undefined).toMatchObject({ status: "running", age: 500 });
-			expect(visible.k === "tool" ? visible.p?.hidden : undefined).not.toBe(true);
-
-			now = 1350;
-			await controller.handleEvent({
-				type: "tool_execution_end",
-				toolCallId: "execution-only-read",
-				toolName: "read",
-				result: { content: [{ type: "text", text: "export const value = 1;" }] },
-				isError: false,
-			});
-			const done = group.describe(toolCx);
-			expect(done.k).toBe("tool");
-			expect(done.k === "tool" ? done.p : undefined).toMatchObject({ status: "done", took: 1250 });
-			now = 2000;
-			const frozen = group.describe(toolCx);
-			expect(frozen.k === "tool" ? frozen.p : undefined).toMatchObject({ status: "done", took: 1250 });
-		} finally {
-			ctx.chatContainer.disposeChildren();
-		}
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "execution-only-read",
+			toolName: "read",
+			args: { path: "src/execution-only.ts" },
+		});
+		const group = ctx.pendingTools.get("execution-only-read")?.group;
+		if (!group) throw new Error("Expected a grouped read");
+		expect(group.status(group.entries())).toBe("running");
+		expect(renderTranscript(ctx).join("\n")).toContain("src/execution-only.ts");
+		group.setActivityVisible(false);
+		expect(renderTranscript(ctx).join("\n")).not.toContain("src/execution-only.ts");
+		expect(group.status(group.entries())).toBe("running");
+		group.setActivityVisible(true);
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "execution-only-read",
+			toolName: "read",
+			result: { content: [{ type: "text", text: "export const value = 1;" }] },
+			isError: false,
+		});
+		expect(group.status(group.entries())).toBe("done");
 	});
-	it("keeps one timer across concurrent reads and freezes it when sealed", () => {
-		let now = 100;
-		vi.spyOn(performance, "now").mockImplementation(() => now);
-		const group = new ReadToolGroupComponent();
-		const toolCx: DescribeContext = {
-			cols: 80,
-			reduceMotion: false,
-			dark: true,
-			supports: kind => kind === "tool",
-			feature: () => true,
-		};
+
+	it("keeps the group running for concurrent reads and settles the unfinished read when sealed", () => {
+		const group = new ReadGroup();
 		group.updateArgs({ path: "first.ts" }, "first");
-		group.setExecutionStarted("first");
-		now = 250;
 		group.updateArgs({ path: "second.ts" }, "second");
-		group.setExecutionStarted("second");
-		now = 400;
 		group.updateResult({ content: [{ type: "text", text: "first" }] }, false, "first");
-		let node = group.describe(toolCx);
-		expect(node.k === "tool" ? node.p : undefined).toMatchObject({ status: "running", age: 300 });
-		now = 700;
+		expect(group.status(group.entries())).toBe("running");
 		group.seal();
-		now = 1000;
-		node = group.describe(toolCx);
-		expect(node.k === "tool" ? node.p : undefined).toMatchObject({ status: "cancelled", took: 600 });
+		expect(group.status(group.entries())).toBe("cancelled");
 	});
 });
 
@@ -1966,8 +1851,8 @@ describe("compact latest live Output consumers", () => {
 		expect(failedView.body).toEqual(["Error: boom at step 2", "line five", "line six", "line seven", "line eight"]);
 		expect(failedView.nativeBody).toEqual(failedView.body);
 		const [, diagnostic, context] = h.output.render(120);
-		expect(diagnostic).toContain(theme.bold(theme.fg("error", "Error: boom at step 2")));
-		expect(context).toContain(theme.fg("toolOutput", "line five"));
+		expect(diagnostic).toContain(currentTheme().style("error strong", "Error: boom at step 2"));
+		expect(context).toContain(currentTheme().fg("toolOutput", "line five"));
 		output.restore([failed, empty], false);
 		const emptyView = h.previewView();
 		expect(emptyView.head).toContain("已完成 · grep");
@@ -2040,7 +1925,7 @@ describe("compact latest live Output consumers", () => {
 			await live.emit({ type: "agent_end", messages: [] });
 			vi.advanceTimersByTime(2999);
 			if (view === "detached") await h.focus.focusAgent("FinishingWorker");
-			expect(h.ctx.statusLine.getTurnElapsedMs()).toBeNull();
+			expect(h.ctx.viewSession.isStreaming).toBe(false);
 			for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("worker result");
 			vi.advanceTimersByTime(1);
 			expect(h.outputRows()).toEqual([[], []]);

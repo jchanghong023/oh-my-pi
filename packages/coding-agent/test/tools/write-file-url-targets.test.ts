@@ -8,13 +8,9 @@ import { InternalUrlRouter, VaultProtocolHandler } from "@oh-my-pi/pi-coding-age
 import * as vaultProtocol from "@oh-my-pi/pi-coding-agent/internal-urls/vault-protocol";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { initTheme } from "../../src/ui/theme/service";
+import { toolCall, toolCallText } from "../helpers/tool-text";
 
 function createSession(cwd: string): ToolSession {
 	return {
@@ -38,23 +34,12 @@ function expectWriteCard(
 	marker?: string,
 	partial = false,
 ): void {
-	const previous = { ...chatTranscriptDisplayPreferences };
-	const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
-	const card = new ToolExecutionComponent("write", args, {}, undefined, ui);
-	try {
-		card.updateResult(result, partial);
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-		card.setToolActivityVisible(true);
-		const detailed = Bun.stripANSI(card.render(120).join("\n"));
-		expect(detailed.length).toBeGreaterThan(0);
-		if (marker) expect(detailed).toContain(marker);
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-		card.setToolActivityVisible(false);
-		expect(card.render(120)).toEqual([]);
-	} finally {
-		card.dispose();
-		setChatTranscriptDisplayPreferences(previous);
-	}
+	const call = toolCall({ name: "write", args, result, partial });
+	const detailed = toolCallText(call);
+	expect(detailed.length).toBeGreaterThan(0);
+	if (marker) expect(detailed).toContain(marker);
+	call.setActivityVisible(false);
+	expect(toolCallText(call)).toBe("");
 }
 
 describe("write to file-backed internal URLs", () => {
@@ -63,7 +48,7 @@ describe("write to file-backed internal URLs", () => {
 
 	beforeAll(async () => {
 		await Settings.init({ inMemory: true });
-		await initTheme(false);
+		initTheme();
 	});
 
 	beforeEach(async () => {

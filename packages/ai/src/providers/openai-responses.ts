@@ -39,6 +39,7 @@ import {
 	getOpenAIStreamIdleTimeoutMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
+import { wrapLeakedThinkingStream } from "../utils/leaked-thinking-stream";
 import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { getProxyForUrl } from "../utils/proxy";
@@ -805,6 +806,7 @@ const streamOpenAIResponsesOnce = (
 					// The family affinity key rides only an explicit prompt-cache
 					// identity; the sessionId-derived cache-id fallback never does.
 					promptCacheAffinityKey: options?.promptCacheKey ? promptCacheSessionId : undefined,
+					parentSessionId: options?.parentSessionId,
 				});
 			const premiumRequestsTotal = copilotPremiumRequests;
 			const providerSessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
@@ -1647,7 +1649,7 @@ const streamOpenAIResponsesOnce = (
  */
 export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (model, context, options) => {
 	const attemptContext: ResponsesAttemptContext = { mode: undefined, dropEncryptedReasoning: false };
-	return withReplaySafeStreamRetry(
+	const stream = withReplaySafeStreamRetry(
 		model,
 		context,
 		options,
@@ -1655,6 +1657,12 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (model,
 			streamOpenAIResponsesOnce(attemptModel, attemptContextMessages, attemptOptions, attemptContext),
 		{ retryEmptyCompletion: () => attemptContext.mode === "sse" },
 	);
+	// Kimi, DeepSeek and Qwen write tool calls as text on Responses hosts too
+	// (OpenRouter); heal them live like the chat-completions route does.
+	const toolCallPattern = model.compat.streamMarkupHealingPattern;
+	return toolCallPattern && toolCallPattern !== "thinking"
+		? wrapLeakedThinkingStream(stream, { toolCallPattern })
+		: stream;
 };
 
 function isResponsesPromptCacheableContentBlock(block: unknown): block is ResponseInputContent {

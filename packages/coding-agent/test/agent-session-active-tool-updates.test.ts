@@ -14,7 +14,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme } from "../src/ui/theme/service";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -103,7 +103,7 @@ describe("AgentSession.activeToolExecutionUpdates cache lifecycle", () => {
 	});
 
 	it("keeps the actual early background terminal output and its original expiry across view rebuilds", async () => {
-		await initTheme();
+		initTheme();
 		session = await makeSession();
 		const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
 		const context = createInteractiveModeContext({ session, viewSession: session, settings: session.settings });

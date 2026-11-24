@@ -41,23 +41,16 @@ test("dispatches the ordinary context command and clears its composer text", asy
 	await using f = await fixture();
 	let text = "/context";
 	let contextReports = 0;
-	const editor = {
-		getExpandedText: () => text,
+	const composer = {
 		setText: (value: string) => {
 			text = value;
 		},
-		setCollapsedText: (value: string) => {
-			text = value;
-		},
-		pendingImages: [],
-		pendingImageLinks: [],
-		disableSubmit: false,
 	};
 	const ctx = {
 		session: f.session,
 		sessionManager: f.session.sessionManager,
 		settings: f.settings,
-		editor,
+		composer,
 		handleContextCommand: () => {
 			contextReports++;
 		},

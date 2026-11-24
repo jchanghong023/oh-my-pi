@@ -12,7 +12,7 @@ import {
 	resolveSyscallTarget,
 	splitPathAndSelPreferringLiteral,
 } from "./path-utils";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { ToolError } from "./tool-errors";
 
 const ISOLATED_SEARCH_TOOLS: Record<string, true> = { grep: true, glob: true, ast_grep: true };
 

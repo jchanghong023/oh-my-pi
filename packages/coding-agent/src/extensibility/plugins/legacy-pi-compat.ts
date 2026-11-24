@@ -17,6 +17,7 @@ import {
 	stripWindowsExtendedLengthPathPrefix,
 } from "@oh-my-pi/pi-utils";
 import { registerPluginCacheInvalidator } from "../../discovery/helpers";
+import { getLoadedBabelParser, loadBabelParser } from "../../eval/js/shared/rewrite-imports";
 import { assertBunCanImport } from "../module-path";
 
 const USE_BUNDLED_PI_MODULES = isCompiledBinary() || Boolean(process.env.PI_BUNDLED);
@@ -38,8 +39,6 @@ const USE_BUNDLED_PI_MODULES = isCompiledBinary() || Boolean(process.env.PI_BUND
 // retained package graph.
 const BUNDLED_VIRTUAL_SCHEME = "omp-legacy-pi-bundled:";
 const BUNDLED_VIRTUAL_NAMESPACE = "omp-legacy-pi-bundled";
-const BUNDLED_HOST_NAMESPACE = "omp-legacy-pi-host";
-const BUNDLED_HOST_SCHEME = `${BUNDLED_HOST_NAMESPACE}:`;
 const TYPEBOX_BUNDLED_MODULE_KEY = "typebox";
 
 type BundledModule = Readonly<Record<string, unknown>>;
@@ -52,7 +51,7 @@ interface LegacyPiResolveResult {
 
 interface BundledVirtualResolveResult {
 	path: string;
-	namespace: typeof BUNDLED_VIRTUAL_NAMESPACE | typeof BUNDLED_HOST_NAMESPACE;
+	namespace: typeof BUNDLED_VIRTUAL_NAMESPACE;
 }
 
 interface ExtensionSpecifierReference {
@@ -62,9 +61,7 @@ interface ExtensionSpecifierReference {
 	readonly end: number;
 }
 
-function parseExtensionSource(source: string, importerPath: string): ParseResult {
-	// Installing specifier hooks needs no parser; only a real source rewrite does.
-	const { parse: parseBabel }: typeof BabelParser = require("@babel/parser");
+function parseExtensionSourceWith(parser: typeof BabelParser, source: string, importerPath: string): ParseResult {
 	const extension = path.extname(importerPath).toLowerCase();
 	const plugins: ParserPlugin[] = ["decorators-legacy", "explicitResourceManagement"];
 	if (extension === ".ts" || extension === ".mts" || extension === ".cts" || extension === ".tsx") {
@@ -75,7 +72,7 @@ function parseExtensionSource(source: string, importerPath: string): ParseResult
 	}
 
 	try {
-		return parseBabel(source, {
+		return parser.parse(source, {
 			sourceType: "unambiguous",
 			allowAwaitOutsideFunction: true,
 			allowReturnOutsideFunction: true,
@@ -462,11 +459,7 @@ function staticMemberPropertyName(node: StructuralAstNode): string | null {
 	return null;
 }
 
-function collectExtensionSpecifierReferences(
-	source: string,
-	importerPath: string,
-	ast: ParseResult = parseExtensionSource(source, importerPath),
-): ExtensionSpecifierReference[] {
+function collectExtensionSpecifierReferences(ast: ParseResult): ExtensionSpecifierReference[] {
 	const references: ExtensionSpecifierReference[] = [];
 	const record = (kind: ExtensionSpecifierReference["kind"], literal: unknown): void => {
 		const node = asAstNode(literal);
@@ -697,10 +690,13 @@ function writeExtensionSourceAnalysis(cacheKey: string, analysis: ExtensionSourc
 		});
 }
 
-function getExtensionSourceAnalysis(source: string, importerPath: string): ExtensionSourceAnalysis {
+function getCachedExtensionSourceAnalysis(
+	source: string,
+	importerPath: string,
+): { cacheKey: string; analysis?: ExtensionSourceAnalysis } {
 	const cacheKey = extensionParseCacheKey(source, importerPath);
 	const memoryCached = extensionSourceAnalysisCache.get(cacheKey);
-	if (memoryCached) return memoryCached;
+	if (memoryCached) return { cacheKey, analysis: memoryCached };
 
 	const db = getExtensionParseCacheDb();
 	try {
@@ -713,7 +709,7 @@ function getExtensionSourceAnalysis(source: string, importerPath: string): Exten
 			const cached = parseCachedAnalysis(row);
 			if (cached) {
 				extensionSourceAnalysisCache.set(cacheKey, cached);
-				return cached;
+				return { cacheKey, analysis: cached };
 			}
 		}
 	} catch (error) {
@@ -722,11 +718,14 @@ function getExtensionSourceAnalysis(source: string, importerPath: string): Exten
 		});
 	}
 
-	const ast = parseExtensionSource(source, importerPath);
+	return { cacheKey };
+}
+
+function buildExtensionSourceAnalysis(ast: ParseResult, cacheKey: string): ExtensionSourceAnalysis {
 	const sourceType = ast.program.sourceType;
 	const analysis: ExtensionSourceAnalysis = {
 		sourceType,
-		references: collectExtensionSpecifierReferences(source, importerPath, ast),
+		references: collectExtensionSpecifierReferences(ast),
 		hasCommonJsSyntax:
 			sourceType === "script" &&
 			collectScopedAstNodes(ast, node => node.type === "CallExpression" || node.type === "MemberExpression").some(
@@ -742,6 +741,25 @@ function getExtensionSourceAnalysis(source: string, importerPath: string): Exten
 	extensionSourceAnalysisCache.set(cacheKey, analysis);
 	writeExtensionSourceAnalysis(cacheKey, analysis);
 	return analysis;
+}
+
+async function getExtensionSourceAnalysis(source: string, importerPath: string): Promise<ExtensionSourceAnalysis> {
+	const { cacheKey, analysis } = getCachedExtensionSourceAnalysis(source, importerPath);
+	if (analysis) return analysis;
+	const parser = await loadBabelParser();
+	const ast = parseExtensionSourceWith(parser, source, importerPath);
+	return buildExtensionSourceAnalysis(ast, cacheKey);
+}
+
+function getExtensionSourceAnalysisSync(source: string, importerPath: string): ExtensionSourceAnalysis {
+	const { cacheKey, analysis } = getCachedExtensionSourceAnalysis(source, importerPath);
+	if (analysis) return analysis;
+	const parser = getLoadedBabelParser();
+	if (!parser) {
+		throw new Error(`@babel/parser is not loaded for synchronous extension rewrite: ${importerPath}`);
+	}
+	const ast = parseExtensionSourceWith(parser, source, importerPath);
+	return buildExtensionSourceAnalysis(ast, cacheKey);
 }
 
 function applySpecifierReplacements(
@@ -800,16 +818,14 @@ function toLegacyPiResolveResult(resolvedPath: string): LegacyPiResolveResult {
 }
 
 /** Maps a bundled virtual specifier or registry key to Bun's plugin namespace shape. */
-function resolveBundledVirtualSpecifier(
-	specifier: string,
-	namespace: BundledVirtualResolveResult["namespace"] = BUNDLED_VIRTUAL_NAMESPACE,
-): BundledVirtualResolveResult {
-	const scheme = `${namespace}:`;
-	const registryKey = specifier.startsWith(scheme) ? specifier.slice(scheme.length) : specifier;
+function resolveBundledVirtualSpecifier(specifier: string): BundledVirtualResolveResult {
+	const registryKey = specifier.startsWith(BUNDLED_VIRTUAL_SCHEME)
+		? specifier.slice(BUNDLED_VIRTUAL_SCHEME.length)
+		: specifier;
 	if (!registryKey) {
 		throw new Error("omp:legacy-pi-shim: bundled virtual specifier has no registry key");
 	}
-	return { path: registryKey, namespace };
+	return { path: registryKey, namespace: BUNDLED_VIRTUAL_NAMESPACE };
 }
 
 // Canonical scope for in-process pi packages. Plugins published against any of
@@ -838,6 +854,40 @@ const PI_PACKAGE_NAMES = [
 	"pi-utils",
 ] as const;
 
+/**
+ * Upstream pi-tui under a foreign scope: its component API is gone (`@oh-my-pi/pi-tui` is the
+ * reactive rewrite), so an extension importing it cannot load. {@link assertNoPiTuiImport} names
+ * the replacement instead of aliasing the import onto a package with another API.
+ */
+const PI_TUI_SPECIFIER = new RegExp(
+	`^@(?:${PI_SCOPE_ALIASES.filter(scope => scope !== "oh-my-pi").join("|")})/pi-tui(?:/.*)?$`,
+);
+
+/** Docs section describing the pi-tui → pi-tui migration. */
+export const PI_TUI_MIGRATION_DOC = "docs/extensions.md#migrating-from-pi-tui";
+
+/** An extension module imports upstream pi-tui, whose API omp no longer provides. */
+export class PiTuiImportError extends Error {
+	constructor(
+		readonly specifier: string,
+		readonly importerPath: string,
+	) {
+		super(
+			`${importerPath} imports "${specifier}", which omp no longer provides: its component API was ` +
+				`replaced by the reactive @oh-my-pi/pi-tui. Return pi-tui nodes (JSX from "@oh-my-pi/pi-tui") or a { render(width): string[] } ` +
+				`rows object from renderers, ctx.ui.custom and ctx.ui.setWidget; replace ctx.ui.setEditorComponent ` +
+				`with the ctx.ui.composer hooks; import Theme types from "@oh-my-pi/pi-coding-agent". ` +
+				`See ${PI_TUI_MIGRATION_DOC}.`,
+		);
+		this.name = "PiTuiImportError";
+	}
+}
+
+/** Throw {@link PiTuiImportError} when `specifier` names upstream pi-tui. */
+function assertNoPiTuiImport(specifier: string, importerPath: string): void {
+	if (PI_TUI_SPECIFIER.test(specifier)) throw new PiTuiImportError(specifier, importerPath);
+}
+
 const PI_SCOPE_ALTERNATION = PI_SCOPE_ALIASES.join("|");
 const PI_PACKAGE_ALTERNATION = PI_PACKAGE_NAMES.join("|");
 
@@ -851,6 +901,14 @@ const PI_SUBPATH_REMAPS: ReadonlyMap<string, string> = new Map<string, string>([
 	["pi-ai/utils/oauth", "pi-ai/oauth"],
 	["pi-ai/utils/oauth/", "pi-ai/oauth/"],
 	["pi-ai/compat", "pi-ai"],
+	// Helpers the old pi-tui carried that are no part of the UI: they kept their exports and moved.
+	["pi-tui/thinking", "pi-coding-agent/thinking/levels"],
+	["pi-tui/fuzzy", "pi-coding-agent/utils/fuzzy"],
+	["pi-tui/lang-from-path", "pi-coding-agent/utils/lang-from-path"],
+	["pi-tui/ttyid", "pi-coding-agent/utils/ttyid"],
+	["pi-tui/vim", "pi-coding-agent/ui/composer/vim"],
+	["pi-tui/loop-sampler", "pi-tui/diag/loop-sampler"],
+	["pi-tui/loop-watchdog", "pi-tui/diag/loop-watchdog"],
 ]);
 
 function remapLegacyPiSubpath(rest: string): string {
@@ -997,16 +1055,9 @@ const LEGACY_PI_CODING_AGENT_SHIM_PATH = USE_BUNDLED_PI_MODULES
 	? bundledModuleVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-coding-agent`)
 	: sourceShimPath("legacy-pi-coding-agent-shim.ts");
 
-// Legacy pi-tui exported `decodeKittyPrintable` from its package root. The
-// canonical TUI replaced it with the broader `decodePrintableKey`; route only
-// legacy root imports through a sibling shim that preserves the old name.
-const LEGACY_PI_TUI_SHIM_PATH = USE_BUNDLED_PI_MODULES
-	? bundledModuleVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-tui`)
-	: sourceShimPath("legacy-pi-tui-shim.ts");
-
-// Package-root overrides. Shim entries (`pi-ai`, `pi-coding-agent`, `pi-tui`)
+// Package-root overrides. Shim entries (`pi-ai`, `pi-coding-agent`)
 // always replace the canonical surface so legacy helpers stay reachable. The
-// other bundled host packages (`pi-agent-core`, `pi-natives`, `pi-utils`) are
+// other bundled host packages (`pi-agent-core`, `pi-natives`, `pi-tui`, `pi-utils`) are
 // added in compiled binaries and npm bundles to route extensions onto the
 // in-process module instance — in dev / source-link / source SDK mode the
 // canonical specifier resolves cleanly through `Bun.resolveSync`; hardcoding a
@@ -1055,7 +1106,6 @@ export function __buildLegacyPiPackageRootOverrides(
 	const candidates: Record<string, string> = {
 		[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
 		[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
-		[`${CANONICAL_PI_SCOPE}/pi-tui`]: LEGACY_PI_TUI_SHIM_PATH,
 	};
 	if (useBundledModules) {
 		for (const key of bundledModuleKeys) {
@@ -1166,9 +1216,10 @@ async function rewriteLegacyExtensionSource(
 	// Compiled mode completes the override map from the build-supplied module
 	// keys on first use; every rewrite path must see the full map.
 	await ensureLegacyPiOverridesReady();
-	const references = getExtensionSourceAnalysis(source, importerPath).references;
+	const references = (await getExtensionSourceAnalysis(source, importerPath)).references;
 	const replacements: Array<ExtensionSpecifierReference & { replacement: string }> = [];
 	for (const reference of references) {
+		assertNoPiTuiImport(reference.specifier, importerPath);
 		if (reference.kind !== "import") continue;
 
 		const specifier = reference.specifier;
@@ -1992,7 +2043,7 @@ async function collectExtensionSpecifierReplacements(
 ): Promise<Array<ExtensionSpecifierReference & { replacement: string }>> {
 	const { references } = sources
 		? await sources.analyze(importerPath)
-		: getExtensionSourceAnalysis(source, importerPath);
+		: await getExtensionSourceAnalysis(source, importerPath);
 	const resolvedSpecifierTargets = new Map<string, string>();
 	const replacements: Array<ExtensionSpecifierReference & { replacement: string }> = [];
 	for (const reference of references) {
@@ -2017,6 +2068,11 @@ async function collectExtensionSpecifierReplacements(
 		resolvedSpecifierTargets.set(`${reference.kind}\0${reference.specifier}`, replacement);
 		replacements.push({ ...reference, replacement });
 	}
+	if (resolvedSpecifierTargets.size > 0) {
+		// Preload `@babel/parser` before publishing synchronous specifier targets so
+		// CJS graph hydration can always re-parse if the file changes on disk later.
+		await loadBabelParser();
+	}
 	extensionSynchronousSpecifierTargets.set(importerPath, resolvedSpecifierTargets);
 	return replacements;
 }
@@ -2027,7 +2083,7 @@ function rewriteExtensionSpecifiersFromCache(source: string, importerPath: strin
 		return source;
 	}
 	const replacements: Array<ExtensionSpecifierReference & { replacement: string }> = [];
-	for (const reference of getExtensionSourceAnalysis(source, importerPath).references) {
+	for (const reference of getExtensionSourceAnalysisSync(source, importerPath).references) {
 		const replacement = resolvedSpecifierTargets.get(`${reference.kind}\0${reference.specifier}`);
 		if (replacement) {
 			replacements.push({ ...reference, replacement });
@@ -2058,7 +2114,7 @@ async function moduleRequiresNativeAddonUncached(modulePath: string): Promise<bo
 	} catch {
 		return false;
 	}
-	for (const reference of getExtensionSourceAnalysis(source, modulePath).references) {
+	for (const reference of (await getExtensionSourceAnalysis(source, modulePath)).references) {
 		if (reference.kind === "require" && (await resolveExtensionNativeAddon(reference.specifier, modulePath))) {
 			return true;
 		}
@@ -2324,6 +2380,7 @@ async function collectExtensionModules(entryRealPath: string): Promise<Extension
 		const references = analysis.references;
 		for (const reference of references) {
 			const specifier = reference.specifier;
+			assertNoPiTuiImport(specifier, file);
 			try {
 				let resolved: string | null = null;
 				let nextCacheBustResolvedImports = cacheBustResolvedImports;
@@ -2897,41 +2954,13 @@ export function installLegacyPiSpecifierShim(): void {
 			build.onResolve({ filter: /^omp-legacy-pi-bundled:.+$/, namespace: "file" }, args =>
 				resolveBundledVirtualSpecifier(args.path),
 			);
-			build.onResolve({ filter: /^omp-legacy-pi-host:.+$/, namespace: "file" }, args =>
-				resolveBundledVirtualSpecifier(args.path, BUNDLED_HOST_NAMESPACE),
-			);
 			build.onResolve({ filter: /.*/, namespace: BUNDLED_VIRTUAL_NAMESPACE }, args =>
-				resolveBundledVirtualSpecifier(
-					args.path,
-					args.path.startsWith(BUNDLED_HOST_SCHEME) ? BUNDLED_HOST_NAMESPACE : BUNDLED_VIRTUAL_NAMESPACE,
-				),
+				resolveBundledVirtualSpecifier(args.path),
 			);
-			build.onResolve({ filter: /.*/, namespace: BUNDLED_HOST_NAMESPACE }, args =>
-				resolveBundledVirtualSpecifier(args.path, BUNDLED_HOST_NAMESPACE),
-			);
-			build.onLoad({ filter: /.*/, namespace: BUNDLED_HOST_NAMESPACE }, async args => ({
+			build.onLoad({ filter: /.*/, namespace: BUNDLED_VIRTUAL_NAMESPACE }, async args => ({
 				exports: await loadBundledModule(args.path),
 				loader: "object",
 			}));
-			build.onLoad({ filter: /.*/, namespace: BUNDLED_VIRTUAL_NAMESPACE }, async args => {
-				const module = await loadBundledModule(args.path);
-				if (!Object.hasOwn(module, "theme") || typeof module.bindTheme !== "function") {
-					return { exports: module, loader: "object" };
-				}
-				// Object modules snapshot values. Keep theme as a genuine ESM
-				// binding, mirrored at assignment time before UI notifications.
-				const host = JSON.stringify(`${BUNDLED_HOST_SCHEME}${args.path}`);
-				return {
-					contents: [
-						`export * from ${host};`,
-						`import { bindTheme } from ${host};`,
-						"export let theme;",
-						"bindTheme(value => { theme = value; });",
-						...(Object.hasOwn(module, "default") ? [`export { default } from ${host};`] : []),
-					].join("\n"),
-					loader: "js",
-				};
-			});
 		},
 	});
 }

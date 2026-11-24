@@ -1,13 +1,12 @@
 import { clearSubmittedText, runWithDetachedDraft } from "./helpers/draft";
 import * as path from "node:path";
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
-import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { prompt } from "@oh-my-pi/pi-utils";
 import {
 	formatModelString,
 	getModelMatchPreferences,
-	resolveCliModel,
 	type ResolveCliModelResult,
+	resolveCliModel,
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import {
@@ -17,8 +16,8 @@ import {
 	getModelPresetNames,
 	isCleanModelPresetSwitch,
 	isValidModelPresetName,
-	modelPresetSavedMessage,
 	type ModelPresetSession,
+	modelPresetSavedMessage,
 	saveModelPreset,
 } from "../config/model-presets";
 import { describeLoopCondition } from "../modes/loop-condition";
@@ -26,18 +25,17 @@ import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import type { InteractiveModeContext } from "../modes/types";
 import ratchetKickoffPrompt from "../prompts/ratchet-kickoff.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
-import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
+import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata } from "../thinking/levels";
 import { noThinkingMessage, resolveThinkingArgument } from "./helpers/effort";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
 import { handleSecurityCommand } from "./helpers/security";
 import type { SlashCommandSpec } from "./types";
-
 import {
-	cfgComputerTakeover,
 	cfgComputerDisplay,
 	cfgComputerEnabled,
 	cfgComputerMaxHeight,
 	cfgComputerMaxWidth,
+	cfgComputerTakeover,
 	cfgRatchetEnabled,
 } from "../tools/settings";
 import { cfgPrewalkFrom, cfgPrewalkInto, cfgSkillful } from "../session/settings";
@@ -46,8 +44,9 @@ import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgPlanEnabled } from "../plan-mode/settings";
+import { formatKeyHint } from "../ui/keys/hints";
 import { readTodoLoop } from "../todoloop/parser";
-import { TodoLoopPresentation, TodoLoopStatusBlock } from "../todoloop/presentation";
+import { TodoLoopPresentation, todoLoopStatusView } from "../todoloop/presentation";
 import type { TodoLoopState } from "../todoloop/runner";
 import { parseCommandArgs } from "../utils/command-args";
 
@@ -68,8 +67,7 @@ export const workspaceCommand = {
 } satisfies SlashCommandSpec;
 
 export function refreshStatusLine(ctx: InteractiveModeContext): void {
-	ctx.statusLine.invalidate();
-	ctx.ui.requestRender();
+	ctx.statusLine.refresh();
 }
 
 /**
@@ -110,8 +108,16 @@ const FAST_USAGE = "Usage: /fast [on|ultra|off|status]";
 function runFastCommand(arg: string, session: AgentSession): string | undefined {
 	switch (arg) {
 		case "":
-		case "toggle":
-			return `Fast mode ${session.toggleFastMode() ? "enabled" : "disabled"}.`;
+		case "toggle": {
+			// toggleFastMode() cannot distinguish "toggled off" from "refused":
+			// route through setFastMode so a tier-less model reports
+			// unavailability instead of claiming success.
+			if (session.isFastModeEnabled()) {
+				session.setFastMode(false);
+				return "Fast mode disabled.";
+			}
+			return session.setFastMode(true) ? "Fast mode enabled." : "Fast mode is unavailable for the current model.";
+		}
 		case "on":
 			return session.setFastMode(true) ? "Fast mode enabled." : "Fast mode is unavailable for the current model.";
 		case "ultra":
@@ -120,8 +126,7 @@ function runFastCommand(arg: string, session: AgentSession): string | undefined 
 				? "Ultrafast mode enabled."
 				: "Ultrafast is unavailable for the current model.";
 		case "off":
-			session.setFastMode(false);
-			return "Fast mode disabled.";
+			return session.setFastMode(false) ? "Fast mode disabled." : "Fast mode is unavailable for the current model.";
 		case "status":
 			return `Fast mode is ${formatFastModeStatus(session)}.`;
 		default:
@@ -304,7 +309,9 @@ const GOAL_MODE_SLASH_COMMAND: SlashCommandSpec = {
 	},
 	handleTui: async (command, runtime) => {
 		await runWithDetachedDraft(command, runtime, () =>
-			runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input),
+			runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input, {
+				streamingBehavior: runtime.followUp ? "followUp" : "steer",
+			}),
 		);
 	},
 };
@@ -353,35 +360,29 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				try {
 					const snapshot = await readTodoLoop(filePath);
 					if (!isOwner()) return;
-					ctx.present(
-						new TodoLoopStatusBlock(
-							{
-								phase: "checking",
-								filePath,
-								completed: snapshot.tasks.filter(task => task.done).length,
-								total: snapshot.tasks.length,
-								completedGroups: snapshot.groups.filter(group => group.tasks.every(task => task.done)).length,
-								totalGroups: snapshot.groups.length,
-								attempt: 0,
-							},
-							snapshot,
-						),
-					);
-					ctx.ui.requestRender();
+					const state: TodoLoopState = {
+						phase: "checking",
+						filePath,
+						completed: snapshot.tasks.filter(task => task.done).length,
+						total: snapshot.tasks.length,
+						completedGroups: snapshot.groups.filter(group => group.tasks.every(task => task.done)).length,
+						totalGroups: snapshot.groups.length,
+						attempt: 0,
+					};
+					ctx.present(() => todoLoopStatusView(() => state, snapshot));
 				} catch (error) {
-					if (isOwner())
-						ctx.present(
-							new TodoLoopStatusBlock({
-								phase: "file_error",
-								filePath,
-								completed: 0,
-								total: 0,
-								completedGroups: 0,
-								totalGroups: 0,
-								attempt: 0,
-								reason: errorMessage(error),
-							}),
-						);
+					if (!isOwner()) return;
+					const state: TodoLoopState = {
+						phase: "file_error",
+						filePath,
+						completed: 0,
+						total: 0,
+						completedGroups: 0,
+						totalGroups: 0,
+						attempt: 0,
+						reason: errorMessage(error),
+					};
+					ctx.present(() => todoLoopStatusView(() => state));
 				}
 				return;
 			}
@@ -412,18 +413,14 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				.runTodoLoop({
 					filePath,
 					signal: controller.signal,
-					onState: state => {
-						if (isOwner()) presentation.onState(state);
-					},
-					onAttempt: event => {
-						if (isOwner()) presentation.onAttempt(event);
-					},
+					onState: state => presentation.onState(state),
+					onAttempt: event => presentation.onAttempt(event),
 				})
 				.then(state => {
-					if (isOwner()) presentation.onState(state);
+					presentation.onState(state);
 				})
 				.catch(error => {
-					if (isOwner()) presentation.onState({ ...initial, phase: "failed", reason: errorMessage(error) });
+					presentation.onState({ ...initial, phase: "failed", reason: errorMessage(error) });
 				})
 				.finally(() => {
 					presentation.finish();
@@ -565,7 +562,10 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			"Manage a persistent goal with unattended orchestration saved in history and restored after compaction",
 		handleTui: async (command, runtime) => {
 			await runWithDetachedDraft(command, runtime, () =>
-				runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input, { autoOrchestrate: true }),
+				runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input, {
+					autoOrchestrate: true,
+					streamingBehavior: runtime.followUp ? "followUp" : "steer",
+				}),
 			);
 		},
 	},
@@ -1038,12 +1038,11 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			}
 			const outcome = await runPresetsCommand(args, ctx.settings, ctx.session);
 			if (outcome.switched) {
-				ctx.statusLine.invalidate();
+				ctx.statusLine.refresh();
 				ctx.updateEditorBorderColor();
 			}
 			if (outcome.failed || outcome.usage) ctx.showWarning(outcome.message);
 			else ctx.showStatus(outcome.message);
-			ctx.ui.requestRender();
 		},
 	},
 	{

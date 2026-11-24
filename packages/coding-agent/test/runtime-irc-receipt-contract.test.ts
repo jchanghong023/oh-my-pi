@@ -7,7 +7,7 @@ import type { AgentSession } from "../src/session/agent-session";
 import { SessionManager } from "../src/session/session-manager";
 import { WriteTool } from "../src/tools/write";
 import type { ToolSession } from "../src/tools";
-import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
+import type { IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/irc-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 afterEach(() => {

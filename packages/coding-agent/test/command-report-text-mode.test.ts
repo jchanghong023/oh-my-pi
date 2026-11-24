@@ -7,16 +7,16 @@ import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mod
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Text } from "@oh-my-pi/pi-tui";
-import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { jsx } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { VirtualTerminal } from "../../tui/test/virtual-terminal";
+import { initTheme } from "../src/ui/theme/service";
+import { createModeTerminal, type ModeTerminal } from "./helpers/mode-terminal";
 
 const ROWS = 32;
 
-function screen(term: VirtualTerminal): string[] {
-	return term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+/** The viewport row showing `text` (blocks are indented), or -1. */
+function rowOf(screen: string[], text: string): number {
+	return screen.findIndex(row => row.trim() === text);
 }
 
 describe("text-mode command reports on a real terminal core", () => {
@@ -24,7 +24,7 @@ describe("text-mode command reports on a real terminal core", () => {
 	let authStorage: AuthStorage;
 	let session: AgentSession;
 	let mode: InteractiveMode;
-	let term: VirtualTerminal;
+	let term: ModeTerminal;
 
 	beforeAll(() => {
 		initTheme();
@@ -44,13 +44,14 @@ describe("text-mode command reports on a real terminal core", () => {
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
-		term = new VirtualTerminal(120, ROWS);
-		const composer = new Composer({ terminal: term });
-		mode = new InteractiveMode(session, "test", () => {}, undefined, undefined, undefined, composer);
+		term = createModeTerminal({ columns: 120, rows: ROWS });
+		mode = new InteractiveMode(session, "test", () => {}, undefined, undefined, undefined, term.frame);
 	});
 
 	afterEach(async () => {
 		mode?.stop();
+		await mode?.shell.stop();
+		term?.dispose();
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
@@ -60,77 +61,85 @@ describe("text-mode command reports on a real terminal core", () => {
 	async function mountTranscript(rows: number): Promise<string> {
 		await mode.init({ suppressWelcomeIntro: true });
 		void mode.getUserInput();
-		await term.waitForRender();
-		for (let i = 0; i < rows; i++) mode.chatContainer.addChild(new Text(`TRANSCRIPT ${i}`, 0, 0));
-		mode.ui.requestRender();
+		await term.settle();
+		for (let i = 0; i < rows; i++) mode.present(() => jsx("text", { text: `TRANSCRIPT ${i}` }));
 		const last = `TRANSCRIPT ${rows - 1}`;
-		await term.waitForRender(() => screen(term).includes(last));
+		await term.waitFor(screen => rowOf(screen, last) !== -1);
+		await term.settle();
 		return last;
 	}
 
-	async function prepareCommand(command: string): Promise<void> {
-		term.sendInput(command);
-		await term.waitForRender(() => screen(term).some(row => row.includes(command)));
-		if (mode.editor.isShowingAutocomplete()) {
-			term.sendInput("\x1b");
-			await term.waitForRender(() => !mode.editor.isShowingAutocomplete());
-		}
-	}
-
-	async function runCommand(command: string, shown: string, last: string): Promise<number> {
-		await prepareCommand(command);
-		const lastRow = screen(term).indexOf(last);
-		expect(lastRow).toBeGreaterThanOrEqual(0);
-		term.sendInput("\r");
-		await term.waitForRender(() => screen(term).some(row => row.includes(shown)));
-		return lastRow;
+	async function runCommand(command: string, shown: string): Promise<void> {
+		term.type(command);
+		await term.waitFor(screen => screen.some(row => row.includes(command)));
+		term.press("enter");
+		await term.waitFor(screen => screen.some(row => row.includes(shown)));
 	}
 
 	it.each([5, 40])(
 		"opens `/changelog full` as a scrollable full-screen page and Esc returns to the untouched screen (%i transcript rows)",
 		async rows => {
 			const last = await mountTranscript(rows);
-			await prepareCommand("/changelog full");
-			// Capture the normal buffer at the actual alternate-screen boundary,
-			// after typing and completion have had their own opportunity to reflow it.
-			let beforeOverlay: string[] | undefined;
-			let restoredScreen: string[] | undefined;
-			const write = term.write.bind(term);
-			term.write = data => {
-				if (data.includes("\x1b[?1049h")) beforeOverlay = screen(term);
-				write(data);
-				if (data.includes("\x1b[?1049l")) restoredScreen = screen(term);
-			};
-			term.sendInput("\r");
-			await term.waitForRender(() => screen(term).some(row => row.includes("Full Changelog")));
-			expect(screen(term).some(row => row.includes(last))).toBe(false);
-			const page = screen(term).join("\n");
-			term.sendInput("\x1b[6~");
-			await term.waitForRender(() => screen(term).join("\n") !== page);
-			expect(screen(term).some(row => row.includes("Full Changelog"))).toBe(true);
+			const before = rowOf(term.screen(), last);
+			await runCommand("/changelog full", "Full Changelog");
+			expect(term.screen().some(row => row.includes("PgUp/PgDn scroll"))).toBe(true);
+			expect(rowOf(term.screen(), last)).toBe(-1);
+			const page = term.screen().join("\n");
+			term.press("pagedown");
+			await term.waitFor(screen => screen.join("\n") !== page);
+			expect(term.screen().some(row => row.includes("Full Changelog"))).toBe(true);
 
-			term.sendInput("\x1b");
-			await term.waitForRender(() => !screen(term).some(row => row.includes("Full Changelog")));
-			expect(beforeOverlay).toBeDefined();
-			expect(restoredScreen).toEqual(beforeOverlay);
-			expect(beforeOverlay!.indexOf(last)).toBeGreaterThanOrEqual(0);
-			expect(screen(term).indexOf(last)).toBe(beforeOverlay!.indexOf(last));
+			term.press("escape");
+			await term.waitFor(screen => !screen.some(row => row.includes("Full Changelog")));
+			expect(rowOf(term.screen(), last)).toBe(before);
 			// Nothing of the page reached the main screen, and no transcript row was duplicated.
-			const buffer = term.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
-			expect(buffer.filter(row => row === last)).toHaveLength(1);
+			const buffer = [...term.scrollback(), ...term.screen()];
+			expect(buffer.filter(row => row.trim() === last)).toHaveLength(1);
 			expect(buffer.some(row => row.includes("Full Changelog"))).toBe(false);
 		},
 	);
 
 	it("shows a report that fits above the editor like /btw and Esc takes it away", async () => {
 		const last = await mountTranscript(40);
-		const lastRow = await runCommand("/tools", "Available Tools", last);
-		// Inline: the transcript stays on the main screen, only covered from below.
-		expect(screen(term).some(row => row.startsWith("TRANSCRIPT"))).toBe(true);
+		// Typing the command opens the autocomplete menu, which pushes transcript rows into history
+		// for good; open and close it once so the baseline already has that shift.
+		term.type("/tools");
+		await term.waitFor(screen => screen.some(row => row.includes("Open debug tools selector")));
+		for (let i = 0; i < "/tools".length; i++) term.press("backspace");
+		await term.waitFor(screen => !screen.some(row => row.includes("Open debug tools selector")));
+		await term.settle();
+		const lastRow = rowOf(term.screen(), last);
+		await runCommand("/tools", "Available Tools");
+		expect(term.screen().some(row => row.includes("to close"))).toBe(true);
+		// Inline: on the main screen, covering the live transcript rows; none of it reaches history.
+		expect(term.engine.isMainScreen).toBe(true);
+		expect(term.scrollback().some(row => row.includes("Available Tools"))).toBe(false);
 
-		term.sendInput("\x1b");
-		await term.waitForRender(() => !screen(term).some(row => row.includes("Available Tools")));
-		expect(screen(term).indexOf(last)).toBe(lastRow);
+		term.press("escape");
+		await term.waitFor(screen => !screen.some(row => row.includes("Available Tools")));
+		expect(rowOf(term.screen(), last)).toBe(lastRow);
+	});
+
+	it.each([
+		[3, "leaves it in place"],
+		[40, "clips its top rows"],
+	])("draws a docked report under the transcript rows that still fit (%i transcript rows: %s)", async rows => {
+		const last = await mountTranscript(rows);
+		const before = term.screen();
+		const scrolled = term.scrollback().length;
+		await runCommand("/ssh help", "SSH Host Management");
+		const screen = term.screen();
+		const reportTop = screen.findIndex(row => row.includes("SSH Host Management"));
+		// The transcript's tail stays on screen, the report right under it.
+		expect(rowOf(screen, last)).toBe(reportTop - 1);
+		if (rows === 3) expect(rowOf(screen, last)).toBe(rowOf(before, last));
+		else expect(rowOf(screen, "TRANSCRIPT 38")).toBe(reportTop - 3);
+		// The rows it covers are not moved into history: closing it brings the screen back as it was.
+		expect(term.scrollback()).toHaveLength(scrolled);
+
+		term.press("escape");
+		await term.waitFor(screen => !screen.some(row => row.includes("SSH Host Management")));
+		expect(term.screen()).toEqual(before);
 	});
 
 	it.each([
@@ -140,14 +149,15 @@ describe("text-mode command reports on a real terminal core", () => {
 		["/ssh list", "SSH Hosts"],
 	])("`%s` reports outside the transcript and Esc takes it away", async (command, title) => {
 		const last = await mountTranscript(40);
-		const blocks = mode.chatContainer.children.length;
-		const lastRow = await runCommand(command, title, last);
-		expect(mode.chatContainer.children).toHaveLength(blocks);
+		const lastRow = rowOf(term.screen(), last);
+		const blocks = mode.shell.transcript.blocks().length;
+		await runCommand(command, title);
+		expect(mode.shell.transcript.blocks()).toHaveLength(blocks);
 
-		term.sendInput("\x1b");
-		await term.waitForRender(() => !screen(term).some(row => row.includes(title)));
-		expect(screen(term).indexOf(last)).toBe(lastRow);
-		const buffer = term.getScrollBuffer().map(row => Bun.stripANSI(row));
+		term.press("escape");
+		await term.waitFor(screen => !screen.some(row => row.includes(title)));
+		expect(rowOf(term.screen(), last)).toBe(lastRow);
+		const buffer = [...term.scrollback(), ...term.screen()];
 		expect(buffer.some(row => row.includes(title))).toBe(false);
 	});
 });

@@ -26,7 +26,6 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { type FileLockHandle, tryAcquireFileLock, withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { $ } from "bun";
 import { Settings, settings } from "../config/settings";
-import { theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	isTimeoutError,
 	isUnsupportedProxyError,
@@ -54,6 +53,7 @@ import {
 } from "./npm-registry";
 
 import { cfgUpdateChannel } from "../modes/settings";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 
 const UPDATE_REPOSITORY = Bun.env.PI_UPDATE_REPOSITORY ?? process.env.PI_UPDATE_REPOSITORY ?? "jchanghong023/oh-my-pi";
 const GITHUB_API = "https://api.github.com";
@@ -1905,7 +1905,7 @@ export async function verifyInstalledVersion(expectedVersion: string): Promise<I
 }
 
 function printVerifiedVersion(expectedVersion: string, binaryPath?: string): void {
-	const icon = theme?.status?.success ?? "✔";
+	const icon = currentTheme().symbols.symbol("status.success");
 	const location = binaryPath ? ` at ${binaryPath}` : "";
 	console.log(chalk.green(`\n${icon} Updated to ${expectedVersion}${location}`));
 }
@@ -3378,7 +3378,7 @@ function acquireInstallLock(): FileLockHandle {
 function announceOffer(version: string, request: UpdateRequest): boolean {
 	const comparison = compareVersions(version, VERSION);
 	if (comparison <= 0 && !request.force && !request.isChannelSwitch) {
-		const icon = theme?.status?.success ?? "✔";
+		const icon = currentTheme().symbols.symbol("status.success");
 		console.log(chalk.green(`${icon} Already up to date`));
 		return false;
 	}
@@ -3640,7 +3640,7 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 
 				if (comparison <= 0 && !opts.force && !isChannelSwitch) {
 					fields.reason = "already_up_to_date";
-					const icon = theme?.status?.success ?? "✔";
+					const icon = currentTheme().symbols.symbol("status.success");
 					console.log(chalk.green(`${icon} Already up to date`));
 					return { kind: "current" };
 				}

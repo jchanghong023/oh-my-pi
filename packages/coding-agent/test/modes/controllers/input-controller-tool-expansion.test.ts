@@ -1,127 +1,99 @@
 import { describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings/keybindings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { cfgDisplayMode, cfgImagesBlockImages, cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgHideThinkingBlock } from "@oh-my-pi/pi-coding-agent/session/settings";
 
 describe("InputController tool output expansion", () => {
-	it("expands children and forces a full repaint so every live block re-renders", () => {
-		const settings = Settings.isolated();
-		cfgDisplayMode.set(settings, "detailed");
-		const expandable = { setExpanded: vi.fn() };
-		const inert = { render: vi.fn(() => []) };
-		const pendingShell = { setExpanded: vi.fn() };
-		const requestRender = vi.fn();
+	it("flips the reactive expansion flag", () => {
 		const showStatus = vi.fn();
 		const ctx = {
-			settings,
+			settings: Settings.isolated({ "display.mode": "detailed" }),
 			toolOutputExpanded: false,
-			chatContainer: { children: [expandable, inert] },
-			pendingShellContainer: { children: [pendingShell] },
-			ui: { requestRender },
+			hideToolActivity: false,
 			showStatus,
 		} as unknown as InteractiveModeContext;
 
 		new InputController(ctx).toggleToolOutputExpansion();
 
 		expect(ctx.toolOutputExpanded).toBe(true);
-		expect(expandable.setExpanded).toHaveBeenCalledWith(true);
-		expect(pendingShell.setExpanded).toHaveBeenCalledWith(true);
-		// Expansion mutates every live block; the forced repaint re-renders them
-		// at their new heights in the same frame.
-		expect(requestRender).toHaveBeenCalledTimes(1);
-		expect(requestRender).toHaveBeenCalledWith(true);
+		expect(showStatus).toHaveBeenCalledWith("Tool output expansion: enabled");
 	});
 
 	it("does not expand hidden tool activity and explains why", () => {
-		const settings = Settings.isolated();
-		cfgDisplayMode.set(settings, "clean");
-		const expandable = { setExpanded: vi.fn() };
-		const requestRender = vi.fn();
 		const showStatus = vi.fn();
 		const ctx = {
-			settings,
+			settings: Settings.isolated({ "display.mode": "clean" }),
 			hideToolActivity: true,
 			toolOutputExpanded: false,
-			chatContainer: { children: [expandable] },
-			keybindings: { getKeys: vi.fn(() => ["alt+h"]) },
+			keybindings: KeybindingsManager.inMemory(),
 			showStatus,
-			ui: { requestRender },
 		} as unknown as InteractiveModeContext;
 
 		new InputController(ctx).toggleToolOutputExpansion();
 
 		expect(ctx.toolOutputExpanded).toBe(false);
-		expect(expandable.setExpanded).not.toHaveBeenCalled();
-		expect(requestRender).not.toHaveBeenCalled();
 		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("/display"));
 	});
 
-	it("does nothing in compact when there is no TodoLoop output to expand", () => {
-		const settings = Settings.isolated();
-		cfgDisplayMode.set(settings, "compact");
-		const expandable = { setExpanded: vi.fn() };
-		const requestRender = vi.fn();
-		const showStatus = vi.fn();
+	it("routes Ctrl+O to compact details without expanding detailed transcript blocks", () => {
+		const toggleCompactDetails = vi.fn();
 		const ctx = {
-			settings,
+			settings: Settings.isolated({ "display.mode": "compact" }),
 			hideToolActivity: true,
 			toolOutputExpanded: false,
-			chatContainer: { children: [expandable] },
-			ui: { requestRender },
-			showStatus,
+			toggleCompactDetails,
+			showStatus: vi.fn(),
 		} as unknown as InteractiveModeContext;
 
 		new InputController(ctx).toggleToolOutputExpansion();
 
+		expect(toggleCompactDetails).toHaveBeenCalledTimes(1);
 		expect(ctx.toolOutputExpanded).toBe(false);
-		expect(expandable.setExpanded).not.toHaveBeenCalled();
-		expect(requestRender).not.toHaveBeenCalled();
-		expect(showStatus).not.toHaveBeenCalled();
+		expect(ctx.showStatus).not.toHaveBeenCalled();
 	});
 });
 
 describe("InputController tool activity visibility", () => {
-	it("cycles the same clean, compact and detailed settings as /display", async () => {
-		const settings = Settings.isolated({
-			"terminal.showImages": false,
-			"images.autoResize": false,
-			"images.blockImages": true,
-		});
+	it("cycles the shared display preset without changing independent image settings", async () => {
+		const settings = Settings.isolated({ "terminal.showImages": false, "images.blockImages": true });
+		cfgDisplayMode.set(settings, "detailed");
+		const showStatus = vi.fn();
 		const showWarning = vi.fn();
 		const controller = new InputController({
 			settings,
-			showStatus: vi.fn(),
+			showStatus,
 			showWarning,
 		} as unknown as InteractiveModeContext);
-		const toggle = async () => {
+
+		for (const display of ["clean", "compact", "detailed"] as const) {
 			controller.toggleToolActivityVisibility();
-			await Promise.resolve(); // The preset reports after the settings effect.
-		};
-		cfgDisplayMode.set(settings, "compact");
-		const imagePreferences = () => ({
-			showImages: lookup("terminal.showImages")?.get(settings),
-			autoResize: lookup("images.autoResize")?.get(settings),
-			blockImages: lookup("images.blockImages")?.get(settings),
-		});
-		const independentImages = { showImages: false, autoResize: false, blockImages: true };
-
-		await toggle();
-		expect(cfgDisplayMode.get(settings)).toBe("detailed");
-		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
-		expect(imagePreferences()).toEqual(independentImages);
-
-		await toggle();
-		expect(cfgDisplayMode.get(settings)).toBe("clean");
-		expect(cfgHideThinkingBlock.get(settings)).toBe(true);
-		expect(imagePreferences()).toEqual(independentImages);
-
-		await toggle();
-		expect(cfgDisplayMode.get(settings)).toBe("compact");
-		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
-		expect(imagePreferences()).toEqual(independentImages);
+			await Promise.resolve();
+			expect(cfgDisplayMode.get(settings)).toBe(display);
+			expect(cfgHideThinkingBlock.get(settings)).toBe(display === "clean");
+			expect(showStatus).toHaveBeenLastCalledWith(expect.stringContaining(`（${display}）`));
+		}
 		expect(showWarning).not.toHaveBeenCalled();
+		expect(cfgTerminalShowImages.get(settings)).toBe(false);
+		expect(cfgImagesBlockImages.get(settings)).toBe(true);
+	});
+
+	it("reports a setting override instead of claiming the shortcut applied it", async () => {
+		const settings = Settings.isolated({ "display.mode": "detailed" });
+		const showStatus = vi.fn();
+		const showWarning = vi.fn();
+
+		new InputController({
+			settings,
+			showStatus,
+			showWarning,
+		} as unknown as InteractiveModeContext).toggleToolActivityVisibility();
+		await Promise.resolve();
+
+		expect(cfgDisplayMode.get(settings)).toBe("detailed");
+		expect(showStatus).not.toHaveBeenCalled();
+		expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("display.mode"));
 	});
 });

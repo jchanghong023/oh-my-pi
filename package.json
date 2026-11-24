@@ -88,6 +88,7 @@
 		"test": "bun scripts/ci-test-ts.ts local",
 		"test:ts": "bun scripts/ci-test-ts.ts local-ts",
 		"test:scripts": "bun scripts/test-report-bun.ts scripts",
+		"test:tern": "OMP_REQUIRE_TERN=1 bun test packages/coding-agent/test/tern-interactions.test.ts",
 		"test:rs": "bun scripts/run-rs-task.ts test:rs",
 		"sdk:test:go": "bun scripts/sdk-test-go.ts",
 		"sdk:test:go:smoke": "bun scripts/sdk-test-go.ts --smoke",

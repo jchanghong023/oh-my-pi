@@ -1,316 +1,116 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+/**
+ * Status-line segments under pressure: the session name's accent follows the
+ * `sessionAccent` setting, the path segment shrinks with its `maxLength`
+ * option, and a bar too narrow for every segment drops the model before the
+ * working directory.
+ */
+import { afterAll, beforeAll, describe, expect, it, setSystemTime } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
-import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
-import { renderComposerShapePreview } from "@oh-my-pi/pi-tui/overlays/composer-shape-preview";
-import type { SegmentContext } from "@oh-my-pi/pi-tui/status-line/segments";
-import { renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
-import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import { getSessionAccentAnsi, getSessionAccentHex } from "@oh-my-pi/pi-tui/theme/session-color";
-import { Container, CURSOR_MARKER, getComposerStyle, visibleWidth } from "@oh-my-pi/pi-tui";
-import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
-import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import type { StatusLineStartupData } from "@oh-my-pi/pi-tui/status-line/startup";
-import { VirtualTerminal } from "../../tui/test/virtual-terminal";
-import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
-import { StatusLineTestComponents } from "./helpers/status-line";
+import { SessionStatusLine } from "@oh-my-pi/pi-coding-agent/modes/interactive/status-line";
+import type { StatusLineSettings } from "@oh-my-pi/pi-coding-agent/modes/view-model/status-line/types";
+import { printRows } from "@oh-my-pi/pi-coding-agent/ui/print-rows";
+import type { StatusFacts, StatusPlacement } from "@oh-my-pi/pi-coding-agent/ui/status/facts";
+import { sessionAccentSgr } from "@oh-my-pi/pi-coding-agent/ui/status/accent";
+import { composerShape, type StatusAttachment } from "@oh-my-pi/pi-coding-agent/ui/styles/composer/shapes";
+import "../src/ui/styles/composer";
+import "../src/ui/styles/overlays/composer-shape-preview";
+import { ensureTheme } from "@oh-my-pi/pi-coding-agent/ui/theme/service";
+import { createRoot } from "@oh-my-pi/pi-tui";
+import { jsx } from "@oh-my-pi/pi-tui/jsx-runtime";
+import { createTestTerminal } from "@oh-my-pi/pi-tui/testing/terminal";
+import { loadThemeSync } from "@oh-my-pi/pi-tui/theme/loader";
+import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import { effectiveStatusSettings, segmentView } from "@oh-my-pi/pi-coding-agent/ui/status/segments";
+import { visibleWidth } from "@oh-my-pi/pi-tui/text/width";
+import { Composer } from "../src/ui/composer";
+import { ComposerShapePreview } from "../src/ui/overlays/composer-shape-preview";
+import { createStatusLine, shapePlacement } from "../src/ui/status/status-line";
+import { segmentText, statusFacts, statusRows, statusSession, statusText } from "./helpers/session-status-line";
 
-const originalProjectDir = getProjectDir();
-const statusLines = new StatusLineTestComponents();
+const theme = loadThemeSync("dark", { symbolPreset: "unicode" });
+const savedTheme = currentTheme();
 
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
-	await initTheme();
+	ensureTheme();
+	setCurrentTheme(theme);
 });
 
 afterAll(() => {
-	statusLines.dispose();
 	resetSettingsForTest();
-	setProjectDir(originalProjectDir);
+	setCurrentTheme(savedTheme);
 });
-
-/** Minimal SegmentContext factory — only path/git fields matter for these tests. */
-function createCtx(overrides?: {
-	pathMaxLength?: number;
-	branch?: string | null;
-	sessionName?: string;
-	sessionAccent?: boolean;
-	previewTitle?: string;
-}): SegmentContext {
-	const hasName = overrides?.sessionName !== undefined;
-	return {
-		session: {
-			state: {},
-			isFastModeEnabled: () => false,
-			modelRegistry: { isUsingSubscription: () => false },
-			sessionManager: hasName ? { getSessionName: () => overrides.sessionName } : undefined,
-		} as unknown as SegmentContext["session"],
-		sessionAccent: overrides?.sessionAccent,
-		previewTitle: overrides?.previewTitle,
-		width: 120,
-		compactThinkingLevel: false,
-		options: {
-			path: {
-				abbreviate: false,
-				maxLength: overrides?.pathMaxLength ?? 40,
-				stripWorkPrefix: false,
-			},
-		},
-		planMode: null,
-		loopMode: null,
-		prewalk: null,
-		goalMode: null,
-		vibeMode: null,
-		vim: null,
-		collab: null,
-		stream: null,
-		recording: false,
-		usageStats: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			orchestrationInput: 0,
-			orchestrationOutput: 0,
-			orchestrationCacheRead: 0,
-			premiumRequests: 0,
-			cost: 0,
-			tokensPerSecond: null,
-		},
-		contextPercent: 0,
-		contextTokens: 0,
-		contextWindow: 0,
-		autoCompactEnabled: false,
-		compactionSpeculation: "idle",
-		speculationBlinkOn: true,
-		subagentCount: 0,
-		activeMs: 0,
-		turnElapsedMs: null,
-		activeRepo: null,
-		worktree: null,
-		git: {
-			branch: overrides?.branch ?? null,
-			status: null,
-			pr: null,
-		},
-		usage: null,
-	};
-}
-
-function createStatusLineSession(sessionName: string, modelName?: string) {
-	const model = modelName ? { name: modelName, contextWindow: 128000 } : undefined;
-	return {
-		state: { messages: [], model },
-		messages: [],
-		model: model ?? { contextWindow: 128000 },
-		contextUsageRevision: 0,
-		systemPrompt: [],
-		agent: { state: { tools: [] } },
-		skills: [],
-		isStreaming: false,
-		isAutoThinking: false,
-		autoResolvedThinkingLevel: () => undefined,
-		isAdvisorActive: () => false,
-		getAdvisorStatusOverview: () => ({ configured: false, advisors: [] }),
-		isFastModeActive: () => false,
-		getAsyncJobSnapshot: () => ({ running: [] }),
-		getCurrentModel: () => undefined,
-		isFastModeEnabled: () => false,
-		getContextUsage: () => ({ tokens: 0, contextWindow: 128000 }),
-		getGoalModeState: () => null,
-		modelRegistry: { isUsingSubscription: () => false },
-		sessionManager: {
-			getSessionName: () => sessionName,
-			getUsageStatistics: () => ({
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				orchestrationInput: 0,
-				orchestrationOutput: 0,
-				orchestrationCacheRead: 0,
-				premiumRequests: 0,
-				cost: 0,
-			}),
-		},
-	} as unknown as ConstructorParameters<typeof StatusLineComponent>[0];
-}
-
-function stripAnsi(value: string): string {
-	return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
-}
 
 describe("status line session accent", () => {
-	function buildComponent(sessionAccent: boolean) {
-		const component = statusLines.track(
-			new StatusLineComponent(createStatusLineSession("Named session"), statusLineHost),
+	/** Theme tokens the session-name segment paints its text with. */
+	function nameTokens(sessionAccent: boolean): string[] {
+		const view = segmentView(
+			"session_name",
+			statusFacts({ sessionName: "Named session" }),
+			effectiveStatusSettings({ preset: "custom", sessionAccent }),
 		);
-		component.updateSettings({
-			preset: "custom",
-			leftSegments: ["pi"],
-			rightSegments: ["session_name"],
-			separator: "powerline-thin",
-			sessionAccent,
-		});
-		return component;
+		return (view?.look.pieces ?? []).flatMap(piece => ("t" in piece && piece.s ? [piece.s] : []));
 	}
 
-	// Computed lazily: `theme` is assigned by initTheme() in beforeAll, after module evaluation.
-	const accentAnsi = (): string => {
-		const ansi = getSessionAccentAnsi(getSessionAccentHex("Named session", theme.sessionAccentInputs));
-		if (!ansi) throw new Error("expected a session accent ANSI sequence for the test theme");
-		return ansi;
-	};
-
-	it("paints the gap with the session accent when enabled", () => {
-		const ansi = accentAnsi();
-		expect(ansi).toBeDefined();
-		const border = buildComponent(true).getTopBorder(80).content;
-		expect(border).toContain(`${ansi}${theme.boxRound.horizontal}`);
-	});
-
-	it("paints the gap with the border color and omits the session accent when disabled", () => {
-		const ansi = accentAnsi();
-		expect(ansi).toBeDefined();
-		const border = buildComponent(false).getTopBorder(80).content;
-		// Positive: gap is rendered with the theme border color.
-		expect(border).toContain(`${theme.getFgAnsi("border")}${theme.boxRound.horizontal}`);
-		// Negative: neither the gap nor the session-name segment may emit the
-		// hash-derived session accent when the effective setting is disabled.
-		expect(border).not.toContain(ansi);
-	});
-
-	it("renders the session name with the theme accent color when the accent is disabled", () => {
-		const ansi = accentAnsi();
-		expect(ansi).toBeDefined();
-		const disabled = renderSegment("session_name", createCtx({ sessionName: "Named session", sessionAccent: false }));
-		expect(disabled.visible).toBe(true);
-		// Positive: the name uses the theme accent color, not the hash-derived session ANSI.
-		expect(disabled.content).toContain(theme.getFgAnsi("accent"));
-		// Negative: the hash-derived session ANSI must not appear for the name text.
-		expect(disabled.content).not.toContain(ansi);
-	});
-
-	it("still renders the session name with the hash-derived accent when enabled", () => {
-		const ansi = accentAnsi();
-		expect(ansi).toBeDefined();
-		const enabled = renderSegment("session_name", createCtx({ sessionName: "Named session", sessionAccent: true }));
-		expect(enabled.visible).toBe(true);
-		expect(enabled.content).toContain(ansi);
-	});
-});
-
-describe("session_name preview-title fallback", () => {
-	it("renders the stand-in title when the session is unnamed", () => {
-		const seg = renderSegment("session_name", createCtx({ previewTitle: "omp" }));
-		expect(seg.visible).toBe(true);
-		expect(stripAnsi(seg.content)).toBe("omp");
-	});
-
-	it("prefers the real session name over the stand-in", () => {
-		const seg = renderSegment("session_name", createCtx({ sessionName: "Named session", previewTitle: "omp" }));
-		expect(stripAnsi(seg.content)).toBe("Named session");
-	});
-
-	it("right-aligns the stand-in title through the box border pipeline", () => {
-		const component = statusLines.track(new StatusLineComponent(createStatusLineSession(""), statusLineHost));
-		component.updateSettings({
+	it("paints the session name with the hash-derived session accent when enabled", () => {
+		expect(nameTokens(true)).toContain("sessionAccent");
+		const facts = statusFacts({ sessionName: "Named session" });
+		const sgr = sessionAccentSgr(theme, facts.sessionName);
+		expect(sgr).toBeDefined();
+		expect(sgr).not.toBe(theme.fgSgr("accent"));
+		const settings: StatusLineSettings = {
 			preset: "custom",
-			leftSegments: ["pi"],
-			rightSegments: ["session_name"],
-			separator: "powerline-thin",
-			sessionAccent: false,
-		});
-		const withTitle = component.getTopBorder(80, "omp");
-		// The gauge fill pads the group gap, so the title chip lands flush right.
-		expect(withTitle.width).toBe(80);
-		expect(stripAnsi(withTitle.content).trimEnd().endsWith("omp")).toBe(true);
-		// Live render path passes no preview title: unnamed sessions show none.
-		expect(stripAnsi(component.getTopBorder(80).content)).not.toContain("omp");
+			leftSegments: ["session_name"],
+			rightSegments: [],
+			sessionAccent: true,
+		};
+		expect(statusRows(settings, facts).join("\n")).toContain(`${sgr}Named session`);
 	});
-});
 
-describe("status line focused-agent dimming", () => {
-	it("keeps powerline end caps at full intensity while text stays dimmed", () => {
-		const component = statusLines.track(
-			new StatusLineComponent(createStatusLineSession("Focused session"), statusLineHost),
-		);
-		component.updateSettings({
+	it("paints the session name with the theme accent when disabled", () => {
+		const tokens = nameTokens(false);
+		expect(tokens).toContain("accent");
+		expect(tokens).not.toContain("sessionAccent");
+		const facts = statusFacts({ sessionName: "Named session" });
+		const settings: StatusLineSettings = {
 			preset: "custom",
-			leftSegments: ["pi"],
-			rightSegments: ["session_name"],
-			separator: "powerline-thin",
+			leftSegments: ["session_name"],
+			rightSegments: [],
 			sessionAccent: false,
-		});
-		component.setSession(createStatusLineSession("Focused session"), "agent-1");
-
-		const border = component.getTopBorder(80).content;
-
-		expect(border).toStartWith("\x1b[2m");
-		expect(border).toContain(`\x1b[22m${theme.sep.powerlineLeft}\x1b[0m\x1b[2m`);
-		expect(border).toContain(`\x1b[22m${theme.sep.powerlineRight}\x1b[0m\x1b[2m`);
-		expect(border).toContain("\x1b[0m\x1b[2m");
-		expect(border).toEndWith("\x1b[22m");
+		};
+		expect(statusRows(settings, facts).join("\n")).toContain(`${theme.fgSgr("accent")}Named session`);
 	});
 });
 
 describe("path segment truncation at varying maxLength", () => {
-	let tmpDir: string;
-
-	beforeAll(() => {
-		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-overflow-very-long-directory-name-for-testing-"));
-		setProjectDir(tmpDir);
-	});
+	const cwd = "/home/user/omp-overflow-very-long-directory-name-for-testing-abcdef/nested/leaf";
+	const pathText = (maxLength: number) =>
+		segmentText("path", statusFacts({ cwd, home: "/home/user" }), {
+			preset: "custom",
+			segmentOptions: {
+				path: { maxLength, abbreviate: false, stripWorkPrefix: false },
+			},
+		}) ?? "";
 
 	it("truncates path with ellipsis when maxLength is smaller than path", () => {
-		const full = renderSegment("path", createCtx({ pathMaxLength: 200 }));
-		const short = renderSegment("path", createCtx({ pathMaxLength: 10 }));
-
-		expect(full.visible).toBe(true);
-		expect(short.visible).toBe(true);
-		expect(visibleWidth(short.content)).toBeLessThan(visibleWidth(full.content));
+		expect(visibleWidth(pathText(10))).toBeLessThan(visibleWidth(pathText(200)));
+		expect(pathText(10)).toContain("…");
 	});
 
 	it("reduces visible width monotonically as maxLength decreases", () => {
-		const widths = [40, 20, 10, 4].map(maxLen => {
-			const rendered = renderSegment("path", createCtx({ pathMaxLength: maxLen }));
-			return visibleWidth(rendered.content);
-		});
-
-		for (let i = 1; i < widths.length; i++) {
-			expect(widths[i]).toBeLessThanOrEqual(widths[i - 1]);
-		}
+		const widths = [40, 20, 10, 4].map(maxLength => visibleWidth(pathText(maxLength)));
+		for (let i = 1; i < widths.length; i++) expect(widths[i]).toBeLessThanOrEqual(widths[i - 1]!);
 	});
 
 	it("still renders a visible segment at maxLength=4", () => {
-		const rendered = renderSegment("path", createCtx({ pathMaxLength: 4 }));
-		expect(rendered.visible).toBe(true);
-		expect(visibleWidth(rendered.content)).toBeGreaterThan(0);
+		expect(visibleWidth(pathText(4))).toBeGreaterThan(0);
 	});
 });
 
 describe("overflow: path survives before model", () => {
 	it("drops the model segment before the cwd path when both cannot fit", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-statusline-overflow-"));
-		const cwd = path.join(root, "cwdxyz");
-		fs.mkdirSync(cwd);
-		setProjectDir(cwd);
-
-		const modelName = `MODEL_SHOULD_DROP_${"x".repeat(24)}`;
-		const session = createStatusLineSession("overflow test", modelName);
-		const component = statusLines.track(new StatusLineComponent(session, statusLineHost));
-		const pathOptions = {
-			abbreviate: false,
-			maxLength: 32,
-			stripWorkPrefix: false,
-		};
-		component.updateSettings({
+		const settings: StatusLineSettings = {
 			preset: "custom",
 			leftSegments: ["pi", "model", "path"],
 			rightSegments: [],
@@ -319,322 +119,308 @@ describe("overflow: path survives before model", () => {
 			transparent: true,
 			segmentOptions: {
 				model: { showThinkingLevel: false },
-				path: pathOptions,
+				path: { abbreviate: false, maxLength: 32, stripWorkPrefix: false },
 			},
+		};
+		const modelName = `MODEL_SHOULD_DROP_${"x".repeat(24)}`;
+		const facts = statusFacts({
+			model: { id: modelName, name: modelName, thinking: false },
+			cwd: "/tmp/root/cwdxyz",
+			home: "/home/user",
 		});
 
-		const ctx = {
-			...createCtx({ pathMaxLength: pathOptions.maxLength }),
-			session,
-			options: {
-				model: { showThinkingLevel: false },
-				path: pathOptions,
-			},
-		} as SegmentContext;
-		const pi = renderSegment("pi", ctx).content;
-		const model = renderSegment("model", ctx).content;
-		const minPath = renderSegment("path", {
-			...ctx,
-			options: { ...ctx.options, path: { ...pathOptions, maxLength: 4 } },
-		}).content;
-		const separatorWidth = visibleWidth(theme.sep.space);
-		const groupWidth = (parts: string[]) =>
-			parts.reduce((sum, part) => sum + visibleWidth(part), 0) +
-			Math.max(0, parts.length - 1) * (separatorWidth + 2) +
-			2;
-		const width = groupWidth([pi, model]) + 1;
+		expect(statusText(settings, facts, 160)).toContain(modelName);
+		const narrow = Bun.stripANSI(topRows(settings, facts, 40)[0]!);
+		expect(narrow).toContain("xyz");
+		expect(narrow).not.toContain("MODEL_SHOULD_DROP");
+	});
+});
 
-		expect(groupWidth([pi, model, minPath])).toBeGreaterThan(width);
-		expect(groupWidth([pi, minPath])).toBeLessThanOrEqual(width);
+const standalone: StatusPlacement = { bar: "full", gap: false, autocomplete: false };
 
-		const rendered = stripAnsi(component.getTopBorder(width).content);
-		expect(rendered).toContain("xyz");
-		expect(rendered).not.toContain("MODEL_SHOULD_DROP");
+function topRows(
+	settings: StatusLineSettings,
+	facts: StatusFacts,
+	width: number,
+	attachment: StatusAttachment = "top-border",
+): string[] {
+	return printRows(
+		() =>
+			createStatusLine({ settings: () => settings, facts: () => facts, placement: () => standalone }).preview(
+				attachment,
+			),
+		width,
+	);
+}
+
+const firstBar: StatusLineSettings = {
+	preset: "custom",
+	leftSegments: ["pi", "model"],
+	rightSegments: [],
+	separator: "powerline-thin",
+	sessionAccent: false,
+};
+
+describe("status-line brand and spacing", () => {
+	it("transitions dim to accent and back over 450ms while swapping the glyph immediately", () => {
+		const settings = { ...firstBar, leftSegments: ["pi"] } satisfies StatusLineSettings;
+		const edge = 1_000_000;
+		const dim = theme.fgSgr("dim");
+		const accent = theme.fgSgr("accent");
+		const icon = theme.symbols.icon("omp");
+		expect(icon).not.toBe("");
+		expect(dim).not.toBe(accent);
+		const line = new SessionStatusLine(statusSession());
+		line.previewSettings(settings);
+		const paint = (now: number) => {
+			setSystemTime(now);
+			return printRows(
+				() =>
+					createStatusLine({
+						settings: () => line.settings(),
+						facts: () => line.facts(),
+						placement: () => standalone,
+					}).panel,
+				80,
+				{ now, motion: true },
+			)[0]!;
+		};
+
+		try {
+			expect(paint(edge)).toContain(`${dim}${icon}`);
+			line.markActivityStart();
+			const early = paint(edge + 10);
+			expect(early).toContain(" 0s");
+			expect(early).not.toContain(icon);
+			expect(early).toContain(dim);
+			expect(early).not.toContain(accent);
+			const mid = paint(edge + 225);
+			expect(mid).toMatch(/\x1b\[38;2;/);
+			expect(mid).not.toContain(dim);
+			expect(mid).not.toContain(accent);
+			expect(paint(edge + 450)).toContain(accent);
+
+			setSystemTime(edge + 500);
+			line.markActivityEnd();
+			expect(paint(edge + 510)).toContain(`${accent}${icon}`);
+			const fadeOut = paint(edge + 725);
+			expect(fadeOut).toContain(icon);
+			expect(fadeOut).toMatch(/\x1b\[38;2;/);
+			expect(fadeOut).not.toContain(dim);
+			expect(fadeOut).not.toContain(accent);
+			expect(paint(edge + 950)).toContain(`${dim}${icon}`);
+		} finally {
+			line.dispose();
+			setSystemTime();
+		}
+	});
+
+	it.each([false, true])("keeps exactly one space on each side of the first separator (working=%s)", working => {
+		const now = Date.now();
+		const facts = statusFacts({
+			model: { id: "model", name: "Test Model", thinking: false },
+			...(working ? { turnStartedAt: now } : {}),
+		});
+		const row = statusText(firstBar, facts, 80);
+		const dot = theme.symbols.symbol("sep.dot").trim() || "·";
+		const index = row.indexOf(dot);
+		expect(index).toBeGreaterThan(0);
+		expect(row.slice(0, index).match(/ *$/)?.[0]).toBe(" ");
+		expect(row.slice(index + dot.length).match(/^ */)?.[0]).toBe(" ");
+	});
+});
+
+describe("status-line transparency", () => {
+	it("paints the theme fill and caps only when transparent is disabled", () => {
+		const facts = statusFacts({ sessionName: "transparent test" });
+		const settings = {
+			...firstBar,
+			leftSegments: ["pi"],
+			rightSegments: ["session_name"],
+		} satisfies StatusLineSettings;
+		const opaque = topRows({ ...settings, transparent: false }, facts, 80)[0]!;
+		const transparent = topRows({ ...settings, transparent: true }, facts, 80)[0]!;
+		const fill = theme.bg("statusLineBg", "\0").split("\0")[0]!;
+		expect(fill).toMatch(/\x1b\[48;/);
+		expect(opaque).toContain(fill);
+		expect(transparent).not.toMatch(/\x1b\[48;/);
+		expect(transparent).toContain("\x1b[49m");
+		for (const key of ["sep.powerlineLeft", "sep.powerlineRight"]) {
+			const cap = theme.symbols.symbol(key);
+			expect(cap).not.toBe("");
+			expect(opaque).toContain(cap);
+			expect(transparent).not.toContain(cap);
+		}
 	});
 });
 
 describe("overflow: embedded context fallback", () => {
-	it("keeps context labels together at the right edge as usage changes, including unknown and over-capacity usage", () => {
-		const session = createStatusLineSession("context");
-		const component = statusLines.track(new StatusLineComponent(session, statusLineHost));
-		component.updateSettings({
-			preset: "custom",
-			leftSegments: ["pi", "context_pct"],
-			rightSegments: [],
-			contextLine: "embedded",
-			sessionAccent: false,
-		});
-		for (const percent of [3, null, 120]) {
-			session.getContextUsage = () => ({
-				tokens: percent === null ? 0 : (percent / 100) * 128000,
-				contextWindow: 128000,
-				percent,
-			});
-			session.contextUsageRevision = (session.contextUsageRevision ?? 0) + 1;
+	const settings: StatusLineSettings = { ...firstBar, leftSegments: ["pi", "context_pct"], contextLine: "embedded" };
+	for (const percent of [3, null, 120]) {
+		it(`keeps usage and 128K together at the right edge for ${percent}`, () => {
+			const facts = statusFacts({ context: { tokens: ((percent ?? 0) / 100) * 128_000, window: 128_000, percent } });
 			for (const width of [26, 80]) {
-				const border = stripAnsi(component.getTopBorder(width).content);
-				const windowStart = border.lastIndexOf("128K");
-				expect(visibleWidth(border)).toBe(width);
-				expect(windowStart).toBe(width - "128K".length - 2);
-				const context = border.slice(border.indexOf("ctx"), windowStart);
-				if (percent === null) {
-					expect(context).not.toContain("%");
-				} else {
-					expect(context).toContain(`${percent}%`);
-					if (percent > 100) {
-						expect(component.getTopBorder(width).content).toContain(`${theme.getFgAnsi("error")}${percent}%`);
-					}
-				}
-				expect(component.render(width).every(line => visibleWidth(line) <= width)).toBe(true);
+				const rows = topRows(settings, facts, width);
+				const top = Bun.stripANSI(rows[0]!);
+				expect(top.endsWith("128K  ")).toBe(true);
+				expect(visibleWidth(top)).toBe(width);
+				expect(rows.every(row => visibleWidth(row) <= width)).toBe(true);
+				if (percent === null) expect(top).not.toContain("%");
+				else expect(top).toContain(`ctx ${percent}% · 128K`);
+				if (percent === 120) expect(rows[0]).toContain(`${theme.fgSgr("error")}120%`);
 			}
-		}
-	});
+		});
+	}
 
 	it("returns freed gauge space to the path after a model moves to overflow", () => {
-		const previousProjectDir = getProjectDir();
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-path-parent-"));
-		const cwd = path.join(root, "directory-with-a-long-leaf-name");
-		fs.mkdirSync(cwd);
-		setProjectDir(cwd);
-		try {
-			const session = createStatusLineSession("context", `MODEL_OVERFLOW_${"x".repeat(90)}`);
-			const component = statusLines.track(new StatusLineComponent(session, statusLineHost));
-			const pathOptions = { abbreviate: false, maxLength: 40, stripWorkPrefix: false };
-			component.updateSettings({
-				preset: "custom",
-				leftSegments: ["pi", "model", "path", "context_pct"],
-				rightSegments: [],
-				separator: "none",
-				transparent: true,
-				contextLine: "embedded",
-				sessionAccent: false,
-				segmentOptions: { model: { showThinkingLevel: false }, path: pathOptions },
-			});
-			const expectedPath = Bun.stripANSI(
-				renderSegment("path", { ...createCtx(), options: { path: pathOptions } }).content,
-			);
-			const wide = Bun.stripANSI(component.getTopBorder(80).content);
-			expect(wide).toContain(expectedPath);
-			expect(wide).not.toContain("MODEL_OVERFLOW");
-			expect(wide.lastIndexOf("128K")).toBe(80 - "128K".length - 2);
-			expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("MODEL_OVERFLOW");
-
-			const narrow = Bun.stripANSI(component.getTopBorder(40).content);
-			expect(narrow).not.toContain(expectedPath);
-			expect(narrow).toContain("…");
-			expect(narrow).toContain("leaf-name");
-			expect(narrow.lastIndexOf("128K")).toBe(40 - "128K".length - 2);
-			expect(visibleWidth(narrow)).toBe(40);
-			expect(narrow).not.toContain(theme.boxRound.horizontal.repeat(2));
-		} finally {
-			setProjectDir(previousProjectDir);
-			fs.rmSync(root, { recursive: true, force: true });
-		}
+		const options = { abbreviate: false, maxLength: 40, stripWorkPrefix: false };
+		const facts = statusFacts({
+			cwd: "/work/directory-with-a-long-leaf-name",
+			model: { id: "model", name: `MODEL_OVERFLOW_${"x".repeat(90)}`, thinking: false },
+			context: { tokens: 0, window: 128_000, percent: 0 },
+		});
+		const custom: StatusLineSettings = {
+			...settings,
+			transparent: true,
+			separator: "none",
+			leftSegments: ["pi", "model", "path", "context_pct"],
+			segmentOptions: { path: options, model: { showThinkingLevel: false } },
+		};
+		const path = segmentText("path", facts, custom)!;
+		const [wide, ...spill] = topRows(custom, facts, 80).map(Bun.stripANSI);
+		expect(wide).toContain(path);
+		expect(wide).not.toContain("MODEL_OVERFLOW");
+		expect(wide?.endsWith("128K  ")).toBe(true);
+		expect(spill.join("\n")).toContain("MODEL_OVERFLOW");
+		const [narrow] = topRows(custom, facts, 40).map(Bun.stripANSI);
+		expect(narrow).not.toContain(path);
+		expect(narrow).toContain("…");
+		expect(narrow).toContain("leaf-name");
+		expect(narrow?.endsWith("128K  ")).toBe(true);
+		expect(visibleWidth(narrow!)).toBe(40);
+		expect(narrow).not.toContain(theme.symbols.box.horizontal.repeat(2));
 	});
 
-	it("keeps context usage visible when the box gauge cannot fit labels beside the last segment", () => {
-		const component = statusLines.track(new StatusLineComponent(createStatusLineSession("context"), statusLineHost));
-		component.updateSettings({
-			preset: "custom",
-			leftSegments: ["pi", "context_pct", "context_total"],
-			rightSegments: [],
-			contextLine: "embedded",
-			sessionAccent: false,
-		});
-		const width = 8;
-		const content = stripAnsi([component.getTopBorder(width).content, ...component.render(width)].join("\n"));
-		expect(content).toContain("0%");
-		expect(component.render(width).every(line => visibleWidth(line) <= width)).toBe(true);
+	it("keeps percent visible in the row or its overflow when embedded labels cannot fit", () => {
+		const facts = statusFacts({ context: { tokens: 0, window: 128_000, percent: 0 } });
+		const rows = topRows({ ...settings, leftSegments: ["pi", "context_pct", "context_total"] }, facts, 8);
+		expect(Bun.stripANSI(rows.join("\n"))).toContain("0%");
+		expect(rows.every(row => visibleWidth(row) <= 8)).toBe(true);
 	});
 });
 
-describe("overflow: box alignment under non-standalone render", () => {
-	it("aligns every overflow row to the editor content width via leftInset", () => {
-		const tmpDir = fs.mkdtempSync(
-			path.join(os.tmpdir(), "omp-overflow-box-alignment-very-long-directory-name-here-"),
-		);
-		setProjectDir(tmpDir);
-		try {
-			const component = statusLines.track(
-				new StatusLineComponent(createStatusLineSession("align", "x".repeat(100)), statusLineHost),
-			);
-			component.updateSettings({
-				preset: "custom",
-				leftSegments: ["pi"],
-				// Multiple right segments with a long model name — when the
-				// editor's top-border content width (statusWidth) is much
-				// narrower than the terminal, every right segment lands in
-				// wrapped overflow rows. Each row uses `width - leftInset`
-				// columns and starts after `leftInset` spaces of padding.
-				rightSegments: ["session_name", "model", "path"],
-				separator: "powerline-thin",
-				sessionAccent: false,
-			});
-			const terminalWidth = 100;
-			const statusWidth = 98;
-			component.setTopBorderWidthProvider(() => statusWidth);
+function shapeRows(shape: string, settings: StatusLineSettings, facts: StatusFacts, width: number): string[] {
+	return printRows(() => {
+		const status = createStatusLine({ settings: () => settings, facts: () => facts, placement: () => standalone });
+		return ComposerShapePreview({ shape: () => shape, status: status.chrome });
+	}, width);
+}
 
-			const lines = component.render(terminalWidth);
-			expect(lines.length).toBeGreaterThan(1);
-			const leftInset = Math.floor((terminalWidth - statusWidth) / 2);
-			expect(leftInset).toBe(1);
-			for (const overflow of lines) {
-				// Every row begins with exactly `leftInset` visible spaces
-				// — no separator dot between the inset padding and its first part.
-				expect(stripAnsi(overflow).startsWith(" ".repeat(leftInset))).toBe(true);
-				expect(visibleWidth(overflow)).toBeLessThanOrEqual(terminalWidth);
-			}
-			// Dropped right-group segments survive across the wrapped rows.
-			expect(stripAnsi(lines.join("\n"))).toContain("x".repeat(24));
-		} finally {
-			setProjectDir(originalProjectDir);
-		}
-	});
+function composerRows(shape: string, settings: StatusLineSettings, facts: StatusFacts, width: number): string[] {
+	return printRows(() => {
+		const status = createStatusLine({
+			settings: () => settings,
+			facts: () => facts,
+			placement: () => shapePlacement(composerShape(shape), false),
+		});
+		const composer = new Composer({ shape });
+		composer.setStatus(status.chrome.composerStatus);
+		return [composer.node, status.panel];
+	}, width);
+}
 
-	it("keeps wrapped rows within width when segments carry CJK and emoji wide characters", () => {
-		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-overflow-cjk-宽字符目录名-"));
-		setProjectDir(tmpDir);
-		try {
-			const component = statusLines.track(
-				new StatusLineComponent(createStatusLineSession("会话名-セッション-🙂", "列".repeat(60)), statusLineHost),
-			);
-			component.updateSettings({
-				preset: "custom",
-				leftSegments: ["pi"],
-				rightSegments: ["session_name", "model", "path"],
-				separator: "powerline-thin",
-				sessionAccent: false,
-			});
-			const terminalWidth = 100;
-			const statusWidth = 98;
-			component.setTopBorderWidthProvider(() => statusWidth);
-
-			const lines = component.render(terminalWidth);
-			expect(lines.length).toBeGreaterThan(1);
-			for (const line of lines) {
-				// Wide characters count 2 columns each; wrapping must budget for that.
-				expect(visibleWidth(line)).toBeLessThanOrEqual(terminalWidth);
-			}
-			const joined = stripAnsi(lines.join("\n"));
-			expect(joined).toContain("列列列列");
-			expect(joined).toContain("宽字符目录名");
-		} finally {
-			setProjectDir(originalProjectDir);
-		}
-	});
-
-	it("reopens text color before plain overflow parts and after separators", () => {
-		const component = statusLines.track(new StatusLineComponent(createStatusLineSession("ansi"), statusLineHost));
-		component.updateSettings({
-			preset: "custom",
+describe("overflow: wrapped rows", () => {
+	it("aligns all box overflow rows to the editor inset and fits CJK and emoji by cell width", () => {
+		const settings: StatusLineSettings = {
+			...firstBar,
 			leftSegments: ["pi"],
-			// `time` and `hostname` render as plain text (no ANSI of
-			// their own), so the row's color anchoring is observable.
+			rightSegments: ["session_name", "model", "path"],
+		};
+		const facts = statusFacts({
+			sessionName: "会话名-セッション-🙂",
+			model: { id: "model", name: "列".repeat(60), thinking: false },
+			cwd: "/repo/宽字符目录名",
+		});
+		const width = 28;
+		const shape = composerShape("box");
+		const inset = shape.sideWidth(shape.paddingX);
+		const [, ...spill] = topRows(settings, facts, width - inset * 2);
+		expect(spill.length).toBeGreaterThan(1);
+		const rows = composerRows("box", settings, facts, width);
+		for (const row of spill.map(Bun.stripANSI)) {
+			expect(rows.map(Bun.stripANSI)).toContain(" ".repeat(inset) + row);
+		}
+		const joined = Bun.stripANSI(rows.join("\n"));
+		expect(joined).toContain("列列列列");
+		expect(joined).toContain("宽字符目录名");
+		expect(rows.every(row => visibleWidth(row) <= width)).toBe(true);
+	});
+
+	it("reopens foreground text before and after a wrapped group's separator", () => {
+		const settings: StatusLineSettings = {
+			...firstBar,
+			leftSegments: ["model"],
 			rightSegments: ["time", "hostname"],
-			separator: "powerline-thin",
-			sessionAccent: false,
-		});
-		// Force every right segment into the overflow row.
-		const terminalWidth = 80;
-		const statusWidth = 4;
-		component.setTopBorderWidthProvider(() => statusWidth);
-
-		const lines = component.render(terminalWidth);
-		expect(lines).toHaveLength(1);
-		const overflow = lines[0]!;
-		const textAnsi = theme.getFgAnsi("text");
-		const leftInset = Math.floor((terminalWidth - statusWidth) / 2);
-		expect(overflow.slice(leftInset).startsWith(textAnsi)).toBe(true);
-		const separatorThenText = `${theme.fg("statusLineSep", theme.sep.dot)}${textAnsi}`;
-		expect(overflow).toContain(separatorThenText);
-		expect(overflow.endsWith("\x1b[39m")).toBe(true);
+		};
+		const width = 24;
+		const iconWidth = visibleWidth(`${theme.symbols.icon("model")} `);
+		const capWidth = visibleWidth(theme.symbols.symbol("sep.powerlineLeft"));
+		const name = "m".repeat(width - iconWidth - capWidth - 2);
+		const facts = statusFacts({ model: { id: "model", name, thinking: false }, hostname: "host" });
+		const [main, ...spill] = topRows(settings, facts, width);
+		expect(Bun.stripANSI(main!)).toContain(name);
+		expect(spill).toHaveLength(1);
+		const foreground = theme.fgSgr("text");
+		expect(spill[0]?.trimStart().startsWith(foreground)).toBe(true);
+		expect(spill[0]).toContain(`${theme.fg("statusLineSep", "·")}${foreground}`);
+		expect(spill[0]?.trimEnd().endsWith("\x1b[39m")).toBe(true);
 	});
-});
 
-describe("overflow: automatic row wrapping", () => {
-	it("preserves every visible full-preset segment while adapting to width", () => {
-		const component = statusLines.track(
-			new StatusLineComponent(createStatusLineSession("session-marker", "model-marker"), statusLineHost),
-		);
-		component.updateSettings({
-			preset: "full",
-			separator: "slash",
-			sessionAccent: false,
+	it("preserves full-preset markers exactly once across standalone and preview rows on resize", () => {
+		const settings: StatusLineSettings = { preset: "full", separator: "slash", sessionAccent: false };
+		const facts = statusFacts({
+			model: { id: "model", name: "model-marker", thinking: false },
+			sessionName: "session-marker",
+			context: { tokens: 0, window: 128_000, percent: 0 },
 		});
-		component.setComposerStyle({
-			statusAttachment: "none",
-			bottomBar: "full",
-			bottomBarGap: false,
-		});
-
-		const wideLines = component.render(240);
-		const narrowLines = component.render(24);
-		const narrowPlain = stripAnsi(narrowLines.join("\n"));
-
-		expect(wideLines).toHaveLength(1);
-		expect(narrowLines.length).toBeGreaterThan(2);
-		expect(narrowLines.every(line => visibleWidth(line) <= 24)).toBe(true);
-		expect(narrowPlain).toContain("model-marker");
-		expect(narrowPlain).toContain("0%");
-		expect(narrowPlain).toContain("session-marker");
-		for (const marker of ["model-marker", "session-marker", "0%"]) {
-			expect(narrowPlain.split(marker)).toHaveLength(2);
+		for (const width of [240, 24, 240]) {
+			const rows = statusRows(settings, facts, width);
+			expect(rows.every(row => visibleWidth(row) <= width)).toBe(true);
+			if (width === 24) expect(rows.length).toBeGreaterThan(2);
+			else expect(rows).toHaveLength(1);
+			const standaloneText = Bun.stripANSI(rows.join("\n"));
+			for (const marker of ["model-marker", "0%", "session-marker"]) {
+				expect(standaloneText.split(marker)).toHaveLength(2);
+			}
 		}
-
-		const boxPreview = renderComposerShapePreview("box", 24, component);
-		const boxPreviewPlain = stripAnsi(boxPreview.join("\n"));
-		expect(boxPreviewPlain).toContain("model-marker");
-		expect(boxPreviewPlain).toContain("session-marker");
-		expect(boxPreview.every(line => visibleWidth(line) <= 24)).toBe(true);
+		const preview = shapeRows("box", settings, facts, 24);
+		expect(preview.every(row => visibleWidth(row) <= 24)).toBe(true);
 		for (const marker of ["model-marker", "session-marker"]) {
-			expect(boxPreviewPlain.split(marker)).toHaveLength(2);
-		}
-
-		const restored = component.render(240);
-		expect(restored).toHaveLength(1);
-		for (const marker of ["model-marker", "session-marker", "0%"]) {
-			expect(stripAnsi(restored.join("\n")).split(marker)).toHaveLength(2);
+			expect(Bun.stripANSI(preview.join("\n")).split(marker)).toHaveLength(2);
 		}
 	});
 
-	it("moves a Unicode model between the rule chip and bottom overflow exactly at the two-cell rule budget", () => {
-		const modelName = "模型🙂e\u0301";
-		const component = statusLines.track(
-			new StatusLineComponent(createStatusLineSession("LEFT", modelName), statusLineHost),
-		);
-		component.updateSettings({
-			preset: "custom",
+	it("moves a Unicode model from the Claude rule chip into bottom overflow at the two-cell budget", () => {
+		const model = "模型🙂e\u0301-claude-width-dock";
+		const settings: StatusLineSettings = {
+			...firstBar,
 			leftSegments: ["session_name"],
 			rightSegments: ["model"],
-			separator: "none",
 			transparent: true,
-			sessionAccent: false,
-			segmentOptions: { model: { showThinkingLevel: false } },
-		});
-		const style = getComposerStyle("claude");
-		component.setComposerStyle(style);
-		const fittingWidth = component.getStandaloneTopBorder(80).width + 2;
-
-		for (const width of [fittingWidth, fittingWidth - 1, fittingWidth]) {
-			const chip = component.getStandaloneTopBorder(width);
-			const bottom = component.render(width);
-			const preview = component.getPreviewLines(width, style);
-			const chipPlain = stripAnsi(chip.content);
-			const bottomPlain = stripAnsi(bottom.join("\n"));
-			const previewPlain = stripAnsi(preview.join("\n"));
-
-			expect(visibleWidth(chip.content)).toBeLessThanOrEqual(width - 2);
-			for (const row of [...bottom, ...preview]) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
-			for (const marker of [modelName, "LEFT"]) {
-				expect(stripAnsi([chip.content, ...bottom].join("\n")).split(marker)).toHaveLength(2);
-				expect(previewPlain.split(marker)).toHaveLength(2);
-			}
-			if (width === fittingWidth) {
-				expect(chipPlain).toContain(modelName);
-				expect(bottomPlain).not.toContain(modelName);
-			} else {
-				expect(chipPlain).not.toContain(modelName);
-				expect(bottomPlain).toContain(modelName);
+		};
+		const facts = statusFacts({ sessionName: "LEFT", model: { id: "model", name: model, thinking: false } });
+		const width = visibleWidth(topRows(settings, facts, 80, "top-rule-chip")[0]!) + 2;
+		for (const columns of [width, width - 1, width]) {
+			const rows = composerRows("claude", settings, facts, columns);
+			const preview = shapeRows("claude", settings, facts, columns);
+			expect([...rows, ...preview].every(row => visibleWidth(row) <= columns)).toBe(true);
+			for (const frame of [rows, preview]) {
+				const plain = frame.map(Bun.stripANSI);
+				expect(plain.join("\n").split(model)).toHaveLength(2);
+				expect(plain.join("\n").split("LEFT")).toHaveLength(2);
+				const chip = plain.find(row => row.includes(theme.symbols.box.horizontal));
+				if (columns === width) expect(chip).toContain(model);
+				else expect(chip).not.toContain(model);
 			}
 		}
 	});
@@ -643,93 +429,70 @@ describe("overflow: automatic row wrapping", () => {
 describe("overflow: live composer screen budget", () => {
 	for (const preset of ["full", "custom"] as const) {
 		for (const shape of ["box", "pi", "claude"] as const) {
-			for (const running of [false, true]) {
-				it(`keeps the cursor input row on short narrow ${running ? "running" : "startup"} frames (${preset}/${shape})`, () => {
-					const modelName = `MODEL_MARKER_${"列🙂".repeat(80)}`;
-					const session = createStatusLineSession("SESSION_MARKER", modelName);
-					const customSegments: Pick<StatusLineStartupData["settings"], "leftSegments" | "rightSegments"> = {
+			it.each([false, true])(`keeps the cursor input row in short ${preset}/${shape} screens (live=%s)`, running => {
+				createRoot(dispose => {
+					const model = `MODEL_MARKER_${"列🙂".repeat(80)}`;
+					const settings: StatusLineSettings = {
+						preset,
+						separator: "slash",
+						sessionAccent: false,
 						leftSegments: ["pi", "model", "path", "context_pct", "context_total", "time", "hostname"],
 						rightSegments: ["session_name", "cost"],
 					};
-					const startup: StatusLineStartupData = {
-						settings: {
-							preset,
-							...(preset === "custom" ? customSegments : {}),
-							separator: "slash",
-							sessionAccent: false,
-						},
-						gitEnabled: false,
-						model: session.model,
-						autoThinking: false,
-						fastMode: false,
-						usingSubscription: false,
-						autoCompactEnabled: false,
-						compactionBoundaries: null,
-					};
-					const style = getComposerStyle(shape);
-					const terminal = new VirtualTerminal(24, 5);
-					const composer = new Composer({
-						terminal,
-						preferences: {
-							quiet: true,
-							composerShape: shape,
-							spellingTypoDetection: false,
-							spellingAutocomplete: "off",
-							spellingAutocorrect: false,
-						},
-						status: { statusLine: startup },
-					});
-					let live: StatusLineComponent | undefined;
-					if (running) {
-						session.isStreaming = true;
-						live = statusLines.track(new StatusLineComponent(session, statusLineHost));
-						live.updateSettings(startup.settings);
-						composer.setStatusComponent(live);
-						live.setTopBorderWidthProvider(width => composer.editor.getTopBorderAvailableWidth(width));
-						live.attachToEditor(composer.editor, style);
-						const transcript = new TranscriptContainer();
-						transcript.addChild({ render: () => ["Running response"] });
-						const editorRoot = new Container();
-						editorRoot.addChild(composer.editor);
-						composer.setRuntimeChildren([transcript, editorRoot]);
-					}
-					composer.start({ playWelcomeIntro: false });
+					const startup = statusFacts({ model: { id: "model", name: model, thinking: false } });
+					const live = running
+						? new SessionStatusLine(
+								statusSession({
+									model: { id: "model", name: model, input: ["text"], contextWindow: 128_000 },
+									sessionManager: { getSessionName: () => "SESSION_MARKER" },
+								}),
+							)
+						: undefined;
+					live?.previewSettings(settings);
+					live?.markActivityStart();
+					const facts = () => live?.facts() ?? startup;
+					const placement = () => shapePlacement(composerShape(shape), false);
+					const status = createStatusLine({ settings: () => live?.settings() ?? settings, facts, placement });
+					const composer = new Composer({ shape, text: "older\n输入🙂line\nnewer", caret: "terminal" });
+					composer.setCursor("older\n输入🙂line".length);
+					composer.setStatus(status.chrome.composerStatus);
+					const term = createTestTerminal(
+						() => ({
+							main: running ? jsx("text", { text: "Running response" }) : undefined,
+							dock: [composer.node, status.panel],
+						}),
+						{ columns: 24, rows: 8, theme },
+					);
 					try {
-						composer.editor.setText("older\n输入🙂line\nnewer");
-						composer.renderFrame({ columns: 24, rows: 8 });
-						composer.editor.handleInput("\x1b[A");
-						composer.editor.moveToLineEnd();
-						for (const rows of [1, 2, 3, 5, 8]) {
-							const frame = composer.renderFrame({ columns: 24, rows }).viewport;
+						term.focus(composer.field);
+						for (const rows of [1, 2, 3, 5, 8, 60]) {
+							term.resize(24, rows);
+							term.render();
+							const frame = term.rows();
 							expect(frame.length).toBeLessThanOrEqual(rows);
-							expect(frame.filter(row => row.includes(CURSOR_MARKER))).toHaveLength(1);
-							expect(frame.find(row => row.includes(CURSOR_MARKER))).toContain("输入🙂line");
-							for (const row of frame) expect(visibleWidth(row)).toBeLessThanOrEqual(24);
-							const resizeFrame = composer.renderResizeFrame({ columns: 24, rows });
-							expect(resizeFrame.find(row => row.includes(CURSOR_MARKER))).toContain("输入🙂line");
-							for (const row of resizeFrame) expect(visibleWidth(row)).toBeLessThanOrEqual(24);
+							expect(frame.every(row => visibleWidth(row) <= 24)).toBe(true);
+							const cursor = term.cursor();
+							expect(cursor).not.toBeNull();
+							expect(Bun.stripANSI(frame[cursor!.row]!)).toContain("输入🙂line");
 						}
-						const taller = composer.renderFrame({ columns: 24, rows: 60 }).viewport;
-						expect(taller.find(row => row.includes(CURSOR_MARKER))).toContain("输入🙂line");
-						const wide = composer.renderFrame({ columns: 600, rows: 60 }).viewport;
-						const plain = stripAnsi(wide.join("\n"));
-						expect(plain).toContain(modelName);
-						expect(plain).toContain("输入🙂line");
-						if (running) expect(plain).toContain("SESSION_MARKER");
-						if (live) {
-							// Live viewport limits must not bleed into /settings previews.
-							composer.renderFrame({ columns: 24, rows: 1 });
-							expect(stripAnsi(live.getPreviewLines(600, style).join("\n"))).toContain("SESSION_MARKER");
+						term.resize(600, 60);
+						const wide = Bun.stripANSI(term.rows().join("\n"));
+						expect(wide).toContain(model);
+						expect(wide).toContain("输入🙂line");
+						if (running) {
+							expect(wide).toContain("SESSION_MARKER");
+							term.resize(24, 1);
+							expect(Bun.stripANSI(shapeRows(shape, settings, facts(), 600).join("\n"))).toContain(
+								"SESSION_MARKER",
+							);
 						}
-						composer.ui.renderNow();
-						expect(terminal.getViewport().join("\n")).toContain("输入🙂line");
-						const cursor = terminal.getCursor();
-						expect(terminal.getViewport()[cursor.row]).toContain("输入🙂line");
 					} finally {
-						composer.stop();
+						term.dispose();
+						live?.dispose();
+						dispose();
 					}
 				});
-			}
+			});
 		}
 	}
 });

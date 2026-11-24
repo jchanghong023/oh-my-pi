@@ -22,11 +22,11 @@ import type { AgentRegistryApi } from "../registry/agent-registry";
 import type { LocalProtocolOptions } from "./local-protocol";
 import type { SessionEntry } from "../session/session-entries";
 import type { ToolSession } from "../tools";
-import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
-import type { ProcReadDetails, ProcWriteDetails } from "@oh-my-pi/pi-tui/tools/proc-render";
-import type { CfgReadDetails, CfgWriteDetails } from "@oh-my-pi/pi-tui/tools/cfg-render";
-import type { EditToolPerFileResult } from "@oh-my-pi/pi-tui/tools/edit";
-import type { SchemeWriteScope } from "@oh-my-pi/pi-tui/tools/url-scheme-host";
+import type { CfgReadDetails, CfgWriteDetails } from "../tools/details/cfg-render";
+import type { EditToolPerFileResult } from "../tools/details/edit";
+import type { ProcReadDetails, ProcWriteDetails } from "../tools/details/proc-render";
+import type { CoordinationDetails } from "../tools/details/wait";
+import type { SchemeWriteScope } from "./url-scheme";
 
 /** Render state and prewalk facts a handler write attaches to the `write` tool result. */
 export interface InternalWriteDetails {

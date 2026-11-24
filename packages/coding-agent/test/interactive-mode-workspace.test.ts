@@ -4,7 +4,10 @@ import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { createRoot, isUiNode } from "@oh-my-pi/pi-tui";
+import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
+import { describeTree } from "@oh-my-pi/pi-tui/testing/corpus";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { __resetDirsFromEnvForTests, getAgentDbPath, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
@@ -18,7 +21,10 @@ import { AgentStorage } from "../src/session/agent-storage";
 import { HistoryStorage } from "../src/session/history-storage";
 import { convertToLlm } from "../src/session/messages";
 import { SessionManager } from "../src/session/session-manager";
+import { StatusBarPreview } from "../src/ui/status/composer-facts";
+import { initTheme } from "../src/ui/theme/service";
 import { commandUsage, hintUsage } from "../src/utils/usage-counter";
+import { createModeTerminal, type ModeTerminal } from "./helpers/mode-terminal";
 
 function text(message: AgentMessage | Message): string {
 	if (!("content" in message)) return "";
@@ -33,6 +39,7 @@ describe("InteractiveMode workspace command", () => {
 	let registry: ModelRegistry;
 	let session: AgentSession;
 	let mode: InteractiveMode;
+	let terminal: ModeTerminal;
 	let mock: MockModel;
 	let localRoot: string;
 
@@ -55,7 +62,7 @@ describe("InteractiveMode workspace command", () => {
 		// Do not bind the process-wide counter to storage this fixture will close.
 		vi.spyOn(hintUsage, "load").mockResolvedValue(undefined);
 		vi.spyOn(commandUsage, "record").mockImplementation(() => {});
-		await initTheme();
+		initTheme();
 		await Settings.init({ inMemory: true, cwd: temp.path(), agentDir: temp.join("agent") });
 		auth = await AuthStorage.create(temp.join("auth.db"));
 		mock = createMockModel({ handler: { content: ["finished"] } });
@@ -81,7 +88,8 @@ describe("InteractiveMode workspace command", () => {
 			toolRegistry: new Map(),
 			convertToLlm,
 		});
-		mode = new InteractiveMode(session, "test");
+		terminal = createModeTerminal();
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, terminal.frame);
 		localRoot = resolveLocalRoot({
 			getArtifactsDir: () => manager.getArtifactsDir(),
 			getSessionId: () => manager.getSessionId(),
@@ -90,6 +98,7 @@ describe("InteractiveMode workspace command", () => {
 
 	afterEach(async () => {
 		mode?.stop();
+		terminal?.dispose();
 		for (const key of ["isStreaming", "isCompacting", "extensionRunner"]) {
 			Reflect.deleteProperty(session, key);
 		}
@@ -126,7 +135,7 @@ describe("InteractiveMode workspace command", () => {
 	}
 
 	function statusText(width: number): string {
-		return [mode.statusLine.getTopBorder(width).content, ...mode.statusLine.render(width)].join(" ");
+		return mode.statusLinePreviewRow(width) ?? "";
 	}
 
 	it("toggles without submitting", async () => {
@@ -151,9 +160,9 @@ describe("InteractiveMode workspace command", () => {
 			},
 		];
 		const imageLinks = ["local://attached.png"];
-		mode.editor.setText("newer draft");
+		mode.composer.setText("newer draft");
 		await submit(raw, { images, imageLinks });
-		expect(mode.editor.getText()).toBe("newer draft");
+		expect(mode.composer.text()).toBe("newer draft");
 		await submit("second message");
 		expect(mock.calls).toHaveLength(2);
 		expect(reminders(mock.calls[0].context.messages)).toHaveLength(1);
@@ -172,7 +181,7 @@ describe("InteractiveMode workspace command", () => {
 	it("delivers an idle command without an input waiter exactly once", async () => {
 		const controller = new InputController(mode);
 		controller.setupEditorSubmitHandler();
-		await mode.editor.onSubmit?.("/workspace between turns");
+		await mode.composer.onSubmit?.("/workspace between turns");
 		expect(session.getWorkspaceModeState().enabled).toBe(true);
 		expect(mock.calls).toHaveLength(1);
 		expect(
@@ -189,11 +198,11 @@ describe("InteractiveMode workspace command", () => {
 			isCompacting: { configurable: true, get: () => compacting },
 		});
 		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-		await mode.editor.onSubmit?.("/workspace steer this");
-		mode.editor.setText("/workspace follow this");
+		await mode.composer.onSubmit?.("/workspace steer this");
+		mode.composer.setText("/workspace follow this");
 		await controller.handleFollowUp();
 		compacting = true;
-		mode.editor.setText("/workspace after compaction");
+		mode.composer.setText("/workspace after compaction");
 		await controller.handleFollowUp();
 		expect(mode.compactionQueuedMessages).toMatchObject([{ text: "/workspace after compaction", mode: "followUp" }]);
 		compacting = false;
@@ -228,7 +237,7 @@ describe("InteractiveMode workspace command", () => {
 		const controller = new InputController(mode);
 		controller.setupEditorSubmitHandler();
 		const pending = mode.getUserInput();
-		const dispatch = mode.editor.onSubmit?.("/workspace original request");
+		const dispatch = mode.composer.onSubmit?.("/workspace original request");
 		await Promise.race([
 			entered.promise,
 			Promise.resolve(dispatch).then(() => {
@@ -236,15 +245,15 @@ describe("InteractiveMode workspace command", () => {
 			}),
 		]);
 		const newerImage = { type: "image" as const, data: "new-image", mimeType: "image/png" };
-		mode.editor.pendingImages = [newerImage];
-		mode.editor.pendingImageLinks = ["local://newer.png"];
-		mode.editor.setText("newer draft");
+		mode.composer.pendingImages.splice(0, mode.composer.pendingImages.length, newerImage);
+		mode.composer.pendingImageLinks.splice(0, mode.composer.pendingImageLinks.length, "local://newer.png");
+		mode.composer.setText("newer draft");
 		release.resolve();
 		await dispatch;
 		expect((await pending).text).toBe("original request");
-		expect(mode.editor.getText()).toBe("newer draft");
-		expect(mode.editor.pendingImages).toEqual([newerImage]);
-		expect(mode.editor.pendingImageLinks).toEqual(["local://newer.png"]);
+		expect(mode.composer.text()).toBe("newer draft");
+		expect(mode.composer.pendingImages).toEqual([newerImage]);
+		expect(mode.composer.pendingImageLinks).toEqual(["local://newer.png"]);
 	});
 
 	it("keeps Plan and Workspace recognizable in ANSI and structured status", async () => {
@@ -254,7 +263,16 @@ describe("InteractiveMode workspace command", () => {
 		await submit("investigate without changing files");
 		expect(mode.planModeEnabled).toBe(true);
 		const ansi = statusText(180);
-		const structured = JSON.stringify(mode.statusLine.describePreview());
+		const structured = createRoot(dispose => {
+			try {
+				const view = StatusBarPreview(mode.statusLine);
+				const node = typeof view === "function" ? view() : view;
+				if (!isUiNode(node)) throw new Error("Expected a structured status node");
+				return JSON.stringify(describeTree(node, staticEnvironment(currentTheme())));
+			} finally {
+				dispose();
+			}
+		});
 		for (const output of [ansi, structured]) {
 			expect(output).toContain("Plan");
 			expect(output).toContain("Workspace");

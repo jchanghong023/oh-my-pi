@@ -31,13 +31,11 @@ const USAGE = "用法：/team <问题或需求> — 用一段自然语言描述�
 function detachSubmittedImages(runtime: TuiSlashCommandRuntime): boolean {
 	const images = runtime.input?.images;
 	if (!images?.length) return false;
-	const editor = runtime.ctx.editor;
-	const pending = editor.pendingImages;
+	const { composer } = runtime.ctx;
+	const pending = composer.pendingImages;
 	if (!images.every((image, index) => pending[index] === image)) return false;
 	pending.splice(0, images.length);
-	const linkCount = Math.min(runtime.input?.imageLinks?.length ?? 0, editor.pendingImageLinks.length);
-	editor.pendingImageLinks.splice(0, linkCount);
-	editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
+	composer.pendingImageLinks.splice(0, images.length);
 	return true;
 }
 
@@ -80,7 +78,8 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handle: handleTeamCommand,
 		handleTui: async (command, runtime: TuiSlashCommandRuntime) => {
 			const question = command.args.trim();
-			const ctx = runtime.ctx;
+			const { ctx } = runtime;
+			const { composer } = ctx;
 			if (question === "configure") {
 				clearSubmittedText(runtime);
 				showTeamConfig(ctx);
@@ -99,25 +98,19 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				hooks: {
 					showStatus: text => ctx.showStatus(text),
 					showError: text => ctx.showError(text),
-					rebuildChat: () => {
-						ctx.rebuildChatFromMessages();
-						// rebuildChatFromMessages mutates the component tree without
-						// scheduling a paint; the report would otherwise wait for the
-						// next unrelated repaint.
-						ctx.ui.requestRender();
-					},
+					rebuildChat: () => ctx.rebuildChatFromMessages(),
 				},
 			});
 			// Dispatch consumes only its own draft; a failed dispatch returns any
 			// detached images after the newer draft and remaps their markers.
 			if (outcome.started) {
-				const currentText = ctx.editor.getExpandedText();
+				const currentText = composer.expandedText();
 				if (!currentText || currentText === command.text) clearSubmittedText(runtime);
 			} else if (draftDetached) {
-				restoreDetachedDraft(ctx.editor, command.text, runtime.input?.images, runtime.input?.imageLinks);
+				restoreDetachedDraft(composer, command.text, runtime.input?.images, runtime.input?.imageLinks);
 			} else {
-				const currentText = ctx.editor.getExpandedText();
-				ctx.editor.setCollapsedText([command.text, currentText].filter(part => part.trim()).join("\n\n"));
+				const currentText = composer.expandedText();
+				composer.setCollapsedText([command.text, currentText].filter(part => part.trim()).join("\n\n"));
 			}
 			return { consumed: true };
 		},

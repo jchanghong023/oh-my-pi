@@ -1,20 +1,14 @@
-import type { AgentSource } from "@oh-my-pi/pi-tui/tools/task";
-export {
-	TASK_SUBAGENT_PROGRESS_CHANNEL,
-	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
-} from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
-export type {
-	SubagentProgressPayload,
-	SubagentLifecyclePayload,
-} from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
+import type { AgentSource } from "./task-details";
+export { TASK_SUBAGENT_PROGRESS_CHANNEL, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "./session-observer-registry";
+export type { SubagentProgressPayload, SubagentLifecyclePayload } from "./session-observer-registry";
 import { type BaseType, type FluentType, type } from "@oh-my-pi/omptype";
 import { $env, isRecord } from "@oh-my-pi/pi-utils";
 
+import type { ConfiguredThinkingLevel } from "../utils/render-utils";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
-import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { CreateAgentSessionOptions } from "../sdk";
 import type { StructuredSubagentRequest } from "./structured-subagent";
-import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
+import type { SingleResult } from "./task-details";
 
 /** Per-invocation publication policy; never mutates shared settings. */
 export interface NativeSpawnOverrides {

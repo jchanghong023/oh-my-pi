@@ -1,34 +1,29 @@
 import * as path from "node:path";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { col, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
-import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { plainText, spansLine } from "@oh-my-pi/pi-tui/native/spans";
-import { backgroundChrome } from "@oh-my-pi/pi-tui/native/tone";
+import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
 import {
+	padTo,
 	replaceTabs,
-	truncateMiddleToWidth,
-	truncateToWidth,
-	wrapTextWithAnsi,
-} from "@oh-my-pi/pi-tui/render/render-utils";
-import type { State } from "@oh-my-pi/pi-tui/render/types";
-import { getStateBgColor, padToWidth } from "@oh-my-pi/pi-tui/render/utils";
-import { theme } from "@oh-my-pi/pi-tui/theme";
-import type { ThemeColor } from "@oh-my-pi/pi-tui/theme/theme";
-import { isGroupedHeader, isMatchRow } from "@oh-my-pi/pi-tui/tools/grouped-file-output";
-import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
-import { getPaddingX, padding, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+	spaces,
+	truncate as truncateToWidth,
+	truncateMiddle as truncateMiddleToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui/text/width";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import type { LocalAgentSessionEvent } from "../session/agent-session";
+import type { LocalAgentSessionEvent } from "../session/agent-session-events";
 import type { LiveToolOutputPreview, LiveToolOutputSnapshot } from "../session/agent-session-handle";
 import { isToolOutputRow, mayBeCoveredByFileDiff, toolOutputSource } from "../session/live-tool-output-text";
+import { unwrapHashlineHeaderPath } from "../tools/hashline-format";
 import { formatPathRelativeToCwd } from "../tools/path-utils";
+import { isGroupedHeader, isMatchRow } from "../ui/tools/grouped-output";
+import { wrapTextWithAnsi } from "../utils/text-width";
 import { compactToolPreviewInfo } from "./compact-thinking-preview";
 import { cfgDisplayMode } from "./settings";
 import type { InteractiveModeContext } from "./types";
 
 function singleLine(value: string): string {
-	return plainText(value)
+	return stripEscapes(value)
 		.replace(/[\r\n]+/g, " ")
 		.trim();
 }
@@ -92,7 +87,7 @@ const PREVIEW_STATE_WORD: Record<PreviewState, string> = {
 	cancelled: "已取消",
 };
 
-const PREVIEW_STATE_COLOR: Record<PreviewState, ThemeColor> = {
+const PREVIEW_STATE_COLOR: Record<PreviewState, string> = {
 	running: "accent",
 	completed: "muted",
 	failed: "error",
@@ -100,11 +95,11 @@ const PREVIEW_STATE_COLOR: Record<PreviewState, ThemeColor> = {
 };
 
 /** Map the preview lifecycle onto the shared output-block visual state. */
-const PREVIEW_BLOCK_STATE: Record<PreviewState, State> = {
-	running: "running",
-	completed: "success",
-	failed: "error",
-	cancelled: "pending",
+const PREVIEW_BLOCK_BG: Record<PreviewState, string> = {
+	running: "toolPendingBg",
+	completed: "toolSuccessBg",
+	failed: "toolErrorBg",
+	cancelled: "toolPendingBg",
 };
 
 export interface CompactPreviewActivity {
@@ -125,7 +120,7 @@ type PreviewHeader = {
 };
 
 /** A text-only projection of session execution facts, independent of transcript tool cards. */
-export class CompactToolOutputPreview implements Component {
+export class CompactToolOutputPreview {
 	#timer?: NodeJS.Timeout;
 	#deadline?: number;
 	#session?: InteractiveModeContext["viewSession"];
@@ -133,9 +128,10 @@ export class CompactToolOutputPreview implements Component {
 	#numberedDiff?: { diff: string; rows: Set<string> };
 
 	constructor(
-		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "ui" | "settings">,
+		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "shell" | "settings">,
 		private readonly availableRows: () => number = () => 6,
 		private readonly coveredDiff?: (toolCallId: string, file: string, width: number) => string | undefined,
+		private readonly onChange: () => void = () => {},
 	) {}
 
 	clear(): void {
@@ -154,12 +150,12 @@ export class CompactToolOutputPreview implements Component {
 			event.type === "tool_execution_update" ||
 			event.type === "tool_execution_end"
 		) {
-			this.#source(this.ctx.ui.terminal.columns);
+			this.#source(this.ctx.shell.size().columns);
 		}
 	}
 
 	restore(): void {
-		this.#source(this.ctx.ui.terminal.columns);
+		this.#source(this.ctx.shell.size().columns);
 	}
 
 	#source(width: number): LiveToolOutputPreview | undefined {
@@ -186,7 +182,7 @@ export class CompactToolOutputPreview implements Component {
 						this.ctx.viewSession.sessionManager.getSessionId() === sessionId &&
 						this.#deadline === deadline
 					)
-						this.ctx.ui.requestRender();
+						this.onChange();
 				}, deadline - Date.now());
 				this.#timer.unref?.();
 			}
@@ -291,7 +287,7 @@ export class CompactToolOutputPreview implements Component {
 		if (cfgDisplayMode.get(this.ctx.settings) !== "compact" || !selected || width < 1) return undefined;
 		const height = Math.max(0, Math.min(6, Math.floor(this.availableRows())));
 		if (height === 0) return undefined;
-		const inset = Math.min(getPaddingX(1), width - 1);
+		const inset = Math.min(1, width - 1);
 		const contentWidth = width - inset;
 		const { call, text: output } = selected;
 		const source = toolOutputSource(call.toolName, call.result, call.args);
@@ -327,18 +323,18 @@ export class CompactToolOutputPreview implements Component {
 		const statusStyle =
 			state === "completed" ? PREVIEW_STATE_COLOR.completed : `${PREVIEW_STATE_COLOR[state]} strong`;
 		const spans = identityText
-			? [span(word, statusStyle), span(gap), span(identityText, "toolTitle strong")]
-			: [span(truncateToWidth(name, contentWidth, ""), "toolTitle strong")];
+			? [{ t: word, s: statusStyle }, { t: gap }, { t: identityText, s: "toolTitle strong" }]
+			: [{ t: truncateToWidth(name, contentWidth, ""), s: "toolTitle strong" }];
 		const command = info.command ? singleLine(info.command) : "";
 		const target = command || singleLine(info.detail);
 		const targetRoom = identityText ? identityRoom - visibleWidth(identityText) - separatorWidth : 0;
 		const targetText = target && targetRoom > 0 ? truncateMiddleToWidth(target, targetRoom) : "";
 		const targetVisible = targetText !== "" && (targetText === target || targetText.replace("…", "").trim() !== "");
-		if (targetVisible) spans.push(span(separator), span(targetText, "toolOutput"));
+		if (targetVisible) spans.push({ t: separator }, { t: targetText, s: "toolOutput" });
 		return {
 			height,
 			contentWidth,
-			left: padding(inset),
+			left: spaces(inset),
 			state,
 			spans,
 			callId: call.toolCallId,
@@ -357,30 +353,13 @@ export class CompactToolOutputPreview implements Component {
 	render(width: number): readonly string[] {
 		const header = this.#header(width);
 		if (!header) return [];
-		const bg = getStateBgColor(PREVIEW_BLOCK_STATE[header.state]);
-		const paint = (row: string) =>
-			header.left + padToWidth(row, header.contentWidth, value => theme.bgFill(bg, value));
+		const theme = currentTheme();
+		const bg = PREVIEW_BLOCK_BG[header.state];
+		const paint = (row: string) => header.left + theme.bgFill(bg, padTo(row, header.contentWidth));
 		const { lines, diagnosticCount } = this.#body(header);
 		return [
-			paint(spansLine(header.spans)),
-			...lines.map((line, i) =>
-				paint(i < diagnosticCount ? theme.bold(theme.fg("error", line)) : theme.fg("toolOutput", line)),
-			),
+			paint(header.spans.map(span => theme.style(span.s, span.t)).join("")),
+			...lines.map((line, i) => paint(theme.style(i < diagnosticCount ? "error strong" : "toolOutput", line))),
 		];
-	}
-
-	describe(cx: DescribeContext): NativeNode {
-		const header = this.#header(cx.cols);
-		if (!header) return { k: "rows", p: { cols: cx.cols, lines: [] } };
-		const tone = backgroundChrome(getStateBgColor(PREVIEW_BLOCK_STATE[header.state])).tone;
-		const { lines, diagnosticCount } = this.#body(header);
-		const paint = (spans: TspSpan[]) => {
-			const content = text(spans, { wrap: "none", tone, grow: 1 });
-			return header.left ? row([text(header.left), content]) : content;
-		};
-		return col([
-			paint(header.spans),
-			...lines.map((line, i) => paint([span(line, i < diagnosticCount ? "error strong" : "toolOutput")])),
-		]);
 	}
 }

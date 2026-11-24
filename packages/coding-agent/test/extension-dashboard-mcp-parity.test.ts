@@ -40,13 +40,9 @@ import { readMCPConfigFile, setMcpServerEnabled, setServerDisabled } from "@oh-m
 import { createExtensionDashboardRuntime } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/dashboard-runtime";
 import { loadAllExtensions } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/state-manager";
 import { __resetDirsFromEnvForTests, getMCPConfigPath, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
-import type { ExtensionDashboardRuntime } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
-import {
-	applyDisabledExtensionsToState,
-	createInitialState,
-	refreshState,
-} from "@oh-my-pi/pi-tui/overlays/extensions/state-manager";
-import { type Extension, isShadowedExtension } from "@oh-my-pi/pi-tui/overlays/extensions/types";
+import type { ExtensionDashboardRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/inventory/extension-dashboard";
+import { type Extension, isShadowedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/inventory/types";
+import { withDisabledIds } from "../src/ui/overlays/panels/extensions-data";
 import { restoreEnvValue } from "./helpers/settings-test-state";
 
 describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
@@ -510,19 +506,18 @@ describe("shared skill runtime/dashboard parity", () => {
 		const initial = await loadAndCompare();
 		const originalBytes = await Promise.all(panelRows(initial).map(row => fs.readFile(row.path, "utf8")));
 		const providers = runtime.getProviders();
-		let state = createInitialState(initial, providers);
 		const aliasId = "skill:personal/panel-shared";
 		runtime.setDisabledExtensions([aliasId]);
-		state = applyDisabledExtensionsToState(state, runtime.getDisabledExtensions(), providers);
-		expect(state.extensions.find(row => row.id === aliasId)?.state).toBe("disabled");
-		state = refreshState(state, await loadAndCompare(), providers);
-		expect(state.extensions.map(row => row.id).sort()).toEqual(initial.map(row => row.id).sort());
-		expect(state.extensions.find(row => row.id === aliasId)?.disabledReason).toBe("item-disabled");
-		expect(state.extensions.find(row => row.name === "panel-shared")?.state).toBe("active");
+		const disabledIds = new Set(runtime.getDisabledExtensions());
+		const immediate = initial.map(row => withDisabledIds(row, disabledIds, providers));
+		expect(immediate.find(row => row.id === aliasId)?.state).toBe("disabled");
+		const refreshed = await loadAndCompare();
+		expect(refreshed.map(row => row.id).sort()).toEqual(initial.map(row => row.id).sort());
+		expect(refreshed.find(row => row.id === aliasId)?.disabledReason).toBe("item-disabled");
+		expect(refreshed.find(row => row.name === "panel-shared")?.state).toBe("active");
 
 		runtime.setDisabledExtensions([]);
-		state = refreshState(state, await loadAndCompare(), providers);
-		expect(state.extensions.every(row => row.state === "active")).toBe(true);
+		expect((await loadAndCompare()).every(row => row.state === "active")).toBe(true);
 
 		runtime.setDisabledExtensions(["skill:panel-shared"]);
 		const disabled = await loadAndCompare();

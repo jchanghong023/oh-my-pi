@@ -31,7 +31,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, type CustomMessage, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
+import { tagImageAttachmentSource } from "@oh-my-pi/pi-coding-agent/utils/image-source";
 import { removeSyncWithRetries, Snowflake, withTimeout } from "@oh-my-pi/pi-utils";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
@@ -717,11 +717,6 @@ describe("AgentSession queued steer delivery", () => {
 		const ctx = createInteractiveModeContext({
 			session,
 			sessionManager: session.sessionManager,
-			editor: {
-				pendingImages: [],
-				pendingImageLinks: [],
-				addToHistory: () => {},
-			},
 			withLocalSubmission: async (_text, submit) => submit(),
 			hasActiveBtw: () => false,
 			hasActiveOmfg: () => false,
@@ -731,8 +726,8 @@ describe("AgentSession queued steer delivery", () => {
 		const run = session.prompt("start");
 		try {
 			await withTimeout(toolStarted.promise, 2_000, "tool did not start");
-			await ctx.editor.onSubmit?.("change direction");
-			await ctx.editor.onSubmit?.("");
+			await ctx.composer.onSubmit?.("change direction");
+			await ctx.composer.onSubmit?.("");
 			await withTimeout(session.waitForIdle(), 2_000, "steer did not finish");
 			await run;
 			expect(mock.calls).toHaveLength(2);

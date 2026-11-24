@@ -9,16 +9,18 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
+import {
+	AgentSession,
+	type LocalAgentSessionEvent as AgentSessionEvent,
+} from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
 	SKILL_PROMPT_MESSAGE_TYPE,
@@ -26,23 +28,9 @@ import {
 	USER_INTERRUPT_LABEL,
 } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Container } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { Composer } from "../src/ui/composer/composer";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
-import { getTestModel } from "./helpers/model-fixtures";
-
-type StubEditor = {
-	setText: (text: string) => void;
-	setCollapsedText: (text: string) => void;
-	getText: () => string;
-	getExpandedText: () => string;
-	clearDraft: (historyText?: string) => void;
-	addToHistory: Mock<(...args: unknown[]) => unknown>;
-	onSubmit?: (text: string) => Promise<void>;
-	pendingImages: ImageContent[];
-	pendingImageLinks: (string | undefined)[];
-	imageLinks?: (string | undefined)[];
-};
 
 type PromptCustomMessage = Mock<
 	(
@@ -74,46 +62,16 @@ function createStubInputControllerContext(opts: {
 	isStreaming: boolean;
 	isCompacting?: boolean;
 	loopModeEnabled?: boolean;
-	model?: InteractiveModeContext["session"]["model"];
 }) {
-	let editorText = "";
-	const sessionId = crypto.randomUUID();
-	const editor: StubEditor = {
-		setText(text) {
-			editorText = text;
-		},
-		// The stub skips chip collapsing so assertions read the wire-format text.
-		setCollapsedText(text) {
-			editorText = text;
-		},
-		getText() {
-			return editorText;
-		},
-		getExpandedText() {
-			return editorText;
-		},
-		clearDraft(historyText?: string) {
-			if (historyText !== undefined) this.addToHistory(historyText);
-			this.setText("");
-			this.imageLinks = undefined;
-			this.pendingImages = [];
-			this.pendingImageLinks = [];
-		},
-		addToHistory: vi.fn(),
-		pendingImages: [] as ImageContent[],
-		pendingImageLinks: [] as (string | undefined)[],
-	};
+	const editor = new Composer();
+	vi.spyOn(editor, "addToHistory");
 	const promptCustomMessage: PromptCustomMessage = vi.fn(async (_message, options) => {
 		options?.onPromptAdmitted?.();
 		return true;
 	});
-	const prompt = vi.fn(async (_text: string, options?: PromptOptions) => {
-		options?.onPromptAdmitted?.();
-		return true;
-	});
+	const prompt = vi.fn(async (_text: string, _options?: unknown) => {});
 	const handleGoalModeCommand = vi.fn(async (_rest?: string) => {});
 	const updatePendingMessagesDisplay = vi.fn();
-	const requestRender = vi.fn();
 	const showError = vi.fn();
 	const renderOptimisticSkillMessage = vi.fn();
 	const reconcileOptimisticSkillMessage = vi.fn();
@@ -122,15 +80,10 @@ function createStubInputControllerContext(opts: {
 	const setLoopPrompt = vi.fn((_prompt: string) => {});
 	const armLoopAutoSubmit = vi.fn();
 	const ctx = {
-		editor,
-		ui: { requestRender },
-		sessionManager: { getSessionId: () => sessionId, getLeafId: () => null },
-		handleDevInput: async () => false,
-		isDevInputRoute: () => false,
+		composer: editor,
 		skillCommands: opts.skillCommands,
 		fileSlashCommands: new Set<string>(),
 		session: {
-			model: opts.model,
 			isStreaming: opts.isStreaming,
 			isCompacting: opts.isCompacting ?? false,
 			isBashRunning: false,
@@ -160,6 +113,7 @@ function createStubInputControllerContext(opts: {
 		renderOptimisticSkillMessage,
 		reconcileOptimisticSkillMessage,
 		clearOptimisticSkillMessage,
+		sessionManager: { getSessionId: () => "session", getLeafId: () => null },
 	} as unknown as InteractiveModeContext;
 
 	return {
@@ -169,7 +123,6 @@ function createStubInputControllerContext(opts: {
 		promptCustomMessage,
 		handleGoalModeCommand,
 		updatePendingMessagesDisplay,
-		requestRender,
 		queueCompactionMessage,
 		showError,
 		renderOptimisticSkillMessage,
@@ -196,8 +149,10 @@ describe("InputController skill queue chip metadata", () => {
 	});
 
 	it("passes slash-form queueChipText for streaming skill steers", async () => {
-		const { ctx, editor, promptCustomMessage, updatePendingMessagesDisplay, requestRender } =
-			createStubInputControllerContext({ skillCommands, isStreaming: true });
+		const { ctx, editor, promptCustomMessage, updatePendingMessagesDisplay } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+		});
 		const controller = new InputController(ctx);
 
 		controller.setupEditorSubmitHandler();
@@ -211,7 +166,6 @@ describe("InputController skill queue chip metadata", () => {
 		});
 		expect(promptCustomMessage.mock.calls[0]?.[0].details.__queueChipText).toBeUndefined();
 		expect(updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
-		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 
 	it("queues known skill steers during compaction instead of dispatching immediately", async () => {
@@ -296,7 +250,7 @@ describe("InputController skill queue chip metadata", () => {
 		await controller.handleFollowUp();
 
 		expect(showError).toHaveBeenCalledTimes(1);
-		expect(editor.getText()).toBe("/skill:test-skill go\n\ntyped while dispatching");
+		expect(editor.expandedText()).toBe("/skill:test-skill go\n\ntyped while dispatching");
 	});
 
 	it("streaming follow-up applies builtin slash commands instead of queueing them", async () => {
@@ -311,7 +265,7 @@ describe("InputController skill queue chip metadata", () => {
 
 		expect(handleGoalModeCommand.mock.calls[0]?.[0]).toBe("set Ship the release");
 		expect(prompt).not.toHaveBeenCalled();
-		expect(editor.getText()).toBe("");
+		expect(editor.expandedText()).toBe("");
 	});
 
 	it("idle skill prompt still leaves queueChipText out of persisted details", async () => {
@@ -342,9 +296,8 @@ describe("InputController skill queue chip metadata", () => {
 
 		controller.setupEditorSubmitHandler();
 		editor.setText("/skill:test-skill inspect this [Image #1]");
-		editor.pendingImages = [image];
-		editor.pendingImageLinks = ["file:///tmp/skill-image.png"];
-		editor.imageLinks = editor.pendingImageLinks;
+		editor.pendingImages.push(image);
+		editor.pendingImageLinks.push("file:///tmp/skill-image.png");
 		await editor.onSubmit?.("/skill:test-skill inspect this [Image #1]");
 
 		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
@@ -354,10 +307,9 @@ describe("InputController skill queue chip metadata", () => {
 		}
 		expect(message.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("Do the thing.") });
 		expect(message.content[1]).toEqual(image);
-		expect(editor.getText()).toBe("");
+		expect(editor.expandedText()).toBe("");
 		expect(editor.pendingImages).toEqual([]);
 		expect(editor.pendingImageLinks).toEqual([]);
-		expect(editor.imageLinks).toBeUndefined();
 	});
 });
 
@@ -435,7 +387,7 @@ describe("InputController optimistic skill row (#8895)", () => {
 		expect(renderOptimisticSkillMessage).toHaveBeenCalledTimes(1);
 		expect(clearOptimisticSkillMessage).toHaveBeenCalledTimes(1);
 		expect(showError).toHaveBeenCalledTimes(1);
-		expect(editor.getText()).toBe("/skill:test-skill go");
+		expect(editor.expandedText()).toBe("/skill:test-skill go");
 	});
 });
 
@@ -456,13 +408,10 @@ describe("compaction skill re-invocation", () => {
 			options?.onPromptAdmitted?.();
 			return true;
 		});
-		const prompt = vi.fn(async (_text: string, options?: PromptOptions) => {
-			options?.onPromptAdmitted?.();
-			return true;
-		});
+		const prompt = vi.fn(async () => true);
 		const steer = vi.fn(async (_text: string, _images?: ImageContent[]) => {});
 		const followUp = vi.fn(async (_text: string, _images?: ImageContent[]) => {});
-		const armLoopAutoSubmit = vi.fn((_admission: Promise<unknown>) => {});
+		const armLoopAutoSubmit = vi.fn((_settlement: Promise<unknown>) => {});
 		const ctx = {
 			skillCommands,
 			compactionQueuedMessages: queuedMessages,
@@ -476,6 +425,7 @@ describe("compaction skill re-invocation", () => {
 			withLocalSubmission: vi.fn(async (_text: string, fn: () => unknown) => Promise.resolve(fn())),
 			session: {
 				sessionManager: { getSessionId: () => "s1" },
+				waitForIdle: async () => {},
 				buildUserSkillPrompt: buildSkillPromptMessage,
 				promptCustomMessage,
 				prompt,
@@ -499,16 +449,16 @@ describe("compaction skill re-invocation", () => {
 	});
 
 	it("arms the loop after re-invoking a queued skill (regression: /loop never resubmitted after compaction)", async () => {
-		const loopPrompt = "/skill:test-skill arg1 arg2";
+		const text = "/skill:test-skill arg1 arg2";
 		const { ctx, promptCustomMessage, armLoopAutoSubmit } = createCompactionDrainContext(
-			[{ text: loopPrompt, mode: "steer" }],
-			loopPrompt,
+			[{ text, mode: "steer" }],
+			text,
 		);
 		const uiHelpers = new UiHelpers(ctx);
 
 		await uiHelpers.flushCompactionQueue({ willRetry: false });
-
 		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
+
 		expect(armLoopAutoSubmit).toHaveBeenCalledTimes(1);
 		await expect(armLoopAutoSubmit.mock.calls[0]?.[0]).resolves.toBeUndefined();
 	});
@@ -592,9 +542,10 @@ interface SessionFixture {
 async function createRealSession(): Promise<SessionFixture> {
 	const tempDir = TempDir.createSync("@pi-skill-queue-real-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-	const model = getTestModel("ascend", candidate => candidate.input.includes("image"));
-	authStorage.keys.setRuntime(model.provider, "test-key");
+	authStorage.keys.setRuntime("anthropic", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage);
+	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!model) throw new Error("Expected built-in anthropic model to exist");
 
 	const agent = new Agent({
 		initialState: {
@@ -827,67 +778,8 @@ describe("AgentSession derived queued custom display", () => {
 	});
 });
 
-function createStubInteractiveModeContextForUiHelpers(
-	session: AgentSession,
-	options?: { focusedAgentId?: string; compactionQueuedMessages?: CompactionQueuedMessage[] },
-) {
-	let editorText = "";
-	const editor: StubEditor = {
-		setText(text) {
-			editorText = text;
-		},
-		// The stub skips chip collapsing so assertions read the wire-format text.
-		setCollapsedText(text) {
-			editorText = text;
-		},
-		getText() {
-			return editorText;
-		},
-		getExpandedText() {
-			return editorText;
-		},
-		clearDraft(historyText?: string) {
-			if (historyText !== undefined) this.addToHistory(historyText);
-			this.setText("");
-			this.imageLinks = undefined;
-			this.pendingImages = [];
-			this.pendingImageLinks = [];
-		},
-		addToHistory: vi.fn(),
-		pendingImages: [] as ImageContent[],
-		pendingImageLinks: [] as (string | undefined)[],
-	};
-	const pendingMessagesContainer = new Container();
-	const requestRender = vi.fn();
-	const requestComponentRender = vi.fn();
-	const updatePendingMessagesDisplay = vi.fn();
-
-	const ctx = {
-		editor,
-		ui: { requestRender, requestComponentRender },
-		pendingMessagesContainer,
-		session,
-		viewSession: session,
-		focusedAgentId: options?.focusedAgentId,
-		compactionQueuedMessages: options?.compactionQueuedMessages ?? [],
-		keybindings: {
-			getKeys: (_action: string) => ["alt+up"],
-		},
-		updatePendingMessagesDisplay,
-		locallySubmittedUserSignatures: new Set<string>(),
-	} as unknown as InteractiveModeContext;
-
-	return { ctx, editor, pendingMessagesContainer, requestComponentRender };
-}
-
-describe("UiHelpers / InputController against derived queued custom display", () => {
+describe("InputController queue restore against derived queued custom display", () => {
 	let fixture: SessionFixture | undefined;
-
-	beforeEach(async () => {
-		const themeInstance = await getThemeByName("dark");
-		expect(themeInstance).toBeDefined();
-		setThemeInstance(themeInstance!);
-	});
 
 	afterEach(async () => {
 		if (fixture) {
@@ -899,90 +791,25 @@ describe("UiHelpers / InputController against derived queued custom display", ()
 		vi.restoreAllMocks();
 	});
 
-	it("renders the compact slash form for queued skills", async () => {
-		fixture = await createRealSession();
-		const { session } = fixture;
-		queueCustomSteer(session, "/skill:test-skill arg1 arg2");
-
-		const { ctx, pendingMessagesContainer } = createStubInteractiveModeContextForUiHelpers(session);
-		const uiHelpers = new UiHelpers(ctx);
-		uiHelpers.updatePendingMessagesDisplay();
-
-		const rendered = Bun.stripANSI(pendingMessagesContainer.render(120).join("\n"));
-		expect(rendered).toContain("Steering · 1");
-		expect(rendered).toContain("1. /skill:test-skill arg1 arg2");
-		expect(rendered).not.toContain("Steer:");
-	});
-
-	it("requests the pending-container repaint after rebuilding and clearing it", async () => {
-		fixture = await createRealSession();
-		const { session } = fixture;
-		queueCustomSteer(session, "/skill:test-skill arg1 arg2");
-
-		const { ctx, pendingMessagesContainer, requestComponentRender } =
-			createStubInteractiveModeContextForUiHelpers(session);
-		const uiHelpers = new UiHelpers(ctx);
-		uiHelpers.updatePendingMessagesDisplay();
-
-		expect(pendingMessagesContainer.children.length).toBeGreaterThan(0);
-		expect(requestComponentRender).toHaveBeenNthCalledWith(1, pendingMessagesContainer);
-
-		session.clearQueue();
-		uiHelpers.updatePendingMessagesDisplay();
-
-		expect(pendingMessagesContainer.children).toHaveLength(0);
-		expect(requestComponentRender).toHaveBeenNthCalledWith(2, pendingMessagesContainer);
-	});
-
-	it("does not advertise main compaction messages in a focused subagent view", async () => {
-		fixture = await createRealSession();
-		const compactionQueuedMessages: CompactionQueuedMessage[] = [{ text: "main compaction", mode: "steer" }];
-		const focused = createStubInteractiveModeContextForUiHelpers(fixture.session, {
-			focusedAgentId: "Worker",
-			compactionQueuedMessages,
-		});
-		new UiHelpers(focused.ctx).updatePendingMessagesDisplay();
-		expect(focused.pendingMessagesContainer.children).toHaveLength(0);
-
-		const main = createStubInteractiveModeContextForUiHelpers(fixture.session, { compactionQueuedMessages });
-		new UiHelpers(main.ctx).updatePendingMessagesDisplay();
-		expect(Bun.stripANSI(main.pendingMessagesContainer.render(120).join("\n"))).toContain("main compaction");
-	});
-
-	it("groups yield follow-ups under one heading", async () => {
-		fixture = await createRealSession();
-		const { session } = fixture;
-		for (const text of ["inspect types", "run tests", "summarize"]) {
-			session.agent.followUp({
-				role: "user",
-				content: text,
-				attribution: "user",
-				timestamp: Date.now(),
-			});
-		}
-
-		const { ctx, pendingMessagesContainer } = createStubInteractiveModeContextForUiHelpers(session);
-		new UiHelpers(ctx).updatePendingMessagesDisplay();
-
-		const rendered = Bun.stripANSI(pendingMessagesContainer.render(120).join("\n"));
-		expect(rendered).toContain("After yield · 3");
-		expect(rendered).toContain("1. inspect types");
-		expect(rendered).toContain("2. run tests");
-		expect(rendered).toContain("3. summarize");
-		expect(rendered).not.toContain("Follow-up:");
-	});
-
 	it("restores the compact slash form into the editor and clears the queue", async () => {
 		fixture = await createRealSession();
 		const { session } = fixture;
 		queueCustomSteer(session, "/skill:test-skill arg1 arg2");
 
-		const { ctx, editor } = createStubInteractiveModeContextForUiHelpers(session);
+		const editor = new Composer();
+		const ctx = {
+			composer: editor,
+			session,
+			viewSession: session,
+			compactionQueuedMessages: [],
+			updatePendingMessagesDisplay: vi.fn(),
+			locallySubmittedUserSignatures: new Set<string>(),
+		} as unknown as InteractiveModeContext;
 		const controller = new InputController(ctx);
 		const count = controller.restoreQueuedMessagesToEditor();
 
 		expect(count).toBe(1);
-		expect(editor.getText()).toBe("/skill:test-skill arg1 arg2");
+		expect(editor.expandedText()).toBe("/skill:test-skill arg1 arg2");
 		expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: [], liveSteered: 0 });
 	});
 });

@@ -1,9 +1,10 @@
-import { fieldQuestions } from "@oh-my-pi/pi-tui/html-form/data";
-import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
-import { plainText } from "@oh-my-pi/pi-tui/native/spans";
-import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
-import { toolFileTargets } from "@oh-my-pi/pi-tui/tools/file-target";
+import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
+import { replaceTabs, truncate as truncateToWidth } from "@oh-my-pi/pi-tui/text/width";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { toolFileTargets } from "../tools/file-target";
+import { fieldQuestions } from "../tools/html-form/data";
+import { parseHtmlForm } from "../tools/html-form/parse";
+import { TRUNCATE_LENGTHS } from "../utils/render-utils";
 
 export interface CompactFileSummary {
 	category: "read" | "write";
@@ -48,7 +49,7 @@ function short(value: string | undefined): string | undefined {
 
 function stringList(value: unknown, kind: string): string | undefined {
 	if (!Array.isArray(value) || value.length === 0) return undefined;
-	const first = short(value.find(item => text(item)));
+	const first = short(value.find((item): item is string => typeof item === "string" && !!item.trim()));
 	if (!first) return undefined;
 	return value.length > 1 ? `${first} (${value.length} ${kind})` : first;
 }
@@ -92,7 +93,7 @@ function questionTarget(value: unknown): string | undefined {
 	const labels = form.fields
 		.filter(field => field.name)
 		.map(field => questions.get(field))
-		.filter(Boolean);
+		.filter((label): label is string => !!label);
 	const label = short(labels[0]);
 	return label ? (labels.length > 1 ? `${label} (${labels.length} questions)` : label) : undefined;
 }
@@ -190,7 +191,7 @@ function fallback(name: string, fields: Fields): string {
 }
 
 function comparable(value: string): string {
-	return replaceTabs(sanitizeText(plainText(value))).replace(/[\r\n]+/g, " ");
+	return replaceTabs(sanitizeText(stripEscapes(value))).replace(/[\r\n]+/g, " ");
 }
 
 /** Project only request-side intent, commands and known operation/target fields. */

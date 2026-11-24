@@ -10,7 +10,7 @@ import { AgentLifecycleManager } from "../../src/registry/agent-lifecycle";
 import * as discovery from "../../src/task/discovery";
 import * as executor from "../../src/task/executor";
 import type { ExecutorOptions } from "../../src/task/executor";
-import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
+import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/task-details";
 import type { ToolSession } from "../../src/tools";
 import { TodoLoopNative } from "../../src/todoloop/native";
 import { readTodoLoop } from "../../src/todoloop/parser";

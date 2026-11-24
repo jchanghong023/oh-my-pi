@@ -1,11 +1,11 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getActiveProfile } from "@oh-my-pi/pi-utils";
-import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { ModelRegistry } from "../config/model-registry";
 import { filterAvailableModelsByEnabledPatterns, resolveProviderModelReference } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";
 import type { Settings, SettingProvenance } from "../config/settings";
 import { UserSettingError, type UserSettingSaveResult } from "../config/user-settings";
+import { parseConfiguredThinkingLevel } from "../thinking/levels";
 import { expandTeamRoster, teamModelCapabilityIssue } from "./members";
 import type {
 	TeamConfigErrorCode,

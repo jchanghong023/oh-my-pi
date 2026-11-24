@@ -949,16 +949,20 @@ impl<K: Sink> Ctx<K> {
 		let ignores = match &self.ignorer {
 			None => None,
 			Some(_) if names.is_empty() => Some(DirIgnores::default()),
-			Some(ignorer) => Some(
-				DirIgnores::load(
-					&mut st.session,
-					&dir,
-					names,
-					ignorer.sources(),
-					matches!(freshness, Some(Freshness::Stamp(_))),
+			Some(ignorer) => {
+				join_into(&self.fs, &self.root, rel, &mut st.abs);
+				Some(
+					DirIgnores::load(
+						&mut st.session,
+						&dir,
+						&st.abs,
+						names,
+						ignorer.sources(),
+						matches!(freshness, Some(Freshness::Stamp(_))),
+					)
+					.await,
 				)
-				.await,
-			),
+			},
 		};
 		let frame = match &ignores {
 			Some(ignores) => ignores.frame(frame.as_ref(), names, rel),

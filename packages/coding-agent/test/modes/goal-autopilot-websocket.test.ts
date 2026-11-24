@@ -12,7 +12,7 @@ import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storag
 import { closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/ui/theme/service";
 import { setAgentDir, setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
 import { endpoint, send, textEvents, toolEvents } from "../../../ai/test/fixtures/openai-responses-server";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
@@ -138,7 +138,7 @@ describe("native Goal Codex WebSocket history", () => {
 							agentsMdFiles: [],
 						},
 					}));
-					await initTheme();
+					initTheme();
 					mode = new InteractiveMode(session, "test");
 					const submitted = mode.getUserInput();
 					await executeBuiltinSlashCommand(`/${goalCommand} ${objective}`, { ctx: mode });

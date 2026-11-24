@@ -1,57 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { describe, expect, it, vi } from "bun:test";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { RecapNotice } from "@oh-my-pi/pi-tui/chat/recap-notice";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
-
-function recordPresented(_content: Component | readonly Component[]): void {}
-
-describe("EventController idle recap presentation", () => {
-	beforeEach(async () => {
-		await initTheme();
-		resetSettingsForTest();
-		await Settings.init({ inMemory: true });
-	});
-
-	afterEach(() => {
-		vi.restoreAllMocks();
-		resetSettingsForTest();
-	});
-
-	it("presents the delivered recap in the transcript", () => {
-		const present = vi.fn(recordPresented);
-		const controller = new EventController(createInteractiveModeContext({ present }));
-		const reply = "Completed the migration; focused tests are next.";
-
-		controller.presentIdleRecap(reply);
-
-		expect(present).toHaveBeenCalledTimes(1);
-		const notice = present.mock.calls[0][0];
-		expect(notice).toBeInstanceOf(RecapNotice);
-		if (!(notice instanceof RecapNotice)) throw new Error("Expected a recap notice");
-		expect(
-			notice
-				.render(200)
-				.map(line => Bun.stripANSI(line))
-				.join("\n"),
-		).toContain(reply);
-		controller.dispose();
-	});
-
-	it("does not present an empty recap", () => {
-		const present = vi.fn(recordPresented);
-		const controller = new EventController(createInteractiveModeContext({ present }));
-
-		controller.presentIdleRecap("  \n  ");
-
-		expect(present).not.toHaveBeenCalled();
-		controller.dispose();
-	});
-});
-
 describe("compaction queue session ownership", () => {
 	it("parks the remaining input and attachments until the submitting session is visible again", async () => {
 		const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };

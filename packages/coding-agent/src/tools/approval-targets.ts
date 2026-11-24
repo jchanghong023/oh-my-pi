@@ -7,7 +7,7 @@
  * a session-local URL mapped to that session's backing path, another registered
  * internal URL kept in normalized form, or a readable web URL kept as written.
  */
-import { isReadableUrlPath } from "@oh-my-pi/pi-tui/tools/read";
+import { isReadableUrlPath } from "./details/read";
 import * as fs from "node:fs";
 import { contextLocalProtocolOptions } from "../internal-urls/context";
 import { InternalUrlRouter } from "../internal-urls/router";

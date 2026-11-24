@@ -1,22 +1,16 @@
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { type Component, spinnerAnimated } from "@oh-my-pi/pi-tui";
-import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
-import type { Loader } from "@oh-my-pi/pi-tui/components/loader";
-import { col, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
-import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
-import { plainText } from "@oh-my-pi/pi-tui/native/spans";
-import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
-import { theme, type ThemeColor } from "@oh-my-pi/pi-tui/theme";
-import { describeShimmer, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
-import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
-import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
-import { getPaddingX, padding, sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
+import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
+import { replaceTabs, truncate as truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/text/width";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { LocalAgentSessionEvent, ModelStage } from "../session/agent-session-events";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
 import { toolOutputSource } from "../session/live-tool-output-text";
+import type { CoordinationDetails } from "../tools/details/wait";
+import type { ToolResult } from "../ui/tools/contract";
+import { sliceWithWidth, wrapTextWithAnsi } from "../utils/text-width";
+import { formatThinkingForDisplay, hasDisplayableThinking } from "../session/transcript/thinking-display";
 import type { CompactPreviewActivity } from "./compact-tool-output-preview";
 import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
@@ -71,10 +65,11 @@ const MODEL_WORDS: Record<ModelStage, string> = {
 };
 
 type ThinkingPreview = { source: string; width: number; proseOnly: boolean; text: string };
-type ActionRow = {
+export type CompactActionRow = {
 	word: string;
-	tone: ThemeColor;
-	detail: { text: string; tone: ThemeColor }[];
+	running: boolean;
+	tone: string;
+	detail: { text: string; tone: string }[];
 };
 type SessionMemory = {
 	calls: Call[];
@@ -85,7 +80,7 @@ type SessionMemory = {
 const memories = new WeakMap<InteractiveModeContext["viewSession"], { id: string; memory: SessionMemory }>();
 
 function clean(value: string): string {
-	return replaceTabs(sanitizeText(plainText(value))).replace(/[\r\n]+/g, " ");
+	return replaceTabs(sanitizeText(stripEscapes(value))).replace(/[\r\n]+/g, " ");
 }
 
 function fields(value: unknown): Record<string, unknown> {
@@ -93,7 +88,7 @@ function fields(value: unknown): Record<string, unknown> {
 }
 
 /** Project the transport and its structured result without exposing payload or output text. */
-function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknown>): void {
+function updateCall(call: Call, args?: unknown, result?: ToolResult<unknown>): void {
 	const outer = fields(args);
 	if (call.name === "bash" && typeof outer.command === "string") call.shellCommand = outer.command;
 	const source = toolOutputSource(
@@ -116,7 +111,7 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 	const target = waitTarget(
 		semanticName,
 		(dispatch && result ? { ...result, details: source.details } : result) as
-			| ToolRenderResult<CoordinationDetails>
+			| ToolResult<CoordinationDetails>
 			| undefined,
 	);
 	if (target) call.waitTarget = target;
@@ -143,7 +138,7 @@ export function compactToolPreviewInfo(
 	name: string,
 	args: unknown,
 	intent?: string,
-	result?: ToolRenderResult<unknown>,
+	result?: ToolResult<unknown>,
 ): { name: string; detail: string; command?: string } {
 	const call: Call = { id: "", name, detail: "", intent };
 	updateCall(call, args, result);
@@ -154,9 +149,10 @@ export function compactToolPreviewInfo(
 	};
 }
 
-function waitTarget(name: string, result?: ToolRenderResult<CoordinationDetails>): string | undefined {
-	if (name !== "wait" || !Array.isArray(result?.details?.jobs) || !result.details.jobs.length) return undefined;
-	return waitToolRenderer.activitySummary({}, { expanded: false, isPartial: true, result }).detail;
+function waitTarget(name: string, result?: ToolResult<CoordinationDetails>): string | undefined {
+	if (name !== "wait" || !Array.isArray(result?.details?.jobs)) return undefined;
+	const jobs = result.details.jobs;
+	return jobs.length ? jobs.map(job => job.label || job.id).join(" · ") : undefined;
 }
 
 function streamedArgs(block: ToolCall): unknown {
@@ -234,7 +230,7 @@ function fileDetail(path: string, file: CompactFileSummary, width: number): [str
 }
 
 /** Composer-only projection of action records and the last displayed content. */
-export class CompactThinkingPreview implements Component {
+export class CompactThinkingPreview {
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
 	#memory?: SessionMemory;
@@ -243,9 +239,9 @@ export class CompactThinkingPreview implements Component {
 	constructor(
 		private readonly ctx: Pick<
 			InteractiveModeContext,
-			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "statusLine" | "settings"
+			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "settings"
 		>,
-		private readonly asyncWaitRow?: () => Loader | undefined,
+		private readonly asyncWaitRow?: () => string | undefined,
 		private readonly compactActivity?: (width: number) => CompactPreviewActivity | undefined,
 	) {}
 
@@ -355,10 +351,6 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	observe(event: LocalAgentSessionEvent): void {
-		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
-			this.clear();
-			return;
-		}
 		const now = Date.now();
 		this.#syncSession();
 		const memory = this.#memory!;
@@ -402,30 +394,26 @@ export class CompactThinkingPreview implements Component {
 		}
 	}
 
-	/** Match the status spinner's active window; the working loader drives ANSI repaint. */
-	#activityAnimating(): boolean {
-		return spinnerAnimated() && shimmerEnabled() && this.ctx.statusLine.getTurnElapsedMs() !== null;
+	/** The shared terminal/native projection; the layout decides how to paint its label. */
+	rows(width: number): readonly (CompactActionRow | undefined)[] {
+		const wait = this.asyncWaitRow?.();
+		const inset = Math.min(1, Math.max(0, width - 1));
+		const columns = width - inset;
+		const rows = this.#visibleActions(width, inset, wait).map(action =>
+			action ? this.#buildRow(action, columns) : undefined,
+		);
+		if (wait)
+			rows[1] = { word: truncateToWidth(`Agent：${wait}`, columns), tone: "muted", detail: [], running: true };
+		return rows;
 	}
-
 	render(width: number): readonly string[] {
 		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
 			this.clear();
 			return [];
 		}
-		const waitRow = this.asyncWaitRow?.();
-		const inset = Math.min(getPaddingX(1), Math.max(0, width - 1));
-		const slots = this.#visibleActions(width, inset, waitRow);
-		const animate = !isNativeRendering() && this.#activityAnimating();
-		const left = padding(inset);
-		const rows = slots.map(action =>
-			action ? left + this.#paintAnsi(this.#buildRow(action, width - inset), animate && action.running) : "",
-		);
-		const waiting = waitRow ? left + truncateToWidth(`Agent：${waitRow.inlineText()}`, width - inset) : "";
-		return [rows[0] ?? "", waiting || (rows[1] ?? ""), ""];
-	}
-
-	handleNativeEvent(event: NativeUiEvent): void {
-		this.asyncWaitRow?.()?.handleNativeEvent(event);
+		const left = width > 1 ? " " : "";
+		const rows = this.rows(width);
+		return [rows[0] ? left + this.#paintAnsi(rows[0]) : "", rows[1] ? left + this.#paintAnsi(rows[1]) : "", ""];
 	}
 
 	#thinkingDetail(stage: ModelStage | null, width: number): string {
@@ -479,7 +467,7 @@ export class CompactThinkingPreview implements Component {
 		};
 	}
 
-	#visibleActions(width: number, inset: number, waitRow: Loader | undefined): (Action | undefined)[] {
+	#visibleActions(width: number, inset: number, waitRow: string | undefined): (Action | undefined)[] {
 		this.#syncSession();
 		const contentWidth = width - inset;
 		if (contentWidth < 1) return [];
@@ -497,7 +485,7 @@ export class CompactThinkingPreview implements Component {
 	}
 
 	/** Keep the path or thinking text ahead of optional detail on narrow terminals. */
-	#buildRow(action: Action, width: number): ActionRow {
+	#buildRow(action: Action, width: number): CompactActionRow {
 		const model = action.category === "thinking";
 		const failed = !model && action.failed;
 		const state = action.running ? "running" : failed ? "failed" : "done";
@@ -509,7 +497,7 @@ export class CompactThinkingPreview implements Component {
 		const runningCall = action.running && action.category === "call";
 		const tone = runningCall ? "accent" : action.running ? "muted" : failed ? "error" : "dim";
 		const detailWidth = width - visibleWidth(word) - ACTION_GAP.length - visibleWidth(extra);
-		const detail: ActionRow["detail"] = [];
+		const detail: CompactActionRow["detail"] = [];
 		if (detailWidth > 0 && action.detail) {
 			if (!model && action.file) {
 				const [prefix, target, suffix] = fileDetail(action.detail, action.file, detailWidth);
@@ -526,45 +514,16 @@ export class CompactThinkingPreview implements Component {
 		}
 		if (extra && width - visibleWidth(word) >= visibleWidth(extra) + ACTION_GAP.length)
 			detail.push({ text: extra, tone: "muted" });
-		return { word, tone, detail };
+		return { word, tone, detail, running: action.running };
 	}
 
-	#paintAnsi({ word, tone, detail }: ActionRow, animate: boolean): string {
-		let line = animate ? shimmerText(word, theme) : theme.fg(tone, word);
+	#paintAnsi({ word, tone, detail }: CompactActionRow): string {
+		const theme = currentTheme();
+		let line = theme.fg(tone, word);
 		if (detail.length) {
 			line += ACTION_GAP;
 			for (const run of detail) line += theme.fg(run.tone, run.text);
 		}
 		return line;
-	}
-
-	describe(cx: DescribeContext): NativeNode {
-		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
-			this.clear();
-			return node("rows", { cols: cx.cols, lines: [] });
-		}
-		const waitRow = this.asyncWaitRow?.();
-		const inset = Math.min(getPaddingX(1), Math.max(0, cx.cols - 1));
-		const slots = this.#visibleActions(cx.cols, inset, waitRow);
-		const left = padding(inset);
-		const animate = this.#activityAnimating() && !cx.reduceMotion && cx.supports("shimmer");
-		const children = slots.map(action => {
-			if (!action) return node("rows", { cols: cx.cols, lines: [""] });
-			const built = this.#buildRow(action, cx.cols - inset);
-			const label =
-				animate && action.running ? describeShimmer([{ text: built.word }]) : text([span(built.word, built.tone)]);
-			const parts = built.detail.length
-				? [text(left), label, text(ACTION_GAP), text(built.detail.map(run => span(run.text, run.tone)))]
-				: [text(left), label];
-			return row(parts);
-		});
-		while (children.length < 2) children.push(node("rows", { cols: cx.cols, lines: [""] }));
-		if (waitRow) {
-			const prefix = truncateToWidth("Agent：", cx.cols - inset);
-			const rest = cx.cols - inset - visibleWidth(prefix);
-			children[1] = row([text(left + prefix), ...(rest > 0 ? [waitRow.describe({ ...cx, cols: rest })] : [])]);
-		}
-		children.push(node("rows", { cols: cx.cols, lines: [""] }));
-		return col(children);
 	}
 }

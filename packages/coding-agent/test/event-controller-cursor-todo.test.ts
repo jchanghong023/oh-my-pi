@@ -1,82 +1,49 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
-import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
-import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
+import { initTheme } from "../src/ui/theme/service";
+import type { LocalAgentSessionEvent as AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { TRUNCATE_LENGTHS } from "@oh-my-pi/pi-coding-agent/utils/render-utils";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import type { Component } from "@oh-my-pi/pi-tui";
+import { isSettled } from "@oh-my-pi/pi-tui";
+import type { TranscriptBlock } from "../src/ui/shell";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
-import { assistantMsg } from "./utilities";
-
-const originalDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-let previousDisplayPreferences = originalDisplayPreferences;
-
-beforeEach(() => {
-	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
-	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-});
-
-afterEach(() => {
-	setChatTranscriptDisplayPreferences(previousDisplayPreferences);
-});
+import { blockText } from "./helpers/transcript-text";
 
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
-	await initTheme();
+	initTheme();
 });
 
 afterAll(() => {
 	resetSettingsForTest();
-	setChatTranscriptDisplayPreferences(originalDisplayPreferences);
 });
 
+/** Tool blocks the controller mounted. */
+function toolBlocks(ctx: InteractiveModeContext): TranscriptBlock[] {
+	return ctx.shell.transcript.blocks().filter(block => ctx.transcriptEntry(block)?.kind === "tool");
+}
+
 function createFixture() {
-	const ctx = createInteractiveModeContext({
-		settings: Settings.isolated({ "display.mode": "detailed" }),
-		streamingComponent: new AssistantMessageComponent(),
-	});
-	const blocks: Component[] = [];
-	const addChild = ctx.chatContainer.addChild.bind(ctx.chatContainer);
-	vi.spyOn(ctx.chatContainer, "addChild").mockImplementation(block => {
-		blocks.push(block);
-		addChild(block);
-	});
-	return { ctx, controller: new EventController(ctx), showWarning: vi.spyOn(ctx, "showWarning"), blocks };
+	const ctx = createInteractiveModeContext();
+	ctx.streaming = ctx.presentAssistant();
+	return {
+		ctx,
+		controller: new EventController(ctx),
+		showWarning: vi.spyOn(ctx, "showWarning"),
+		get blocks() {
+			return toolBlocks(ctx);
+		},
+	};
 }
 
-function createPresentationFixture() {
-	const f = createFixture();
-	const helpers = new UiHelpers(f.ctx);
-	f.ctx.eventController = f.controller;
-	f.showWarning.mockImplementation(helpers.showWarning.bind(helpers));
-	f.ctx.renderSessionContext = helpers.renderSessionContext.bind(helpers);
-	f.ctx.renderSessionContextIncrementally = helpers.renderSessionContextIncrementally.bind(helpers);
-	return { ...f, helpers };
-}
-
-function renderTranscript(ctx: InteractiveModeContext, width = 180): string {
-	return Bun.stripANSI(ctx.chatContainer.render(width).join("\n"));
-}
-
-function expectRetirableResult(block: Component): void {
-	const transcript = new TranscriptContainer();
-	transcript.addChild(block);
-	const batch = transcript.peekFinalizedBatch(80, 0);
-	const retired = Bun.stripANSI(batch?.rows.join("\n") ?? "");
-	expect(retired).toContain("done");
-	expect(retired).not.toContain("running");
+/** The block is final (it can move into scrollback) and shows the finished result. */
+function expectRetirableResult(block: TranscriptBlock): void {
+	expect(isSettled(block.node)).toBe(true);
+	const shown = blockText(block, 80);
+	expect(shown).toContain("done");
+	expect(shown).not.toContain("running");
 }
 
 /** A cumulative `message_update` carrying one streamed tool-call block. */
@@ -84,31 +51,19 @@ function streamedToolBlock(
 	toolCallId: string,
 	toolName: string,
 	args: Record<string, unknown>,
-	precedingCalls: { id: string; name: string; arguments: Record<string, unknown> }[] = [],
 ): Extract<AgentSessionEvent, { type: "message_update" }> {
 	return {
 		type: "message_update",
 		assistantMessageEvent: { type: "toolcall_start" },
 		message: {
 			role: "assistant",
-			content: [
-				...precedingCalls.map(call => ({ type: "toolCall" as const, ...call })),
-				{ type: "toolCall", id: toolCallId, name: toolName, arguments: args },
-			],
+			content: [{ type: "toolCall", id: toolCallId, name: toolName, arguments: args }],
 		},
 	} as unknown as Extract<AgentSessionEvent, { type: "message_update" }>;
 }
 
-function streamedTodoBlock(
-	toolCallId: string,
-	precedingCallIds: string[] = [],
-): Extract<AgentSessionEvent, { type: "message_update" }> {
-	return streamedToolBlock(
-		toolCallId,
-		"todo",
-		{ todos: [] },
-		precedingCallIds.map(id => ({ id, name: "todo", arguments: { todos: [] } })),
-	);
+function streamedTodoBlock(toolCallId: string): Extract<AgentSessionEvent, { type: "message_update" }> {
+	return streamedToolBlock(toolCallId, "todo", { todos: [] });
 }
 
 function todoEnd(
@@ -154,10 +109,10 @@ function evalStart(toolCallId: string): Extract<AgentSessionEvent, { type: "tool
 	} as Extract<AgentSessionEvent, { type: "tool_execution_start" }>;
 }
 
-function todoFailure(text: string, toolCallId = "todo-1"): Extract<AgentSessionEvent, { type: "tool_execution_end" }> {
+function todoFailure(text: string): Extract<AgentSessionEvent, { type: "tool_execution_end" }> {
 	return {
 		type: "tool_execution_end",
-		toolCallId,
+		toolCallId: "todo-1",
 		toolName: "todo",
 		isError: true,
 		result: { content: [{ type: "text", text }] },
@@ -165,37 +120,40 @@ function todoFailure(text: string, toolCallId = "todo-1"): Extract<AgentSessionE
 }
 
 describe("EventController + Cursor todo bridge", () => {
-	it("sanitizes and bounds provider error text in the rendered warning", async () => {
-		// Provider errors are untrusted terminal input, while the warning's own
-		// prefix, stale-progress hint and row padding are presentation details.
-		const f = createPresentationFixture();
+	it("sanitizes provider error text before it reaches the status line", async () => {
+		// The bridge forwards the server's error string verbatim, so this text is
+		// untrusted terminal input. Raw tabs punch holes in the single-line status
+		// area and an unbounded string overflows it.
+		const f = createFixture();
 
 		await f.controller.handleEvent(
 			todoFailure(`\u001b[31mrejected:\u001b[0m\tid 4\r\n\tconflicts with ${"x".repeat(400)}`),
 		);
 
-		const warning = f.showWarning.mock.calls[0]![0];
-		expect(warning).toContain("rejected:");
-		expect(warning).not.toContain("\t");
-		expect(warning).not.toContain("\n");
-		expect(warning).not.toContain("\u001b");
-		expect(warning).not.toContain("\r");
-		expect(warning).not.toContain("x".repeat(400));
-		for (const width of [40, 80, 180]) {
-			const rows = f.ctx.chatContainer.render(width).map(row => Bun.stripANSI(row));
-			expect(rows.join("\n")).toContain("rejected:");
-			for (const row of rows) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(width);
-		}
+		expect(f.showWarning).toHaveBeenCalledTimes(1);
+		const message = f.showWarning.mock.calls[0]![0] as string;
+		expect(message).not.toContain("\t");
+		expect(message).not.toContain("\n");
+		// ANSI and other C0/C1 controls reach the terminal verbatim through
+		// `Text` and can repaint outside the row, so they must be gone too.
+		expect(message).not.toContain("\u001b");
+		expect(message).not.toContain("\r");
+		// The prefix is ours and fixed; only the untrusted tail is bounded.
+		expect(message.startsWith("Todo update failed: ")).toBe(true);
+		expect(Bun.stringWidth(message.slice("Todo update failed: ".length))).toBeLessThanOrEqual(TRUNCATE_LENGTHS.LINE);
+		expect(f.showWarning.mock.calls[0]![1]).toEqual({ hideWithToolActivity: true });
 	});
 
 	it("keeps the standalone hint when the failure carries no text", async () => {
 		// Without a detail the warning must still say the panel may be stale —
 		// dropping to a bare "Todo update failed" hides that local state diverged.
-		const f = createPresentationFixture();
+		const f = createFixture();
 
 		await f.controller.handleEvent(todoFailure(""));
 
-		expect(renderTranscript(f.ctx)).toMatch(/progress may be stale/i);
+		expect(f.showWarning).toHaveBeenCalledWith("Todo update failed. Progress may be stale until todo succeeds.", {
+			hideWithToolActivity: true,
+		});
 	});
 
 	it("settles a card whose completion arrived before the streamed block created it", async () => {
@@ -234,10 +192,7 @@ describe("EventController + Cursor todo bridge", () => {
 
 		expect(f.blocks).toHaveLength(1);
 		expect(f.ctx.pendingTools.size).toBe(0);
-		const block = f.blocks[0]!;
-		expect(block).toHaveProperty("isTranscriptBlockFinalized");
-		expect((block as AssistantMessageComponent).isTranscriptBlockFinalized()).toBe(true);
-		expectRetirableResult(block);
+		expectRetirableResult(f.blocks[0]!);
 	});
 
 	it("shows current Todo phases rather than a snapshot captured during Eval", async () => {
@@ -290,10 +245,7 @@ describe("EventController + Cursor todo bridge", () => {
 
 		expect(f.blocks).toHaveLength(1);
 		expect(f.ctx.pendingTools.size).toBe(0);
-		const block = f.blocks[0]!;
-		expect(block).toHaveProperty("isTranscriptBlockFinalized");
-		expect((block as AssistantMessageComponent).isTranscriptBlockFinalized()).toBe(true);
-		expectRetirableResult(block);
+		expectRetirableResult(f.blocks[0]!);
 	});
 
 	it("fires the failure warning exactly once when a failed completion is replayed", async () => {
@@ -366,20 +318,13 @@ describe("EventController + Cursor todo bridge", () => {
 			timestamp: 1,
 		};
 		const ctx = createInteractiveModeContext({
-			settings: Settings.isolated({ "display.mode": "detailed" }),
-			streamingComponent: new AssistantMessageComponent(),
 			session: {
 				agent: {
 					getPendingToolResults: () => [pending],
 				},
 			},
 		});
-		const blocks: Component[] = [];
-		const addChild = ctx.chatContainer.addChild.bind(ctx.chatContainer);
-		vi.spyOn(ctx.chatContainer, "addChild").mockImplementation(block => {
-			blocks.push(block);
-			addChild(block);
-		});
+		ctx.streaming = ctx.presentAssistant();
 		const controller = new EventController(ctx);
 		const showWarning = vi.spyOn(ctx, "showWarning");
 
@@ -387,9 +332,9 @@ describe("EventController + Cursor todo bridge", () => {
 		await controller.handleEvent(streamedToolBlock("grep-restore-1", "grep", { pattern: "restore" }));
 		await controller.handleEvent(streamedToolBlock("grep-restore-1", "grep", { pattern: "restore" }));
 
-		expect(blocks).toHaveLength(1);
+		expect(toolBlocks(ctx)).toHaveLength(1);
 		expect(ctx.pendingTools.size).toBe(0);
-		expect(Bun.stripANSI(blocks[0]!.render(120).join("\n"))).toContain("RESTORE_MATCH_LINE");
+		expect(blockText(toolBlocks(ctx)[0]!)).toContain("RESTORE_MATCH_LINE");
 		expect(showWarning).not.toHaveBeenCalled();
 	});
 
@@ -403,150 +348,21 @@ describe("EventController + Cursor todo bridge", () => {
 			timestamp: 1,
 		};
 		const ctx = createInteractiveModeContext({
-			settings: Settings.isolated({ "display.mode": "detailed" }),
-			streamingComponent: new AssistantMessageComponent(),
 			session: {
 				agent: {
 					getPendingToolResults: () => [pending],
 				},
 			},
 		});
-		const blocks: Component[] = [];
-		const addChild = ctx.chatContainer.addChild.bind(ctx.chatContainer);
-		vi.spyOn(ctx.chatContainer, "addChild").mockImplementation(block => {
-			blocks.push(block);
-			addChild(block);
-		});
+		ctx.streaming = ctx.presentAssistant();
 		const controller = new EventController(ctx);
 
 		await controller.handleEvent({ type: "agent_start" } as Extract<AgentSessionEvent, { type: "agent_start" }>);
 		await controller.handleEvent(streamedToolBlock("grep-restore-2", "grep", { pattern: "start" }));
 		await controller.handleEvent(streamedToolBlock("grep-restore-2", "grep", { pattern: "start" }));
 
-		expect(blocks).toHaveLength(1);
+		expect(toolBlocks(ctx)).toHaveLength(1);
 		expect(ctx.pendingTools.size).toBe(0);
-		expect(Bun.stripANSI(blocks[0]!.render(120).join("\n"))).toContain("AGENT_START_MATCH");
-	});
-});
-
-describe("Todo failure replay", () => {
-	it("replaces a replayed failure with the new live result in detailed views", () => {
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-		const f = createPresentationFixture();
-		const component = new ToolExecutionComponent("todo", { todos: [] }, {}, undefined, f.ctx.ui);
-		component.updateResult({ content: [{ type: "text", text: "OLD_FAILURE" }], isError: true }, false, "todo-1");
-		component.updateResult({ content: [{ type: "text", text: "NEW_LIVE_FAILURE" }], isError: true });
-		component.setExpanded(true);
-		const expanded = Bun.stripANSI(component.render(180).join("\n"));
-		expect(expanded).toContain("NEW_LIVE_FAILURE");
-		expect(expanded).not.toContain("OLD_FAILURE");
-		component.setExpanded(false);
-		const detailed = Bun.stripANSI(component.render(180).join("\n"));
-		expect(detailed).toContain("NEW_LIVE_FAILURE");
-		expect(detailed).not.toContain("OLD_FAILURE");
-	});
-
-	it.each(["detailed", "clean"] as const)("drops stale warnings on %s replay", async presentation => {
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-		const f = createPresentationFixture();
-		cfgDisplayMode.override(f.ctx.settings, "compact");
-		f.ctx.hideToolActivity = true;
-		f.ctx.chatContainer.setToolActivityVisible(false);
-		f.ctx.addMessageToChat = f.helpers.addMessageToChat.bind(f.helpers);
-		const failure = todoFailure("HISTORY_FAILURE_REASON\nPRESERVED_DETAIL_LINE");
-		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
-		await f.controller.handleEvent(failure);
-		const context: SessionContext = {
-			...f.ctx.sessionManager.buildSessionContext(),
-			messages: [
-				{
-					role: "assistant",
-					content: [{ type: "toolCall", id: "todo-1", name: "todo", arguments: { todos: [] } }],
-					api: "anthropic-messages",
-					provider: "anthropic",
-					model: "test",
-					timestamp: 1,
-					stopReason: "toolUse",
-					usage: {
-						input: 0,
-						output: 0,
-						cacheRead: 0,
-						cacheWrite: 0,
-						totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-				},
-				{
-					role: "toolResult",
-					toolCallId: "todo-1",
-					toolName: "todo",
-					content: [{ type: "text", text: "HISTORY_FAILURE_REASON\nPRESERVED_DETAIL_LINE" }],
-					isError: true,
-					timestamp: 2,
-				},
-				assistantMsg("FINAL_ANSWER_AFTER_FAILURE"),
-			],
-		};
-		const storedResult = JSON.stringify(context.messages[1]);
-		f.ctx.viewSession.buildTranscriptSessionContext = () => context;
-		await f.helpers.renderInitialMessages();
-		// Compact replay hides ordinary tool errors while retaining the stored result.
-		const builder = new ChatTranscriptBuilder({
-			ui: f.ctx.ui,
-			cwd: process.cwd(),
-			requestRender() {},
-		});
-		builder.rebuild(
-			context.messages.map((message, index) => ({
-				type: "message" as const,
-				id: String(index),
-				parentId: index === 0 ? null : String(index - 1),
-				timestamp: new Date(0).toISOString(),
-				message,
-			})),
-		);
-		expect(Bun.stripANSI(builder.container.render(180).join("\n"))).not.toContain("HISTORY_FAILURE_REASON");
-		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
-		cfgDisplayMode.override(f.ctx.settings, presentation);
-		setChatTranscriptDisplayPreferences({ hideToolActivity: presentation === "clean" });
-		f.ctx.hideToolActivity = presentation === "clean";
-		f.ctx.chatContainer.setToolActivityVisible(!f.ctx.hideToolActivity);
-		builder.container.setToolActivityVisible(!f.ctx.hideToolActivity);
-		const builderRebuilt = Bun.stripANSI(builder.container.render(180).join("\n"));
-		expect(builderRebuilt).toContain("FINAL_ANSWER_AFTER_FAILURE");
-		if (presentation === "clean") {
-			expect(builderRebuilt).not.toContain("HISTORY_FAILURE_REASON");
-		} else {
-			expect(builderRebuilt).toContain("HISTORY_FAILURE_REASON");
-			expect(builderRebuilt).toContain("PRESERVED_DETAIL_LINE");
-		}
-		await f.helpers.renderInitialMessages();
-		const rebuilt = renderTranscript(f.ctx);
-		expect(rebuilt).toContain("FINAL_ANSWER_AFTER_FAILURE");
-		expect(rebuilt).not.toContain("Warning:");
-		if (presentation === "clean") expect(rebuilt).not.toContain("HISTORY_FAILURE_REASON");
-		// Revealing clean history must not resurrect a warning retained while hidden.
-		cfgDisplayMode.override(f.ctx.settings, "detailed");
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-		f.ctx.hideToolActivity = false;
-		f.ctx.chatContainer.setToolActivityVisible(true);
-		builder.container.setToolActivityVisible(true);
-		const builderDetailed = Bun.stripANSI(builder.container.render(180).join("\n"));
-		expect(builderDetailed).toContain("HISTORY_FAILURE_REASON");
-		expect(builderDetailed).toContain("PRESERVED_DETAIL_LINE");
-		const detailed = renderTranscript(f.ctx);
-		expect(detailed.match(/HISTORY_FAILURE_REASON/g)).toHaveLength(1);
-		expect(detailed).toContain("PRESERVED_DETAIL_LINE");
-		expect(detailed.indexOf("PRESERVED_DETAIL_LINE")).toBeLessThan(detailed.indexOf("FINAL_ANSWER_AFTER_FAILURE"));
-		expect(detailed).not.toContain("Warning:");
-		await f.helpers.renderInitialMessages();
-		expect(renderTranscript(f.ctx)).not.toContain("Warning:");
-		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
-		f.ctx.chatContainer.setToolActivityVisible(false);
-		builder.container.setToolActivityVisible(false);
-		expect(Bun.stripANSI(builder.container.render(180).join("\n"))).not.toContain("HISTORY_FAILURE_REASON");
-		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
-		expect(JSON.stringify(context.messages[1])).toBe(storedResult);
-		expect(f.ctx.setTodos).not.toHaveBeenCalled();
+		expect(blockText(toolBlocks(ctx)[0]!)).toContain("AGENT_START_MATCH");
 	});
 });

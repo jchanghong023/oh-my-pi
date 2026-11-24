@@ -3,11 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
-import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
-import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
-import { setAgentDir } from "@oh-my-pi/pi-utils";
 import * as args from "@oh-my-pi/pi-coding-agent/cli/args";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
@@ -17,13 +12,17 @@ import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-comm
 import * as sketch from "@oh-my-pi/pi-coding-agent/sketch/server";
 import { decodePng } from "@oh-my-pi/pi-coding-agent/tools/browser/screenshot";
 import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
+import { imageAttachmentSource } from "@oh-my-pi/pi-coding-agent/utils/image-source";
 import * as open from "@oh-my-pi/pi-coding-agent/utils/open";
 import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
+import { jsx } from "@oh-my-pi/pi-tui/jsx-runtime";
+import { setAgentDir } from "@oh-my-pi/pi-utils";
+import type { InputInterceptor } from "../../src/ui/shell";
+import { initTheme } from "../../src/ui/theme/service";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 const PNG = encodeRawPng(Uint8Array.of(0, 0, 0, 255), 1, 1, 4);
-type InputListener = (data: string) => { consume?: boolean; data?: string } | undefined;
 
 function service() {
 	const result = Promise.withResolvers<Buffer | null>();
@@ -34,8 +33,7 @@ function service() {
 }
 
 function harness(artifactsDir: string, streaming = false) {
-	const editor = new CustomEditor(getEditorTheme());
-	const listeners = new Set<InputListener>();
+	const listeners = new Set<InputInterceptor>();
 	const changes = new Set<() => void>();
 	const disposers: Array<() => void> = [];
 	const statuses = new Map<string, string>();
@@ -43,10 +41,8 @@ function harness(artifactsDir: string, streaming = false) {
 	const abort = vi.fn<InteractiveModeContext["session"]["abort"]>(async () => {});
 	let sessionId = "sketch-owner";
 	let disposed = false;
-	let focused: Component | null = editor;
 	let focusedAgentId: string | undefined;
 	const ctx = createInteractiveModeContext({
-		editor,
 		get focusedAgentId() {
 			return focusedAgentId;
 		},
@@ -75,40 +71,36 @@ function harness(artifactsDir: string, streaming = false) {
 				};
 			},
 		},
-		ui: {
-			getFocused: () => focused,
-			addInputListener: listener => {
-				listeners.add(listener);
-				return () => {
-					listeners.delete(listener);
-				};
-			},
-		},
 		setHookStatus: (key, text) => {
 			if (text === undefined) statuses.delete(key);
 			else statuses.set(key, text);
 		},
-		flushPendingBashComponents: () => {},
 		withLocalSubmission: async <T>(_text: string, run: () => Promise<T>): Promise<T> => run(),
+	});
+	const interceptInput = ctx.shell.interceptInput.bind(ctx.shell);
+	spyOn(ctx.shell, "interceptInput").mockImplementation(listener => {
+		listeners.add(listener);
+		const remove = interceptInput(listener);
+		return () => {
+			listeners.delete(listener);
+			remove();
+		};
 	});
 	const controller = new InputController(ctx);
 	ctx.handleImagePathPaste = controller.handleImagePathPaste.bind(controller);
 	controller.setupEditorSubmitHandler();
 	return {
 		ctx,
-		editor,
+		composer: ctx.composer,
 		prompt,
 		abort,
 		listeners,
 		changes,
 		statuses,
 		disposers,
-		key(data: string) {
-			for (const listener of listeners) if (listener(data)?.consume) return true;
-			return false;
-		},
-		focus(target: Component | null) {
-			focused = target;
+		async submit() {
+			ctx.composer.submit();
+			await controller.waitForSubmissionDispatches();
 		},
 		focusAgent(id: string | undefined) {
 			focusedAgentId = id;
@@ -120,6 +112,7 @@ function harness(artifactsDir: string, streaming = false) {
 		dispose() {
 			disposed = true;
 			for (const dispose of disposers) dispose();
+			ctx.shell.overlays.closeAll();
 		},
 	};
 }
@@ -133,9 +126,7 @@ describe("native /sketch", () => {
 	let settingsState: SettingsTestState | undefined;
 	const cleanup: Array<() => void> = [];
 
-	beforeAll(async () => {
-		await initTheme(false);
-	});
+	beforeAll(() => initTheme());
 	beforeEach(async () => {
 		settingsState = beginSettingsTest();
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-sketch-command-"));
@@ -164,7 +155,7 @@ describe("native /sketch", () => {
 		spyOn(clipboard, "requestOfflineBrowserUrlCopy").mockReturnValue(true);
 		const h = createHarness();
 		const s = service();
-		h.editor.setText("offline draft");
+		h.composer.setText("offline draft");
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
 		expect(open.openPath).not.toHaveBeenCalled();
 		expect(clipboard.requestOfflineBrowserUrlCopy).toHaveBeenCalledWith(s.server.url);
@@ -172,8 +163,8 @@ describe("native /sketch", () => {
 		s.resolve(PNG);
 		await run;
 		expect(h.ctx.showError).not.toHaveBeenCalled();
-		expect(h.editor.getExpandedText()).toStartWith("offline draft");
-		expect(h.editor.pendingImages).toHaveLength(1);
+		expect(h.composer.expandedText()).toStartWith("offline draft");
+		expect(h.composer.pendingImages).toHaveLength(1);
 		expect(h.prompt).not.toHaveBeenCalled();
 		expect(s.close).toHaveBeenCalled();
 	});
@@ -182,16 +173,16 @@ describe("native /sketch", () => {
 		const h = createHarness();
 		const s = service();
 		const existing = oldImage();
-		h.editor.pendingImages.push(existing);
-		h.editor.pendingImageLinks.push("file:///existing.png");
-		h.editor.setCollapsedText("keep [Image #1] and this text");
-		const before = h.editor.getExpandedText();
+		h.composer.pendingImages.push(existing);
+		h.composer.pendingImageLinks.push("file:///existing.png");
+		h.composer.setCollapsedText("keep [Image #1] and this text");
+		const before = h.composer.expandedText();
 		expect(await executeBuiltinSlashCommand("/sketch extra", { ctx: h.ctx })).toBe(false);
 		expect(s.start).not.toHaveBeenCalled();
 		expect(open.openPath).not.toHaveBeenCalled();
-		expect(h.editor.getExpandedText()).toBe(before);
-		expect(h.editor.pendingImages).toEqual([existing]);
-		expect(h.editor.pendingImageLinks).toEqual(["file:///existing.png"]);
+		expect(h.composer.expandedText()).toBe(before);
+		expect(h.composer.pendingImages).toEqual([existing]);
+		expect(h.composer.pendingImageLinks).toEqual(["file:///existing.png"]);
 		expect(h.prompt).not.toHaveBeenCalled();
 	});
 
@@ -199,22 +190,22 @@ describe("native /sketch", () => {
 		const h = createHarness();
 		const s = service();
 		const existing = oldImage();
-		h.editor.pendingImages.push(existing);
-		h.editor.pendingImageLinks.push("file:///existing.png");
-		h.editor.setCollapsedText("keep [Image #1] and this text ");
+		h.composer.pendingImages.push(existing);
+		h.composer.pendingImageLinks.push("file:///existing.png");
+		h.composer.setCollapsedText("keep [Image #1] and this text ");
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
-		h.editor.pasteText("newer typing ");
-		const before = h.editor.getExpandedText();
+		h.composer.insertText("newer typing ");
+		const before = h.composer.expandedText();
 		s.resolve(PNG);
 		await run;
 
 		expect(h.ctx.showError).not.toHaveBeenCalled();
-		expect(h.editor.getExpandedText()).toStartWith(before);
-		expect(h.editor.getExpandedText()).toContain("[Image #2");
-		expect(h.editor.getExpandedText()).not.toContain("/sketch");
-		expect(h.editor.pendingImages).toHaveLength(2);
-		expect(h.editor.pendingImages[0]).toBe(existing);
-		const attached = h.editor.pendingImages[1]!;
+		expect(h.composer.expandedText()).toStartWith(before);
+		expect(h.composer.expandedText()).toContain("[Image #2");
+		expect(h.composer.expandedText()).not.toContain("/sketch");
+		expect(h.composer.pendingImages).toHaveLength(2);
+		expect(h.composer.pendingImages[0]).toBe(existing);
+		const attached = h.composer.pendingImages[1]!;
 		const decoded = decodePng(await new Bun.Image(Buffer.from(attached.data, "base64")).png().bytes());
 		const original = decodePng(PNG);
 		expect(decoded.width * original.height).toBe(decoded.height * original.width);
@@ -229,7 +220,7 @@ describe("native /sketch", () => {
 		});
 		expect(saved).toBeDefined();
 		expect(Buffer.from(await Bun.file(saved!).arrayBuffer()).equals(PNG)).toBe(true);
-		expect(h.editor.pendingImageLinks[0]).toBe("file:///existing.png");
+		expect(h.composer.pendingImageLinks[0]).toBe("file:///existing.png");
 		expect(h.prompt).not.toHaveBeenCalled();
 		expect(open.openPath).toHaveBeenCalledWith(s.server.url);
 		expect(h.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining(s.server.url));
@@ -237,13 +228,12 @@ describe("native /sketch", () => {
 		expect(h.changes.size).toBe(0);
 		expect(h.statuses.size).toBe(0);
 
-		const manualText = h.editor.getExpandedText();
-		await h.editor.onSubmit?.(manualText);
+		await h.submit();
 		expect(h.ctx.showError).not.toHaveBeenCalled();
 		expect(h.prompt).toHaveBeenCalledTimes(1);
 		expect(h.prompt.mock.calls[0]?.[0]).toContain("keep [Image #1] and this text newer typing");
 		expect(h.prompt.mock.calls[0]?.[1]?.images).toEqual([existing, attached]);
-		expect(h.editor.pendingImages).toHaveLength(0);
+		expect(h.composer.pendingImages).toHaveLength(0);
 	});
 
 	it("restores detached submission images without replacing newer composer text/images", async () => {
@@ -251,9 +241,9 @@ describe("native /sketch", () => {
 		const s = service();
 		const submitted = oldImage();
 		const newer = oldImage();
-		h.editor.pendingImages.push(newer);
-		h.editor.pendingImageLinks.push("file:///newer.png");
-		h.editor.setCollapsedText("newer draft [Image #1]");
+		h.composer.pendingImages.push(newer);
+		h.composer.pendingImageLinks.push("file:///newer.png");
+		h.composer.setCollapsedText("newer draft [Image #1]");
 		const run = executeBuiltinSlashCommand("/sketch", {
 			ctx: h.ctx,
 			draftDetached: true,
@@ -261,9 +251,9 @@ describe("native /sketch", () => {
 		});
 		s.resolve(null);
 		await run;
-		expect(h.editor.getExpandedText()).toBe("[Image #2]\n\nnewer draft [Image #1]");
-		expect(h.editor.pendingImages).toEqual([newer, submitted]);
-		expect(h.editor.pendingImageLinks).toEqual(["file:///newer.png", "file:///submitted.png"]);
+		expect(h.composer.expandedText()).toBe("[Image #2]\n\nnewer draft [Image #1]");
+		expect(h.composer.pendingImages).toEqual([newer, submitted]);
+		expect(h.composer.pendingImageLinks).toEqual(["file:///newer.png", "file:///submitted.png"]);
 		expect(h.prompt).not.toHaveBeenCalled();
 	});
 
@@ -271,16 +261,23 @@ describe("native /sketch", () => {
 		const h = createHarness(dir, true);
 		const s = service();
 		const existing = oldImage();
-		h.editor.pendingImages.push(existing);
-		h.editor.pendingImageLinks.push("file:///existing.png");
-		h.editor.setCollapsedText("unchanged [Image #1]");
+		h.composer.pendingImages.push(existing);
+		h.composer.pendingImageLinks.push("file:///existing.png");
+		h.composer.setCollapsedText("unchanged [Image #1]");
+		const olderInterceptor = vi.fn(() => false);
+		const remove = h.ctx.shell.interceptInput(olderInterceptor);
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
-		expect(h.key("\x1b")).toBe(true);
+		try {
+			h.ctx.shell.input({ type: "key", key: { id: "escape", kind: "press", raw: "\x1b" } });
+			expect(olderInterceptor).not.toHaveBeenCalled();
+		} finally {
+			remove();
+		}
 		await run;
 		expect(s.close).toHaveBeenCalled();
 		expect(h.abort).not.toHaveBeenCalled();
-		expect(h.editor.getExpandedText()).toBe("unchanged [Image #1]");
-		expect(h.editor.pendingImages).toEqual([existing]);
+		expect(h.composer.expandedText()).toBe("unchanged [Image #1]");
+		expect(h.composer.pendingImages).toEqual([existing]);
 		expect(h.listeners.size).toBe(0);
 		expect(h.statuses.size).toBe(0);
 	});
@@ -288,18 +285,18 @@ describe("native /sketch", () => {
 	it("does not restore the consumed command on browser cancellation or launch failure", async () => {
 		const h = createHarness();
 		const s = service();
-		h.editor.setText("/sketch");
+		h.composer.setText("/sketch");
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
 		s.resolve(null);
 		await run;
-		expect(h.editor.getText()).toBe("");
+		expect(h.composer.text()).toBe("");
 		s.start.mockImplementationOnce(() => {
 			throw new Error("listen denied");
 		});
-		h.editor.setText("/sketch");
+		h.composer.setText("/sketch");
 		await executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
 		expect(h.ctx.showError).toHaveBeenCalledWith("Sketch failed: listen denied");
-		expect(h.editor.getText()).toBe("");
+		expect(h.composer.text()).toBe("");
 		expect(h.listeners.size).toBe(0);
 		expect(h.changes.size).toBe(0);
 		expect(h.statuses.size).toBe(0);
@@ -311,12 +308,12 @@ describe("native /sketch", () => {
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
 		s.resolve(PNG);
 		h.switchSession();
-		h.editor.clearDraft();
-		h.editor.setText("replacement draft");
+		h.composer.clearDraft();
+		h.composer.setText("replacement draft");
 		await run;
 		expect(s.close).toHaveBeenCalled();
-		expect(h.editor.getText()).toBe("replacement draft");
-		expect(h.editor.pendingImages).toEqual([]);
+		expect(h.composer.text()).toBe("replacement draft");
+		expect(h.composer.pendingImages).toEqual([]);
 		expect(h.listeners.size).toBe(0);
 		expect(h.changes.size).toBe(0);
 		expect(h.statuses.size).toBe(0);
@@ -327,18 +324,18 @@ describe("native /sketch", () => {
 		async change => {
 			const h = createHarness();
 			const s = service();
-			h.editor.setText("owner draft");
+			h.composer.setText("owner draft");
 			const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
 			s.resolve(PNG);
 			if (change === "view") h.focusAgent("OtherAgent");
-			if (change === "prompt") h.focus({ render: () => [], handleInput: () => {} });
+			if (change === "prompt") h.ctx.shell.overlays.show(() => jsx("col", {}));
 			if (change === "draft") {
-				h.editor.clearDraft();
-				h.editor.setText("next draft");
+				h.composer.clearDraft();
+				h.composer.setText("next draft");
 			}
 			if (change === "dispose") h.dispose();
 			await run;
-			expect(h.editor.pendingImages).toEqual([]);
+			expect(h.composer.pendingImages).toEqual([]);
 			expect(h.prompt).not.toHaveBeenCalled();
 			expect(h.listeners.size).toBe(0);
 			expect(h.changes.size).toBe(0);
@@ -368,15 +365,15 @@ describe("native /sketch", () => {
 		const h = createHarness(blockedRoot);
 		const s = service();
 		const image = oldImage();
-		h.editor.pendingImages.push(image);
-		h.editor.pendingImageLinks.push("file:///existing.png");
-		h.editor.setCollapsedText("keep [Image #1]");
+		h.composer.pendingImages.push(image);
+		h.composer.pendingImageLinks.push("file:///existing.png");
+		h.composer.setCollapsedText("keep [Image #1]");
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
 		s.resolve(PNG);
 		await run;
 		expect(h.ctx.showError).toHaveBeenCalledWith(expect.stringContaining("Sketch failed:"));
-		expect(h.editor.getExpandedText()).toBe("keep [Image #1]");
-		expect(h.editor.pendingImages).toEqual([image]);
+		expect(h.composer.expandedText()).toBe("keep [Image #1]");
+		expect(h.composer.pendingImages).toEqual([image]);
 		expect(h.prompt).not.toHaveBeenCalled();
 		expect(h.listeners.size).toBe(0);
 		expect(h.changes.size).toBe(0);

@@ -1,45 +1,49 @@
-import { createAgentHubRuntime } from "@oh-my-pi/pi-coding-agent/modes/agent-hub-runtime";
 /**
  * Hub Enter contract: activating a non-remote agent row delegates to the
  * `focusAgent` dep (session focus proxy) and closes the hub on success; a
  * focus failure keeps the hub open and surfaces the error as a notice.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model, Usage } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import type { AgentTranscriptViewer } from "@oh-my-pi/pi-tui/overlays/agent-transcript-viewer";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
-import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
-import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
-import { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { visitEntriesFromFileStream } from "@oh-my-pi/pi-coding-agent/session/session-loader";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
-import { TempDir } from "@oh-my-pi/pi-utils";
-import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { createAgentHubRuntime } from "@oh-my-pi/pi-coding-agent/modes/agent-hub-runtime";
 import {
+	type AgentMetrics,
 	aggregateMetrics,
 	hubFallbackStatsSession,
 	hubRowMetrics,
-	type AgentMetrics,
-} from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
+} from "@oh-my-pi/pi-coding-agent/modes/view-model/overlays/agent-hub-projection";
+import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { visitEntriesFromFileStream } from "@oh-my-pi/pi-coding-agent/session/session-loader";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
+import { SessionObserverRegistry } from "@oh-my-pi/pi-coding-agent/task/session-observer-registry";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { type MountedHub, mountAgentHub } from "./helpers/agent-hub";
+import { AgentTranscriptViewer } from "../src/ui/overlays/panels/agent-transcript-viewer";
+import { AgentTranscriptViewerModel } from "../src/ui/overlays/panels/agent-transcript-viewer-model";
+import { mountLayer } from "./helpers/layer-terminal";
 
 const AGENT_ID = "Worker";
 const TEST_CWD = path.resolve("agent-hub-cwd");
 
 function persistedChildJsonl(id: string): string {
 	return [
-		JSON.stringify({ type: "session", version: 3, id, timestamp: "2026-07-30T01:13:37.835Z", cwd: TEST_CWD }),
+		JSON.stringify({
+			type: "session",
+			version: 3,
+			id,
+			timestamp: "2026-07-30T01:13:37.835Z",
+			cwd: TEST_CWD,
+		}),
 		JSON.stringify({
 			type: "session_init",
 			id: "init",
@@ -105,27 +109,26 @@ function makeHub(focusAgent: (id: string) => Promise<void>) {
 	});
 	let doneCalls = 0;
 	const done = Promise.withResolvers<void>();
-	const renderRequested = Promise.withResolvers<void>();
-	const hub = new AgentHubOverlayComponent({
-		...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
-		observers: new SessionObserverRegistry(),
-		hubKeys: [],
+	const hub = mountAgentHub({
+		...createAgentHubRuntime({
+			settings: Settings.isolated(),
+			registry: agents,
+		}),
 		onDone: () => {
 			doneCalls++;
 			done.resolve();
 		},
-		requestRender: () => renderRequested.resolve(),
 		registry: agents,
 		irc: new IrcBus(agents),
 		focusAgent,
 	});
-	return { hub, agents, doneCalls: () => doneCalls, done: done.promise, renderRequested: renderRequested.promise };
+	return { hub, agents, doneCalls: () => doneCalls, done: done.promise };
 }
 
 const ROSTER_ENTRY_PATTERN = /^(❯| ) (?:(?:(?:│ {3}| {4})*)(?:├── |└── ))?(\S+) (\S+)/u;
 
-function renderedRosterEntry(hub: AgentHubOverlayComponent, id: string, width: number): string {
-	const cells = hub.render(width).map(raw => {
+function renderedRosterEntry(hub: MountedHub, id: string): string {
+	const cells = hub.lines().map(raw => {
 		const line = Bun.stripANSI(raw);
 		if (!line.startsWith("│ ")) return undefined;
 		const divider = line.indexOf("│", Math.max(2, Math.floor(line.length / 3)));
@@ -146,9 +149,9 @@ function renderedRosterEntry(hub: AgentHubOverlayComponent, id: string, width: n
 	return entry.join("\n");
 }
 
-function renderedRosterIds(hub: AgentHubOverlayComponent, width: number): string[] {
+function renderedRosterIds(hub: MountedHub): string[] {
 	const ids: string[] = [];
-	for (const raw of hub.render(width)) {
+	for (const raw of hub.lines()) {
 		const line = Bun.stripANSI(raw);
 		if (!line.startsWith("│ ")) continue;
 		const divider = line.indexOf("│", Math.max(2, Math.floor(line.length / 3)));
@@ -161,10 +164,6 @@ function renderedRosterIds(hub: AgentHubOverlayComponent, width: number): string
 }
 
 describe("Agent hub Enter activation", () => {
-	beforeAll(() => {
-		initTheme();
-	});
-
 	beforeEach(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
@@ -180,7 +179,7 @@ describe("Agent hub Enter activation", () => {
 			focusedIds.push(id);
 		});
 
-		hub.handleInput("\r");
+		hub.press("enter");
 		await done; // activation is fire-and-forget async; onDone signals completion
 
 		expect(focusedIds).toEqual([AGENT_ID]);
@@ -188,180 +187,16 @@ describe("Agent hub Enter activation", () => {
 		hub.dispose();
 	});
 
-	it("Enter still focuses an ordinary parked task rather than opening a read-only viewer", async () => {
-		const focusAgent = vi.fn(async (_id: string) => {});
-		const { hub, agents, done } = makeHub(focusAgent);
-		agents.detachSession(AGENT_ID);
-		agents.setStatus(AGENT_ID, "parked");
-		try {
-			hub.handleInput("\r");
-			await done;
-			expect(focusAgent).toHaveBeenCalledWith(AGENT_ID);
-		} finally {
-			hub.dispose();
-		}
-	});
-
-	for (const outcome of ["done", "failed", "cancelled"] as const) {
-		it(`Enter opens the retained ${outcome} native transcript without revival or send`, async () => {
-			await using temp = await TempDir.create("@omp-hub-readonly-record-");
-			const manager = SessionManager.create(temp.path(), temp.join("sessions"));
-			const model = createMockModel({ handler: () => ({ content: ["unexpected model execution"] }) });
-			const output = `${outcome} persisted tool output`;
-			const error = `${outcome} persisted diagnostic`;
-			manager.appendMessage({ role: "user", content: "Inspect execution evidence", timestamp: 1 });
-			manager.appendMessage({
-				...assistantTurn(model, 0, 2),
-				content: [{ type: "toolCall", id: "evidence", name: "record_evidence", arguments: { outcome } }],
-				stopReason: "toolUse",
-			});
-			manager.appendMessage({
-				role: "toolResult",
-				toolCallId: "evidence",
-				toolName: "record_evidence",
-				content: [{ type: "text", text: output }],
-				isError: outcome !== "done",
-				timestamp: 3,
-			});
-			manager.appendMessage({
-				...assistantTurn(model, 0, 4),
-				content: [{ type: "text", text: error }],
-				stopReason: outcome === "done" ? "stop" : "error",
-				errorMessage: outcome === "done" ? undefined : error,
-			});
-			await manager.ensureOnDisk();
-			await manager.close();
-			const agents = new AgentRegistry();
-			agents.register({
-				id: AGENT_ID,
-				displayName: AGENT_ID,
-				kind: "sub",
-				parentId: "Main",
-				session: null,
-				sessionFile: manager.getSessionFile() ?? null,
-				status: "parked",
-				history: { executionEnded: true },
-			});
-			const focusAgent = vi.fn(async (_id: string) => {});
-			const ensureLive = vi.fn(async (_id: string) => {
-				throw new Error("Must not revive");
-			});
-			const release = vi.fn(async () => true);
-			const onDone = vi.fn();
-			let viewer!: AgentTranscriptViewer;
-			const hub = new AgentHubOverlayComponent({
-				...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
-				observers: new SessionObserverRegistry(),
-				hubKeys: [],
-				expandKeys: ["ctrl+o"],
-				onDone,
-				requestRender: () => {},
-				registry: agents,
-				irc: new IrcBus(agents),
-				lifecycle: () => ({ ensureLive, release }),
-				focusAgent,
-				ui: {
-					terminal: { rows: 80 },
-					requestRender: () => {},
-					requestComponentRender: () => {},
-					setFocus: () => {},
-					showOverlay: (component: AgentTranscriptViewer) => {
-						viewer = component;
-						return { hide: () => {} };
-					},
-				} as never,
-			});
-			try {
-				hub.handleInput("r");
-				expect(Bun.stripANSI(hub.render(140).join("\n"))).toContain("read-only execution record");
-				hub.handleInput("x");
-				expect(release).not.toHaveBeenCalled();
-				hub.handleInput("\r");
-				expect(viewer).toBeDefined();
-				viewer.handleInput("\x0f");
-				const rendered = Bun.stripANSI(viewer.render(140).join("\n"));
-				expect(rendered).toContain("record_evidence");
-				expect(rendered).toContain(output);
-				expect(rendered).toContain(error);
-				expect(rendered).not.toContain(":send");
-				viewer.handleInput("Resume this execution");
-				viewer.handleInput("\r");
-				expect(focusAgent).not.toHaveBeenCalled();
-				expect(ensureLive).not.toHaveBeenCalled();
-				expect(model.calls).toHaveLength(0);
-				expect(onDone).not.toHaveBeenCalled();
-			} finally {
-				hub.dispose();
-			}
-		});
-	}
-
-	it("rejects send if an already-open ordinary task becomes an ended record during revival", async () => {
-		const agents = new AgentRegistry();
-		agents.register({
-			id: AGENT_ID,
-			displayName: AGENT_ID,
-			kind: "sub",
-			session: null,
-			sessionFile: null,
-			status: "parked",
-		});
-		const prompt = vi.fn(async () => {});
-		const live = Promise.withResolvers<{ prompt: typeof prompt }>();
-		const ensureLive = vi.fn(() => live.promise);
-		const settled = Promise.withResolvers<void>();
-		let viewer!: AgentTranscriptViewer;
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
-			onDone: () => {},
-			requestRender: () => {
-				if (agents.get(AGENT_ID)?.history?.executionEnded) settled.resolve();
-			},
-			registry: agents,
-			irc: new IrcBus(agents),
-			lifecycle: () => ({ ensureLive, release: async () => true }),
-			ui: {
-				terminal: { rows: 40 },
-				requestRender: () => {},
-				requestComponentRender: () => {},
-				setFocus: () => {},
-				showOverlay: (component: AgentTranscriptViewer) => {
-					viewer = component;
-					return { hide: () => {} };
-				},
-			} as never,
-		});
-		try {
-			hub.openChat(AGENT_ID);
-			viewer.handleInput("Continue task");
-			viewer.handleInput("\r");
-			expect(ensureLive).toHaveBeenCalledWith(AGENT_ID);
-			agents.setHistory(AGENT_ID, { executionEnded: true });
-			live.resolve({ prompt });
-			await settled.promise;
-			expect(prompt).not.toHaveBeenCalled();
-			expect(Bun.stripANSI(viewer.render(120).join("\n"))).toContain("read-only");
-			viewer.handleInput("Try another continuation");
-			viewer.handleInput("\r");
-			expect(ensureLive).toHaveBeenCalledTimes(1);
-		} finally {
-			live.resolve({ prompt });
-			hub.dispose();
-		}
-	});
-
 	it("a focus failure keeps the hub open and shows the error as a notice", async () => {
 		const message = 'Agent "X" is aborted and cannot be revived';
-		const { hub, doneCalls, renderRequested } = makeHub(() => Promise.reject(new Error(message)));
+		const { hub, doneCalls } = makeHub(() => Promise.reject(new Error(message)));
 
-		hub.handleInput("\r");
-		await renderRequested; // the rejection path requests a render after setting the notice
+		hub.press("enter");
+		// The rejection lands after the activation's microtasks: wait for the notice to paint.
+		for (let i = 0; i < 20 && !hub.text().includes(message); i++) await Promise.resolve();
 
 		expect(doneCalls()).toBe(0);
-		const rendered = Bun.stripANSI(hub.render(120).join("\n"));
-		expect(rendered).toContain(message);
+		expect(hub.text()).toContain(message);
 		hub.dispose();
 	});
 
@@ -377,33 +212,230 @@ describe("Agent hub Enter activation", () => {
 			status: "aborted",
 		});
 		const focusAgent = vi.fn(async (_id: string) => {});
-		const showOverlay = vi.fn((_component: unknown, _options: unknown) => ({ hide: () => {} }));
-		const setFocus = vi.fn();
+		const openTranscript = vi.fn();
 		const done = Promise.withResolvers<void>();
 		const onDone = vi.fn(() => done.resolve());
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+			}),
 			onDone,
-			requestRender: () => {},
 			registry: agents,
 			irc: new IrcBus(agents),
 			focusAgent,
-			ui: {
-				requestRender: () => {},
-				requestComponentRender: () => {},
-				showOverlay,
-				setFocus,
-			} as never,
+			openTranscript,
 		});
 
-		hub.handleInput("\r");
+		hub.press("enter");
 		await done.promise;
 
 		expect(focusAgent).toHaveBeenCalledWith(AGENT_ID);
-		expect(showOverlay).not.toHaveBeenCalled();
+		expect(openTranscript).not.toHaveBeenCalled();
 		hub.dispose();
+	});
+
+	it("still focuses an ordinary parked task", async () => {
+		const focusAgent = vi.fn(async (_id: string) => {});
+		const { hub, agents, done } = makeHub(focusAgent);
+		agents.detachSession(AGENT_ID);
+		agents.setStatus(AGENT_ID, "parked");
+		try {
+			hub.press("enter");
+			await done;
+			expect(focusAgent).toHaveBeenCalledWith(AGENT_ID);
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	it("keeps another root's persisted execution records out of the local Hub", () => {
+		const registry = new AgentRegistry();
+		const root = path.join(TEST_CWD, "current.jsonl");
+		registry.register({
+			id: "CurrentWorker",
+			displayName: "CurrentWorker",
+			kind: "sub",
+			parentId: "Main",
+			session: null,
+			sessionFile: path.join(TEST_CWD, "current", "__worker.jsonl"),
+			status: "parked",
+		});
+		registry.register({
+			id: "PreviousWorker",
+			displayName: "PreviousWorker",
+			kind: "sub",
+			parentId: "Main",
+			session: null,
+			sessionFile: path.join(TEST_CWD, "previous", "__worker.jsonl"),
+			status: "parked",
+			history: { executionEnded: true },
+		});
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({ settings: Settings.isolated(), registry, sessionFile: root }),
+			irc: new IrcBus(registry),
+		});
+		try {
+			expect(hub.text()).toContain("CurrentWorker");
+			expect(hub.text()).not.toContain("PreviousWorker");
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	it.each(["done", "failed", "cancelled"] as const)(
+		"opens a completed %s execution as a read-only native transcript",
+		async outcome => {
+			await using temp = await TempDir.create("@omp-hub-readonly-record-");
+			const manager = SessionManager.create(temp.path(), temp.join("sessions"));
+			const output = `${outcome} persisted tool output`;
+			const diagnostic = `${outcome} persisted diagnostic`;
+			manager.appendMessage({ role: "user", content: "Inspect execution evidence", timestamp: 1 });
+			const assistant: AssistantMessage = {
+				role: "assistant",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				content: [{ type: "toolCall", id: "evidence", name: "record_evidence", arguments: { outcome } }],
+				stopReason: "toolUse",
+				timestamp: 2,
+			};
+			manager.appendMessage(assistant);
+			manager.appendMessage({
+				role: "toolResult",
+				toolCallId: "evidence",
+				toolName: "record_evidence",
+				content: [{ type: "text", text: output }],
+				isError: outcome !== "done",
+				timestamp: 3,
+			});
+			manager.appendMessage({
+				...assistant,
+				content: [{ type: "text", text: diagnostic }],
+				stopReason: outcome === "done" ? "stop" : "error",
+				errorMessage: outcome === "done" ? undefined : diagnostic,
+				timestamp: 4,
+			});
+			await manager.ensureOnDisk();
+			const sessionFile = manager.getSessionFile();
+			await manager.close();
+
+			const agents = new AgentRegistry();
+			agents.register({
+				id: AGENT_ID,
+				displayName: AGENT_ID,
+				kind: "sub",
+				session: null,
+				sessionFile,
+				status: "parked",
+				history: { executionEnded: true },
+			});
+			const runtime = createAgentHubRuntime({ settings: Settings.isolated(), registry: agents });
+			const focusAgent = vi.fn(async (_id: string) => {});
+			const ensureLive = vi.fn(async (_id: string) => {
+				throw new Error("must not revive");
+			});
+			const release = vi.fn(async () => true);
+			const onDone = vi.fn();
+			let model: AgentTranscriptViewerModel | undefined;
+			const openTranscript = vi.fn((agentId: string) => {
+				model = new AgentTranscriptViewerModel({
+					agentId,
+					transcript: runtime.transcript,
+					registry: agents,
+					lifecycle: () => ({ ensureLive }),
+					terminalRows: () => 40,
+					expandKeys: ["ctrl+o"],
+					hubKeys: [],
+					onClose: () => {},
+					onHubClose: onDone,
+				});
+			});
+			const hub = mountAgentHub({
+				...runtime,
+				irc: new IrcBus(agents),
+				lifecycle: () => ({ ensureLive, release }),
+				focusAgent,
+				openTranscript,
+				onDone,
+			});
+			try {
+				hub.press("r");
+				expect(hub.text()).toMatch(/read.only/i);
+				hub.press("x");
+				hub.press("enter");
+				expect(openTranscript).toHaveBeenCalledWith(AGENT_ID, undefined);
+				const opened = model!;
+				const viewer = mountLayer(() => AgentTranscriptViewer({ model: opened }), {
+					columns: 120,
+					rows: 40,
+					focusKind: "editor",
+				});
+				try {
+					viewer.press("ctrl+o");
+					expect(viewer.text()).toContain("record_evidence");
+					expect(viewer.text()).toContain(output);
+					expect(viewer.text()).toContain(diagnostic);
+					expect(opened.sendable).toBe(false);
+					opened.draft = { text: "Resume this execution", cursor: 21 };
+					opened.submit();
+					expect(opened.shownNotice()).toMatch(/read.only/i);
+				} finally {
+					viewer.dispose();
+				}
+				expect(focusAgent).not.toHaveBeenCalled();
+				expect(ensureLive).not.toHaveBeenCalled();
+				expect(release).not.toHaveBeenCalled();
+				expect(onDone).not.toHaveBeenCalled();
+			} finally {
+				model?.dispose();
+				hub.dispose();
+			}
+		},
+	);
+
+	it("rejects an in-flight send if the ordinary task becomes an ended execution during revival", async () => {
+		const registry = new AgentRegistry();
+		registry.register({ id: AGENT_ID, displayName: AGENT_ID, kind: "sub", session: null, status: "parked" });
+		const prompt = vi.fn(async () => {});
+		const live = Promise.withResolvers<{ prompt: typeof prompt }>();
+		const ensureLive = vi.fn((_id: string) => live.promise);
+		const model = new AgentTranscriptViewerModel({
+			agentId: AGENT_ID,
+			transcript: createAgentHubRuntime({ settings: Settings.isolated(), registry }).transcript,
+			registry,
+			lifecycle: () => ({ ensureLive }),
+			terminalRows: () => 40,
+			expandKeys: [],
+			hubKeys: [],
+			onClose: () => {},
+			onHubClose: () => {},
+		});
+		try {
+			expect(model.sendable).toBe(true);
+			model.draft = { text: "Continue task", cursor: 13 };
+			model.submit();
+			expect(ensureLive).toHaveBeenCalledWith(AGENT_ID);
+			registry.setHistory(AGENT_ID, { executionEnded: true });
+			live.resolve({ prompt });
+			await live.promise;
+			expect(model.shownNotice()).toMatch(/read.only/i);
+			expect(prompt).not.toHaveBeenCalled();
+			model.draft = { text: "Try again", cursor: 9 };
+			model.submit();
+			expect(ensureLive).toHaveBeenCalledTimes(1);
+		} finally {
+			live.resolve({ prompt });
+			model.dispose();
+		}
 	});
 
 	it("lists persisted subagent session files after restart", async () => {
@@ -413,20 +445,21 @@ describe("Agent hub Enter activation", () => {
 		await Bun.write(sessionFile, "");
 		await Bun.write(workerSessionFile, persistedChildJsonl("worker"));
 		const agents = new AgentRegistry();
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents, sessionFile }),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+				sessionFile,
+			}),
 			onDone: () => {},
-			requestRender: () => {},
 			registry: agents,
 			irc: new IrcBus(agents),
 			focusAgent: async () => {},
 			sessionFile,
 		});
-		await hub.persistedSubagentsReady;
+		await hub.handle.persistedReady;
 
-		const workerEntry = renderedRosterEntry(hub, "Worker", 120);
+		const workerEntry = renderedRosterEntry(hub, "Worker");
 		expect(workerEntry).toContain("○ Worker");
 		expect(agents.get("Worker")?.sessionFile).toBe(workerSessionFile);
 		hub.dispose();
@@ -450,20 +483,21 @@ describe("Agent hub Enter activation", () => {
 			await fs.utimes(file, new Date(mtime), new Date(mtime));
 		}
 		const agents = new AgentRegistry();
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents, sessionFile }),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+				sessionFile,
+			}),
 			onDone: () => {},
-			requestRender: () => {},
 			registry: agents,
 			irc: new IrcBus(agents),
 			focusAgent: async () => {},
 			sessionFile,
 		});
-		await hub.persistedSubagentsReady;
+		await hub.handle.persistedReady;
 
-		expect(renderedRosterIds(hub, 120)).toEqual(["Ccc", "Bbb", "Aaa"]);
+		expect(renderedRosterIds(hub)).toEqual(["Ccc", "Bbb", "Aaa"]);
 		hub.dispose();
 	});
 
@@ -473,19 +507,20 @@ describe("Agent hub Enter activation", () => {
 		await Bun.write(sessionFile, "");
 		await Bun.write(path.join(tempDir.path(), "main", "Worker.jsonl"), "");
 		const agents = new AgentRegistry();
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents, sessionFile }),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+				sessionFile,
+			}),
 			onDone: () => {},
-			requestRender: () => {},
 			registry: agents,
 			irc: new IrcBus(agents),
 			sessionFile,
 		});
 
 		hub.dispose();
-		await hub.persistedSubagentsReady;
+		await hub.handle.persistedReady;
 
 		expect(agents.get("Worker")).toBeUndefined();
 	});
@@ -498,22 +533,23 @@ describe("Agent hub Enter activation", () => {
 		await Bun.write(parentSessionFile, persistedChildJsonl("parent"));
 		await Bun.write(childSessionFile, persistedChildJsonl("child"));
 		const agents = new AgentRegistry();
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents, sessionFile }),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+				sessionFile,
+			}),
 			onDone: () => {},
-			requestRender: () => {},
 			registry: agents,
 			irc: new IrcBus(agents),
 			sessionFile,
 		});
-		await hub.persistedSubagentsReady;
+		await hub.handle.persistedReady;
 
 		expect(agents.get("Parent")?.parentId).toBe("Main");
 		expect(agents.get("Child")?.parentId).toBe("Parent");
-		hub.handleInput("t");
-		expect(Bun.stripANSI(renderedRosterEntry(hub, "Child", 120))).toContain("└── ○ Child");
+		hub.press("t");
+		expect(Bun.stripANSI(renderedRosterEntry(hub, "Child"))).toContain("└── ○ Child");
 		hub.dispose();
 	});
 
@@ -527,7 +563,13 @@ describe("Agent hub Enter activation", () => {
 		await Bun.write(
 			workerSessionFile,
 			[
-				JSON.stringify({ type: "session", version: 3, id: "worker-session", timestamp: createdAt, cwd: TEST_CWD }),
+				JSON.stringify({
+					type: "session",
+					version: 3,
+					id: "worker-session",
+					timestamp: createdAt,
+					cwd: TEST_CWD,
+				}),
 				JSON.stringify({
 					type: "session_init",
 					id: "init",
@@ -541,17 +583,18 @@ describe("Agent hub Enter activation", () => {
 		);
 		await fs.utimes(workerSessionFile, lastActivity, lastActivity);
 		const agents = new AgentRegistry();
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents, sessionFile }),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+				sessionFile,
+			}),
 			onDone: () => {},
-			requestRender: () => {},
 			registry: agents,
 			irc: new IrcBus(agents),
 			sessionFile,
 		});
-		await hub.persistedSubagentsReady;
+		await hub.handle.persistedReady;
 
 		expect(agents.get("Worker")).toMatchObject({
 			activity: "Inspect dependency boundaries and report unsafe coupling.",
@@ -559,7 +602,7 @@ describe("Agent hub Enter activation", () => {
 			lastActivity: lastActivity.getTime(),
 			status: "parked",
 		});
-		const workerEntry = renderedRosterEntry(hub, "Worker", 120);
+		const workerEntry = renderedRosterEntry(hub, "Worker");
 		expect(workerEntry).toContain("Inspect dependency boundaries and report unsafe coupling.");
 		expect(workerEntry.replace(/\s+/g, " ")).toContain("usage ·");
 		expect(workerEntry).not.toContain("$0.000");
@@ -576,7 +619,13 @@ describe("Agent hub Enter activation", () => {
 		await Bun.write(
 			workerSessionFile,
 			[
-				JSON.stringify({ type: "session", version: 3, id: "worker-session", timestamp: createdAt, cwd: TEST_CWD }),
+				JSON.stringify({
+					type: "session",
+					version: 3,
+					id: "worker-session",
+					timestamp: createdAt,
+					cwd: TEST_CWD,
+				}),
 				JSON.stringify({
 					type: "model_change",
 					id: "model",
@@ -603,8 +652,18 @@ describe("Agent hub Enter activation", () => {
 						role: "assistant",
 						timestamp: lastActivity.getTime(),
 						content: [
-							{ type: "toolCall", id: "read-call", name: "read", arguments: { path: "src/a.ts" } },
-							{ type: "toolCall", id: "grep-call", name: "grep", arguments: { pattern: "needle" } },
+							{
+								type: "toolCall",
+								id: "read-call",
+								name: "read",
+								arguments: { path: "src/a.ts" },
+							},
+							{
+								type: "toolCall",
+								id: "grep-call",
+								name: "grep",
+								arguments: { pattern: "needle" },
+							},
 						],
 						usage: {
 							input: 100,
@@ -612,7 +671,13 @@ describe("Agent hub Enter activation", () => {
 							cacheRead: 200,
 							cacheWrite: 10,
 							totalTokens: 335,
-							cost: { input: 0.01, output: 0.1, cacheRead: 0.01, cacheWrite: 0.003, total: 0.123 },
+							cost: {
+								input: 0.01,
+								output: 0.1,
+								cacheRead: 0.01,
+								cacheWrite: 0.003,
+								total: 0.123,
+							},
 						},
 					},
 				}),
@@ -620,26 +685,27 @@ describe("Agent hub Enter activation", () => {
 		);
 		await fs.utimes(workerSessionFile, lastActivity, lastActivity);
 		const agents = new AgentRegistry();
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents, sessionFile }),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+				sessionFile,
+			}),
 			onDone: () => {},
-			requestRender: () => {},
 			registry: agents,
 			irc: new IrcBus(agents),
 			sessionFile,
 		});
-		await hub.persistedSubagentsReady;
+		await hub.handle.persistedReady;
 
-		const workerEntry = renderedRosterEntry(hub, "Worker", 120).replace(/\s+/g, " ");
+		const workerEntry = renderedRosterEntry(hub, "Worker").replace(/\s+/g, " ");
 		expect(workerEntry).toContain("SMOL");
 		expect(workerEntry).toContain("$0.123");
 		expect(workerEntry).toContain("1m30s");
 		expect(workerEntry).toContain("1 req");
 		expect(workerEntry).toContain("2 tools");
 		expect(workerEntry).toContain("135 tok");
-		expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("Read-only · 0 LoC");
+		expect(hub.text()).toContain("Read-only · 0 LoC");
 		hub.dispose();
 	});
 	it("yields to a macrotask at the configured streaming threshold", async () => {
@@ -722,259 +788,34 @@ describe("Agent hub Enter activation", () => {
 		await fs.writeFile(path.join(sourceArtifacts, "OrdinaryTask.jsonl"), persistedChildJsonl("OrdinaryTask"));
 		const fork = await manager.fork();
 		if (!fork) throw new Error("Expected persisted fork");
-		await fs.cp(sourceArtifacts, fork.newSessionFile.slice(0, -6), { recursive: true });
+		await fs.cp(sourceArtifacts, fork.newSessionFile.slice(0, -6), {
+			recursive: true,
+		});
 		await manager.close();
 
 		const agents = new AgentRegistry();
-		const hub = new AgentHubOverlayComponent({
+		const hub = mountAgentHub({
 			...createAgentHubRuntime({
 				settings: Settings.isolated(),
 				registry: agents,
 				sessionFile: fork.newSessionFile,
 			}),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
 			onDone: () => {},
-			requestRender: () => {},
 			registry: agents,
 			irc: new IrcBus(agents),
 			focusAgent: async () => {},
 			sessionFile: fork.newSessionFile,
 		});
-		await hub.persistedSubagentsReady;
+		await hub.handle.persistedReady;
 
 		expect(agents.get("ActiveVibe")).toBeUndefined();
 		expect(agents.get("KilledVibe")).toBeUndefined();
 		expect(agents.get("OrdinaryTask")?.status).toBe("parked");
 		hub.dispose();
 	});
-
-	it("selector controller restores focus to the editor after Enter focuses an agent", async () => {
-		const agents = new AgentRegistry();
-		agents.register({
-			id: AGENT_ID,
-			displayName: AGENT_ID,
-			kind: "sub",
-			parentId: "Main",
-			session: { subscribe: () => () => {} } as unknown as AgentSession,
-			sessionFile: null,
-			status: "running",
-		});
-
-		const editor = {};
-		let capturedHub: AgentHubOverlayComponent | undefined;
-		const focusedIds: string[] = [];
-		const focusResolved = Promise.withResolvers<void>();
-		const editorFocused = Promise.withResolvers<void>();
-		const focusTargets: unknown[] = [];
-		const editorContainer = {
-			children: [editor],
-			clear: () => {},
-			addChild: () => {},
-		};
-		const ctx = {
-			keybindings: { getKeys: () => [] },
-			ui: {
-				showOverlay: (component: AgentHubOverlayComponent) => {
-					capturedHub = component;
-					return { hide: () => {} };
-				},
-				setFocus: (target: unknown) => {
-					focusTargets.push(target);
-					if (target === editor) editorFocused.resolve();
-				},
-				requestRender: () => {},
-			},
-			editor,
-			editorContainer,
-			collabGuest: { agentRegistry: agents, hubRemote: undefined },
-			focusAgentSession: async (id: string) => {
-				focusedIds.push(id);
-				focusResolved.resolve();
-			},
-			session: { getToolByName: () => undefined, extensionRunner: undefined },
-			sessionManager: { getCwd: () => TEST_CWD, getSessionFile: () => null },
-			hideThinkingBlock: false,
-		};
-		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);
-
-		controller.showAgentHub(new SessionObserverRegistry());
-
-		expect(focusTargets[0]).toBe(capturedHub);
-
-		capturedHub!.handleInput("\r");
-		await focusResolved.promise;
-		await editorFocused.promise;
-
-		expect(focusedIds).toEqual([AGENT_ID]);
-		expect(focusTargets.at(-1)).toBe(editor);
-		capturedHub!.dispose();
-	});
-});
-
-describe("Agent hub double-← gating", () => {
-	beforeAll(() => {
-		initTheme();
-	});
-
-	afterEach(() => {
-		resetSettingsForTest();
-	});
-
-	function setup(agents: AgentRegistry, sessionFile: string | null = null) {
-		let shown: AgentHubOverlayComponent | undefined;
-		let overlayOptions: Record<string, unknown> | undefined;
-		const shownReady = Promise.withResolvers<AgentHubOverlayComponent>();
-		const editor = {};
-		const focusTargets: unknown[] = [];
-		const ctx = {
-			keybindings: { getKeys: () => [] },
-			ui: {
-				showOverlay: (component: AgentHubOverlayComponent, options: Record<string, unknown>) => {
-					shown = component;
-					overlayOptions = options;
-					shownReady.resolve(component);
-					return { hide: () => {} };
-				},
-				setFocus: (target: unknown) => {
-					focusTargets.push(target);
-				},
-				requestRender: () => {},
-			},
-			editor,
-			editorContainer: {
-				children: [editor],
-				clear: () => {},
-				addChild: () => {},
-			},
-			collabGuest: { agentRegistry: agents, hubRemote: undefined },
-			focusAgentSession: async () => {},
-			session: { getToolByName: () => undefined, extensionRunner: undefined },
-			sessionManager: { getCwd: () => TEST_CWD, getSessionFile: () => sessionFile },
-			hideThinkingBlock: false,
-		};
-		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);
-		return {
-			controller,
-			editor,
-			shown: () => shown,
-			shownReady: shownReady.promise,
-			overlayOptions: () => overlayOptions,
-			focusTargets,
-		};
-	}
-
-	function registerWorker(agents: AgentRegistry) {
-		agents.register({
-			id: AGENT_ID,
-			displayName: AGENT_ID,
-			kind: "sub",
-			parentId: "Main",
-			session: { subscribe: () => () => {} } as unknown as AgentSession,
-			sessionFile: null,
-			status: "running",
-		});
-	}
-
-	it("requireContent keeps the hub closed when only Main is registered", () => {
-		const agents = new AgentRegistry();
-		agents.register({
-			id: "Main",
-			displayName: "Main",
-			kind: "main",
-			session: null,
-			sessionFile: null,
-			status: "running",
-		});
-		const { controller, shown } = setup(agents);
-
-		controller.showAgentHub(new SessionObserverRegistry(), { requireContent: true });
-
-		expect(shown()).toBeUndefined();
-	});
-
-	it("requireContent opens the hub once a subagent exists", () => {
-		const agents = new AgentRegistry();
-		registerWorker(agents);
-		const { controller, shown } = setup(agents);
-
-		controller.showAgentHub(new SessionObserverRegistry(), { requireContent: true });
-
-		expect(shown()).toBeDefined();
-		shown()!.dispose();
-	});
-
-	it("requireContent opens the hub after persisted subagents load", async () => {
-		using tempDir = TempDir.createSync("@omp-agent-hub-require-content-");
-		const sessionFile = path.join(tempDir.path(), "main.jsonl");
-		const workerSessionFile = path.join(tempDir.path(), "main", "Worker.jsonl");
-		await Bun.write(sessionFile, "");
-		await Bun.write(workerSessionFile, persistedChildJsonl("worker"));
-		const agents = new AgentRegistry();
-		const { controller, shown, shownReady } = setup(agents, sessionFile);
-
-		controller.showAgentHub(new SessionObserverRegistry(), { requireContent: true });
-
-		expect(shown()).toBeUndefined();
-		const shownHub = await shownReady;
-		expect(agents.get("Worker")?.sessionFile).toBe(workerSessionFile);
-		shownHub!.dispose();
-	});
-
-	it("the explicit hub opens fullscreen before persisted subagents load", async () => {
-		using tempDir = TempDir.createSync("@omp-agent-hub-explicit-");
-		const sessionFile = path.join(tempDir.path(), "main.jsonl");
-		await Bun.write(sessionFile, "");
-		await Bun.write(path.join(tempDir.path(), "main", "Worker.jsonl"), persistedChildJsonl("worker"));
-		const agents = new AgentRegistry();
-		const { controller, shown, overlayOptions } = setup(agents, sessionFile);
-
-		controller.showAgentHub(new SessionObserverRegistry());
-
-		const hub = shown();
-		expect(hub).toBeDefined();
-		expect(overlayOptions()).toMatchObject({ width: "100%", maxHeight: "100%", margin: 0, fullscreen: true });
-		expect(agents.get("Worker")).toBeUndefined();
-		expect(Bun.stripANSI(hub!.render(120).join("\n"))).toContain("Loading saved agents");
-		await hub!.persistedSubagentsReady;
-		expect(agents.get("Worker")?.status).toBe("parked");
-		hub!.dispose();
-	});
-
-	it("armCloseTap lets a single ← dismiss the hub the opening ←← raised", () => {
-		const agents = new AgentRegistry();
-		// A parked/persisted agent opens the hub under requireContent (issue #4780).
-		agents.register({
-			id: "Parked",
-			displayName: "Parked",
-			kind: "sub",
-			parentId: "Main",
-			session: { subscribe: () => () => {} } as unknown as AgentSession,
-			sessionFile: null,
-			status: "parked",
-		});
-		const { controller, editor, shown, focusTargets } = setup(agents);
-
-		controller.showAgentHub(new SessionObserverRegistry(), { requireContent: true, armCloseTap: true });
-
-		const hub = shown();
-		expect(hub).toBeDefined();
-		expect(focusTargets.at(-1)).toBe(hub);
-
-		// One ← — the editor's detector consumed the ←← that opened the hub — now
-		// closes it, returning focus to the editor. Without armCloseTap this ← only
-		// primes the hub's fresh detector and the user stays trapped.
-		hub!.handleInput("\x1b[D");
-
-		expect(focusTargets.at(-1)).toBe(editor);
-	});
 });
 
 describe("Agent hub data refresh coalescing", () => {
-	beforeAll(() => {
-		initTheme();
-	});
-
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
@@ -982,25 +823,26 @@ describe("Agent hub data refresh coalescing", () => {
 		AgentRegistry.resetGlobalForTests();
 	});
 
-	it("coalesces a synchronous registry burst into one render and refreshes rows", async () => {
+	it("coalesces a synchronous registry burst into one refresh of the rows", async () => {
 		vi.useFakeTimers();
 		const agents = new AgentRegistry();
 		const observers = new SessionObserverRegistry();
-		const requestRender = vi.fn();
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+			}),
 			observers,
-			hubKeys: [],
 			onDone: () => {},
-			requestRender,
 			registry: agents,
 			irc: new IrcBus(agents),
 			focusAgent: async () => {},
 		});
 
 		try {
-			await hub.persistedSubagentsReady;
-			requestRender.mockClear();
+			await hub.handle.persistedReady;
+			// A refresh re-reads the registry; painting does not.
+			const refreshes = vi.spyOn(agents, "list");
 
 			for (const id of ["BurstA", "BurstB", "BurstC"]) {
 				agents.register({
@@ -1014,16 +856,29 @@ describe("Agent hub data refresh coalescing", () => {
 				});
 			}
 
-			expect(requestRender).not.toHaveBeenCalled();
-			expect(Bun.stripANSI(hub.render(120).join("\n"))).not.toContain("BurstA");
+			expect(refreshes).not.toHaveBeenCalled();
+			expect(hub.text()).not.toContain("BurstA");
 
 			vi.advanceTimersByTime(99);
-			expect(requestRender).not.toHaveBeenCalled();
+			expect(refreshes).not.toHaveBeenCalled();
 
 			vi.advanceTimersByTime(1);
-			expect(requestRender).toHaveBeenCalledTimes(1);
+			const burstReads = refreshes.mock.calls.length;
+			expect(burstReads).toBeGreaterThan(0);
+			// Three registrations cost what one does: a single refresh.
+			agents.register({
+				id: "Single",
+				displayName: "Single",
+				kind: "sub",
+				parentId: "Main",
+				session: { subscribe: () => () => {} } as unknown as AgentSession,
+				sessionFile: null,
+				status: "running",
+			});
+			vi.advanceTimersByTime(100);
+			expect(refreshes.mock.calls.length).toBe(burstReads * 2);
 
-			const rendered = Bun.stripANSI(hub.render(120).join("\n"));
+			const rendered = hub.text();
 			expect(rendered).toContain("BurstA");
 			expect(rendered).toContain("BurstB");
 			expect(rendered).toContain("BurstC");
@@ -1037,7 +892,6 @@ describe("Agent hub data refresh coalescing", () => {
 		vi.useFakeTimers();
 		const agents = new AgentRegistry();
 		const observers = new SessionObserverRegistry();
-		const requestRender = vi.fn();
 		let inputTokens = 100;
 		let assistantMessages = 1;
 		const getSessionStats = vi.fn(() => ({
@@ -1064,44 +918,48 @@ describe("Agent hub data refresh coalescing", () => {
 			displayName: "SDK agent",
 			kind: "sub",
 			parentId: "Main",
-			session: { getSessionStats, subscribe: () => () => {} } as unknown as AgentSession,
+			session: {
+				getSessionStats,
+				subscribe: () => () => {},
+			} as unknown as AgentSession,
 			status: "running",
 		});
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+			}),
 			observers,
-			hubKeys: [],
 			onDone: () => {},
-			requestRender,
 			registry: agents,
 			irc: new IrcBus(agents),
 			focusAgent: async () => {},
 		});
 
 		try {
-			await hub.persistedSubagentsReady;
+			await hub.handle.persistedReady;
 			expect(getSessionStats).toHaveBeenCalledTimes(1);
-			for (let i = 0; i < 4; i++) hub.render(120);
+			for (let i = 0; i < 4; i++) hub.lines();
 			expect(getSessionStats).toHaveBeenCalledTimes(1);
-			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("150 tok");
+			expect(hub.text()).toContain("150 tok");
 
 			inputTokens = 400;
 			assistantMessages = 2;
 			agents.setActivity("SdkAgent", "heartbeat");
 			vi.advanceTimersByTime(100);
 			expect(getSessionStats).toHaveBeenCalledTimes(1);
-			expect(Bun.stripANSI(hub.render(120).join("\n"))).toContain("150 tok");
+			expect(hub.text()).toContain("150 tok");
 
 			vi.advanceTimersByTime(4_899);
 			expect(getSessionStats).toHaveBeenCalledTimes(1);
 			vi.advanceTimersByTime(1);
 			expect(getSessionStats).toHaveBeenCalledTimes(2);
-			const refreshed = Bun.stripANSI(hub.render(120).join("\n"));
+			const refreshed = hub.text();
 			expect(refreshed).toContain("450 tok");
 			expect(refreshed).toContain("2 req");
 			expect(refreshed).toContain("1/1");
 			expect(refreshed).toContain("measured");
-			hub.render(120);
+			hub.lines();
 			expect(getSessionStats).toHaveBeenCalledTimes(2);
 		} finally {
 			hub.dispose();
@@ -1112,14 +970,26 @@ describe("Agent hub data refresh coalescing", () => {
 	it("counts shared fallback session usage once across parent and descendant rows", () => {
 		const agents = new AgentRegistry();
 		const getSessionStats = vi.fn(() => ({
-			tokens: { input: 100, output: 40, cacheRead: 10, cacheWrite: 10, total: 160 },
+			tokens: {
+				input: 100,
+				output: 40,
+				cacheRead: 10,
+				cacheWrite: 10,
+				total: 160,
+			},
 			assistantMessages: 1,
 			toolCalls: 2,
 			cost: 0.1,
 			contextUsage: undefined,
 		}));
 		const session = { getSessionStats } as unknown as AgentSession;
-		agents.register({ id: "Parent", displayName: "Parent", kind: "sub", session, status: "idle" });
+		agents.register({
+			id: "Parent",
+			displayName: "Parent",
+			kind: "sub",
+			session,
+			status: "idle",
+		});
 		agents.register({
 			id: "Child",
 			displayName: "Child",
@@ -1128,18 +998,18 @@ describe("Agent hub data refresh coalescing", () => {
 			session,
 			status: "idle",
 		});
-		const hub = new AgentHubOverlayComponent({
-			...createAgentHubRuntime({ settings: Settings.isolated(), registry: agents }),
-			observers: new SessionObserverRegistry(),
-			hubKeys: [],
+		const hub = mountAgentHub({
+			...createAgentHubRuntime({
+				settings: Settings.isolated(),
+				registry: agents,
+			}),
 			onDone: () => {},
-			requestRender: () => {},
 			registry: agents,
 			irc: new IrcBus(agents),
 			focusAgent: async () => {},
 		});
 		try {
-			const rendered = Bun.stripANSI(hub.render(120).join("\n"));
+			const rendered = hub.text();
 			expect(rendered).toContain("150 tok");
 			expect(rendered).toContain("1/2");
 			expect(rendered).toContain("measured");
@@ -1158,12 +1028,20 @@ describe("Agent hub data refresh coalescing", () => {
 			if (!model) throw new Error("Expected a bundled model");
 
 			const parentManager = SessionManager.inMemory();
-			parentManager.appendMessage({ role: "user", content: "parent task", timestamp: 1 });
+			parentManager.appendMessage({
+				role: "user",
+				content: "parent task",
+				timestamp: 1,
+			});
 			parentManager.appendMessage(assistantTurn(model, 0.6, 2));
 			parentSession = liveAgentSession(parentManager, model, modelRegistry);
 
 			const childManager = SessionManager.inMemory();
-			childManager.appendMessage({ role: "user", content: "child task", timestamp: 1 });
+			childManager.appendMessage({
+				role: "user",
+				content: "child task",
+				timestamp: 1,
+			});
 			childManager.appendMessage(assistantTurn(model, 0.2, 2));
 			childSession = liveAgentSession(childManager, model, modelRegistry);
 
@@ -1221,7 +1099,10 @@ describe("Agent hub data refresh coalescing", () => {
 					usage: billedUsage(0.05),
 					stopReason: "stop",
 				},
-				{ sessionId: parentManager.getSessionId(), parentId: parentManager.getLeafId() },
+				{
+					sessionId: parentManager.getSessionId(),
+					parentId: parentManager.getLeafId(),
+				},
 			);
 			parentManager.appendCompaction("Work before the retained turn", undefined, finalAssistantEntryId, 100, {
 				tokensAfter: 15,
@@ -1323,9 +1204,17 @@ describe("Agent hub data refresh coalescing", () => {
 			if (!model) throw new Error("Expected a bundled model");
 
 			const manager = SessionManager.inMemory();
-			manager.appendMessage({ role: "user", content: "initial turn", timestamp: 1 });
+			manager.appendMessage({
+				role: "user",
+				content: "initial turn",
+				timestamp: 1,
+			});
 			const ownerParent = manager.appendMessage(assistantTurn(model, 0.6, 2));
-			const activeLeaf = manager.appendMessage({ role: "user", content: "successor turn", timestamp: 3 });
+			const activeLeaf = manager.appendMessage({
+				role: "user",
+				content: "successor turn",
+				timestamp: 3,
+			});
 			session = liveAgentSession(manager, model, modelRegistry);
 			const registry = new AgentRegistry();
 			const ref = registry.register({

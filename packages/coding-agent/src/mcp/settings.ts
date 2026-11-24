@@ -2,8 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { setMcpRenderMarkdownResults } from "@oh-my-pi/pi-tui/tools/mcp";
-import { effect, register } from "../config/registry";
+import { register } from "../config/registry";
 
 // MCP
 export const cfgMcpEnableProjectConfig = register({
@@ -92,7 +91,6 @@ export const cfgMcpRenderMarkdownResults = register({
 		description: "在对话记录中将非 JSON 的 MCP 文本结果渲染为 Markdown",
 	},
 });
-effect(cfgMcpRenderMarkdownResults, setMcpRenderMarkdownResults);
 
 export const cfgMcpNotifications = register({
 	id: "mcp.notifications",

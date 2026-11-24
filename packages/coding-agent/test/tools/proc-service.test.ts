@@ -16,7 +16,7 @@ import { BashTool } from "../../src/tools/bash";
 import { WriteTool } from "../../src/tools/write";
 import { sharedBrowserDaemonName } from "../../src/tools/browser/shared-daemon";
 import type { ToolSession } from "../../src/tools";
-import type { UnitSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
+import type { UnitSnapshot } from "@oh-my-pi/pi-coding-agent/daemon/daemon-types";
 import { hasLiveOwnedService } from "../../src/launch/services";
 import { IsolatedDaemon } from "../fixtures/daemon-harness";
 

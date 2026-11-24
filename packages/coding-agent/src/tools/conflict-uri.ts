@@ -5,10 +5,10 @@
  */
 import * as fs from "node:fs/promises";
 import { editDiffString } from "@oh-my-pi/pi-natives";
-import type { EditToolPerFileResult } from "@oh-my-pi/pi-tui/tools/edit";
-import { type ConflictEntry, renderConflictRegion } from "@oh-my-pi/pi-tui/tools/conflict-detect";
-import { PREVIEW_LIMITS } from "@oh-my-pi/pi-tui/render/render-utils";
-import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import type { EditToolPerFileResult } from "./details/edit";
+import { type ConflictEntry, renderConflictRegion } from "./conflict-region";
+import { PREVIEW_LIMITS } from "../utils/render-utils";
+import { ToolError } from "./tool-errors";
 import { stripBom } from "../edit/normalize";
 import type { InternalWriteResult } from "../internal-urls/types";
 import { writethroughNoop } from "../lsp/writethrough";

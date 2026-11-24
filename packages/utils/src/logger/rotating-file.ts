@@ -97,6 +97,11 @@ export class RotatingFileSink {
 		this.#onFailure = options.onFailure;
 	}
 
+	/** The file currently open for records, including any size-rotation suffix. */
+	get currentPath(): string | undefined {
+		return this.#fd === undefined ? undefined : this.#activePath;
+	}
+
 	#openFd(filePath: string): void {
 		this.#closeFd();
 		const requirePrivate = prepareLogDirectory(path.dirname(filePath));

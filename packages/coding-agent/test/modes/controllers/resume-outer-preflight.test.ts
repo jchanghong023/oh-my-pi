@@ -4,7 +4,6 @@ import * as core from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -12,9 +11,11 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { createTools, type Tool } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { initTheme } from "../../../src/ui/theme/service";
+import { createModeTerminal } from "../../helpers/mode-terminal";
 
 beforeAll(async () => {
-	await initTheme();
+	initTheme();
 });
 
 afterEach(() => {
@@ -51,10 +52,17 @@ async function createMode(opts: { flushFails?: boolean } = {}): Promise<{
 		toolRegistry,
 		rebuildSystemPrompt: async () => ({ systemPrompt: ["Test"] }),
 	});
-	const mode = new InteractiveMode(session, "test");
+	const mode = new InteractiveMode(
+		session,
+		"test",
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		createModeTerminal().frame,
+	);
 	vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
-	vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});
-	mode.ui.requestRender = vi.fn();
+	vi.spyOn(mode, "ensureWorkingRow").mockImplementation(() => {});
 
 	// Make settings.flush fail or succeed as configured.
 	vi.spyOn(mode.settings, "flush").mockImplementation(async () => {
@@ -65,6 +73,7 @@ async function createMode(opts: { flushFails?: boolean } = {}): Promise<{
 		mode,
 		session,
 		cleanup: async () => {
+			mode.stop();
 			resetSettingsForTest();
 			AgentStorage.close();
 			// testauth.db lives under tempDir; Windows keeps it locked until closed.
