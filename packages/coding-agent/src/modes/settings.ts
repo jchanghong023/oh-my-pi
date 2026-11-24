@@ -14,7 +14,13 @@ import {
 import { cfgHideThinkingBlock } from "../session/settings";
 import { cfgReadToolResultPreview } from "../tools/settings";
 import { formatKeyHint, formatKeyHints } from "../ui/keys/hints";
+import { setTightLayout } from "../ui/styles/terminal-padding";
 import { setColorBlindMode, setSymbolPreset, setThemeSlot } from "../ui/theme/service";
+import {
+	DEFAULT_INLINE_IMAGE_COLUMNS,
+	DEFAULT_INLINE_IMAGE_ROWS,
+	setInlineImageLimits,
+} from "../ui/transcript/messages/image";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
 import { TREE_FILTER_MODES } from "./view-model/overlays/tree-selector";
 import { WORD_COMPLETION_METHODS } from "./view-model/prompt/word-completion";
@@ -335,21 +341,23 @@ export const cfgImagesBlockImages = register({
 	},
 });
 
+/** The width limit for transcript images, in columns. */
 export const cfgTuiMaxInlineImageColumns = register({
 	id: "tui.maxInlineImageColumns",
 	type: "number",
-	default: 100,
-	description:
-		"Maximum width in terminal columns for inline images (default 100). Set to 0 for unlimited (bounded only by terminal width).",
+	default: DEFAULT_INLINE_IMAGE_COLUMNS,
+	description: `Maximum width in terminal columns for inline images (default ${DEFAULT_INLINE_IMAGE_COLUMNS}). Set to 0 for unlimited (bounded only by terminal width).`,
 });
 
+/** The height limit for transcript images, in rows. */
 export const cfgTuiMaxInlineImageRows = register({
 	id: "tui.maxInlineImageRows",
 	type: "number",
-	default: 20,
-	description:
-		"Maximum height in terminal rows for inline images (default 20). Set to 0 to use only the viewport-based limit (60% of terminal height).",
+	default: DEFAULT_INLINE_IMAGE_ROWS,
+	description: `Maximum height in terminal rows for inline images (default ${DEFAULT_INLINE_IMAGE_ROWS}). Set to 0 to use only the viewport-based limit (60% of terminal height).`,
 });
+
+effect(combine({ columns: cfgTuiMaxInlineImageColumns, rows: cfgTuiMaxInlineImageRows }), setInlineImageLimits);
 
 export const cfgTuiMaxInlineImages = register({
 	id: "tui.maxInlineImages",
@@ -641,6 +649,7 @@ export const cfgTuiMouse = register({
 	},
 });
 
+/** Whether terminal output removes a cell of horizontal padding on each side. */
 export const cfgTuiTight = register({
 	id: "tui.tight",
 	type: "boolean",
@@ -649,9 +658,11 @@ export const cfgTuiTight = register({
 		tab: "appearance",
 		group: "显示",
 		label: "紧凑布局",
-		description: "移除终端输出左右两侧各 1 字符的水平内边距",
+		description: "移除终端输出左右各一格的标准内边距，保留消息气泡和工具边框的内边距",
 	},
 });
+
+effect(cfgTuiTight, setTightLayout);
 
 export const cfgDisplayShimmer = register({
 	id: "display.shimmer",
@@ -1288,7 +1299,7 @@ export const cfgPasteLargeMenuThreshold = register({
 		group: "输入",
 		label: "大段粘贴菜单",
 		description:
-			"粘贴内容达到此行数时，提供菜单以包裹为代码块、包裹为 XML 标签或保存到文件。0 表示关闭菜单（大段粘贴仍会折叠为 [Paste] 标记）。",
+			"粘贴内容达到此行数时，提供菜单以包裹为代码块、包裹为 XML 标签或保存到文件。0 表示关闭菜单（大段粘贴仍会折叠为粘贴标签）。",
 		options: [
 			{ value: "0", label: "关闭" },
 			{ value: "100", label: "100 行" },

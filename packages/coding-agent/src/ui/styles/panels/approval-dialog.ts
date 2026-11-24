@@ -9,9 +9,9 @@ import { type Block, defineRolePainter, EMPTY_BLOCK } from "@oh-my-pi/pi-tui/ter
 import { styledText } from "@oh-my-pi/pi-tui/term/painters/layout";
 import { padTo, truncate, wrap } from "@oh-my-pi/pi-tui/text/width";
 import type { TspItemProps, TspListProps, TspTextProps } from "@oh-my-pi/pi-wire";
-import { bindingGlyph, boxRows, findNode, keyGlyph, plainText, propsOf, selectNavGlyphs, termOf } from "./common";
+import { bindingGlyph, boxRows, findNode, keyLabels, plainText, propsOf, selectNavGlyphs, termOf } from "./common";
 import { appApproveKeys } from "../../../config/keybindings/matchers";
-import { canonicalKeyId } from "../../../config/keybindings/key-id";
+import { expandKeyLabel } from "../../keys/hints";
 
 const DETAIL_ROWS = 8;
 
@@ -60,22 +60,25 @@ defineRolePainter("col", "omp.editor.ask.approval", (node, cx): Block => {
 		const id = choice.key();
 		if (id === "deny" && term.drafting) label = "拒绝并发送消息";
 		if (id === selected)
-			content.push(theme.style("strong", theme.fg(props.tone === "error" ? "error" : "accent", `❯ ${label}`)));
+			content.push(
+				theme.style(
+					"strong",
+					theme.fg(props.tone === "error" ? "error" : "accent", `${theme.symbols.symbol("nav.cursor")} ${label}`),
+				),
+			);
 		else content.push(`  ${label}`);
 	}
-	const approve = `${appApproveKeys()
-		.map(key => keyGlyph(canonicalKeyId(key)))
-		.join("/")} 允许`;
-	const deny = `${bindingGlyph("tui.select.cancel", "escape")} 拒绝`;
+	const approve = `${keyLabels(theme, appApproveKeys())} 允许`;
+	const deny = `${bindingGlyph("tui.select.cancel", "escape", theme)} 拒绝`;
 	const hints = term.drafting
-		? ["⏎ 拒绝并发送", approve, deny]
-		: [`${selectNavGlyphs()} 浏览`, `${bindingGlyph("tui.select.confirm", "enter")} 选择`, approve, deny];
-	if (term.expandable) hints.push(term.expanded ? "⌃O 收起" : "⌃O 详情");
+		? [`${bindingGlyph("tui.input.submit", "enter", theme)} 拒绝并发送`, approve, deny]
+		: [`${selectNavGlyphs(theme)} 浏览`, `${bindingGlyph("tui.select.confirm", "enter", theme)} 选择`, approve, deny];
+	if (term.expandable) hints.push(`${expandKeyLabel(theme)} ${term.expanded ? "收起" : "详情"}`);
 	// A draft holds the keys: no scrolling, and typing already steers.
 	if (!term.drafting) {
 		if (lines.length > DETAIL_ROWS)
 			hints.push(
-				`${bindingGlyph("tui.select.pageUp", "pageUp")}/${bindingGlyph("tui.select.pageDown", "pageDown")} 滚动`,
+				`${bindingGlyph("tui.select.pageUp", "pageUp", theme)}/${bindingGlyph("tui.select.pageDown", "pageDown", theme)} 滚动`,
 			);
 		if (term.draftHost) hints.push("输入以拒绝并引导 Agent");
 	}

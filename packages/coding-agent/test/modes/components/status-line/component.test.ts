@@ -78,10 +78,10 @@ function makeSession(
 	} as unknown as AgentViewSession;
 }
 
-/** The status line's segments as plain text (`nerd`: Nerd Font glyphs). */
-function statusText(session: AgentViewSession, nerd = false): string {
+/** The status line's segments as plain text. */
+function statusText(session: AgentViewSession): string {
 	const line = statusLines.track(new SessionStatusLine(session));
-	return statusSegs(line.settings(), line.facts(), nerd)
+	return statusSegs(line.settings(), line.facts())
 		.map(seg => `${seg.icon ?? ""}${seg.spans.map(span => span.t).join("")}`)
 		.join(" | ");
 }
@@ -99,7 +99,6 @@ function costText(session: AgentViewSession, preset: "unicode" | "ascii" | "nerd
 						settings: () => line.settings(),
 						facts: () => line.facts(),
 						placement: () => ({ bar: "full", gap: false, autocomplete: false }),
-						nerd: () => preset === "nerd",
 					}).panel,
 				120,
 			).join("\n"),

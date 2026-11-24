@@ -3,11 +3,12 @@
  * native spans, icon and tone, plus its terminal look ({@link SegLook}) —
  * or nothing while it has nothing to show.
  */
-import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
-import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
-import { presetSymbols } from "@oh-my-pi/pi-tui/theme/symbols";
-import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { pathToFileURL } from "node:url";
+import type { SymbolSet } from "@oh-my-pi/pi-tui/theme/contract";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import { ThemeSymbols } from "@oh-my-pi/pi-tui/theme/symbols";
+import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { StatusLineSegmentId } from "../../config/status-line-schema";
 import { STATUS_LINE_PRESETS } from "../../modes/view-model/status-line/presets";
 import type { StatusLineSegmentOptions, StatusLineSettings } from "../../modes/view-model/status-line/types";
@@ -70,16 +71,12 @@ interface SegInput {
 	readonly compactThinking: boolean;
 	/** Seed of the session accent; undefined when it is off or the session is unnamed. */
 	readonly accent: string | undefined;
-	/** The active symbol preset is the Nerd Font one. */
-	readonly nerd: boolean;
-	readonly ascii: boolean;
+	readonly symbols: SymbolSet;
+	readonly asciiBilling: boolean;
 }
 
-/** Glyphs native spans embed, from the active preset (a native terminal draws their Nerd Font runs as `icon` spans). */
-const UNICODE = presetSymbols("unicode");
-const NERD = presetSymbols("nerd");
-const ASCII = presetSymbols("ascii");
-const glyph = (input: SegInput, key: string): string => (input.nerd ? NERD : UNICODE)[key] ?? "";
+const ASCII_SYMBOLS = new ThemeSymbols({ preset: "ascii" });
+const glyph = (input: SegInput, key: string): string => input.symbols.symbol(key);
 
 const span = (t: string, s?: string): TspSpan => (s ? { t, s } : { t });
 
@@ -150,8 +147,8 @@ function piSeg(input: SegInput): SegView {
 			"warning",
 		);
 	}
+	const profile = input.options.pi?.showProfile !== false && facts.profile ? sanitizeStatusText(facts.profile) : "";
 	const working = facts.turnStartedAt !== undefined;
-	const profile = input.options.pi?.showProfile === false ? undefined : facts.profile;
 	const piece: LookPiece = {
 		brand: working ? facts.turnStartedAt! : null,
 		s: working ? lookAccent(input, "accent") : "dim",
@@ -445,8 +442,7 @@ function statSeg(input: SegInput, value: number, icon: string, color: string): S
 }
 
 function costSeg(input: SegInput): SegView | null {
-	const { facts, nerd } = input;
-	const symbols = input.ascii ? ASCII : nerd ? NERD : UNICODE;
+	const { facts, symbols } = input;
 	const own = Math.max(0, facts.usage.cost - (facts.usage.subagentCost ?? 0));
 	const text = billingSummary(
 		{
@@ -458,12 +454,7 @@ function costSeg(input: SegInput): SegView | null {
 			pricingPeriod: facts.pricingPeriod,
 			advisor: facts.advisorCost,
 		},
-		// A Nerd Font draws the billing glyphs; otherwise their text forms.
-		{
-			nerd: nerd && !input.ascii,
-			subscription: symbols["icon.subscription"] ?? "",
-			advisor: symbols["icon.advisor"] ?? "",
-		},
+		input.asciiBilling && symbols.preset !== "ascii" ? ASCII_SYMBOLS : symbols,
 	);
 	if (!text) return null;
 	return view(input, [span(text, "statusLineCost")], [{ t: text, s: "statusLineCost" }]);
@@ -629,30 +620,26 @@ function treeSeg(input: SegInput): SegView | null {
 		...view(
 			input,
 			[span(label, "accent")],
-			[{ icon: "cmd.tree", s: "accent" }, { t: label, s: "accent" }, { t: " " }, { t: "/tree", s: "dim" }],
+			[{ icon: "tree", s: "accent" }, { t: label, s: "accent" }, { t: " " }, { t: "/tree", s: "dim" }],
 			"tree",
 		),
 		title: `Session tree: ${facts.join(", ")}\nOpen /tree to move between branches`,
 	};
 }
 
-/**
- * The view of segment `id`, or null while it shows nothing. `nerd` says
- * whether the active symbol preset is the Nerd Font one (the glyphs native spans embed).
- */
+/** The view of segment `id` in the active theme, or null while it shows nothing. */
 export function segmentView(
 	id: StatusLineSegmentId,
 	facts: StatusFacts,
 	settings: EffectiveStatusSettings,
-	nerd = false,
 ): SegView | null {
 	const input: SegInput = {
 		facts,
 		options: settings.segmentOptions,
 		compactThinking: settings.compactThinkingLevel ?? false,
 		accent: settings.sessionAccent !== false ? facts.sessionName || undefined : undefined,
-		nerd,
-		ascii: settings.preset === "ascii" || currentTheme().symbols.preset === "ascii",
+		symbols: currentTheme().symbols,
+		asciiBilling: settings.preset === "ascii",
 	};
 	const usage = facts.usage;
 	switch (id) {

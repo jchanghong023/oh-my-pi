@@ -119,10 +119,16 @@ extensions:
   factories. `additionalExtensionPaths` are still resolved normally, including
   package directories with `package.json#omp.extensions`.
 
-Disabling extension discovery governs extension factories and OMP extension-package
-sibling roots; it does not isolate the whole process. Skills, MCP servers, tools,
-prompts, and rules owned by other discovery subsystems retain their own
-enable/disable controls.
+Executable custom tools follow the same explicit-only contract: ambient
+`.omp/tools`, `.claude/tools`, `.codex/tools`, marketplace and installed-plugin
+tools are not imported. Tools under explicitly named extension packages'
+`tools/` directories still load. Bundled custom commands remain available;
+external custom commands are not discovered.
+
+This flag governs extension factories, executable custom tool/command modules,
+and OMP extension-package sibling roots; it is not a whole-process
+capability-isolation switch. Skills, MCP servers, prompts, rules, and the
+launch directory's `.env` retain their own controls.
 
 ### Exact module allowlist
 

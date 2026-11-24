@@ -55,10 +55,10 @@
 //! nothing could reach them afterwards. A job that is just an external runs
 //! on as its own process, as in bash.
 //!
-//! **Tools.** `timeout`, `nohup` and (with `PI_SMART_GIT`/`PI_GIT_GUARD`)
-//! `git` are host callouts: the driver hands them to its
-//! [`ToolCalls`](crate::tools::ToolCalls), routes the `Done` of their
-//! subshells there, polls them every turn, and parks no longer than their
+//! **Tools.** `time` with options, `timeout`, `nohup` and (with
+//! `PI_SMART_GIT`/`PI_GIT_GUARD`) `git` are host callouts. The driver hands
+//! them to its [`ToolCalls`](crate::tools::ToolCalls), routes the `Done` of
+//! their subshells there, polls them every turn, and parks no longer than their
 //! next deadline.
 
 use std::{
@@ -845,7 +845,7 @@ struct Driver {
 	bell:     Arc<Bell>,
 	jobs:     flume::Receiver<Request>,
 	children: Children,
-	/// The host callouts in flight (`timeout`, `nohup`, `git`).
+	/// The host callouts in flight.
 	tools:    ToolCalls,
 	/// Updated at the end of each command.
 	image:    LatestImage,
@@ -1046,7 +1046,10 @@ impl Driver {
 	fn on_done(&mut self, run: RunId, status: i32) {
 		let signal = self.shell.exec_signal(run);
 		let virtual_signal = self.shell.ended_by_virtual_signal(run);
-		self.tools.on_done(run, status, signal, virtual_signal);
+		let usage = self.shell.run_usage(run);
+		self
+			.tools
+			.on_done(run, status, signal, virtual_signal, usage);
 	}
 
 	/// Start a host callout ([`crate::bash::Resolved::Tool`]).

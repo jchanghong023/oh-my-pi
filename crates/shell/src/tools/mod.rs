@@ -6,6 +6,9 @@
 //!   ([`ShellApi::run_subshell_in`]), signals that tree at the deadline
 //!   ([`SigTarget::Label`](crate::bash::SigTarget::Label)), waits for it and
 //!   the externals it started, and escalates to `KILL` after `-k`.
+//! - `time` with options (`-l`, `-v`, `-p`): runs its command in a subshell and
+//!   reports the times and resource usage of the externals it waited for
+//!   ([`crate::bash::ProcUsage`]), as macOS and GNU `/usr/bin/time` do.
 //! - `nohup`: runs its command in a detached tree ([`Lineage::detached`]): the
 //!   shell's cancel spares it and the spawner leaves its externals running when
 //!   the shell is torn down.
@@ -33,6 +36,7 @@
 mod extra;
 mod git;
 mod nohup;
+mod time;
 mod timeout;
 mod urlmap;
 
@@ -48,8 +52,8 @@ use parking_lot::Mutex;
 
 use crate::{
 	bash::{
-		CallId, CallOutcome, ControlHandle, Cx, IoPoll, Lineage, NativeRef, RunId, Script, Shell,
-		ShellApi, ToolCall, ToolRef,
+		CallId, CallOutcome, ControlHandle, Cx, IoPoll, Lineage, NativeRef, ProcUsage, RunId, Script,
+		Shell, ShellApi, ToolCall, ToolRef,
 	},
 	commands::CommandSlot,
 	extras::{ExtrasGate, ReportedError, Speech},
@@ -63,31 +67,40 @@ const GIT: ToolRef = ToolRef(3);
 /// Every extra that runs command lines; `argv[0]` names it.
 const EXTRA: ToolRef = ToolRef(4);
 const URLMAP: ToolRef = ToolRef(5);
+const TIME: ToolRef = ToolRef(6);
 
 /// pi's tools other than the extras, by name; [`ToolConfig::lookup`] offers
 /// `nohup` and `git` only when the session's switches turn them on.
-const TOOLS: [(&str, ToolRef); 4] =
-	[("timeout", TIMEOUT), ("urlmap", URLMAP), ("nohup", NOHUP), ("git", GIT)];
+const TOOLS: [(&str, ToolRef); 5] =
+	[("time", TIME), ("timeout", TIMEOUT), ("urlmap", URLMAP), ("nohup", NOHUP), ("git", GIT)];
 
 /// The switch that hands `nohup` to the system binary.
 const NOHUP_OFF: &str = "PI_DISABLE_NOHUP_BUILTIN";
 
 /// The commands pi adds to bash's own builtins, sorted.
 ///
-/// `timeout`, `urlmap`, `nohup` and the extras [`ExtrasGate`] offers, in a
-/// shell whose starting environment turns on the switches `on` names
-/// ([`flag_on`] of their values). Not `git`, whose layers wrap the binary.
+/// `time`, `timeout`, `urlmap`, `nohup` and the extras [`ExtrasGate`]
+/// offers, in a shell whose starting environment turns on the switches `on`
+/// names ([`flag_on`] of their values). Not `git`, whose layers wrap the
+/// binary.
 /// omp's bash tool lists them to the model.
 pub fn builtins(on: impl Fn(&str) -> bool) -> Vec<&'static str> {
 	let extras = ExtrasGate::from_switches(&on);
 	let mut names: Vec<&'static str> = omp_builtins::extras::extras()
 		.filter(|&(name, kind)| extras.allows(name, kind))
 		.map(|(name, _)| name)
-		.chain(["timeout", "urlmap"])
+		.chain(["time", "timeout", "urlmap"])
 		.chain((!on(NOHUP_OFF)).then_some("nohup"))
 		.collect();
 	names.sort_unstable();
 	names
+}
+
+/// Whether tool `name` was given an option it does not implement, so
+/// `PATH`'s program of that name runs instead
+/// ([`crate::bash::Host::defers_to_path`]): `time -o file`.
+pub fn lacks_option(name: &BStr, argv: &[BString]) -> bool {
+	name == "time" && time::lacks_option(argv)
 }
 
 /// Every name [`ToolConfig::lookup`] or [`ToolConfig::native_extra`] can
@@ -350,6 +363,7 @@ struct Turn<'a> {
 
 /// One running tool call.
 enum Tool {
+	Time(time::Time),
 	Timeout(timeout::Timeout),
 	Nohup(nohup::Nohup),
 	Git(git::Git),
@@ -360,6 +374,7 @@ enum Tool {
 impl Tool {
 	fn start(call: ToolCall, config: &ToolConfig) -> Option<Self> {
 		Some(match call.tool {
+			TIME => Self::Time(time::Time::new(call)),
 			TIMEOUT => Self::Timeout(timeout::Timeout::new(call)),
 			NOHUP => Self::Nohup(nohup::Nohup::new(call)),
 			GIT => Self::Git(git::Git::new(call)),
@@ -372,6 +387,7 @@ impl Tool {
 	/// Make progress; the outcome once the call is answered.
 	fn advance(&mut self, api: &mut ShellApi<'_, '_>, turn: &mut Turn<'_>) -> Option<CallOutcome> {
 		match self {
+			Self::Time(t) => t.advance(api, turn),
 			Self::Timeout(t) => t.advance(api, turn),
 			Self::Nohup(t) => t.advance(api, turn),
 			Self::Git(t) => t.advance(api, turn),
@@ -380,16 +396,18 @@ impl Tool {
 		}
 	}
 
-	/// `run` (one of the tool's subshells) ended; `false` when it is not
-	/// the tool's.
+	/// `run` (one of the tool's subshells) ended, having used `usage`;
+	/// `false` when it is not the tool's.
 	fn on_done(
 		&mut self,
 		run: RunId,
 		status: i32,
 		signal: Option<i32>,
 		virtual_signal: bool,
+		usage: Option<ProcUsage>,
 	) -> bool {
 		let child = match self {
+			Self::Time(t) => return t.on_done(run, status, signal, usage),
 			Self::Timeout(t) => return t.on_done(run, status, virtual_signal),
 			Self::Nohup(t) => &mut t.child,
 			Self::Git(t) => &mut t.child,
@@ -401,6 +419,7 @@ impl Tool {
 
 	const fn child(&self) -> &Child {
 		match self {
+			Self::Time(t) => &t.child,
 			Self::Timeout(t) => &t.child,
 			Self::Nohup(t) => &t.child,
 			Self::Git(t) => &t.child,
@@ -421,7 +440,7 @@ impl Tool {
 	fn deadline(&self) -> Option<u64> {
 		match self {
 			Self::Timeout(t) => t.deadline(),
-			Self::Nohup(_) | Self::Git(_) | Self::Extra(_) | Self::Urlmap(_) => None,
+			Self::Time(_) | Self::Nohup(_) | Self::Git(_) | Self::Extra(_) | Self::Urlmap(_) => None,
 		}
 	}
 }
@@ -563,17 +582,19 @@ impl ToolCalls {
 	/// to a tool (the driver ignores it then). `signal` is the actual
 	/// signal death of a command replacing the run, not an exit code.
 	/// `virtual_signal` identifies a synthetic, uncaught VM signal death.
+	/// `usage` is what its externals used ([`Shell::run_usage`]).
 	pub fn on_done(
 		&mut self,
 		run: RunId,
 		status: i32,
 		signal: Option<i32>,
 		virtual_signal: bool,
+		usage: Option<ProcUsage>,
 	) -> bool {
 		if self
 			.active
 			.iter_mut()
-			.any(|(_, tool)| tool.on_done(run, status, signal, virtual_signal))
+			.any(|(_, tool)| tool.on_done(run, status, signal, virtual_signal, usage))
 		{
 			return true;
 		}
@@ -785,7 +806,7 @@ mod tests {
 			.expect("runtime");
 		let candidates: Vec<&str> = omp_builtins::extras::extras()
 			.map(|(name, _)| name)
-			.chain(["timeout", "nohup", "urlmap"])
+			.chain(["time", "timeout", "nohup", "urlmap"])
 			.collect();
 		for pairs in [&[][..], &[("PI_DISABLE_UUTILS_BUILTINS", "1"), (NOHUP_OFF, "true")], &[
 			("PI_DISABLE_UUTILS_DESTRUCTIVE", "1"),

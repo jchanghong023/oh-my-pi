@@ -288,6 +288,7 @@ import type {
 import type { TodoItem, TodoPhase } from "../tools/details/todo";
 import type { ConversationPosition } from "./utils/conversation-position";
 import { setImageBlobWriter } from "../ui/transcript/image-links";
+import { followInlineImageLimits } from "../ui/transcript/messages/image";
 import { imageLinksForMessage, UiHelpers } from "./utils/ui-helpers";
 
 import {
@@ -1068,6 +1069,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#pendingSubmissionPreservesDraft = false;
 	/** Unregisters this mode's transcript-image blob writer (a later mode's registration survives). */
 	#disposeImageBlobWriter: (() => void) | undefined;
+	#disposeInlineImageLimits: (() => void) | undefined;
 	#optimisticUserMessageBlocks: TranscriptBlock[] = [];
 	#optimisticSkillMessageBlocks: TranscriptBlock[] = [];
 	/** True while an optimistically-rendered `/skill:` row awaits its canonical
@@ -1577,6 +1579,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#disposeImageBlobWriter = setImageBlobWriter((data, options) =>
 			this.viewSession.sessionManager.putBlobSync(data, options),
 		);
+		this.#disposeInlineImageLimits = followInlineImageLimits(() => this.shell.size().rows);
 		this.#tray = new TrayFeed(
 			{
 				input: () =>
@@ -1708,9 +1711,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		// The composer hint follows the ask above, running agents and the conversation's start.
 		this.#effect(() => this.composer.setPlaceholder(this.#composerHint()));
 		this.#effect(() => this.composer.setNativePlaceholder(this.#nativeComposerPlaceholder()));
-		// A `/btw` note taking or giving back the composer changes its role and chip.
+		// A `/btw` note taking or giving back the composer changes its role and chip; so does a draft
+		// that starts or stops skipping the ask waiting above (read only while one waits).
 		this.#effect(() => {
 			this.#btwController.isFocused();
+			this.#extensionUiController.composerAsk();
 			untrack(() => this.#syncComposerState());
 		});
 		// Idle, the terminal's status row keeps the working row's trailer (band title with its pin,
@@ -2446,6 +2451,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.composer.setDisableSubmit(false);
 		this.#idleMaintenanceActivity.ready = true;
 		this.syncIdleMaintenanceView();
+		// The first alt+p then opens as fast as a reopen.
+		this.#selectorController
+			.warmModelPicker(this.#dialogLifetime.signal)
+			.catch(error => logger.warn("Model picker prewarm failed", { error: String(error) }));
 	}
 
 	/**
@@ -4050,10 +4059,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncComposerState();
 	}
 
-	/** The composer's mode: a turn runs (Stop for Send), the draft is a shell command or a `/btw` question. */
+	/**
+	 * The composer's mode: a turn runs (Stop for Send), the draft is a shell command or a `/btw`
+	 * question, the view is a subagent's (its viewing header), sending the draft skips the ask above.
+	 */
 	#syncComposerState(): void {
 		this.#composerHintRevision.set(this.#composerHintRevision.peek() + 1);
 		const draft = untrack(this.composer.text).trimStart();
+		const viewing = this.#viewingLineage();
 		this.composer.setState({
 			running: this.#working.kind !== undefined || this.session.isStreaming,
 			...(this.isBashMode
@@ -4064,7 +4077,25 @@ export class InteractiveMode implements InteractiveModeContext {
 						? { shell: { kind: "btw", excluded: false } }
 						: {}),
 			...(untrack(() => this.isBtwFocused) ? { btw: true } : {}),
+			...(viewing ? { viewing } : {}),
+			...(untrack(() => this.#extensionUiController.composerAsk()) === "skip" ? { skipsAsk: true } : {}),
 		});
+	}
+
+	/** The focused subagent and its live ancestors below main, outermost first; undefined on the main session. */
+	#viewingLineage(): string[] | undefined {
+		const id = this.focusedAgentId;
+		if (!id) return undefined;
+		const registry = AgentRegistry.global();
+		const lineage = [id];
+		for (
+			let parent = registry.get(id)?.parentId;
+			parent && parent !== MAIN_AGENT_ID && !lineage.includes(parent) && registry.get(parent);
+			parent = registry.get(parent)?.parentId
+		) {
+			lineage.unshift(parent);
+		}
+		return lineage;
 	}
 
 	/**
@@ -4722,6 +4753,11 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.sessionManager.appendModeChange("none");
 				return;
 			}
+			// A --no-tools session cannot run the goal; leave it journaled for a session that can.
+			if (this.session.restrictToolNames) {
+				this.session.goalRuntime.clearAccounting();
+				return;
+			}
 			this.session.setGoalModeState({
 				enabled: sessionContext.mode === "goal",
 				mode: "active",
@@ -4821,6 +4857,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.vibeModeEnabled) {
 			this.showWarning("Exit vibe mode first.");
+			return;
+		}
+		// Plan mode ends by `propose`, which a --no-tools session does not register.
+		if (this.session.restrictToolNames) {
+			this.showWarning("Plan mode is unavailable in a --no-tools session.");
 			return;
 		}
 
@@ -5090,6 +5131,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.vibeModeEnabled) {
 			this.showWarning("Exit vibe mode first.");
+			return;
+		}
+		// Goal mode runs through the `goal` tool, which a --no-tools session does not register.
+		if (this.session.restrictToolNames) {
+			this.showWarning("Goal mode is unavailable in a --no-tools session.");
 			return;
 		}
 		const enabledTools = this.session.getEnabledToolNames();
@@ -7105,6 +7151,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		setCfgApprovalHost(null);
 		this.#disposeImageBlobWriter?.();
 		this.#disposeImageBlobWriter = undefined;
+		this.#disposeInlineImageLimits?.();
+		this.#disposeInlineImageLimits = undefined;
 		this.#hideSessionInfo();
 		if (this.#ownsStartedUi) {
 			void this.shell.stop();

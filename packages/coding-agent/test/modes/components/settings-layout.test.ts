@@ -1,15 +1,15 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { afterAll, describe, expect, it } from "bun:test";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	getSettingsForTab,
 	TAB_GROUPS,
 	type SettingsDisplayEntry,
 } from "@oh-my-pi/pi-coding-agent/config/settings-defs";
-import { jsx } from "@oh-my-pi/pi-tui/jsx-runtime";
 import { bubbleEvent } from "@oh-my-pi/pi-tui/dispatch";
+import { jsx } from "@oh-my-pi/pi-tui/jsx-runtime";
 import { visibleWidth } from "@oh-my-pi/pi-tui/text/width";
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
-import { mountSettingsWindow, settingsScreen } from "../../helpers/settings-window";
+import { settingsScreen, setupSettingsWindow } from "../../helpers/settings-window";
 import { cfgRetryUsageAwareFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgAdvisorEnabled } from "@oh-my-pi/pi-coding-agent/advisor/settings";
 import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
@@ -19,14 +19,7 @@ const restoreTheme = currentTheme();
 afterAll(() => setCurrentTheme(restoreTheme));
 
 describe("settings layout", () => {
-	beforeEach(async () => {
-		resetSettingsForTest();
-		await Settings.init({ inMemory: true });
-	});
-
-	afterEach(() => {
-		resetSettingsForTest();
-	});
+	const mountSettingsWindow = setupSettingsWindow();
 
 	it("groups settings in declared order without dropping ungrouped or external sections", () => {
 		const entry = (path: string, group?: string): SettingsDisplayEntry => ({
@@ -94,16 +87,12 @@ describe("settings layout", () => {
 			{ callbacks: { describeStatusLinePreview: () => previews.map(text => jsx("text", { text })) } },
 			{ columns: 80 },
 		);
-		try {
-			const lines = settingsScreen(term).split("\n");
-			for (const text of previews) {
-				const line = lines.find(candidate => candidate.includes(text));
-				expect(line?.startsWith("│")).toBe(true);
-				expect(line?.endsWith("│")).toBe(true);
-				expect(visibleWidth(line!)).toBe(80);
-			}
-		} finally {
-			term.dispose();
+		const lines = settingsScreen(term).split("\n");
+		for (const text of previews) {
+			const line = lines.find(candidate => candidate.includes(text));
+			expect(line?.startsWith("│")).toBe(true);
+			expect(line?.endsWith("│")).toBe(true);
+			expect(visibleWidth(line!)).toBe(80);
 		}
 	});
 
@@ -115,22 +104,18 @@ describe("settings layout", () => {
 			context: { settings: host },
 			callbacks: { onChange: (path, value) => changes.push([path, value]) },
 		});
-		try {
-			term.type("输入区形状");
-			term.press("enter");
-			const rendered = settingsScreen(term);
-			expect(rendered).toContain("输入区形状");
-			expect(rendered).toContain("Rounded Box");
-			expect(rendered).toContain("Claude Code");
-			expect(rendered).toContain("Preview:");
-			expect(rendered).toContain("Ask anything");
-			term.press("down");
-			term.press("enter");
-			expect(changes).toEqual([["composer.shape", "claude"]]);
-			expect(host.get("composer.shape")).toBe("claude");
-		} finally {
-			term.dispose();
-		}
+		term.type("输入区形状");
+		term.press("enter");
+		const rendered = settingsScreen(term);
+		expect(rendered).toContain("输入区形状");
+		expect(rendered).toContain("Rounded Box");
+		expect(rendered).toContain("Claude Code");
+		expect(rendered).toContain("Preview:");
+		expect(rendered).toContain("Ask anything");
+		term.press("down");
+		term.press("enter");
+		expect(changes).toEqual([["composer.shape", "claude"]]);
+		expect(host.get("composer.shape")).toBe("claude");
 	});
 
 	it("persists worktree machine values from keyboard and native selection", () => {
@@ -141,26 +126,22 @@ describe("settings layout", () => {
 			context: { settings: host },
 			callbacks: { onChange: (path, value) => changes.push([path, value]) },
 		});
-		try {
-			const path = "session.worktreeScope";
-			const root = term.surface.layer()[0]!;
-			bubbleEvent([root], { type: "action", key: "", act: "page", value: "interaction", mods: [] });
-			bubbleEvent([root], { type: "action", key: "", act: "edit", value: path, mods: [] });
-			const rendered = settingsScreen(term);
-			expect(rendered).toContain("当前目录");
-			expect(rendered).toContain("仓库工作树");
-			term.press("up");
-			term.press("enter");
-			expect(host.get(path)).toBe("directory");
-			expect(changes).toEqual([[path, "directory"]]);
-			bubbleEvent([root], { type: "change", key: "", item: path, value: "repo" });
-			expect(host.get(path)).toBe("repo");
-			expect(changes).toEqual([
-				[path, "directory"],
-				[path, "repo"],
-			]);
-		} finally {
-			term.dispose();
-		}
+		const path = "session.worktreeScope";
+		const root = term.surface.layer()[0]!;
+		bubbleEvent([root], { type: "action", key: "", act: "page", value: "interaction", mods: [] });
+		bubbleEvent([root], { type: "action", key: "", act: "edit", value: path, mods: [] });
+		const rendered = settingsScreen(term);
+		expect(rendered).toContain("当前目录");
+		expect(rendered).toContain("仓库工作树");
+		term.press("up");
+		term.press("enter");
+		expect(host.get(path)).toBe("directory");
+		expect(changes).toEqual([[path, "directory"]]);
+		bubbleEvent([root], { type: "change", key: "", item: path, value: "repo" });
+		expect(host.get(path)).toBe("repo");
+		expect(changes).toEqual([
+			[path, "directory"],
+			[path, "repo"],
+		]);
 	});
 });

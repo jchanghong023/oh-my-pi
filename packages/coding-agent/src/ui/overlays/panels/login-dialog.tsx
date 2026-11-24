@@ -22,7 +22,8 @@ import { editLine } from "../settings/line-edit";
 import { ActionButton, applyEdit, applyMaskedEdit } from "./common";
 import { matchesSelectCancel } from "../../../config/keybindings/matchers";
 import { getKeybindings } from "../../../config/keybindings/keybindings";
-import { actionKbd, actionKeyId, kbdOf } from "../../keys/hints";
+import { keyHintPlatform } from "../../keys/format";
+import { actionKbd, actionKeyId, formatKeyHint, kbdOf } from "../../keys/hints";
 import { bindingGlyph, keyTitle } from "../../styles/panels/common";
 
 /** `Enter code: ABCD-1234` device instructions: the lead-in and the code. */
@@ -139,7 +140,7 @@ export class LoginDialogState {
 			{ kind: "url", url },
 			{
 				kind: "text",
-				text: `按住 ${process.platform === "darwin" ? "⌘" : "Ctrl"} 并点击打开`,
+				text: `按住 ${formatKeyHint(keyHintPlatform() === "darwin" ? "super" : "ctrl")} 并点击打开`,
 				style: "dim",
 				href: url,
 			},

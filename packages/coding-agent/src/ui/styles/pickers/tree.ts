@@ -21,10 +21,12 @@ import {
 } from "@oh-my-pi/pi-tui/term/painters/picker";
 import { padTo, truncate, wrap } from "@oh-my-pi/pi-tui/text/width";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
+import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
 import { caretField } from "./common";
 import { canonicalKeyId } from "../../../config/keybindings/key-id";
 import { getKeybindings } from "../../../config/keybindings/keybindings";
-import { bindingGlyph, keyGlyph } from "../panels/common";
+import { keyLabel } from "../../keys/hints";
+import { bindingGlyph, keyLabels } from "../panels/common";
 
 /** One visible entry. */
 export type TreeLookRow = {
@@ -58,19 +60,23 @@ export type TreeLookTerm = PickerTerm & {
 };
 
 /** The key help line, in the user's bindings (branch keys only when bound). */
-function help(): string {
+function help(theme: Theme): string {
 	const branchKeys = (["app.tree.previousBranch", "app.tree.nextBranch"] as const)
 		.map(action => getKeybindings().keysFor(action)[0])
 		.filter(key => key !== undefined)
-		.map(key => keyGlyph(canonicalKeyId(key)))
+		.map(key => keyLabel(theme, canonicalKeyId(key)))
 		.join("/");
 	return [
-		`${bindingGlyph("tui.select.confirm", "enter")}: 切换。`,
-		"⌥⏎: 工具详情，⇧↑/⇧↓: 滚动详情。",
-		"⌥↑/⌥↓: 上一轮／下一轮。",
+		`${bindingGlyph("tui.select.confirm", "enter", theme)}: 切换。`,
+		`${keyLabel(theme, "alt+enter")}: 工具详情，${keyLabels(theme, ["shift+up", "shift+down"])}: 滚动详情。`,
+		`${keyLabels(theme, ["alt+up", "alt+down"])}: 上一轮／下一轮。`,
 		...(branchKeys ? [`${branchKeys}: 上一分支／下一分支。`] : []),
-		`${bindingGlyph("tui.select.pageUp", "pageUp")}/${bindingGlyph("tui.select.pageDown", "pageDown")} (←/→): 翻页。`,
-		"Home/End: 首项／末项。⇧⏎: 摘要后切换。⇧L: 标记。⌃O: 筛选。输入以搜索。",
+		`${bindingGlyph("tui.select.pageUp", "pageUp", theme)}/${bindingGlyph("tui.select.pageDown", "pageDown", theme)} (${keyLabels(theme, ["left", "right"])}): 翻页。`,
+		`${keyLabels(theme, ["home", "end"])}: 首项／末项。`,
+		`${keyLabel(theme, "shift+enter")}: 摘要后切换。`,
+		`${keyLabel(theme, "shift+l")}: 标记。`,
+		`${keyLabel(theme, "ctrl+o")}: 筛选。`,
+		"输入以搜索。",
 	].join(" ");
 }
 
@@ -78,11 +84,12 @@ function help(): string {
 const TREE_MIN_CONTENT = 24;
 
 /** A row's guide prefix: `│` under each fork still open above it, `├─`/`└─` at a branch head's own level. */
-function guide(row: TreeLookRow): string {
+function guide(theme: Theme, row: TreeLookRow): string {
+	const tree = theme.symbols;
 	let out = "";
 	for (let level = 0; level < row.depth; level++) {
-		if (row.guides[level]) out += "│  ";
-		else if (row.branch && level === row.depth - 1) out += row.last ? "└─ " : "├─ ";
+		if (row.guides[level]) out += `${tree.symbol("tree.vertical")}  `;
+		else if (row.branch && level === row.depth - 1) out += `${tree.symbol(row.last ? "tree.last" : "tree.branch")} `;
 		else out += "   ";
 	}
 	return out;
@@ -94,16 +101,19 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 	const props = node.props() as TspPickerProps & { term: TreeLookTerm };
 	const term = props.term;
 	const inner = Math.max(1, width - 4);
-	const head = ["", truncate(theme.style("muted", help()), inner, theme.symbols.ellipsis)];
+	const head = ["", truncate(theme.style("muted", help(theme)), inner, theme.symbols.ellipsis)];
 	head.push(caretField(theme, `${theme.style("muted", "搜索：")} `, term.field.text, term.field.cursor, inner));
 	const body: string[] = [""];
 	const hits: Hit[] = [];
 	if (term.label) {
 		body.push(truncate(theme.style("muted", "Label (empty to remove):"), inner));
 		body.push(caretField(theme, "> ", term.label.text, term.label.cursor, inner));
-		const save = bindingGlyph("tui.input.submit", "enter");
+		const save = keyLabel(theme, "enter");
 		body.push(
-			truncate(theme.style("dim", `${save}: save  ${bindingGlyph("tui.select.cancel", "escape")}: cancel`), inner),
+			truncate(
+				theme.style("dim", `${save}: save  ${bindingGlyph("tui.select.cancel", "escape", theme)}: cancel`),
+				inner,
+			),
 		);
 	} else if (term.entries.length === 0) {
 		const muted = (text: string): string => truncate(theme.style("muted", text), inner, theme.symbols.ellipsis);
@@ -111,13 +121,13 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 		else if (term.field.text.length > 0)
 			body.push(
 				muted(`No entries match search "${term.field.text}"`),
-				muted("Press ⌫ to clear the search"),
+				muted(`Press ${keyLabel(theme, "backspace")} to clear the search`),
 				muted(`(0/${term.total})${term.filterLabel}`),
 			);
 		else
 			body.push(
 				muted(`${term.total} entries hidden by the current filter ${term.filterLabel.trim() || "[default]"}`),
-				muted("Press ⌥A to show all, ⌥D for default"),
+				muted(`Press ${keyLabel(theme, "alt+a")} to show all, ${keyLabel(theme, "alt+d")} for default`),
 				muted(`(0/${term.total})${term.filterLabel}`),
 			);
 	} else {
@@ -136,7 +146,7 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 		for (let i = start; i < end; i++) {
 			const row = term.entries[i]!;
 			const selected = row.id === props.selected;
-			let marks = row.active ? theme.style("accent", "• ") : "";
+			let marks = row.active ? theme.style("accent", `${theme.symbols.symbol("md.bullet")} `) : "";
 			if (row.label) marks += theme.style("warning", `[${row.label}] `);
 			let text = "";
 			for (const part of row.parts) {
@@ -146,7 +156,7 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 			// A selected row is bold whole (after its marks); nested bold would close it early.
 			text = marks + (selected ? theme.style("strong", text) : text);
 			const lead = selected ? theme.style("accent", "› ") : "  ";
-			let prefix = guide(row);
+			let prefix = guide(theme, row);
 			const hidden = Math.min(windowOffset, row.depth) * 3;
 			if (hidden > 0) {
 				prefix = prefix.slice(hidden);

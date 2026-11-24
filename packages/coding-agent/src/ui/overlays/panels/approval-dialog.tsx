@@ -21,6 +21,7 @@ import {
 	signal,
 	untrack,
 } from "@oh-my-pi/pi-tui";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
 import { replaceTabs } from "@oh-my-pi/pi-tui/text/width";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
@@ -132,8 +133,12 @@ export function ApprovalDialog(props: ApprovalDialogProps): JSXNode {
 	const drafting = () => options.draft?.hasDraft() ?? false;
 	const current = () => (drafting() ? "deny" : selected());
 	const onceLabel = grants.length > 0 ? "仅允许本次" : "允许";
+	const expandKey = actionKeyId("app.tools.expand", "ctrl+o");
 	const labelOf = (id: string): string => {
-		if (id === "remember") return `${remember() ? "☑" : "☐"} 跨会话记住`;
+		if (id === "remember") {
+			const glyph = currentTheme().symbols.symbol(remember() ? "checkbox.checked" : "checkbox.unchecked");
+			return `${glyph} 跨会话记住`;
+		}
 		if (id.startsWith("grant")) {
 			const grant = grants[Number(id.slice(5))]!;
 			return remember() ? grant.alwaysLabel : grant.label;
@@ -300,8 +305,8 @@ export function ApprovalDialog(props: ApprovalDialogProps): JSXNode {
 					<ActionButton
 						id="expand"
 						label={() => (expanded() ? "收起" : "详情")}
-						title={() => (expanded() ? "收起调用详情  ⌃O" : "查看完整调用详情  ⌃O")}
-						keys={["ctrl", "o"]}
+						title={() => `${expanded() ? "收起调用详情" : "查看完整调用详情"}  ${keyTitle(expandKey)}`}
+						keys={kbdOf(expandKey)}
 					/>
 				)}
 				<ActionButton

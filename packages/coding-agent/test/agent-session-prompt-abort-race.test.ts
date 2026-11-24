@@ -1,12 +1,10 @@
 /**
- * abort() can land while prompt() is awaiting a custom command, normalizing
- * images, or building a vision-model description before model admission.
- * Interrupted image prompts must be dropped instead of starting or queueing a
- * turn, and custom commands must cancel nested work and discard late prompts.
+ * Abort drops image prompts still normalizing, cancels the wait for descriptions
+ * after admission, and prevents custom commands from publishing late prompts.
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
+import type { completeSimple, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -16,9 +14,9 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import * as imageVisionFallback from "@oh-my-pi/pi-coding-agent/utils/image-vision-fallback";
 import * as imageLoading from "@oh-my-pi/pi-coding-agent/utils/image-loading";
-import { withTimeout } from "@oh-my-pi/pi-utils";
+import { ImageDescriptions } from "@oh-my-pi/pi-coding-agent/utils/image-vision-fallback";
+import { TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 
 const IMAGE: ImageContent = {
 	type: "image",
@@ -39,11 +37,11 @@ describe("AgentSession prompt admission racing abort", () => {
 
 	async function createSession(
 		responses: Array<() => MockResponse | Promise<MockResponse>>,
-		textOnly = false,
 		options: {
 			modelRegistry?: Pick<ModelRegistry, "getApiKey">;
 			clientBridge?: unknown;
 			extensionRunner?: unknown;
+			imageDescriptions?: { artifactsDir: string; completeImpl: typeof completeSimple };
 		} = {},
 		customCommands: CustomCommand[] = [],
 	) {
@@ -51,22 +49,37 @@ describe("AgentSession prompt admission racing abort", () => {
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("Expected claude-sonnet-4-5 model to exist");
-		const model: Model = textOnly ? { ...bundled, input: ["text"] } : bundled;
 		const mock = createMockModel({ responses });
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
-		});
+		const settings = Settings.isolated({ "compaction.enabled": false, "todo.enabled": false });
 		// A real registry keeps the lookups the session runs (fallback-chain
 		// resolution calls find()); tests only script its key resolution.
 		const modelRegistry = new ModelRegistry(authStorage);
 		if (options.modelRegistry) spyOn(modelRegistry, "getApiKey").mockImplementation(options.modelRegistry.getApiKey);
+		const descriptionConfig = options.imageDescriptions;
+		const descriptions = descriptionConfig
+			? new ImageDescriptions(() => ({
+					modelRegistry,
+					settings,
+					localProtocolOptions: {
+						getArtifactsDir: () => descriptionConfig.artifactsDir,
+						getSessionId: () => "prompt-abort-race",
+					},
+					completeImpl: descriptionConfig.completeImpl,
+				}))
+			: undefined;
+		const model: Model = descriptions ? { ...bundled, id: "prompt-abort-text-only", input: ["text"] } : bundled;
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			transformProviderContext: descriptions?.transform,
+			streamFn: mock.stream,
+		});
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
+			settings,
 			modelRegistry,
+			imageDescriptions: descriptions,
 			...(options.extensionRunner ? { extensionRunner: options.extensionRunner as never } : {}),
 			customCommands: customCommands.map(command => ({
 				path: "test-command.ts",
@@ -80,7 +93,7 @@ describe("AgentSession prompt admission racing abort", () => {
 		}
 		const dropped: string[] = [];
 		session.setPromptDropped(prompt => dropped.push(prompt.text));
-		return { session, dropped, modelRegistry };
+		return { session, dropped, modelRegistry, calls: mock.calls };
 	}
 
 	/** Holds image normalization for image-bearing calls until released. */
@@ -251,39 +264,48 @@ describe("AgentSession prompt admission racing abort", () => {
 		expect({ agentEnds, queued: session.agent.hasQueuedMessages() }).toEqual({ agentEnds: 2, queued: false });
 	});
 
-	it("cancels an in-flight vision description on abort and drops the prompt", async () => {
-		const streamCalls: string[] = [];
-		const { session, dropped } = await createSession(
-			[
-				() => {
-					streamCalls.push("started");
-					return { content: ["should not run"] };
+	it("admits an image prompt before describing it and aborts its wait without dispatching", async () => {
+		using artifacts = TempDir.createSync("@pi-prompt-abort-image-");
+		const descriptionStarted = Promise.withResolvers<AbortSignal | undefined>();
+		const releaseDescription = Promise.withResolvers<void>();
+		const vision = createMockModel({ responses: [{ content: ["A single red pixel"] }] });
+		const { session, dropped, calls } = await createSession([() => ({ content: ["done"] })], {
+			imageDescriptions: {
+				artifactsDir: artifacts.path(),
+				completeImpl: async (model, context, options) => {
+					descriptionStarted.resolve(options?.signal);
+					await releaseDescription.promise;
+					return vision.stream(model, context, options).result();
 				},
-			],
-			true,
-		);
-		const describeStarted = Promise.withResolvers<AbortSignal | undefined>();
-		const spy = spyOn(imageVisionFallback, "describeAttachedImagesForTextModel").mockImplementation(
-			async (_images, _deps, signal) => {
-				describeStarted.resolve(signal);
-				// Stands in for a provider that never answers: only the signal ends it.
-				const { promise, resolve } = Promise.withResolvers<void>();
-				signal?.addEventListener("abort", () => resolve(), { once: true });
-				await promise;
-				return [];
 			},
-		);
-		restores.push(() => spy.mockRestore());
+		});
+		let admitted = false;
+		try {
+			const prompt = session.prompt("describe this", {
+				images: [IMAGE],
+				onPromptAdmitted: () => {
+					admitted = true;
+				},
+			});
+			const signal = await withTimeout(descriptionStarted.promise, 2_000, "Vision description never started");
+			expect(admitted).toBe(true);
+			await withTimeout(session.abort({ reason: USER_INTERRUPT_LABEL }), 2_000, "Abort waited for vision");
+			expect(await withTimeout(prompt, 2_000, "The admitted prompt did not settle")).toBe(true);
+			expect(dropped).toEqual([]);
+			expect(calls).toHaveLength(0);
+			expect(signal?.aborted).toBe(false);
+		} finally {
+			releaseDescription.resolve();
+		}
 
-		const promptPromise = session.prompt("describe this", { images: [IMAGE] });
-		const signal = await withTimeout(describeStarted.promise, 2_000, "Vision description never started");
-		expect(signal?.aborted).toBe(false);
-		await session.abort({ reason: USER_INTERRUPT_LABEL });
-
-		expect(signal?.aborted).toBe(true);
-		expect(await withTimeout(promptPromise, 2_000, "Abort did not release the vision description")).toBe(true);
-		expect(dropped).toEqual(["describe this"]);
-		expect(streamCalls).toEqual([]);
+		expect(await session.prompt("describe this again", { images: [IMAGE] })).toBe(true);
+		expect(vision.calls).toHaveLength(1);
+		expect(calls).toHaveLength(1);
+		const sent = calls[0]?.context.messages.at(-1)?.content;
+		expect(sent).toEqual([
+			{ type: "text", text: "describe this again" },
+			{ type: "text", text: expect.stringContaining("A single red pixel") },
+		]);
 	});
 
 	it("cancels waiting custom-command work instead of letting it publish or call the model", async () => {
@@ -298,7 +320,6 @@ describe("AgentSession prompt admission racing abort", () => {
 					return { content: ["should not run"] };
 				},
 			],
-			false,
 			{},
 			[
 				{
@@ -347,7 +368,6 @@ describe("AgentSession prompt admission racing abort", () => {
 					return { content: ["next invocation completed"] };
 				},
 			],
-			false,
 			{},
 			[
 				{
@@ -593,7 +613,6 @@ describe("AgentSession prompt admission racing abort", () => {
 					return { content: ["should not stream"] };
 				},
 			],
-			false,
 			// deferAgentInitiatedTurns marks the session as ACP-owned: no
 			// continuation may run without a client-owned prompt.
 			{ modelRegistry, clientBridge: { capabilities: {}, deferAgentInitiatedTurns: true } },
@@ -647,7 +666,6 @@ describe("AgentSession prompt admission racing abort", () => {
 					return { content: ["drained steer turn"] };
 				},
 			],
-			false,
 			{ modelRegistry },
 		);
 
@@ -683,7 +701,6 @@ describe("AgentSession prompt admission racing abort", () => {
 					return { content: ["first turn"] };
 				},
 			],
-			false,
 			{
 				extensionRunner: {
 					getCommand: (name: string) => (name === "queued-cmd" ? { name: "queued-cmd" } : undefined),

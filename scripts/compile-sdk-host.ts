@@ -28,7 +28,6 @@ if (compile) {
 		native: { platform: sdk.platform, arch: sdk.arch },
 		target: sdk.platform === "linux" ? "bun-linux-x64-baseline" : undefined,
 		buildVersion: sdk.version,
-		chunkNaming: "chunks/[dir]/[name]-[hash].[ext]",
 	});
 } else {
 	// Bun can cache missing module paths before installation, so compile in a fresh process.

@@ -69,6 +69,7 @@ omp
 - **Goal Autopilot**：用 `/goal-autopilot <目标>` 运行无人值守长任务，自动审批，自动回答AI问题。
 - **按清单执行**：用 `/todoloop tasks.md` 按组执行 Markdown 待办。
 - **按需编排**：`/orchestrate` 拆解并分派任务，`/workflowz` 组织批量工作，`/ultrathink` 深入分析。
+- **同目录实例通信**：默认允许同目录的其他 OMP 实例读取子代理输出并向其发消息；不需要时运行 `omp config set task.crossInstance false`。
 
 ### 个人内置技能与命令
 
