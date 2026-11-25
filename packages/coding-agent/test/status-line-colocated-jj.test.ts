@@ -5,8 +5,8 @@
  *
  * Presentation now follows a second detector, `vcs.repoForDisplay()`, whose
  * only policy difference is preferring jj on equal-root ties; automation
- * keeps `vcs.repo()`. The branch label and the head watcher come from the
- * display repository, while PR lookup keeps resolving the operational git
+ * keeps `vcs.repo()`. The branch label comes from the display repository,
+ * while PR lookup keeps resolving the operational git
  * branch — a jj bookmark/change id must never become a GitHub head.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
@@ -91,7 +91,6 @@ function operationalGit(
 		asGit: () => handle,
 		asJj: () => null,
 		root: () => root,
-		watchTarget: () => `${root}/.git/HEAD`,
 	} as unknown as VcsRepo;
 }
 
@@ -101,7 +100,6 @@ function displayJj(root: string, label: () => Promise<string | null>, status: Vc
 		asGit: () => null,
 		asJj: () => ({}) as never,
 		root: () => root,
-		watchTarget: () => `${root}/.jj/repo/op_heads/heads`,
 		label,
 		statusSummary: async () => status,
 	} as unknown as VcsRepo;
@@ -132,11 +130,10 @@ function mockRepos(operational: VcsRepo, display: VcsRepo, root: string): void {
 	vi.spyOn(vcs, "git").mockReturnValue(null);
 	vi.spyOn(vcs, "repo").mockReturnValue(operational);
 	vi.spyOn(vcs, "repoForDisplay").mockReturnValue(display);
-	vi.spyOn(vcs, "watch").mockReturnValue(() => {});
 }
 
 describe("status line display detector", () => {
-	it("shows the jj bookmark with the jj watch target when colocated", async () => {
+	it("shows the jj bookmark when colocated", async () => {
 		const root = "/repo/colocated";
 		// One file both staged and unstaged (MM), and one untracked (??).
 		const operational = operationalGit(root, headFor("main"), [0, 1, 1, 1, 1, 2, 2, 2]);
@@ -146,11 +143,6 @@ describe("status line display detector", () => {
 			untracked: 0,
 		});
 		mockRepos(operational, display, root);
-		let watched: VcsRepo | null = null;
-		vi.spyOn(vcs, "watch").mockImplementation(((repo: VcsRepo) => {
-			watched = repo;
-			return () => {};
-		}) as unknown as typeof vcs.watch);
 
 		const component = makeLine(gitSegment);
 		const painted = await paint(component);
@@ -160,7 +152,6 @@ describe("status line display detector", () => {
 		expect(content).toContain("my-bookmark");
 		expect(content).toContain("改动2");
 		expect(content).not.toContain("改动4");
-		expect((watched as VcsRepo | null)?.watchTarget()).toBe(`${root}/.jj/repo/op_heads/heads`);
 	});
 
 	it("keeps the git branch for a nested git checkout under an outer jj workspace", async () => {

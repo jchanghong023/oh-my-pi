@@ -2,10 +2,10 @@ import {
 	type ApiKeyResolution,
 	type ApiKeyResolver,
 	createOAuthProvenance,
+	refreshReasonFor,
 	type ResolvedApiKey,
 	resolveAfterRotation,
 } from "@oh-my-pi/pi-ai/auth-retry";
-import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { AuthApiKeyOptions, AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
 import type { Api, Model } from "@oh-my-pi/pi-ai/types";
 
@@ -66,27 +66,19 @@ export function createApiKeyResolver(
 	// token a 401 rejected is looked up from the bearer that request sent.
 	const provenance = createOAuthProvenance();
 	provenance.record(options.initialKey);
-	const resolveKey = async (
-		forceRefresh: boolean | undefined,
-		signal?: AbortSignal,
-		refreshReason?: AuthApiKeyOptions["refreshReason"],
-		rejectedAccessToken?: string,
-	): Promise<ApiKeyResolution> => {
+	const resolveKey = async (request: AuthApiKeyOptions): Promise<ApiKeyResolution> => {
 		const resolved = await registry.getApiKeyWithCredentialForProvider(provider, sessionId, {
 			baseUrl,
 			modelId,
-			forceRefresh,
-			signal,
-			refreshReason,
-			rejectedAccessToken,
+			...request,
 		});
 		provenance.record(resolved);
 		return resolved;
 	};
-	return async ({ lastChance, error, signal, previousKey }) => {
+	return async ({ lastChance, error, signal, previousKey, serviceTier }) => {
 		const rejectedAccessToken = provenance.accessFor(previousKey);
 		if (error === undefined) {
-			return resolveKey(undefined);
+			return resolveKey({ serviceTier });
 		}
 		if (lastChance) {
 			// Account constraint (401 / usage / account-rate-limit): rotate to a
@@ -102,8 +94,14 @@ export function createApiKeyResolver(
 				signal,
 				apiKey: previousKey,
 			});
-			return resolveAfterRotation(rotation, error, () => resolveKey(undefined));
+			return resolveAfterRotation(rotation, error, () => resolveKey({ serviceTier }));
 		}
-		return resolveKey(true, signal, AIError.status(error) === 401 ? "auth-recovery" : undefined, rejectedAccessToken);
+		return resolveKey({
+			forceRefresh: true,
+			signal,
+			refreshReason: refreshReasonFor(error),
+			rejectedAccessToken,
+			serviceTier,
+		});
 	};
 }

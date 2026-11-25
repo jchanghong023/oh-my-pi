@@ -57,6 +57,8 @@ export interface WriteDetails {
 	readonly conflictChanges?: readonly EditToolPerFileResult[];
 	readonly message?: {
 		readonly to?: string;
+		/** Session title of a recipient in another omp instance, shown in place of its pid `to`. */
+		readonly toLabel?: string;
 		readonly receipts?: readonly Receipt[];
 	};
 	readonly proc?: unknown;
@@ -167,7 +169,7 @@ const RECEIPT_TONE: Record<string, TspTone> = {
 
 function messageView(target: string, body: string, result: ToolResult<WriteDetails> | undefined): ToolView {
 	const details = result?.details?.message;
-	const recipient = cleanText(details?.to || target || "…");
+	const recipient = cleanText(details?.toLabel || details?.to || target || "…");
 	const receipts = details?.receipts ?? [];
 	const delivered = receipts.filter(receipt => receipt.outcome !== "failed").length;
 	const failed = receipts.length - delivered;

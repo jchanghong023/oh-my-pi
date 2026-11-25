@@ -65,6 +65,8 @@ import {
 } from "../session/agent-session-events";
 import { publicSessionListener } from "../session/agent-session-events";
 import {
+	type AgentModelChange,
+	type AgentModelSelectionState,
 	type AgentSessionAdvisorOverview,
 	type AgentViewLoop,
 	type AgentViewRuleSource,
@@ -884,6 +886,10 @@ export class RemoteAgentSession implements AgentViewSession {
 	abort(options?: SessionAbortOptions): Promise<void> {
 		if (this.#closed !== undefined) return Promise.resolve();
 		return this.#command("abort", options);
+	}
+
+	applyAgentModelChange(change: AgentModelChange): Promise<AgentModelSelectionState> {
+		return this.#command("applyAgentModelChange", change);
 	}
 
 	setWorkPoolYieldItems(items: readonly WorkPoolYieldItem[]): Promise<void> {

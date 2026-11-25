@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { IrcBus } from "../../src/irc/bus";
@@ -12,11 +13,14 @@ import { AuthStorage } from "../../src/session/auth-storage";
 import { convertToLlm } from "../../src/session/messages";
 import { SessionManager } from "../../src/session/session-manager";
 import { collectIrcPeerRoster } from "../../src/task/executor";
+import { cfgTaskAgentModelOverrides } from "../../src/task/settings";
+import type { AgentDefinition } from "../../src/task/types";
 import { RemoteAgentSession } from "../../src/thread/remote-agent-session";
 import type { ThreadService } from "../../src/thread/services";
 import { agentsThreadService } from "../../src/thread/services/agents";
 import { identityThreadService } from "../../src/thread/services/identity";
 import { SubagentWorker } from "../../src/thread/subagent-worker";
+import { WriteTool } from "../../src/tools/write";
 import type { AgentsProbe, AgentsProbeGlobals } from "../fixtures/agents-bridge-worker";
 import { getTestModel } from "../helpers/model-fixtures";
 
@@ -75,7 +79,7 @@ function mirrorOf(session: AgentSessionHandle | null | undefined): RemoteAgentSe
 	return session;
 }
 
-async function mainSession(id: string): Promise<AgentSession> {
+async function mainSession(id: string, sessionAgents?: AgentDefinition[]): Promise<AgentSession> {
 	const model = getTestModel("deepseek");
 	const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 	const agent = new Agent({
@@ -91,6 +95,7 @@ async function mainSession(id: string): Promise<AgentSession> {
 		sessionManager: SessionManager.inMemory(),
 		settings: Settings.isolated(),
 		modelRegistry: new ModelRegistry(authStorage),
+		inheritedSessionAgents: sessionAgents,
 		agentId: id,
 	});
 	cleanups.push(async () => {
@@ -233,6 +238,81 @@ describe("agent bridging across subagent workers", () => {
 		});
 		expect((await probe.peerSeen()).runStates).toEqual(["running", "idle"]);
 	});
+
+	it("switches a worker-homed child to a granted model and applies viable effort on its next request", async () => {
+		const initialModel = getTestModel("deepseek");
+		const alternateModel = getTestModel(
+			"deepseek",
+			model =>
+				model.id !== initialModel.id &&
+				!!model.thinking?.efforts?.includes(Effort.Low) &&
+				model.thinking.efforts.includes(Effort.Max) &&
+				!model.thinking.efforts.includes(Effort.Minimal),
+		);
+		const initialSelector = `${initialModel.provider}/${initialModel.id}`;
+		const alternateSelector = `${alternateModel.provider}/${alternateModel.id}`;
+		const [{ probe }, parent] = await Promise.all([
+			startWorker(),
+			mainSession("Parent", [
+				{
+					name: "m1",
+					model: [alternateSelector],
+					thinkingLevel: ThinkingLevel.Medium,
+					description: "User-tagged model",
+					systemPrompt: "",
+					source: "bundled",
+				},
+			]),
+		]);
+		const registry = AgentRegistry.global();
+		registry.register({ id: "Parent", displayName: "Parent", kind: "main", session: parent });
+		await probe.open("Parent.Child", { parentId: "Parent", parentSessionKey: parent.instanceKey });
+		const remote = mirrorOf(liveRef("Parent.Child").session);
+		registry.register({
+			id: "Foreign",
+			displayName: "Foreign",
+			kind: "sub",
+			parentId: "Parent",
+			parentSessionKey: "old-parent",
+			session: remote,
+		});
+
+		let spawns = "task";
+		cfgTaskAgentModelOverrides.override(parent.settings, { task: initialSelector });
+		const write = new WriteTool({
+			cwd: parent.sessionManager.getCwd(),
+			hasUI: false,
+			settings: parent.settings,
+			getSessionFile: () => parent.sessionFile ?? null,
+			getSessionSpawns: () => spawns,
+			getSessionAgents: () => parent.getSessionAgents(),
+			getAgentId: () => "Parent",
+			getAgentSession: () => parent,
+			agentRegistry: registry,
+		});
+		const set = (path: string, content: string) => write.execute("control", { path: `agent://${path}`, content });
+
+		await expect(set("Parent.Child/model", "m1:max")).rejects.toThrow("Allowed: task");
+		await expect(set("Foreign/effort", "high")).rejects.toThrow("only yourself or a direct child");
+		expect(remote.model?.id).toBe(initialModel.id);
+
+		spawns = "task,m1";
+		const model = await set("Parent.Child/model", "m1:max");
+		expect(model.content[0]).toMatchObject({
+			text: expect.stringContaining(`${alternateSelector} (effort: max)`),
+		});
+		const effort = await set("Parent.Child/effort", "minimal");
+		expect(effort.content[0]).toMatchObject({
+			text: expect.stringContaining(`${alternateSelector} (effort: low)`),
+		});
+		expect(await probe.prompt("Parent.Child", "Check the settings for this turn")).toEqual({
+			model: alternateModel.id,
+			effort: ThinkingLevel.Low,
+		});
+		await set("Parent.Child/model", "task:off");
+		expect(remote.model?.id).toBe(initialModel.id);
+		expect(remote.thinkingLevel).toBe(ThinkingLevel.Off);
+	}, 20_000);
 
 	it("delivers an IRC message from main into a worker-homed session", async () => {
 		const { probe } = await startWorker();

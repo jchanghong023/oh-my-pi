@@ -719,7 +719,6 @@ describe("InteractiveMode goal mode integration", () => {
 		const file = harness.session.sessionFile;
 		if (!file) throw new Error("expected saved session");
 		expect(await harness.session.switchSession(file)).toBe(true);
-		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 		await harness.mode.init({ suppressWelcomeIntro: true });
 		expect(harness.mode.goalModeEnabled).toBe(false);
 		expect(harness.mode.goalModePaused).toBe(true);
@@ -761,7 +760,6 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	it("restores only each saved session's strict auto marker when reopening and switching", async () => {
-		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 		await harness.mode.init({ suppressWelcomeIntro: true });
 		await executeBuiltinSlashCommand("/goal-autopilot Saved automatic objective", { ctx: harness.mode });
 		await harness.session.sessionManager.ensureOnDisk();
@@ -795,7 +793,6 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	it("restores the selected branch's goal mode instead of leaking a later replacement", async () => {
-		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 		await harness.mode.init({ suppressWelcomeIntro: true });
 		await executeBuiltinSlashCommand("/goal Ordinary branch objective", { ctx: harness.mode });
 		const ordinaryEntry = harness.session.sessionManager.appendMessage({
@@ -825,7 +822,6 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	it("reconciles auto orchestration on public tree navigation and stops it on an ordinary or empty branch", async () => {
-		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 		await harness.mode.init({ suppressWelcomeIntro: true });
 		const emptyNode = harness.session.sessionManager.appendModeChange("none");
 		await executeBuiltinSlashCommand("/goal Ordinary tree objective", { ctx: harness.mode });

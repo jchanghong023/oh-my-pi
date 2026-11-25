@@ -192,6 +192,57 @@ describe("TermBackend frame priority", () => {
 	});
 });
 
+describe("TermBackend animation", () => {
+	it("keeps ticking past identical output and presents cursor-only changes", () => {
+		vi.useFakeTimers();
+		const start = Date.now();
+		const active = signal(false);
+		defineRolePainter("rows", "test.clock-caret", (_node, cx) => {
+			const elapsed = active() ? cx.now() - start : 0;
+			return { rows: ["spin"], cursor: { row: 0, col: Math.floor(elapsed / 160) % 4 } };
+		});
+		const driver = new FakeDriver();
+		const surface = createSurface(() => ({ dock: <rows role="test.clock-caret" lines={[]} /> }));
+		const backend = new TermBackend({ surface, driver, theme: () => PLAIN_THEME, tickInterval: 80 });
+		try {
+			backend.start();
+			active.set(true); // Starts reading the clock, but the caret is still at 0.
+			vi.advanceTimersByTime(80);
+			expect(driver.frames.length).toBe(1);
+			vi.advanceTimersByTime(80);
+			expect(driver.frames.length).toBe(2);
+			expect(driver.frames.at(-1)?.cursor).toEqual({ row: 0, col: 1 });
+		} finally {
+			backend.stop();
+			surface.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("carries the current animation in a content frame instead of drawing the old tick immediately after it", () => {
+		vi.useFakeTimers();
+		const start = Date.now();
+		defineRolePainter("rows", "test.running-clock", (_node, cx) => ({ rows: [String(cx.now() - start)] }));
+		const driver = new FakeDriver();
+		const surface = createSurface(() => ({ dock: <rows role="test.running-clock" lines={[]} /> }));
+		const backend = new TermBackend({ surface, driver, theme: () => PLAIN_THEME, tickInterval: 80 });
+		try {
+			backend.start();
+			vi.advanceTimersByTime(79);
+			backend.renderNow();
+			expect(driver.viewport).toEqual(["79"]);
+			vi.advanceTimersByTime(1);
+			expect(driver.frames.length).toBe(2);
+			vi.advanceTimersByTime(79);
+			expect(driver.viewport).toEqual(["159"]);
+		} finally {
+			backend.stop();
+			surface.dispose();
+			vi.useRealTimers();
+		}
+	});
+});
+
 describe("TermBackend main surface", () => {
 	it("moves settled rows into history exactly once, only the rows the live tail cannot fit", () => {
 		const a = signal(lines("a", 4));

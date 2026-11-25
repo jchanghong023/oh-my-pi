@@ -2,7 +2,10 @@
 import { describe, expect, test, vi } from "bun:test";
 import { signal, type UiNode } from "@oh-my-pi/pi-tui";
 import { createTestTerminal } from "@oh-my-pi/pi-tui/testing/terminal";
-import type { ExtensionAskDialogQuestion } from "../../../../src/modes/view-model/overlays/ask-dialog";
+import type {
+	ExtensionAskDialogQuestion,
+	ExtensionAskDialogResult,
+} from "../../../../src/modes/view-model/overlays/ask-dialog";
 import { AskDialog, AskDialogModel, type AskDialogOptions } from "../../../../src/ui/overlays/panels/ask-dialog";
 import { type Driver, panelSuite } from "./harness";
 
@@ -109,7 +112,14 @@ test("keeps localized note labels and a raw answer distinct from its normalized 
 	const onPrompt = vi.fn(async () => "retain exact row");
 	const onSubmit = vi.fn();
 	const model = new AskDialogModel(
-		[{ id: "q", question: "Proceed?", recommended: 1, options: [{ label: "Retry\rnow" }, { label: "Retry now (Recommended)" }] }],
+		[
+			{
+				id: "q",
+				question: "Proceed?",
+				recommended: 1,
+				options: [{ label: "Retry\rnow" }, { label: "Retry now (Recommended)" }],
+			},
+		],
 		{ onSubmit, onCancel() {}, onPrompt },
 		{ terminalRows: () => 30 },
 	);
@@ -130,14 +140,35 @@ test("keeps localized note labels and a raw answer distinct from its normalized 
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		expect(onSubmit).toHaveBeenCalledWith({
 			kind: "submit",
-			results: [expect.objectContaining({
-				options: ["Retry\rnow", "Retry now (Recommended)"],
-				selectedOptions: ["Retry\rnow"],
-			})],
+			results: [
+				expect.objectContaining({
+					options: ["Retry\rnow", "Retry now (Recommended)"],
+					selectedOptions: ["Retry\rnow"],
+				}),
+			],
 		});
 	} finally {
 		term.dispose();
 	}
+});
+
+describe("Submit", () => {
+	test("sends with an earlier multi-select left empty instead of reopening it", () => {
+		const sent: ExtensionAskDialogResult[] = [];
+		const model = new AskDialogModel(
+			[
+				{ id: "m", question: "Which?", multi: true, options: [{ label: "A" }, { label: "B" }] },
+				{ id: "y", question: "Go?", options: [{ label: "Yes" }, { label: "No" }] },
+			],
+			{ onSubmit: result => void sent.push(result), onCancel() {}, onPrompt: async () => undefined },
+			{ terminalRows: () => 30 },
+		);
+		// Enter on the multi-select moves on without checking; Enter on the last question picks Yes.
+		model.key("enter", undefined);
+		model.key("enter", undefined);
+		const results = sent[0]?.kind === "submit" ? sent[0].results : [];
+		expect(results.map(result => result.selectedOptions)).toEqual([[], ["Yes"]]);
+	});
 });
 
 describe("Ctrl+O", () => {

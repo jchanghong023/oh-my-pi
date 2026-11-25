@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
-import { __providerInFlightForTesting, streamSimple } from "@oh-my-pi/pi-ai/stream";
+import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Context } from "@oh-my-pi/pi-ai/types";
 import {
 	__physicalTargetSegmentsForTesting,
@@ -151,7 +151,6 @@ describe("Settings", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		clearCustomApis();
-		__providerInFlightForTesting.setRoot(undefined);
 		AgentStorage.close();
 		restoreSettingsTestState(settingsState);
 		settingsState = undefined;
@@ -2883,7 +2882,6 @@ describe("Settings", () => {
 			it("applies the effective merged value as the process-wide limit", async () => {
 				const settings = Settings.isolated({ "providers.maxInFlightRequests": { openai: 1 } });
 				bindEffects(settings);
-				__providerInFlightForTesting.setRoot(tempDir.join("provider-inflight"));
 				registerMockApi();
 				const firstStarted = Promise.withResolvers<void>();
 				const releaseFirst = Promise.withResolvers<void>();

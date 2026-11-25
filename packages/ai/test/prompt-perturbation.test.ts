@@ -12,8 +12,8 @@ const pool: { entries: { source: string; variants: string[]; manual?: boolean }[
 	readFileSync(new URL("../src/prompts/perturbation-pool.json.txt", import.meta.url), "utf8"),
 );
 
-const sample = pool.entries.find(entry => !entry.manual && entry.source.startsWith("`todo`"));
-if (!sample) throw new Error("pool lost the todo guidance line");
+const sample = pool.entries.find(entry => !entry.manual && /^[A-Z`]/.test(entry.source));
+if (!sample) throw new Error("pool has no generated sentence");
 
 const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 if (!model) throw new Error("bundled fixture model missing");
@@ -45,6 +45,33 @@ describe("per-install prompt perturbation", () => {
 		expect(first).not.toBe(sample.source);
 		expect(sample.variants).toContain(first);
 		expect(second).toBe(first);
+	});
+
+	it("rewrites a pooled sentence wherever it renders, keeping its punctuation and surroundings", () => {
+		const before = "  - Rendered value 42 here. ";
+		const after = "! Trailing sentence that no pool entry could have authored.";
+		const rendered = perturbPromptText(`${before}${sample.source}${after}`);
+		expect(rendered.startsWith(before)).toBe(true);
+		expect(rendered.endsWith(after)).toBe(true);
+		expect(sample.variants).toContain(rendered.slice(before.length, -after.length));
+	});
+
+	it("leaves a pooled sentence untouched where it is only part of a longer one", () => {
+		for (const text of [
+			`${sample.source}, which no pool entry could have authored.`,
+			`Long before that ${sample.source}.`,
+		]) {
+			expect(perturbPromptText(text)).toBe(text);
+		}
+	});
+
+	it("leaves a pooled sentence inside fenced code untouched", () => {
+		const fenced = `\`\`\`\n${sample.source}\n\`\`\``;
+		expect(perturbPromptText(fenced)).toBe(fenced);
+	});
+
+	it("swaps manual literals inside fenced code too", () => {
+		expect(perturbPromptText("```\n⁂ Runtime\n```")).not.toContain("⁂");
 	});
 
 	it("drops the system-prompt opener instead of paraphrasing it", async () => {

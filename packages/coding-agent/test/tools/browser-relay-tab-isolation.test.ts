@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { findFreeCdpPort } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
 import type { BrowserDownload } from "@oh-my-pi/pi-coding-agent/tools/browser/downloads";
 import {
 	closeLaunchedBrowser,
@@ -11,10 +10,6 @@ import {
 	RENDERER_PRIORITY_ARGS,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import { acquireBrowser, releaseBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
-import {
-	unpackedExtensionId,
-	writeRelayExtension,
-} from "@oh-my-pi/pi-coding-agent/tools/browser/relay/extension-files";
 import { waitForRelayExtension } from "@oh-my-pi/pi-coding-agent/tools/browser/relay/probe";
 import { type RelayServer, startRelayServer } from "@oh-my-pi/pi-coding-agent/tools/browser/relay/server";
 import type {
@@ -32,9 +27,8 @@ import {
 import { WorkerCore } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-worker";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { getPuppeteerDir } from "@oh-my-pi/pi-utils";
-import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import puppeteer, { type Browser, type Page, type Protocol } from "puppeteer-core";
-import { relayNativePortFixture } from "./browser-relay-native-port-fixture";
+import { type FixtureRelayExtension, prepareRelayExtension } from "./browser-relay-fixture";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
@@ -75,6 +69,8 @@ function startWorker(payload: WorkerInitPayload): TestWorker {
 
 interface RelayBrowser {
 	browser: Browser;
+	/** IDs Chrome assigned to the companion extensions, indexed by their source directories. */
+	extensionIds: ReadonlyMap<string, string>;
 	/** Evaluates `expression` on an extension page, where Chrome's tab and runtime APIs are in scope. */
 	inExtension(expression: string): Promise<unknown>;
 }
@@ -101,12 +97,16 @@ async function launchRelayFixture(
 	log?: (message: string, data?: Record<string, unknown>) => void,
 	extensions: string[] = [],
 ): Promise<RelayFixture> {
-	const port = await findFreeCdpPort();
-	const server = startRelayServer({ port, group: false, log });
-	const extensionDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-relay-isolation-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-relay-isolation-"));
+	const server = startRelayServer({
+		port: 0,
+		group: false,
+		log,
+		installRegistryFile: path.join(root, "omp", "installs.json"),
+	});
+	let install: FixtureRelayExtension;
 	// Every fixture browser saves downloads here, as the user's Chrome would its own folder (real names, " (1)" on a clash).
-	const downloads = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-relay-downloads-")));
-	const profiles: string[] = [];
+	const downloads = await fs.realpath(await fs.mkdtemp(path.join(root, "downloads-")));
 	const held: Array<PromiseWithResolvers<void>> = [];
 	let heldArrived = Promise.withResolvers<void>();
 	const pages = Bun.serve({
@@ -162,14 +162,12 @@ async function launchRelayFixture(
 		} finally {
 			server.stop();
 			pages.stop(true);
-			await fs.rm(extensionDir, { recursive: true, force: true });
-			await fs.rm(downloads, { recursive: true, force: true });
-			for (const profile of profiles) await fs.rm(profile, { recursive: true, force: true });
+			await fs.rm(root, { recursive: true, force: true });
 		}
 	}
 	async function launchBrowser(): Promise<RelayBrowser> {
-		const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-relay-profile-"));
-		profiles.push(userDataDir);
+		const userDataDir = await fs.mkdtemp(path.join(root, "profile-"));
+		await install.configureProfile?.(userDataDir);
 		await Bun.write(
 			path.join(userDataDir, "Default", "Preferences"),
 			JSON.stringify({
@@ -182,13 +180,13 @@ async function launchRelayFixture(
 			pipe: true,
 			userDataDir,
 			enableExtensions: true,
+			env: { ...process.env, PI_CODING_AGENT_DIR: path.join(root, "omp") },
 			args: ["--no-first-run", "--no-default-browser-check", "--use-mock-keychain", ...RENDERER_PRIORITY_ARGS],
 		});
 		browsers.push(browser);
-		// CDP returns the ID Chrome assigned to the loaded extension. Its resolved
-		// path may differ from the fixture's path on Windows.
-		const extensionId = await browser.installExtension(extensionDir);
-		for (const extension of extensions) await browser.installExtension(extension);
+		const extensionId = await browser.installExtension(install.dir);
+		const extensionIds = new Map<string, string>();
+		for (const extension of extensions) extensionIds.set(extension, await browser.installExtension(extension));
 		// A service worker is transient: it may start and stop before Puppeteer observes its target.
 		// An extension page can wake it via runtime messaging and remains available for tab queries.
 		const page = await browser.newPage();
@@ -217,18 +215,16 @@ async function launchRelayFixture(
 			if (exceptionDetails) throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
 			return result.value;
 		}
-		return { browser, inExtension };
+		return { browser, extensionIds, inExtension };
 	}
 	try {
-		await writeRelayExtension(extensionDir, VERSION);
-		await Bun.write(path.join(extensionDir, "test-fixture.html"), "<title>Relay fixture</title>");
-		const backgroundPath = path.join(extensionDir, "background.js");
+		install = await prepareRelayExtension(root, server.port);
+		await Bun.write(path.join(install.dir, "test-fixture.html"), "<title>Relay fixture</title>");
+		const backgroundPath = path.join(install.dir, "background.js");
 		const background = await Bun.file(backgroundPath).text();
-		// Replace only the native port; keep real Chrome debugger, tab, and worker behavior.
 		await Bun.write(
 			backgroundPath,
-			`${relayNativePortFixture(port)}
-const testRegisterDetach = chrome.debugger.onDetach.addListener.bind(chrome.debugger.onDetach);
+			`const testRegisterDetach = chrome.debugger.onDetach.addListener.bind(chrome.debugger.onDetach);
 chrome.debugger.onDetach.addListener = listener => {
 	globalThis.testDebuggerDetach = listener;
 	testRegisterDetach(listener);
@@ -255,14 +251,13 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
 });
 ${background}`,
 		);
-		const { browser, inExtension } = await launchBrowser();
-		const cdpUrl = `http://127.0.0.1:${port}`;
+		const firstBrowser = await launchBrowser();
+		const cdpUrl = `http://127.0.0.1:${server.port}`;
 		// Finish the extension hello before the native CDP client attaches to the sentinel.
 		const outcome = await waitForRelayExtension(cdpUrl);
 		if (outcome !== "ready") throw new Error(`Relay fixture handshake failed: ${outcome}`);
 		return {
-			browser,
-			inExtension,
+			...firstBrowser,
 			server,
 			cdpUrl,
 			origin: `http://127.0.0.1:${pages.port}`,
@@ -697,8 +692,8 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("relay tab ownership", () => {
 			expect(filled.returnValue).toBe("secret");
 			// A call names what omp hid, once: that call, the next or a later one, as the relay reports it. Chrome can
 			// also drop omp as the menu starts loading and that load then never commit: omp hid nothing, and says nothing.
-			const vaultId = await unpackedExtensionId(vaultDir);
-			if (!vaultId) throw new Error("Missing stand-in vault directory");
+			const vaultId = fixture.extensionIds.get(vaultDir);
+			if (!vaultId) throw new Error("Missing stand-in vault extension ID");
 			if ((await emptiedFrames(driven)) > 0) {
 				const told = await untilNamed(name, vaultId, failed, shown(filled));
 				expect(occurrences(told.join("\n"), vaultId)).toBe(1);
@@ -745,8 +740,8 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("relay tab ownership", () => {
 			});
 			const page = (await fixture.browser.pages()).find(page => page.url().includes("who=submit"));
 			if (!page) throw new Error("omp's tab is gone");
-			const vaultId = await unpackedExtensionId(vaultDir);
-			if (!vaultId) throw new Error("Missing stand-in vault directory");
+			const vaultId = fixture.extensionIds.get(vaultDir);
+			if (!vaultId) throw new Error("Missing stand-in vault extension ID");
 			// The page adds frames of its own as the card opens, so one sweep empties them with it: one to an extension
 			// that is not installed, one to a vault page no site may load, and one whose `src` carries page text.
 			await page.evaluate(`document.addEventListener("submit", () => {

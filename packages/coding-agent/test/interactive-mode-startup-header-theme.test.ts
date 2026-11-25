@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -74,7 +73,6 @@ describe("InteractiveMode startup header after the terminal reports a light back
 			undefined,
 			createModeTerminal({ settings }).frame,
 		);
-		vi.spyOn(vcs, "watch").mockImplementation(() => () => {});
 	});
 
 	afterEach(async () => {

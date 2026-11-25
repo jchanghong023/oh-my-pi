@@ -13,7 +13,10 @@ const packageDir = path.resolve(import.meta.dir, "..");
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-html-template-"));
 const unrelatedCwd = path.join(tempRoot, "unrelated-cwd");
 const bundleDir = path.join(tempRoot, "bundle");
-const compiledPath = path.join(tempRoot, "compiled-template-probe");
+const compiledPath = path.join(
+	tempRoot,
+	process.platform === "win32" ? "compiled-template-probe.exe" : "compiled-template-probe",
+);
 const compiledVersion = "19.0.1+fork.1";
 let bundlePath: string;
 const dependencyStubs: Record<string, string> = {
@@ -175,7 +178,11 @@ describe("HTML export template", () => {
 		for (const name of ["template-stale.css", "tool-views.generated.js", "marked.min.js", "highlight.min.js"]) {
 			await Bun.write(path.join(packDir, "dist", name), "excluded hosted viewer sidecar");
 		}
-		await fs.cp(path.join(packageDir, "src/export/html"), path.join(packDir, "src/export/html"), { recursive: true });
+		const hostedAssets = ["shell.html", "template.css", "template.js", "share-loader.js"];
+		for (const name of ["template.html.txt", "viewer.generated.json", ...hostedAssets]) {
+			const relative = path.join("src/export/html", name);
+			await Bun.write(path.join(packDir, relative), Bun.file(path.join(packageDir, relative)));
+		}
 		const pack = Bun.spawn([process.execPath, "pm", "pack", "--dry-run", "--ignore-scripts"], {
 			cwd: packDir,
 			stdin: "ignore",
@@ -192,7 +199,7 @@ describe("HTML export template", () => {
 		expect(packed).toContain("dist/cli.js");
 		expect(packed).toContain("src/export/html/template.html.txt");
 		expect(packed).toContain("src/export/html/viewer.generated.json");
-		for (const name of ["shell.html", "template.css", "template.js", "share-loader.js"]) {
+		for (const name of hostedAssets) {
 			expect(packed).not.toContain(`src/export/html/${name}`);
 		}
 		expect(packed.filter(file => /^dist\/(template-|tool-views\.|marked\.|highlight\.)/.test(file))).toEqual([]);

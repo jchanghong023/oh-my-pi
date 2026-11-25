@@ -11,6 +11,7 @@ import {
 	SERVICE_TIER_OPENAI_OPTIONS,
 	SERVICE_TIER_OPENAI_VALUES,
 } from "../config/service-tier";
+import { DaemonProviderSlots } from "../daemon/modules/provider-slots";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
 	TINY_MODEL_DEVICE_SETTING_OPTIONS,
@@ -26,7 +27,7 @@ import { compileModelPatterns } from "../utils/model-patterns";
 import { DEFAULT_USAGE_RESERVE_PCT } from "@oh-my-pi/pi-ai/auth-storage";
 import { configureProviderStoreResponses } from "@oh-my-pi/pi-ai/providers/openai-responses-state";
 import { configureCodexAccessPrograms } from "@oh-my-pi/pi-ai/providers/openai-codex/access-programs";
-import { configureProviderMaxInFlightRequests } from "@oh-my-pi/pi-ai/stream";
+import { configureProviderMaxInFlightRequests, configureProviderSlotBroker } from "@oh-my-pi/pi-ai/stream";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { formatKeyHint } from "../ui/keys/hints";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking/levels";
@@ -112,7 +113,8 @@ export const cfgPrewalkFrom = register({
 		tab: "model",
 		group: "Prewalk",
 		label: "Prewalk planning model",
-		description: "Model or role (default '@default') that /prewalk restart returns to for planning.",
+		description:
+			"Model or role (default '@default') to plan on: /prewalk restart returns to it, and Auto Prewalk's Escalate mode moves a front-loaded task to it before planning.",
 	},
 });
 
@@ -132,7 +134,7 @@ export const cfgPrewalkInto = register({
 export const cfgPrewalkAuto = register({
 	id: "prewalk.auto",
 	type: "enum",
-	values: ["off", "suggest", "on"] as const,
+	values: ["off", "suggest", "on", "escalate"] as const,
 	default: "off",
 	ui: {
 		tab: "model",
@@ -145,12 +147,18 @@ export const cfgPrewalkAuto = register({
 			{
 				value: "suggest",
 				label: "仅建议",
-				description: "对每个任务进行分类并报告决定，但不启用 Prewalk",
+				description: "对每个任务报告分类结果，以及升级规划模型时是否会切换模型，但不启用 Prewalk",
 			},
 			{
 				value: "on",
 				label: "开启",
 				description: "确信任务的主要推理集中在前期时，从当前模型交接至自动目标模型；下一个任务回到规划模型",
+			},
+			{
+				value: "escalate",
+				label: "升级规划模型",
+				description:
+					"与“开启”类似，但先切换到 Prewalk 规划模型（prewalk.from）。确信主要推理集中在前期时，先切换再准备任务，之后从规划模型交接；下一个任务回到本次任务的起始模型。如果当前已是规划模型，则行为与“开启”相同，但 '@initial' 不会触发交接。",
 			},
 		],
 	},
@@ -164,9 +172,13 @@ export const cfgPrewalkAutoTarget = register({
 		tab: "model",
 		group: "Prewalk",
 		label: "自动 Prewalk 目标",
-		description: "自动 Prewalk 首次 edit/write 时交接到的模型或角色（默认为 '@smol'）。",
+		description:
+			"自动 Prewalk 首次 edit/write 时交接到的模型或角色（默认为 '@smol'）。'@initial' 仅用于升级规划模型模式，可交接回任务开始时的模型和推理级别。",
 	},
 });
+
+/** `prewalk.autoTarget` value that hands an `escalate` task back to the model and effort it started on. */
+export const PREWALK_INITIAL_TARGET = "@initial";
 
 function isPositiveLimit(limit: unknown): limit is number {
 	return typeof limit === "number" && Number.isFinite(limit) && limit > 0;
@@ -216,6 +228,8 @@ export const cfgProvidersMaxInFlightRequests = register({
 effect(cfgProvidersMaxInFlightRequests, limits =>
 	configureProviderMaxInFlightRequests(normalizeProviderMaxInFlightRequests(limits)),
 );
+// The limits bind every omp process of this config root, through the daemon.
+configureProviderSlotBroker(new DaemonProviderSlots());
 
 export const cfgImagesDescribeForTextModels = register({
 	id: "images.describeForTextModels",

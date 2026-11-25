@@ -267,64 +267,57 @@ describe("goal runtime", () => {
 		}
 	});
 
-	it.each([true, false])(
-		"resumes exhausted budgets as limited only for autopilot goals (autopilot=%s)",
-		async autoOrchestrate => {
-			for (const restoredBudget of [20, undefined]) {
-				const harness = createHarness();
-				const original = await harness.runtime.createGoal({
-					objective: "Finish only within the approved budget",
-					tokenBudget: 10,
-					autoOrchestrate,
-				});
-				harness.runtime.onTurnStart("turn-1", createUsage());
-				harness.setUsage({ input: 10 });
-				harness.advance(2_000);
-				await harness.runtime.onToolCompleted("read");
-				expect(harness.getState()?.goal.status).toBe("budget-limited");
-				expect(harness.hiddenMessages).toHaveLength(1);
-				await harness.runtime.pauseGoal();
-				harness.advance(5_000);
+	it("keeps resumed Autopilot budget-limited without re-steering until the budget changes", async () => {
+		for (const restoredBudget of [20, undefined]) {
+			const harness = createHarness();
+			const original = await harness.runtime.createGoal({
+				objective: "Finish only within the approved budget",
+				tokenBudget: 10,
+				autoOrchestrate: true,
+			});
+			harness.runtime.onTurnStart("turn-1", createUsage());
+			harness.setUsage({ input: 10 });
+			harness.advance(2_000);
+			await harness.runtime.onToolCompleted("read");
+			expect(harness.getState()?.goal.status).toBe("budget-limited");
+			expect(harness.hiddenMessages).toHaveLength(1);
+			await harness.runtime.pauseGoal();
+			harness.advance(5_000);
 
-				const resumed = await harness.runtime.resumeGoal();
-				const resumedStatus = autoOrchestrate ? "budget-limited" : "active";
-				expect(resumed).toMatchObject({
-					enabled: true,
-					mode: "active",
-					goal: { id: original.goal.id, status: resumedStatus, tokensUsed: 10, timeUsedSeconds: 2 },
-				});
-				expect(resumed.autoOrchestrate === true).toBe(autoOrchestrate);
-				expect(harness.persists.at(-1)).toMatchObject({
-					mode: "goal",
-					state: { enabled: true, goal: { status: resumedStatus } },
-				});
-				if (autoOrchestrate) {
-					expect(harness.runtime.buildActivePrompt()).toBeUndefined();
-					expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
-				} else {
-					expect(harness.runtime.buildActivePrompt()).toContain(original.goal.objective);
-					expect(harness.runtime.buildContinuationPrompt()).toContain(original.goal.objective);
-				}
-				harness.setUsage({ input: 12 });
-				harness.advance(3_000);
-				await harness.runtime.onToolCompleted("read");
-				await harness.runtime.onAgentEnd();
-				expect(harness.getState()?.goal).toMatchObject({
-					status: "budget-limited",
-					tokensUsed: 12,
-					timeUsedSeconds: 5,
-				});
-				const steerCount = autoOrchestrate ? 1 : 2;
-				expect(harness.hiddenMessages).toHaveLength(steerCount);
+			const resumed = await harness.runtime.resumeGoal();
+			expect(resumed).toMatchObject({
+				enabled: true,
+				mode: "active",
+				autoOrchestrate: true,
+				goal: { id: original.goal.id, status: "budget-limited", tokensUsed: 10, timeUsedSeconds: 2 },
+			});
+			expect(harness.persists.at(-1)).toMatchObject({
+				mode: "goal",
+				state: { enabled: true, goal: { status: "budget-limited" } },
+			});
+			expect(harness.runtime.buildActivePrompt()).toBeUndefined();
+			expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
+			harness.setUsage({ input: 12 });
+			harness.advance(3_000);
+			await harness.runtime.onToolCompleted("read");
+			await harness.runtime.onAgentEnd();
+			expect(harness.getState()?.goal).toMatchObject({
+				status: "budget-limited",
+				tokensUsed: 12,
+				timeUsedSeconds: 5,
+			});
+			expect(harness.hiddenMessages).toHaveLength(1);
 
-				await harness.runtime.onBudgetMutated(restoredBudget);
-				expect(harness.getState()).toMatchObject({ enabled: true, goal: { status: "active", tokensUsed: 12 } });
-				expect(harness.getState()?.autoOrchestrate === true).toBe(autoOrchestrate);
-				expect(harness.runtime.buildContinuationPrompt()).toContain(original.goal.objective);
-				expect(harness.hiddenMessages).toHaveLength(steerCount);
-			}
-		},
-	);
+			await harness.runtime.onBudgetMutated(restoredBudget);
+			expect(harness.getState()).toMatchObject({
+				enabled: true,
+				autoOrchestrate: true,
+				goal: { status: "active", tokensUsed: 12 },
+			});
+			expect(harness.runtime.buildContinuationPrompt()).toContain(original.goal.objective);
+			expect(harness.hiddenMessages).toHaveLength(1);
+		}
+	});
 
 	it("retains orchestration across internal reconciliation and interruption without auto-starting restored goals", async () => {
 		const harness = createHarness({
@@ -566,6 +559,41 @@ describe("goal runtime", () => {
 		await harness.runtime.flushUsage("allowed");
 		expect(harness.getState()?.goal.status).toBe("budget-limited");
 		expect(harness.hiddenMessages).toHaveLength(2);
+	});
+
+	it("resuming a paused goal whose budget is spent stays budget-limited instead of reporting active", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: true,
+				mode: "active",
+				goal: createGoal({ status: "budget-limited", tokenBudget: 100_000, tokensUsed: 156_977 }),
+			},
+		});
+
+		await harness.runtime.pauseGoal();
+		const resumed = await harness.runtime.resumeGoal();
+
+		expect(resumed.enabled).toBe(true);
+		expect(resumed.goal.status).toBe("budget-limited");
+		expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
+
+		await harness.runtime.onBudgetMutated(200_000);
+		expect(harness.getState()?.goal.status).toBe("active");
+	});
+
+	it("resuming a paused goal with budget left reactivates it", async () => {
+		const harness = createHarness({
+			state: {
+				enabled: false,
+				mode: "active",
+				goal: createGoal({ status: "paused", tokenBudget: 100_000, tokensUsed: 99_999 }),
+			},
+		});
+
+		const resumed = await harness.runtime.resumeGoal();
+
+		expect(resumed.goal.status).toBe("active");
+		expect(harness.runtime.buildContinuationPrompt()).toBeDefined();
 	});
 
 	it("pauses an active goal when an interruption aborts the task", async () => {

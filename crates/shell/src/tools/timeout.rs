@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use bstr::{BString, ByteSlice};
 
-use super::{Child, Out, Turn, nanos};
+use super::{Child, Measurement, Out, Turn, nanos};
 use crate::bash::{CallOutcome, Platform, RunId, ShellApi, Signal, ToolCall};
 
 /// GNU timeout's exit status for its own usage or internal errors.
@@ -327,6 +327,9 @@ impl Timeout {
 		let now = turn.now;
 		self.phase = match std::mem::replace(&mut self.phase, Phase::Exit(0)) {
 			Phase::Start(opts) => {
+				if opts.foreground && opts.limit.is_some() {
+					self.child.measurement = Measurement::Direct;
+				}
 				self
 					.child
 					.start(api, turn, &self.call, opts.command.clone(), false, "");

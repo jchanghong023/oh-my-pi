@@ -167,6 +167,8 @@ async fn timeout_preserves_signal_status_for_external_and_in_process_operands() 
 		("timeout --preserve-status -s TERM 0.1 eval 'while :; do :; done'", 143),
 		("timeout --preserve-status -s KILL 0.1 eval 'while :; do :; done'", 137),
 		("timeout -s INT 0.1 /bin/sleep 5", 124),
+		("time -l timeout --foreground --preserve-status 0.1 /bin/sleep 5", 143),
+		("timeout --foreground --preserve-status 0.1 time -l /bin/sleep 5", 143),
 	] {
 		let result = tokio::time::timeout(Duration::from_secs(5), run(&mut s, command))
 			.await
@@ -369,6 +371,8 @@ async fn dd_rss(s: &mut Session, command: &str) -> u64 {
 /// `time -l` is the utility, not the keyword timing a command named `-l`:
 /// it reports the program's own peak memory, on its stderr, so a pipe
 /// reads it; a program run inside a nested shell's pipeline counts too.
+/// The peak is the program's, not this process's (Linux exec keeps the
+/// spawner's high-water mark).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn time_reports_a_programs_peak_memory() {
 	let mut s = session();

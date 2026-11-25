@@ -159,11 +159,12 @@ async function createRuntimeModel(
 			storage,
 			resolveModel: id => (id === modelId ? selectedModel : undefined),
 			credentials: {
-				resolve: (model, sessionId, signal) =>
+				resolve: (model, sessionId, signal, serviceTier) =>
 					registry.getApiKeyWithCredentialForProvider(model.provider, sessionId, {
 						baseUrl: model.baseUrl,
 						modelId: model.id,
 						signal,
+						serviceTier,
 					}),
 				resolver: (model, sessionId, initialKey) =>
 					registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl, modelId: model.id, initialKey }),

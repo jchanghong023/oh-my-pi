@@ -14,6 +14,7 @@ import {
 import { getOAuthProviders, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { resolveCliModel } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { cfgExtendedContext } from "@oh-my-pi/pi-coding-agent/session/context-settings";
@@ -1363,6 +1364,40 @@ describe("ModelRegistry runtime provider registration", () => {
 		expectSecondProjection();
 	});
 
+	test("an authenticated projected literal @smol wins over the configured role before a full catalog read", async () => {
+		const provider = "projecting-provider";
+		await authStorage.credentials.set(provider, {
+			type: "oauth",
+			access: "access-token",
+			refresh: "refresh-token",
+			expires: Date.now() + 60_000,
+		});
+		registry.registerProvider(
+			provider,
+			{
+				api: "custom-projection-api",
+				baseUrl: "https://example.invalid/",
+				streamSimple,
+				models: [baseModel],
+				oauth: {
+					name: "Projecting OAuth",
+					login: async () => ({ access: "a", refresh: "r", expires: Date.now() + 60_000 }),
+					refreshToken: async credentials => credentials,
+					getApiKey: credentials => credentials.access,
+					modifyModels: models =>
+						models.map(model => (model.provider === provider ? { ...model, id: "@smol" } : model)),
+				},
+			},
+			"ext://oauth",
+		);
+		const settings = Settings.isolated({ modelRoles: { smol: "openai/gpt-4o" } });
+		const all = vi.spyOn(registry, "getAll");
+		const result = resolveCliModel({ cliModel: "@smol", settings, modelRegistry: registry });
+		expect(result.selector).toBe(`${provider}/@smol`);
+		expect(result.configuredRole).toBeUndefined();
+		expect(all).not.toHaveBeenCalled();
+	});
+
 	test("provider-scoped lookups preserve whole-catalog modifyModels projections", async () => {
 		const hiddenModel = registry.getAll().find(model => model.provider === "ascend");
 		await authStorage.credentials.set("deepseek", {
@@ -1409,7 +1444,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			refresh: "refresh-token",
 			expires: Date.now() + 60_000,
 		});
-		let projectionCount = 0;
+		let projectionName = "initial";
 		registry.registerProvider(
 			"deepseek",
 			{
@@ -1422,21 +1457,24 @@ describe("ModelRegistry runtime provider registration", () => {
 					login: async () => ({ access: "a", refresh: "r", expires: Date.now() + 60_000 }),
 					refreshToken: async credentials => credentials,
 					getApiKey: credentials => credentials.access,
-					modifyModels: models => {
-						projectionCount += 1;
-						return models.map(model =>
-							model.provider === "deepseek" ? { ...model, name: `projection-${projectionCount}` } : model,
-						);
-					},
+					modifyModels: models =>
+						models.map(model => (model.provider === "deepseek" ? { ...model, name: projectionName } : model)),
 				},
 			},
 			"ext://oauth",
 		);
 
-		const refreshPromise = registry.refresh("offline");
-		expect(registry.find("ascend", anthropicId!)).toBeDefined();
-		expect(registry.find("deepseek", "runtime-model")?.name).toBe("projection-3");
-		await refreshPromise;
+		// A changed static input enters lazy composition without relying on a
+		// missing config discarding an otherwise valid catalog.
+		await Bun.write(modelsJsonPath, "{}");
+		const refresh = registry.refresh("offline");
+		try {
+			expect(registry.find("ascend", anthropicId!)).toBeDefined();
+			projectionName = "after-other-provider-lookup";
+			expect(registry.find("deepseek", "runtime-model")?.name).toBe(projectionName);
+		} finally {
+			await refresh;
+		}
 	});
 
 	test("registering another provider reapplies whole-catalog modifyModels projections", async () => {

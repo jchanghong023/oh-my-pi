@@ -14,8 +14,14 @@
 //!
 //! The figures are those of the external processes the command waited for,
 //! as `wait4` reports them ([`ProcUsage`]): in-process builtins and
-//! functions count toward the real time only. The macOS-only `-l` lines
-//! (instructions, cycles, peak footprint) print on macOS.
+//! functions count toward the real time only. The host spawns them for
+//! measurement
+//! ([`NativeSpawner::spawn_measured`](crate::sys::NativeSpawner::spawn_measured)):
+//! on Linux, when signals can target their groups, each runs under a small
+//! helper process as under GNU time, so its peak resident set size is its own
+//! rather than the shell's.
+//! macOS-only `-l` lines (instructions, cycles, peak footprint) print on
+//! macOS.
 //!
 //! Exit status: the command's; 1 for `time`'s own usage errors.
 
@@ -23,7 +29,7 @@ use std::fmt::Write as _;
 
 use bstr::{BString, ByteSlice};
 
-use super::{Child, Out, Turn};
+use super::{Child, Measurement, Out, Turn};
 use crate::bash::{CallOutcome, ProcUsage, RunId, ShellApi, ToolCall};
 
 const USAGE: &str = "usage: time [-l | -v] [-p] utility [argument ...]\n";
@@ -299,7 +305,14 @@ impl Time {
 				Phase::Exit(1)
 			},
 		};
-		Self { child: Child::default(), call, out, phase, signal: None, usage: ProcUsage::default() }
+		Self {
+			child: Child { measurement: Measurement::Measured, ..Child::default() },
+			call,
+			out,
+			phase,
+			signal: None,
+			usage: ProcUsage::default(),
+		}
 	}
 
 	/// `run` ended; `false` when it is not this call's command.

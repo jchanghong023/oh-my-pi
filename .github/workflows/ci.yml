@@ -124,15 +124,15 @@ jobs:
               test -f vendor/openwiki/src/agent/repository-runner.ts || { echo "::error::OpenWiki submodule is missing"; exit 1; }
          - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
            with:
-              bun-version: 1.4.4
+              bun-version: 1.4.5
          - name: Restore bun store
            id: bun-cache
            uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
            with:
               path: ~/.bun/install/cache
-              key: bun-1.4.4-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+              key: bun-1.4.5-${{ runner.os }}-${{ hashFiles('bun.lock') }}
               restore-keys: |
-                 bun-1.4.4-${{ runner.os }}-
+                 bun-1.4.5-${{ runner.os }}-
          - name: Restore Cargo and build asset caches
            id: cargo-cache
            uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -142,9 +142,9 @@ jobs:
                  ~/.cargo/git
                  ${{ env.CARGO_TARGET_DIR }}
                  ${{ env.OMP_BUILD_CACHE_DIR }}
-              key: cargo-local-strip-symbols-v1-${{ runner.os }}-${{ matrix.native_variant }}-${{ hashFiles('rust-toolchain.toml') }}-bun1.4.4-zigbuild0.24.1-zig0.14.1-${{ github.sha }}
+              key: cargo-local-strip-symbols-v1-${{ runner.os }}-${{ matrix.native_variant }}-${{ hashFiles('rust-toolchain.toml') }}-bun1.4.5-zigbuild0.24.1-zig0.14.1-${{ github.sha }}
               restore-keys: |
-                 cargo-local-strip-symbols-v1-${{ runner.os }}-${{ matrix.native_variant }}-${{ hashFiles('rust-toolchain.toml') }}-bun1.4.4-zigbuild0.24.1-zig0.14.1-
+                 cargo-local-strip-symbols-v1-${{ runner.os }}-${{ matrix.native_variant }}-${{ hashFiles('rust-toolchain.toml') }}-bun1.4.5-zigbuild0.24.1-zig0.14.1-
          - name: Install pinned host Rust toolchain
            run: |
               set -euo pipefail
@@ -198,7 +198,7 @@ jobs:
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
          - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
            with:
-              bun-version: 1.4.4
+              bun-version: 1.4.5
          - run: bun install --frozen-lockfile
          - run: bun run --cwd packages/browser-relay build
            env:

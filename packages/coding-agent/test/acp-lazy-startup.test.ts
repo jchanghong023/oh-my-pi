@@ -742,7 +742,6 @@ describe("ACP lazy startup", () => {
 					invalidFlagValues: [],
 					noSkills: true,
 					noRules: true,
-					noTools: true,
 					noLsp: true,
 					sessionDir: cwd,
 					extensions: [path.join(cwd, "runtime-provider.ts")],

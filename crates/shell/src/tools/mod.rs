@@ -41,7 +41,7 @@ mod timeout;
 mod urlmap;
 
 use std::{
-	collections::{HashSet, VecDeque},
+	collections::{HashMap, HashSet, VecDeque},
 	sync::Arc,
 	task::Waker,
 	time::Duration,
@@ -206,17 +206,28 @@ impl ToolConfig {
 
 type SpawnRecord = (u32, crate::proctree::Process);
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Measurement {
+	#[default]
+	Inherit,
+	Measured,
+	/// A foreground timeout must signal the program itself, not its group.
+	Direct,
+}
+
 #[derive(Default)]
 struct SpawnState {
 	spawned:       Vec<SpawnRecord>,
 	external:      HashSet<u32>,
 	next_sweep_at: usize,
+	measurement:   HashMap<u32, Measurement>,
 }
 
-/// External identities spawned in labeled subshell trees.
+/// External identities and measurement policy for labeled subshell trees.
 ///
 /// Pin each live identity at spawn, before a PID can be recycled. Keep the
 /// labels' external-spawn history separately so exited handles can be released.
+/// Clones share the log.
 #[derive(Clone, Default)]
 pub struct SpawnLog(Arc<Mutex<SpawnState>>);
 
@@ -253,6 +264,37 @@ impl SpawnLog {
 		}
 	}
 
+	/// Whether externals of `label` run for `time`, which reports
+	/// their resource usage
+	/// ([`NativeSpawner::spawn_measured`](crate::sys::NativeSpawner::spawn_measured)).
+	pub fn measured(&self, label: u32) -> bool {
+		label != 0 && self.0.lock().measurement.get(&label) == Some(&Measurement::Measured)
+	}
+
+	fn inherit_measurement(&self, parent: u32, label: u32) {
+		let mut state = self.0.lock();
+		if let Some(&measurement) = state.measurement.get(&parent) {
+			state.measurement.insert(label, measurement);
+		}
+	}
+
+	fn set_measurement(&self, label: u32, measurement: Measurement) {
+		match measurement {
+			Measurement::Inherit => {},
+			Measurement::Measured => {
+				self
+					.0
+					.lock()
+					.measurement
+					.entry(label)
+					.or_insert(measurement);
+			},
+			Measurement::Direct => {
+				self.0.lock().measurement.insert(label, measurement);
+			},
+		}
+	}
+
 	/// Pinned, still-live external members of the labeled trees.
 	fn live(&self, labels: &[u32]) -> Vec<crate::proctree::Process> {
 		self
@@ -285,6 +327,7 @@ impl SpawnLog {
 		state.spawned.retain(|(label, _)| !labels.contains(label));
 		for label in labels {
 			state.external.remove(label);
+			state.measurement.remove(label);
 		}
 		state.next_sweep_at = state
 			.spawned
@@ -300,6 +343,8 @@ impl SpawnLog {
 struct Labels {
 	last:    u32,
 	parents: Vec<(u32, u32)>,
+	/// Where measurement policies are kept for inheritance and cleanup.
+	log:     SpawnLog,
 }
 
 impl Labels {
@@ -308,6 +353,7 @@ impl Labels {
 		self.last = self.last.wrapping_add(1).max(1);
 		if parent != 0 {
 			self.parents.push((self.last, parent));
+			self.log.inherit_measurement(parent, self.last);
 		}
 		self.last
 	}
@@ -342,6 +388,7 @@ impl Labels {
 
 	fn release(&mut self, group: &[u32]) {
 		self.parents.retain(|(child, _)| !group.contains(child));
+		self.log.forget(group);
 	}
 }
 
@@ -448,9 +495,10 @@ impl Tool {
 /// A tool's subshell: its run and label, and its status once it ended.
 #[derive(Default)]
 struct Child {
-	run:    Option<RunId>,
-	label:  u32,
-	status: Option<i32>,
+	run:         Option<RunId>,
+	label:       u32,
+	status:      Option<i32>,
+	measurement: Measurement,
 }
 
 impl Child {
@@ -467,6 +515,7 @@ impl Child {
 		redirect: &str,
 	) {
 		self.label = turn.labels.fresh(api.lineage().label);
+		turn.log.set_measurement(self.label, self.measurement);
 		let mut script = Script::command(format!("\"$@\"{redirect}").into_bytes());
 		script.args = Some(argv);
 		// The command's environment, per-command assignments included.
@@ -549,7 +598,7 @@ impl ToolCalls {
 		Self {
 			active: Vec::new(),
 			orphans: Vec::new(),
-			labels: Labels::default(),
+			labels: Labels { log: log.clone(), ..Labels::default() },
 			log,
 			waker,
 			config,
@@ -653,7 +702,6 @@ impl ToolCalls {
 					.is_descendant(tool.child().label, parent.child().label)
 			}) && (live || self.log.has_live(&group));
 			if !retained {
-				self.log.forget(&group);
 				self.labels.release(&group);
 			}
 			if let Some(outcome) = answer {
@@ -759,12 +807,25 @@ mod tests {
 	fn labels_group_their_nested_trees() {
 		let mut labels = Labels::default();
 		let outer = labels.fresh(0);
+		labels.log.set_measurement(outer, Measurement::Measured);
 		let inner = labels.fresh(outer);
 		let innermost = labels.fresh(inner);
 		let other = labels.fresh(0);
 		assert_eq!(labels.group(outer), [outer, inner, innermost]);
 		assert_eq!(labels.group(other), [other]);
+		assert!(labels.log.measured(inner));
+		assert!(labels.log.measured(innermost));
+		assert!(!labels.log.measured(other));
+		let foreground = labels.fresh(outer);
+		labels.log.set_measurement(foreground, Measurement::Direct);
+		let timed = labels.fresh(foreground);
+		labels.log.set_measurement(timed, Measurement::Measured);
+		assert!(!labels.log.measured(foreground));
+		assert!(!labels.log.measured(timed));
+		labels.release(&labels.group(foreground));
 		labels.release(&labels.group(inner));
+		assert!(!labels.log.measured(innermost));
+		assert!(labels.log.measured(outer));
 		assert_eq!(labels.group(outer), [outer]);
 	}
 
