@@ -1,6 +1,7 @@
+import { errorMessage } from "@oh-my-pi/pi-utils";
 import { MAX_CRAWL_WAIT_SECONDS, runCrawl, type CrawlOptions } from "../tools/browser/crawl";
 import { parseCommandArgs } from "../utils/command-args";
-import { commandConsumed, errorMessage, usage } from "./helpers/parse";
+import { commandConsumed, usage } from "./helpers/parse";
 import type { ParsedSlashCommand, SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 const CRAWL_USAGE =

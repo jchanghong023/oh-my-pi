@@ -24,6 +24,7 @@ import {
 	getProjectDir,
 	getTestTempDir,
 	localDay,
+	relativePathWithinNormalizedRoot,
 	relativePathWithinRoot,
 	setProfile,
 	setProjectDir,
@@ -114,6 +115,16 @@ describe("project directory state", () => {
 		} finally {
 			stat.mockRestore();
 		}
+	});
+
+	it("treats a child whose name starts with two dots as inside, and a parent or sibling as outside", () => {
+		const root = path.resolve("containment-root");
+		expect(relativePathWithinNormalizedRoot(root, path.join(root, "..hidden", "file"))).toBe(
+			path.join("..hidden", "file"),
+		);
+		expect(relativePathWithinNormalizedRoot(root, root)).toBe("");
+		expect(relativePathWithinNormalizedRoot(root, path.dirname(root))).toBeNull();
+		expect(relativePathWithinNormalizedRoot(root, path.join(root, "..", "sibling"))).toBeNull();
 	});
 
 	it("normalizes each containment operand only once", () => {

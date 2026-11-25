@@ -275,7 +275,7 @@ Profiles live in the root `Cargo.toml`; `.cargo/config.toml` carries the setting
 | ----------- | ------------------------------------------------------------------------------------ |
 | `dev`       | Default. Line tables for our crates, no debuginfo for deps, deps at `opt-level = 2`. |
 | `release`   | Shipping build: fat LTO, 1 codegen unit, stripped.                                   |
-| `local`     | Fast local release iteration: thin LTO, 16 codegen units, incremental.               |
+| `local`     | Fast local release iteration: no LTO, 16 codegen units, incremental.                 |
 | `profiling` | `release` codegen with symbols kept, for `perf`/`samply`/Instruments.                |
 | `ci`        | Thin LTO, no debuginfo, stripped.                                                    |
 

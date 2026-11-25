@@ -34,7 +34,13 @@ function present(
 				renderContext: { settledBashJobs },
 			};
 			const view = waitPresenter.result!(result, state, {});
-			const node = toolNode("wait", { ...view, term: { ...view?.term, expanded } }, bodyNodes(view?.body), "done", state);
+			const node = toolNode(
+				"wait",
+				{ ...view, term: { ...view?.term, expanded } },
+				bodyNodes(view?.body),
+				"done",
+				state,
+			);
 			const env = staticEnvironment(PLAIN_THEME);
 			return {
 				terminal: Bun.stripANSI(paintNode(env, node, 160).rows.join("\n")),

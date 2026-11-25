@@ -30,7 +30,13 @@ import {
 	validateAgentSkillFrontmatter,
 } from "./agent-plugin-format";
 import { resolveContainedPath } from "./contained-path";
-import { type ClaudePluginRoot, compareSkillOrder, createSourceMeta, listClaudePluginRoots } from "./helpers";
+import {
+	type ClaudePluginRoot,
+	compareSkillOrder,
+	createSourceMeta,
+	listClaudePluginRoots,
+	mergeLoadResults,
+} from "./helpers";
 import { listOmpExtensionRoots } from "./omp-extension-roots";
 
 const PROVIDER_ID = "agent-plugins";
@@ -241,10 +247,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 			};
 		}),
 	);
-	return {
-		items: results.flatMap(result => result.items),
-		warnings: results.flatMap(result => result.warnings ?? []),
-	};
+	return mergeLoadResults(results);
 }
 
 // =============================================================================
@@ -340,10 +343,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			};
 		}),
 	);
-	return {
-		items: results.flatMap(result => result.items),
-		warnings: results.flatMap(result => result.warnings ?? []),
-	};
+	return mergeLoadResults(results);
 }
 
 // =============================================================================

@@ -1,3 +1,4 @@
+import { errorMessage } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "../cli/args";
 import { InternalUrlRouter } from "../internal-urls/router";
 import { compactImageMarkers, formatVisionMarker } from "../modes/view-model/prompt/composer-attachments";
@@ -6,7 +7,6 @@ import { startSketchServer, type SketchServer } from "../sketch/server";
 import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPath } from "../utils/open";
 import { restoreDetachedDraft } from "./helpers/draft";
-import { errorMessage } from "./helpers/parse";
 import type { ParsedSlashCommand, SlashCommandSpec, TuiSlashCommandRuntime } from "./types";
 
 interface SketchSessionState {

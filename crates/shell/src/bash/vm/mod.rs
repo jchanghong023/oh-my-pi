@@ -2262,7 +2262,7 @@ impl Shell {
 		if children.is_empty() && extra.is_empty() {
 			return;
 		}
-		let mut failed = None;
+		let mut wave = None;
 		'first: for (i, p) in self.procs.iter_mut().enumerate() {
 			if !included(i, p.lineage.detached) {
 				continue;
@@ -2271,12 +2271,12 @@ impl Shell {
 				if let Some(sc) = frame.scratch.as_mut()
 					&& let Live::Ext(ext) = &mut sc.live
 				{
-					failed = ext.signal_wave(sig, &children, extra, groups);
+					wave = ext.signal_wave(sig, &children, extra, groups);
 					break 'first;
 				}
 			}
 		}
-		if failed.is_none() && !extra.is_empty() {
+		if wave.is_none() && !extra.is_empty() {
 			let mut targets = crate::proctree::TerminationTargets::new();
 			for process in extra {
 				if !children
@@ -2304,21 +2304,17 @@ impl Shell {
 				if let Some(sc) = frame.scratch.as_mut()
 					&& let Live::Ext(ext) = &mut sc.live
 				{
-					match &failed {
-						Some(failed)
-							if i32::try_from(ext.pid()).is_ok_and(|pid| failed.contains(&pid)) =>
-						{
+					if let Some(wave) = &wave {
+						ext.record_wave_signal(sig, wave);
+						if i32::try_from(ext.pid()).is_ok_and(|pid| wave.failed.contains(&pid)) {
 							// This handle keeps the child's PID unreaped. Retry only
-							// this PID so no other wave member is signaled twice.
+							// this PID so no other wave member is signalled twice.
 							let _ = ext.signal_single(sig);
-						},
-						Some(_) => ext.record_wave_signal(sig),
-						None if groups => {
-							let _ = ext.signal(sig);
-						},
-						None => {
-							let _ = ext.signal_single(sig);
-						},
+						}
+					} else if groups {
+						let _ = ext.signal(sig);
+					} else {
+						let _ = ext.signal_single(sig);
 					}
 					if resume {
 						let _ = ext.cont();

@@ -108,6 +108,7 @@ import {
 	isBunTestRuntime,
 	isInteractiveHost,
 	isRecord,
+	Laps,
 	logger,
 	postmortem,
 	prompt,
@@ -600,6 +601,7 @@ const TITLE_DRIFT_JUDGE_TIMEOUT_MS = 15_000;
 import { StallGuard, stalledWaiters } from "./stalled-waiters";
 import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-guards";
 import { AutoParallelCoordinator } from "./auto-parallel";
+import { LeftoverProcessTracker } from "./leftover-processes";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE, TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
@@ -1312,6 +1314,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
 	readonly #todo: TodoTracker;
+	readonly #leftoverProcesses: LeftoverProcessTracker;
 	readonly #autoParallel: AutoParallelCoordinator;
 	readonly #modelMentions: ModelMentionRegistry;
 	#workPoolYieldItems: readonly WorkPoolYieldItem[] = [];
@@ -2513,6 +2516,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			phasesChanged: () => this.#mirrorTodoPhases(),
 		};
 		this.#todo = new TodoTracker(todoHost);
+		this.#leftoverProcesses = new LeftoverProcessTracker({
+			agent: this.agent,
+			sessionManager: this.sessionManager,
+			settings: this.settings,
+			agentKind: () => this.#agentKind,
+			asyncJobManager: () => this.#asyncJobManager,
+			toolSession: () => this.#evalToolSession,
+		});
 		this.#autoParallel = new AutoParallelCoordinator({
 			settings: this.settings,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
@@ -5959,6 +5970,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					endLoop({ continuing: true });
 					return;
 				}
+				if (await this.#leftoverProcesses.remind()) {
+					this.#scheduleAgentContinue({ source: "leftover-processes", generation: this.#promptGeneration });
+					endLoop({ continuing: true });
+					return;
+				}
 				// Ahead of the wake-source pause and the stop hooks: agents blocked on this one stay
 				// blocked once nothing wakes it (a subagent's job that waits on it included).
 				if (this.#continueForStalledWaiters()) {
@@ -7817,6 +7833,13 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			logger.warn("Session dispose: Sharpshooter release failed", { error: String(error) });
 		}
 		const advisorRecorderClosed = this.#advisors.recorderClosed();
+		// The `&` processes the session's bash calls left behind, while its shells still hold
+		// them: `releaseShellSessions` below hands those shells off.
+		try {
+			await this.#leftoverProcesses.reap();
+		} catch (error) {
+			logger.warn("Session dispose: leftover process reaping failed", { error: String(error) });
+		}
 		releaseShellSessions(this.sessionManager.getSessionId());
 		const results = await Promise.allSettled([
 			this.#disposeOwnedAsyncJobs(),
@@ -10691,7 +10714,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		signal: AbortSignal,
 	): Promise<QueuedMessagePreparation> {
 		const generation = this.#promptGeneration;
+		const laps = new Laps();
 		await this.#prewalk.beginAutoTask(message);
+		laps.lap("beginTaskMs");
 		// Past the cap, the before-model-call gate refuses this task's first request and reports it; judging it, or
 		// moving it to an `escalate` planner, would only spend and switch for a request that is never sent.
 		const capped = this.#costGate.check() !== undefined;
@@ -10704,9 +10729,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					message,
 					() => !signal.aborted && this.#promptGeneration === generation,
 				);
+		laps.lap("prewalkRouteMs");
 		const preparation = await this.#prepareAgentStart(message, prompt, images, generation, signal, "queued");
+		laps.lap("agentStartMs");
 		const decision = await autoPrewalk?.decision;
+		laps.lap("prewalkJudgeMs");
 		const plan = await autoParallel;
+		laps.lap("autoParallelMs");
+		logger.debug("Queued task prepared", laps.record());
 		return {
 			commit: () => {
 				const additional = preparation.commit();
@@ -10749,7 +10779,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			(!this.#isDisposed || alreadyDisposing) &&
 			!signal?.aborted;
 		const cancelled = { baseToolCommandCatalogDelivered: false, commit: () => undefined };
+		const laps = new Laps();
 		if (this.hasPendingDeferredExtensions) await this.loadDeferredExtensions();
+		laps.lap("extensionsMs");
 		const pendingMCPDiscovery = this.#pendingMCPDiscovery;
 		if (pendingMCPDiscovery) {
 			const timedOut = new Error("MCP discovery still pending");
@@ -10762,13 +10794,17 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				logger.debug("Turn started before MCP discovery finished", { error: String(error) });
 			});
 		}
+		laps.lap("mcpMs");
 		for (let attempt = 0; attempt < AGENT_START_POLICY_MAX_ATTEMPTS; attempt++) {
 			await this.#memory.transition;
+			laps.lap("memoryMs");
 			if (!isCurrent()) return cancelled;
 			const sourceBase = this.#tools.baseSystemPrompt;
 			const basePreparation = await this.#tools.buildSystemPromptForAgentStart(prompt, isCurrent, signal);
+			laps.lap("systemPromptMs");
 			if (!isCurrent()) return cancelled;
 			const result = await this.#extensionRunner?.emitBeforeAgentStart(prompt, images, basePreparation.systemPrompt);
+			laps.lap("hooksMs");
 			if (!isCurrent()) return cancelled;
 			// Overrides are opaque replacements, not string patches. Re-run only policy preparation
 			// against the winning base; discard this attempt's returned context and staged memory.
@@ -10818,7 +10854,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				);
 				if (!isCurrent()) return cancelled;
 			}
+			laps.lap("messagesMs");
 			if (!overrideIsCurrent()) continue;
+			logger.debug("Agent start prepared", { origin, attempts: attempt + 1, ...laps.record() });
 			return {
 				baseToolCommandCatalogDelivered: result?.systemPrompt === undefined,
 				commit: () => {
@@ -12828,16 +12866,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.queuedMessageCount > 0 || this.agent.peekUndeliveredQueuedMessages().some(isDisplayableQueuedMessage);
 	}
 
-	/** Chip texts for the queue display. Steering live steering took for the streaming response
-	 *  stays listed until the transcript records it, when the model actually switches to it. */
+	/** Chip texts for the queue display. Input the agent already took stays listed, first in its
+	 *  queue, until the transcript records it: steering live steering took for the streaming
+	 *  response (the model switches to it then), and messages on their way into the next request
+	 *  (recorded once it opens). `liveSteered` counts the steering among them. */
 	getQueuedMessages(): { steering: readonly string[]; followUp: readonly string[]; liveSteered: number } {
-		const liveSteered = this.agent.peekLiveSteeredMessages().filter(isUserAuthoredQueuedMessage).length;
+		const sent = [...this.agent.peekLiveSteeredMessages(), ...this.agent.peekDeliveringMessages("steering")].filter(
+			isUserAuthoredQueuedMessage,
+		);
 		return {
-			steering: [...this.agent.peekLiveSteeredMessages(), ...this.agent.peekSteeringQueue()]
+			steering: [...sent, ...this.agent.peekSteeringQueue().filter(isUserAuthoredQueuedMessage)].map(queueChipText),
+			followUp: [...this.agent.peekDeliveringMessages("followUp"), ...this.agent.peekFollowUpQueue()]
 				.filter(isUserAuthoredQueuedMessage)
 				.map(queueChipText),
-			followUp: this.agent.peekFollowUpQueue().filter(isUserAuthoredQueuedMessage).map(queueChipText),
-			liveSteered,
+			liveSteered: sent.length,
 		};
 	}
 

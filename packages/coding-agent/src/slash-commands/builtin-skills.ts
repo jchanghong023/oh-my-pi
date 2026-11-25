@@ -1,3 +1,4 @@
+import { errorMessage } from "@oh-my-pi/pi-utils";
 import { DEFAULT_SKILLS_URL } from "@oh-my-pi/pi-wire/skillshare";
 import { cfgSkillsRegistryUrl } from "../extensibility/settings";
 import type { InteractiveModeContext } from "../modes/types";
@@ -14,7 +15,7 @@ import {
 	updateSkillPackages,
 } from "../skillshare/installer";
 import { clearSubmittedText } from "./helpers/draft";
-import { errorMessage, parseSubcommand } from "./helpers/parse";
+import { parseSubcommand } from "./helpers/parse";
 import type { SlashCommandSpec } from "./types";
 
 const USAGE = [

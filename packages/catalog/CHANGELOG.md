@@ -17,9 +17,18 @@
 - Offline model commands retain the cached Codex client version without contacting the npm registry.
 - Restored Alibaba Token Plan login and chat models, including China (Beijing) and international (Singapore) regions.
 
+### Added
+
+- Added `xai-oauth/grok-voice-transcribe-2.0` (SuperGrok speech-to-text on `api.x.ai/v1/stt`, through the new `xai-stt` runner API) ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
+
+### Changed
+
+- Seeded models now survive their provider's model exclusions ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
+## [19.2.1] - 2026-11-25
+
 ### Fixed
 
-- A Codex service tier offered by only some logged-in accounts (such as Ultrafast) is no longer hidden when the first account's plan lacks it.
+- Fixed Codex service tiers, such as Ultrafast, being hidden for accounts that support them when the first logged-in account has a plan that does not.
 
 ## [19.2.0] - 2026-11-25
 

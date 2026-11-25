@@ -174,6 +174,7 @@ import {
 import { cfgBrowserEnabled } from "./tools/browser/settings";
 import { syncRelayInstallsOnStartup } from "./tools/browser/relay/installs";
 import { claimTerminal } from "./tools/browser/terminal-owner";
+import { cfgBashReapBackground } from "./exec/settings";
 import {
 	cfgAutocompleteMaxVisible,
 	cfgAutoResume,
@@ -2227,6 +2228,8 @@ export async function runRootCommand(
 		if (parsedArgs.offline) cfgOffline.override(settingsInstance, true);
 		if (parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") {
 			applyProtocolDefaults("rpc", settingsInstance);
+			// RPC hosts own their processes: no leftover reminder, no session-end reaping.
+			cfgBashReapBackground.override(settingsInstance, false);
 		} else if (parsedArgs.mode === "acp") {
 			applyProtocolDefaults("acp", settingsInstance);
 		}

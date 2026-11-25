@@ -19,6 +19,7 @@ import {
 	isCompiledBinary,
 	isEnoent,
 	logger,
+	pathIsWithinLexical,
 	VERSION,
 	WhichCachePolicy,
 } from "@oh-my-pi/pi-utils";
@@ -1034,8 +1035,7 @@ function bunShimMarkerPath(launcherPath: string): string {
 function isPathInDirectoryLexical(filePath: string, directoryPath: string): boolean {
 	const normalizedPath = normalizePathForComparison(path.resolve(filePath));
 	const normalizedDirectory = normalizePathForComparison(path.resolve(directoryPath));
-	const relativePath = path.relative(normalizedDirectory, normalizedPath);
-	return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+	return pathIsWithinLexical(normalizedDirectory, normalizedPath);
 }
 
 function isPathInDirectory(filePath: string, directoryPath: string): boolean {

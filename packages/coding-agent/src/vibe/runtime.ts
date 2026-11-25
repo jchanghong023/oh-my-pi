@@ -761,8 +761,11 @@ export class VibeSessionRegistry {
 			if (this.#records.has(key)) continue;
 			const existing = AgentRegistry.global().get(spawn.id);
 			const existingMatchesWorker =
-				existing?.kind === "sub" && existing.parentId === scope.ownerId && existing.sessionFile === childSessionFile;
-			const existingIsResumable = existingMatchesWorker && (existing.status === "idle" || existing.status === "parked");
+				existing?.kind === "sub" &&
+				existing.parentId === scope.ownerId &&
+				existing.sessionFile === childSessionFile;
+			const existingIsResumable =
+				existingMatchesWorker && (existing.status === "idle" || existing.status === "parked");
 			const blockedByCollision = Boolean(existing && !existingIsResumable);
 			const hasWarmSession =
 				existing &&
@@ -770,7 +773,8 @@ export class VibeSessionRegistry {
 				!existing.history?.executionEnded &&
 				(existing.session !== null || AgentLifecycleManager.global().has(spawn.id, existing));
 			const readOnlyHistory =
-				!hasWarmSession && (!child.canColdRevive || (existingMatchesWorker && existing.history?.executionEnded === true));
+				!hasWarmSession &&
+				(!child.canColdRevive || (existingMatchesWorker && existing.history?.executionEnded === true));
 			const { agent, modelOverride, modelRole } = this.#resolveWorker(session, spawn.cli);
 			if (!existing) {
 				AgentRegistry.global().register({

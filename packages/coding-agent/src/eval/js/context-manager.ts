@@ -1155,11 +1155,13 @@ function spawnJsProcess(sessionId?: string): JsEvalWorkerHandle {
 		terminating ??= (async () => {
 			await base.terminate();
 			let writerStopped = false;
-			const drainOnExit = spawned.proc.exited.then(() => drainOutput()).finally(() => {
-				writerStopped = true;
-				unsubscribe();
-				cleanup();
-			});
+			const drainOnExit = spawned.proc.exited
+				.then(() => drainOutput())
+				.finally(() => {
+					writerStopped = true;
+					unsubscribe();
+					cleanup();
+				});
 			try {
 				await raceWithTimeout(drainOnExit, WORKER_CLOSE_TIMEOUT_MS, "Timed out draining JS eval process output");
 			} catch (error) {

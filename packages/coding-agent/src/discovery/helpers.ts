@@ -13,6 +13,7 @@ import {
 	normalizePathForComparison,
 	parseFrontmatter,
 	pathIsWithin,
+	relativePathWithinNormalizedRoot,
 	tryParseJson,
 } from "@oh-my-pi/pi-utils";
 import { boundSettings, isUserSourceEnabled } from "../capability";
@@ -594,6 +595,14 @@ export function expandEnvVarsDeep<T>(obj: T, extraEnv?: Record<string, string>):
 	return obj;
 }
 
+/** Concatenate per-root load results in order; warnings are always an array. */
+export function mergeLoadResults<T>(results: readonly LoadResult<T>[]): LoadResult<T> {
+	return {
+		items: results.flatMap(r => r.items),
+		warnings: results.flatMap(r => r.warnings ?? []),
+	};
+}
+
 /**
  * Load files from a directory matching extensions.
  * Uses native glob for fast filesystem scanning with gitignore support.
@@ -709,11 +718,12 @@ function samePath(left: string, right: string): boolean {
 function isWithin(parent: string, child: string): boolean {
 	const normalizedParent = path.resolve(parent);
 	const normalizedChild = path.resolve(child);
-	const relative = path.relative(
-		process.platform === "win32" ? normalizedParent.toLowerCase() : normalizedParent,
-		process.platform === "win32" ? normalizedChild.toLowerCase() : normalizedChild,
+	return (
+		relativePathWithinNormalizedRoot(
+			process.platform === "win32" ? normalizedParent.toLowerCase() : normalizedParent,
+			process.platform === "win32" ? normalizedChild.toLowerCase() : normalizedChild,
+		) !== null
 	);
-	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
 /**

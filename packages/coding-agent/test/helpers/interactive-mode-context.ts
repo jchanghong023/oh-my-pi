@@ -66,6 +66,7 @@ import { getAssistantMessageLinkTargets } from "../../src/session/transcript/lin
 import type { BlockOptions, InputInterceptor, OverlayOptions } from "../../src/ui/shell";
 import { ViewList } from "../../src/ui/shell/views";
 import type { StatusFacts, StatusLineSettings } from "@oh-my-pi/pi-coding-agent/ui/status/facts";
+import type { FigureCell } from "../../src/ui/transcript/figures/svg";
 import { TokenRateMeter } from "@oh-my-pi/pi-coding-agent/utils/token-rate";
 import { restoreWorkspaceModeState } from "@oh-my-pi/pi-coding-agent/workspace-mode";
 import { type JSXNode, type KeyEvent, type Signal, signal } from "@oh-my-pi/pi-tui";
@@ -572,6 +573,9 @@ export function createInteractiveModeContext(
 				proseOnlyThinking: display.proseOnlyThinking,
 				expandThinkingBlocks: display.expandThinkingBlocks,
 				showImages: signal(cfgTerminalShowImages.get(contextSettings)),
+				renderSvg: signal(false),
+				renderEmbeds: signal(false),
+				figureCell: signal<FigureCell | undefined>(undefined),
 				tableCharts: signal(true),
 				shellVisualization: signal(true),
 				mcpMarkdown: signal(false),

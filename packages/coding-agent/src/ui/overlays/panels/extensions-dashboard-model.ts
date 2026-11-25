@@ -215,7 +215,11 @@ export class ExtensionDashboardModel {
 				: this.#disconnectMcp(providerId, userSourceOnly),
 		);
 		this.#providerMcpChanges = change.catch(error => {
-			logger.warn("Failed to apply provider switch to live MCP servers", { providerId, enabled, error: String(error) });
+			logger.warn("Failed to apply provider switch to live MCP servers", {
+				providerId,
+				enabled,
+				error: String(error),
+			});
 		});
 		void this.#providerMcpChanges.then(() => this.#reload());
 	}

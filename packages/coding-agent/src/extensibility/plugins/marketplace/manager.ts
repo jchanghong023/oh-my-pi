@@ -293,7 +293,8 @@ export class MarketplaceManager {
 			await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updatedReg);
 		} catch (err) {
 			// Only remove an unpublished checkout if this update created its destination.
-			if (createdDestination) await fs.rm(path.dirname(catalogPath), { recursive: true, force: true }).catch(() => {});
+			if (createdDestination)
+				await fs.rm(path.dirname(catalogPath), { recursive: true, force: true }).catch(() => {});
 			throw err;
 		}
 

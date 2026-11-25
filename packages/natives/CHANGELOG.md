@@ -2,11 +2,21 @@
 
 ## [Unreleased]
 
+## [19.2.1] - 2026-11-25
+
+### Added
+
+- Added `Shell.heldProcesses()` to inspect all live external processes held by a shell session, including background and `nohup` jobs, with their `nohup` status.
+- Added process utilities for finding processes by inherited environment variables, inspecting process details and output files, and terminating process families while preserving `nohup` processes when requested.
+- Added an in-process Perl 5.34 shell builtin with core language and regex support, common command-line options and modules, and shell-integrated file and command I/O, including support for `scheme://` paths and other shell builtins.
+
 ### Fixed
 
 - Shell timeouts respect the launched process scope and preserve the platform's KILL and cancellation status rules.
 - Strict sorted glob reports inaccessible subtrees.
 - Fixed timed-out or aborted `glob`, `grep`, `fuzzyFind` and `astGrep` calls continuing to walk the tree in the background when several ran at once, pinning CPUs and stalling every later filesystem call in the process.
+- Fixed timed-out, cancelled, or terminated shell and PTY commands leaving descendant processes running, including descendants in separate process groups or sessions.
+- Fixed cancelled filesystem searches continuing in the background and consuming CPU or blocking subsequent filesystem operations when multiple searches ran concurrently.
 
 ## [19.2.0] - 2026-11-25
 

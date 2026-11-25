@@ -13,6 +13,7 @@ Long-lived services:
 - ready needs log regex or port (both if given); host defaults localhost, ready.timeout 30s.
 - If logs fail after start, read `proc://<name>` before acting; NEVER blindly retry.
 - `notify` (regex) sends each matching output line as a follow-up while the service runs.
+- Shell command `o2ctl services add <name> <pid|%job>` keeps an already-running process (`cmd &`, `nohup cmd &`) as a service, without restarting it; `o2ctl services ls`; `o2ctl services stop <name>`.
 {{/if}}
 {{#if autoBackgroundEnabled}}
 Non-`pty` calls still running after {{autoBackgroundSeconds}}s (or 1s before `timeout`, if sooner) usually move to background job `bg_N` and keep running to `timeout`.

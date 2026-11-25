@@ -292,6 +292,7 @@ import type {
 } from "./types";
 import type { TodoItem, TodoPhase } from "../tools/details/todo";
 import type { ConversationPosition } from "./utils/conversation-position";
+import { DEFAULT_FIGURE_CELL, type FigureCell } from "../ui/transcript/figures/svg";
 import { setImageBlobWriter } from "../ui/transcript/image-links";
 import { followInlineImageLimits } from "../ui/transcript/messages/image";
 import { imageLinksForMessage, UiHelpers } from "./utils/ui-helpers";
@@ -708,6 +709,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		proseOnlyThinking: signal(true),
 		expandThinkingBlocks: signal(false),
 		showImages: signal(true),
+		renderSvg: signal(true),
+		renderEmbeds: signal(true),
+		figureCell: signal<FigureCell | undefined>(undefined),
 		tableCharts: () => this.tableChartsVisible,
 		shellVisualization: signal(true),
 		mcpMarkdown: signal(false),
@@ -1849,6 +1853,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 		const host = this.shell.host;
 		if (!host) return;
+		const updateFigureCell = (): void => {
+			const caps = host.driver.capabilities;
+			const next = caps.images ? (caps.cell ?? DEFAULT_FIGURE_CELL) : undefined;
+			const current = this.#display.figureCell.peek();
+			if (current?.w !== next?.w || current?.h !== next?.h) this.#display.figureCell.set(next);
+		};
+		updateFigureCell();
 		// A confirmed Glyph Protocol handshake means omp's own icons render without a Nerd Font, so
 		// the unconfigured `unicode` preset is upgraded to `nerd` for this session. The setting is
 		// left alone (it travels to terminals where the upgrade would show tofu); an explicit
@@ -1865,6 +1876,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		upgradeGlyphs();
 		this.#eventBusUnsubscribers.push(
 			host.driver.onCapabilities(upgradeGlyphs),
+			host.driver.onCapabilities(updateFigureCell),
 			followTerminal(host.driver),
 			host.onFrame(frame => (this.#lastFrame = frame)),
 		);
@@ -2958,6 +2970,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				timeoutMs: cfgLoopConditionTimeoutMs.get(settings),
 				signal: controller.signal,
 				sessionId,
+				sessionFile: this.sessionManager.getSessionFile(),
 				isSessionCurrent: () => this.sessionManager.getSessionId() === sessionId,
 			});
 		} finally {
@@ -3715,6 +3728,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#syncTranscriptDisplaySettings(): void {
 		const display = this.#display;
 		display.showImages.set(cfgTerminalShowImages.get(this.settings));
+		display.renderSvg.set(cfgTuiRenderSvg.get(this.settings));
+		display.renderEmbeds.set(cfgTuiRenderEmbeds.get(this.settings));
 		display.shellVisualization.set(cfgDisplayShellVisualization.get(this.settings));
 		display.mcpMarkdown.set(cfgMcpRenderMarkdownResults.get(this.settings));
 		display.readPreview.set(cfgReadToolResultPreview.get(this.settings));
@@ -3808,7 +3823,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			rebuildChat = true;
 		}
-		if (any("tui.colorfulMarkdown", "tui.renderMermaid")) {
+		if (any("tui.colorfulMarkdown", "tui.renderMermaid", "tui.renderSvg", "tui.renderEmbeds")) {
 			this.#syncTranscriptDisplaySettings();
 			resetDisplay = true;
 		}
@@ -7518,10 +7533,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	// Extension UI integration
 	setToolUIContext(uiContext: ExtensionUIContext, hasUI: boolean): void {
 		this.#toolUiContextSetter(uiContext, hasUI);
-	}
-
-	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void {
-		this.#extensionUiController.initializeHookRunner(uiContext, hasUI);
 	}
 
 	// UI helpers

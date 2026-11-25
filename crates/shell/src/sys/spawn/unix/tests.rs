@@ -137,13 +137,12 @@ fn cancellation_wave_signals_shared_group_once() {
 		.unwrap();
 	until("both signal handlers", || first_ready.exists() && second_ready.exists());
 	let children = [(first.pid(), first.pgid()), (second.pid(), second.pgid())];
-	assert!(
-		first
-			.signal_wave(Signal::Term, &children, &[], true)
-			.is_some_and(|failed| failed.is_empty())
-	);
-	first.record_wave_signal(Signal::Term);
-	second.record_wave_signal(Signal::Term);
+	let wave = first
+		.signal_wave(Signal::Term, &children, &[], true)
+		.expect("batch supported");
+	assert!(wave.failed.is_empty());
+	first.record_wave_signal(Signal::Term, &wave);
+	second.record_wave_signal(Signal::Term, &wave);
 	assert_eq!(wait(&mut first), ExitStatus::Exited(0));
 	assert_eq!(wait(&mut second), ExitStatus::Exited(0));
 	assert_eq!(std::fs::read_to_string(log).unwrap().lines().count(), 2);
@@ -159,12 +158,11 @@ fn foreground_wave_does_not_signal_other_group_members() {
 		.spawn(spec(&args, &env, PgroupSpec::Join(first.pid())))
 		.unwrap();
 	let pid = first.pid();
-	assert!(
-		first
-			.signal_wave(Signal::Term, &[(pid, None)], &[], false)
-			.is_some_and(|failed| failed.is_empty())
-	);
-	first.record_wave_signal(Signal::Term);
+	let wave = first
+		.signal_wave(Signal::Term, &[(pid, None)], &[], false)
+		.expect("batch supported");
+	assert!(wave.failed.is_empty());
+	first.record_wave_signal(Signal::Term, &wave);
 	assert_eq!(wait(&mut first), ExitStatus::Signaled(Signal::Term));
 	assert!(live(second.pid() as i32), "foreground signal reached another group member");
 	second.signal(Signal::Kill).unwrap();
@@ -852,6 +850,69 @@ fn abandoning_a_paused_job_still_terminates_it() {
 	until("stopped", || proc::info(pid).is_some_and(|i| i.state == ProcState::Stopped));
 	drop(p);
 	until("terminated", || proc::info(pid).is_none_or(|i| i.state == ProcState::Zombie));
+}
+
+/// KILLs (and continues) a stray process when a case ends, failed or not.
+struct KillOnDrop(proc::ProcInfo);
+
+impl Drop for KillOnDrop {
+	fn drop(&mut self) {
+		let _ = proc::signal_pinned(&self.0, Signal::Kill);
+		let _ = proc::signal_pinned(&self.0, Signal::Cont);
+	}
+}
+
+/// A debugger's inferior (lldb's, which outlived a timed-out job stopped
+/// and orphaned): a grandchild that moved to a session of its own and
+/// stopped itself is outside the external's session, and the cancel's TERM
+/// kills its parent and leaves it to init before the KILL. The cancel
+/// (TERM, then the drop) must still kill it.
+///
+/// Needs `/usr/bin/perl` (macOS and Debian-family Linux ship it) for `setsid`.
+#[test]
+fn cancel_kills_a_stopped_grandchild_in_a_session_of_its_own() {
+	check_cancel_kills_orphan(false);
+}
+
+#[test]
+fn cancel_wave_kills_a_stopped_grandchild_in_a_session_of_its_own() {
+	check_cancel_kills_orphan(true);
+}
+
+fn check_cancel_kills_orphan(batched: bool) {
+	let env = EnvView::default();
+	let grace = Duration::from_millis(300);
+	let s = spawner(Sessions::Detach, grace);
+	// It ignores TERM and HUP and sleeps on once continued: only the KILL
+	// after the grace ends it, when its parent is long dead.
+	let a = sh("/usr/bin/perl -e '$SIG{HUP} = $SIG{TERM} = q(IGNORE); use POSIX (); \
+	            POSIX::setsid() > 0 or die; kill(q(STOP), $$); sleep 30' & wait");
+	let mut p = s.spawn(spec(&a, &env, NEW)).unwrap();
+	let pid = p.pid() as i32;
+	let inferior = KillOnDrop(child_of(pid));
+	let ipid = inferior.0.pid;
+	until("grandchild stopped in its own session", || {
+		proc::info(ipid).is_some_and(|i| i.state == ProcState::Stopped && i.sid == ipid)
+	});
+	let start = Instant::now();
+	if batched {
+		let peer_args = argv(&["/bin/sleep", "30"]);
+		let mut peer = s.spawn(spec(&peer_args, &env, NEW)).unwrap();
+		let children = [(peer.pid(), peer.pgid()), (p.pid(), p.pgid())];
+		let wave = peer
+			.signal_wave(Signal::Term, &children, &[], true)
+			.expect("batch supported");
+		assert!(wave.failed.is_empty());
+		peer.record_wave_signal(Signal::Term, &wave);
+		p.record_wave_signal(Signal::Term, &wave);
+	} else {
+		p.signal(Signal::Term).unwrap();
+	}
+	drop(p);
+	until("grandchild killed", || {
+		proc::info(ipid).is_none_or(|i| i.start != inferior.0.start || i.state == ProcState::Zombie)
+	});
+	assert!(start.elapsed() >= grace, "it ignores TERM: only the KILL ends it");
 }
 
 #[test]

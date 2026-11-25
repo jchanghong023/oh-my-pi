@@ -1104,11 +1104,16 @@ describe("ModelRegistry runtime provider registration", () => {
 			},
 		};
 		registry.registerProvider("gated-provider", config, "ext://oauth");
-		const deepseekNames = () => registry.getProviderModels("deepseek").map(model => model.name);
+		const mirror = new ModelRegistry(authStorage, modelsJsonPath, { owner: registry });
+		const { snapshot, unsubscribe } = registry.subscribeMirror(batch => mirror.applyMirrorBatch(batch));
+		mirror.applyMirrorBatch(snapshot);
+		const deepseekNames = (catalog: ModelRegistry) => catalog.getProviderModels("deepseek").map(model => model.name);
 
 		// Without credentials the hook cannot run, so the lookup stays provider-scoped and untouched.
-		const originalNames = deepseekNames();
+		const originalNames = deepseekNames(registry);
+		expect(originalNames.length).toBeGreaterThan(0);
 		expect(originalNames.some(name => name.endsWith(" (gated)"))).toBe(false);
+		expect(deepseekNames(mirror)).toEqual(originalNames);
 		authStorage.keys.setRuntime("deepseek", "test-deepseek-key");
 		const scoped = registry.getAvailableForProviders(new Set(["deepseek"]));
 		expect(scoped.map(model => model.name)).toEqual(originalNames);
@@ -1122,7 +1127,10 @@ describe("ModelRegistry runtime provider registration", () => {
 		});
 		// The login flow refreshes only the authenticated provider; deepseek's lookup must still see the hook.
 		await registry.refreshProvider("gated-provider", "offline");
-		expect(deepseekNames()).toEqual(originalNames.map(name => `${name} (gated)`));
+		const expected = originalNames.map(name => `${name} (gated)`);
+		expect(deepseekNames(registry)).toEqual(expected);
+		expect(deepseekNames(mirror)).toEqual(expected);
+		unsubscribe();
 	});
 
 	test("oauth.modifyModels output is materialized through buildModel", async () => {
@@ -1437,7 +1445,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("provider-scoped lookups do not intern other providers' transient projections", async () => {
-		const anthropicId = registry.getAll().find(model => model.provider === "ascend")?.id;
+		const ascendId = registry.getAll().find(model => model.provider === "ascend")?.id;
 		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
@@ -1458,7 +1466,11 @@ describe("ModelRegistry runtime provider registration", () => {
 					refreshToken: async credentials => credentials,
 					getApiKey: credentials => credentials.access,
 					modifyModels: models =>
-						models.map(model => (model.provider === "deepseek" ? { ...model, name: projectionName } : model)),
+						models.map(model =>
+							model.provider === "deepseek" || (model.provider === "ascend" && model.id === ascendId)
+								? { ...model, name: projectionName }
+								: model,
+						),
 				},
 			},
 			"ext://oauth",
@@ -1469,7 +1481,8 @@ describe("ModelRegistry runtime provider registration", () => {
 		await Bun.write(modelsJsonPath, "{}");
 		const refresh = registry.refresh("offline");
 		try {
-			expect(registry.find("ascend", anthropicId!)).toBeDefined();
+			projectionName = "ascend lookup";
+			expect(registry.find("ascend", ascendId!)?.name).toBe(projectionName);
 			projectionName = "after-other-provider-lookup";
 			expect(registry.find("deepseek", "runtime-model")?.name).toBe(projectionName);
 		} finally {

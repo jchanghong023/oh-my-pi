@@ -539,12 +539,12 @@ impl ExtProc for SignalsOnExit {
 		pids: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
-	) -> Option<std::collections::HashSet<i32>> {
+	) -> Option<crate::proctree::SignalWave> {
 		self.child.signal_wave(sig, pids, extra, groups)
 	}
 
-	fn record_wave_signal(&mut self, sig: crate::bash::Signal) {
-		self.child.record_wave_signal(sig);
+	fn record_wave_signal(&mut self, sig: crate::bash::Signal, wave: &crate::proctree::SignalWave) {
+		self.child.record_wave_signal(sig, wave);
 	}
 
 	fn signal(&mut self, sig: crate::bash::Signal) -> io::Result<()> {

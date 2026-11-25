@@ -242,12 +242,12 @@ impl ExtProc for CountedExt {
 		pids: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
-	) -> Option<std::collections::HashSet<i32>> {
+	) -> Option<crate::proctree::SignalWave> {
 		self.ext.signal_wave(sig, pids, extra, groups)
 	}
 
-	fn record_wave_signal(&mut self, sig: Signal) {
-		self.ext.record_wave_signal(sig);
+	fn record_wave_signal(&mut self, sig: Signal, wave: &crate::proctree::SignalWave) {
+		self.ext.record_wave_signal(sig, wave);
 	}
 
 	fn poll_event(&mut self, cx: &mut Context<'_>) -> Poll<crate::bash::ProcEvent> {

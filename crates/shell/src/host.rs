@@ -49,10 +49,11 @@ pub const TERM_GRACE: Duration = Duration::from_secs(1);
 /// The [`Session`](crate::session::Session) lists a run's live children
 /// through it (pi's `Shell::pids()`). Implementations must not block.
 pub trait SpawnObserver: Send + Sync {
-	/// `pid` was spawned.
-	fn spawned(&self, pid: u32);
-	/// `pid`'s exit was observed, or the engine abandoned it (the spawner
-	/// then terminates it in the background).
+	/// `pid` was spawned. `detached` indicates a detached (`nohup`) tree
+	/// ([`crate::bash::Lineage::detached`]), regardless of process placement.
+	fn spawned(&self, pid: u32, detached: bool);
+	/// `pid`'s exit was observed, or the engine abandoned it. The spawner
+	/// terminates abandoned processes in the background unless detached.
 	fn released(&self, pid: u32);
 }
 
@@ -437,7 +438,7 @@ impl Launcher {
 		Ok(match &self.observer {
 			Some(observer) => {
 				let pid = child.pid();
-				observer.spawned(pid);
+				observer.spawned(pid, lineage.detached);
 				Box::new(Observed { child, observer: Arc::clone(observer), released: false })
 			},
 			None => child,
@@ -1034,12 +1035,12 @@ impl ExtProc for Observed {
 		pids: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
-	) -> Option<std::collections::HashSet<i32>> {
+	) -> Option<crate::proctree::SignalWave> {
 		self.child.signal_wave(sig, pids, extra, groups)
 	}
 
-	fn record_wave_signal(&mut self, sig: Signal) {
-		self.child.record_wave_signal(sig);
+	fn record_wave_signal(&mut self, sig: Signal, wave: &crate::proctree::SignalWave) {
+		self.child.record_wave_signal(sig, wave);
 	}
 
 	fn stop(&mut self) -> io::Result<()> {
@@ -1130,6 +1131,7 @@ mod tests {
 			tag:       CmdTag { run: RunId(1), vpid: Vpid(1), seq: 1 },
 			vpid:      Vpid(1),
 			umask:     0o022,
+			jobs:      &[],
 		};
 		let error = match host.start(&command, inv) {
 			Ok(_) => panic!("string-only builtin accepted a non-UTF-8 argument"),

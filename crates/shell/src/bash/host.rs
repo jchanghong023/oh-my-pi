@@ -356,6 +356,10 @@ pub struct Invocation<'a> {
 	pub vpid:      Vpid,
 	/// File-creation mask: the shell's `umask`.
 	pub umask:     u32,
+	/// Arguments that are job specs (`%1`, `%%`, `%name`) naming a job of the
+	/// invoking shell that runs a program, each with that program's OS pid:
+	/// what `jobs -x` would put in their place. Empty when none is.
+	pub jobs:      &'a [(BString, u32)],
 }
 
 /// A native command running on host threads or inline.
@@ -736,19 +740,19 @@ pub trait ExtProc: Send {
 	/// contains each selected handle's PID and, for group waves only, its
 	/// launch PGID. Without a PGID the handle is a process-only target.
 	/// `extra` contains pinned processes no longer owned by the interpreter.
-	/// Returns the PIDs whose delivery failed, or `None` without sending any
-	/// signals when batching is unavailable.
+	/// Returns the wave's result, including any PIDs whose delivery failed,
+	/// or `None` without sending signals when batching is unavailable.
 	fn signal_wave(
 		&mut self,
 		_sig: Signal,
 		_children: &[(u32, Option<u32>)],
 		_extra: &[crate::proctree::Process],
 		_groups: bool,
-	) -> Option<std::collections::HashSet<i32>> {
+	) -> Option<crate::proctree::SignalWave> {
 		None
 	}
-	/// Record a signal delivered by [`ExtProc::signal_wave`] for this process.
-	fn record_wave_signal(&mut self, _sig: Signal) {}
+	/// Record the result of [`ExtProc::signal_wave`] for this process.
+	fn record_wave_signal(&mut self, _sig: Signal, _wave: &crate::proctree::SignalWave) {}
 	/// Stop the process group (job pause).
 	fn stop(&mut self) -> io::Result<()>;
 	/// Continue after [`ExtProc::stop`].

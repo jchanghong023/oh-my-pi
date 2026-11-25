@@ -10,6 +10,12 @@
 - Removed the fork-only blocked todo state and blocker note from the TUI todo types.
 - Removed the fork-only `runInput()` `previewLines` option. Native command and code previews keep the upstream six-line limit.
 
+## [19.2.1] - 2026-11-25
+
+### Breaking Changes
+
+- Removed the public `oneLine` export from `@oh-my-pi/pi-tui/term/painters/picker`; use `flattenLine` from `@oh-my-pi/pi-tui/text/sanitize` instead.
+
 ### Added
 
 - Added handling of `features` terminal events to update UI without waiting for a new hello
@@ -2398,6 +2404,11 @@
 - Added native cmux notification delivery targeted to the current terminal surface.
 - Added `@oh-my-pi/pi-tui`, the terminal UI that replaces `@oh-my-pi/pi-tui`: one tree of Tern Surface Protocol nodes drawn natively by Tern and as terminal rows elsewhere, with signals and a compiler-free JSX runtime, role-based painters and widgets, a terminal driver (input, capabilities, multiplexers, images, resize policies, notifications), Markdown and text utilities, themes, and test utilities (`testing/terminal`, `testing/cells`)
 - Added the `change` UI event for an image's annotated picture, delivered to the node's `onChange` without an `item`.
+- Added the `change` UI event for annotated images, delivered to the node’s `onChange` handler without an associated item.
+
+### Fixed
+
+- Panes in a background Tern tab no longer log frame-acknowledgment stall warnings.
 
 ## [19.2.0] - 2026-11-25
 

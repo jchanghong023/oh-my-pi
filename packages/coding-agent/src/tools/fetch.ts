@@ -7,7 +7,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { type FetchImpl, getEnvApiKey, type ImageContent, type TextContent } from "@oh-my-pi/pi-ai";
 import { htmlToMarkdown, notebookToEditableText } from "@oh-my-pi/pi-natives";
-import { $which, ptree, removeWithRetries } from "@oh-my-pi/pi-utils";
+import { $which, errorMessage, ptree, removeWithRetries } from "@oh-my-pi/pi-utils";
 import {
 	type ArchiveFormat,
 	formatArchiveEntryLines,
@@ -910,10 +910,6 @@ function getArchiveFormatHint(mime: string, extensionHint: string): ArchiveForma
 	return undefined;
 }
 
-function formatErrorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
 function binaryContentType(mime: string): string {
 	return mime || "application/octet-stream";
 }
@@ -1034,7 +1030,7 @@ async function tryRenderBinaryPayload(
 				resultNotes,
 			);
 		} catch (error) {
-			resultNotes.push(`Notebook rendering failed: ${formatErrorMessage(error)}`);
+			resultNotes.push(`Notebook rendering failed: ${errorMessage(error)}`);
 			return buildBinaryPayloadResult(
 				url,
 				finalUrl,
@@ -1059,7 +1055,7 @@ async function tryRenderBinaryPayload(
 				resultNotes,
 			);
 		} catch (error) {
-			resultNotes.push(`SQLite rendering failed: ${formatErrorMessage(error)}`);
+			resultNotes.push(`SQLite rendering failed: ${errorMessage(error)}`);
 			return buildBinaryPayloadResult(
 				url,
 				finalUrl,
@@ -1087,7 +1083,7 @@ async function tryRenderBinaryPayload(
 				resultNotes,
 			);
 		} catch (error) {
-			resultNotes.push(`Archive rendering failed: ${formatErrorMessage(error)}`);
+			resultNotes.push(`Archive rendering failed: ${errorMessage(error)}`);
 			return buildBinaryPayloadResult(
 				url,
 				finalUrl,
