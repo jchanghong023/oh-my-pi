@@ -8,7 +8,7 @@ import {
 } from "@oh-my-pi/pi-natives/offline-root";
 import { getNativeGrammarsDir, logger, offlineFromEnv, withFileLock } from "@oh-my-pi/pi-utils";
 import { withDownload } from "../downloads/activity";
-import { downloadFile } from "./tools-manager";
+import { downloadFile } from "../downloads/file";
 
 /**
  * On-demand tree-sitter grammars. Less common languages ship as WebAssembly

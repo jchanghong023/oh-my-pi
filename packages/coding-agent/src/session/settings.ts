@@ -1503,7 +1503,7 @@ export const cfgProvidersOpenrouterVariant = register({
 export const cfgProvidersFetch = register({
 	id: "providers.fetch",
 	type: "enum",
-	values: ["auto", "native", "trafilatura", "lynx", "parallel", "firecrawl", "jina"] as const,
+	values: ["auto", "local", "parallel", "firecrawl", "jina"] as const,
 	default: "auto",
 	ui: {
 		tab: "providers",
@@ -1514,11 +1514,9 @@ export const cfgProvidersFetch = register({
 			{
 				value: "auto",
 				label: "自动",
-				description: "优先级：native > trafilatura > lynx > parallel > firecrawl > jina",
+				description: "优先级：local > parallel > firecrawl > jina",
 			},
-			{ value: "native", label: "原生", description: "进程内 HTML→Markdown 转换器（始终可用）" },
-			{ value: "trafilatura", label: "Trafilatura", description: "通过 uv/pip 自动安装" },
-			{ value: "lynx", label: "Lynx", description: "需要 lynx 系统软件包" },
+			{ value: "local", label: "本地", description: "进程内网页阅读引擎（始终可用）" },
 			{ value: "parallel", label: "Parallel", description: "需要 PARALLEL_API_KEY" },
 			{ value: "firecrawl", label: "Firecrawl", description: "需要 FIRECRAWL_API_KEY" },
 			{ value: "jina", label: "Jina", description: "使用 r.jina.ai 阅读器（JINA_API_KEY 可选）" },

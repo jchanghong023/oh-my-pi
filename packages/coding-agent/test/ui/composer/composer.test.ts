@@ -8,6 +8,7 @@ import { bubbleEvent, pathTo } from "@oh-my-pi/pi-tui/dispatch";
 import { corpusEnvironment } from "@oh-my-pi/pi-tui/testing/corpus";
 import { paintNode, staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
 import { plainRows } from "@oh-my-pi/pi-tui/testing/cells";
+import { createTestTerminal } from "@oh-my-pi/pi-tui/testing/terminal";
 import { loadThemeSync } from "@oh-my-pi/pi-tui/theme/loader";
 import { getKeybindings, KeybindingsManager, setKeybindings } from "../../../src/config/keybindings/keybindings";
 import {
@@ -17,6 +18,7 @@ import {
 	composerShape,
 	registerComposerShape,
 } from "../../../src/ui/composer";
+import { composerShapePreviewRows } from "../../../src/ui/styles/overlays/composer-shape-preview";
 import { key, sendKey, sendPaste } from "./harness";
 
 function make(options: ComposerOptions = {}): { composer: Composer; type(...keys: string[]): void } {
@@ -150,20 +152,21 @@ describe("multiline IME-safe caret layout", () => {
 	const draft = "first\n输入文本\nlast";
 	const lineEnd = "first\n输入文本".length;
 
-	test("opens only the current CJK row and leaves the source and cursor unchanged", () => {
+	test("opens only the current nonfinal CJK row without moving the bottom border", () => {
 		createRoot(dispose => {
 			try {
-				const composer = new Composer({ text: draft, shape: "box", caret: "terminal" });
-				composer.setCursor(lineEnd);
+				const composer = new Composer({ text: draft, shape: "box", caret: "terminal", imeSafeCursor: true });
+				composer.setCursor(lineEnd - 1);
 				const env = corpusEnvironment("dark");
 				env.setFocus(composer.field);
 				const paint = () => paintNode(env, composer.node, 40);
 				const closed = paint();
-				composer.setImeSafeCursor(true);
+				composer.setCursor(lineEnd);
 				const opened = paint();
 				const row = opened.cursor!.row;
 				expect(row).toBeGreaterThan(0);
-				expect(opened.cursor).toEqual(closed.cursor!);
+				expect(opened.cursor!.col).toBe(closed.cursor!.col + 2);
+				expect(opened.cursor!.row).toBe(closed.cursor!.row);
 				expect(Bun.stripANSI(opened.rows[row]!)).toEndWith("输入文本");
 				expect(Bun.stripANSI(closed.rows[row]!)).toEndWith(env.theme().symbols.box.vertical);
 				expect(opened.rows.filter((_, index) => index !== row)).toEqual(
@@ -178,7 +181,7 @@ describe("multiline IME-safe caret layout", () => {
 	});
 
 	test.each(["unfocused", "drawn caret", "middle of line", "borderless", "visual selection"] as const)(
-		"keeps the normal layout when %s",
+		"keeps the earlier row's right border behavior when %s",
 		condition => {
 			createRoot(dispose => {
 				try {
@@ -200,8 +203,12 @@ describe("multiline IME-safe caret layout", () => {
 					}
 					const closed = paint();
 					composer.setImeSafeCursor(true);
-					expect(paint().rows).toEqual(closed.rows);
-					expect(plainRows([...closed.rows]).join("\n")).toContain("输入文本");
+					const opened = paint();
+					const earlierRow = (rows: readonly string[]) =>
+						rows.find(row => Bun.stripANSI(row).includes("输入文本"));
+					const previous = earlierRow(closed.rows);
+					expect(previous).toContain("输入文本");
+					expect(earlierRow(opened.rows)).toBe(previous);
 					expect(composer.text()).toBe(draft);
 				} finally {
 					dispose();
@@ -243,6 +250,42 @@ describe("extension hooks", () => {
 			"[hi▏     ]",
 			"[        ]",
 		]);
+	});
+	test("a custom shape keeps the hardware caret on its text row after leading padding", () => {
+		const remove = registerComposerShape({
+			id: "test-padded",
+			sideBorders: true,
+			paddingX: 1,
+			sideWidth: paddingX => paddingX + 1,
+			top: ({ width }) => `╭${"─".repeat(width - 2)}╮`,
+			row: ({ first, last, width, text, pad }) => {
+				const blank = `│${" ".repeat(width - 2)}│`;
+				return {
+					rows: [...(first ? [blank] : []), `│ ${text}${pad} │`, ...(last ? [blank] : [])],
+					textRow: first ? 1 : 0,
+				};
+			},
+			bottom: ({ width }) => `╰${"─".repeat(width - 2)}╯`,
+		});
+		const { composer } = make({ shape: "test-padded", caret: "terminal" });
+		const theme = loadThemeSync("dark");
+		const term = createTestTerminal(() => ({ dock: composer.node }), { columns: 24, rows: 8, theme });
+		try {
+			term.focus(composer.field);
+			term.type("hello");
+			const blank = `│${" ".repeat(22)}│`;
+			const top = `╭${"─".repeat(22)}╮`;
+			const bottom = `╰${"─".repeat(22)}╯`;
+			const screen = term.screen();
+			expect(screen.slice(-6)).toEqual([top, blank, `│ hello${" ".repeat(16)}│`, blank, blank, bottom]);
+			expect(term.cursor()).toEqual({ row: screen.length - 4, col: 7 });
+
+			const preview = plainRows(composerShapePreviewRows(theme, "test-padded", 24));
+			expect(preview).toEqual([top, blank, expect.stringContaining("Ask anything"), blank, bottom]);
+		} finally {
+			term.dispose();
+			remove();
+		}
 	});
 });
 
@@ -593,5 +636,41 @@ describe("a `?` draft", () => {
 		expect(chip?.children()[0]?.props()).toMatchObject({ spans: [{ s: "btwMode", t: "btw" }] });
 		expect(field?.props()).toMatchObject({ decor: [{ from: 0, to: 2, s: "hide" }] });
 		expect(field?.props()).not.toHaveProperty("lang", expect.anything());
+	});
+});
+
+describe("IME-safe cursor layout", () => {
+	test("keeps the box bottom border separate as the hardware caret moves", () => {
+		const { composer } = make({ text: "hi", caret: "terminal", imeSafeCursor: true });
+		const env = corpusEnvironment("dark");
+		env.setFocus(composer.field);
+		const paint = () => paintNode(env, composer.node, 20);
+		const end = paint();
+		expect(plainRows([...end.rows]).slice(-3)).toEqual(["│  hi", `│${" ".repeat(18)}│`, `╰${"─".repeat(18)}╯`]);
+		composer.setCursor(1);
+		const middle = paint();
+		expect(middle.rows).toEqual(end.rows);
+		expect(middle.cursor).toEqual({ row: end.cursor!.row, col: end.cursor!.col - 1 });
+	});
+
+	test("drops the right chrome of the last text row in the filled shapes", () => {
+		for (const [shape, cap] of [
+			["field", "▐"],
+			["rail", "▎"],
+		] as const) {
+			const { composer } = make({ text: "hi", caret: "terminal", imeSafeCursor: true, shape });
+			const painted = paintNode(corpusEnvironment("dark"), composer.node, 20);
+			expect(plainRows([...painted.rows])[0]).toBe(`${cap} hi`);
+		}
+	});
+
+	test("does not open the input row or add a separate bottom border when the caret is drawn", () => {
+		const { composer } = make({ text: "hi", caret: "drawn" });
+		const env = corpusEnvironment("dark");
+		env.setFocus(composer.field);
+		const paint = () => paintNode(env, composer.node, 20).rows;
+		const baseline = paint();
+		composer.setImeSafeCursor(true);
+		expect(paint()).toEqual(baseline);
 	});
 });

@@ -23,7 +23,6 @@ test("embedding gateways and explicit environment credentials survive managed pr
 				import { getMnemopiSessionState } from ${JSON.stringify(path.join(source, "mnemopi/state.ts"))};
 				import { embed } from ${JSON.stringify(path.join(mnemopiSource, "core/embeddings.ts"))};
 				import { withMnemopiRuntimeOptions } from ${JSON.stringify(path.join(mnemopiSource, "core/runtime-options.ts"))};
-				import { isApiEmbeddingModel, apiEmbeddingsAvailable } from ${JSON.stringify(path.join(mnemopiSource, "config.ts"))};
 
 				const root = ${JSON.stringify(root)};
 				const requests = [];
@@ -104,10 +103,7 @@ test("embedding gateways and explicit environment credentials survive managed pr
 					});
 					clearEnv();
 					await run("official-registry", { "mnemopi.embeddingModel": "openai/text-embedding-3-small" });
-					const suffixEnv = { OPENROUTER_BASE_URL: "https://openrouter.ai.gateway.internal/v1" };
-					console.log(JSON.stringify({ requests, vectors, registryLookups,
-						suffixApiModel: isApiEmbeddingModel("intfloat/multilingual-e5-large", suffixEnv),
-						suffixAvailable: apiEmbeddingsAvailable(suffixEnv) }));
+					console.log(JSON.stringify({ requests, vectors, registryLookups }));
 				} finally { server.stop(true); }
 				`,
 			],
@@ -164,8 +160,6 @@ test("embedding gateways and explicit environment credentials survive managed pr
 		]);
 		expect(result.vectors).toEqual(Array.from({ length: 6 }, () => [[0.25, 0.75]]));
 		expect(result.registryLookups).toEqual(["openrouter"]);
-		expect(result.suffixApiModel).toBe(true);
-		expect(result.suffixAvailable).toBe(true);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

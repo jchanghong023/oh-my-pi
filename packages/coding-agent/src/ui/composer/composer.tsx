@@ -294,6 +294,7 @@ export interface ComposerOptions {
 	readonly autocompleteMaxVisible?: number;
 	/** `drawn`: the caret is drawn in the text (default); `terminal`: the hardware cursor alone shows it. */
 	readonly caret?: "drawn" | "terminal";
+	/** Clear the space after input for terminal IME preedit when using the hardware cursor. */
 	readonly imeSafeCursor?: boolean;
 	/** Symbol lookup for chip glyphs (the theme's `symbols.symbol`). */
 	readonly symbol?: (key: string) => string;
@@ -1734,6 +1735,7 @@ export class Composer {
 		this.#caret.set(caret);
 	}
 
+	/** Clear the space after input for terminal IME preedit when using the hardware cursor. */
 	setImeSafeCursor(enabled: boolean): void {
 		this.#imeSafeCursor.set(enabled);
 	}
@@ -1896,8 +1898,8 @@ export class Composer {
 			...(this.#status() ? { status: this.#status() } : {}),
 			...(this.#border() ? { border: this.#border() } : {}),
 			...(this.#borderFaint() ? { borderFaint: true } : {}),
+			...(this.#imeSafeCursor() && this.#caret() === "terminal" ? { imeSafeCursor: true } : {}),
 			...(this.#faint() ? { faint: true } : {}),
-			imeSafeCursor: this.#imeSafeCursor() && this.#caret() === "terminal",
 		}));
 
 		const modeChip = (): JSXNode => {

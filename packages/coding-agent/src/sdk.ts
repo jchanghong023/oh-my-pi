@@ -6017,6 +6017,7 @@ async function createAgentSessionScoped(
 			advisorSharedMaxNotesPerUpdate: discoveredAdvisors.sharedMaxNotesPerUpdate,
 			advisorConfigs: discoveredAdvisors.advisors,
 			advisorConfigWarnings: discoveredAdvisors.warnings,
+			advisorConfigDir: agentDir,
 			agent,
 			eventBus,
 			subagentEventBus,

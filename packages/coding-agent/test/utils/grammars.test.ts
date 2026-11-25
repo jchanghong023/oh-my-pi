@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WasmGrammarInfo } from "@oh-my-pi/pi-natives";
 import { installGrammar } from "@oh-my-pi/pi-coding-agent/utils/grammars";
-import * as toolsManager from "@oh-my-pi/pi-coding-agent/utils/tools-manager";
+import * as downloads from "@oh-my-pi/pi-coding-agent/downloads/file";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const RELEASE = "grammars-test";
@@ -67,7 +67,7 @@ describe("wasm grammar install", () => {
 		const dest = path.join(tempDir.path(), info.file);
 		const previousOffline = process.env.OMP_OFFLINE;
 		const previousMirror = process.env.PI_GRAMMARS_URL;
-		const download = spyOn(toolsManager, "downloadFile").mockRejectedValue(new Error("unexpected download"));
+		const download = spyOn(downloads, "downloadFile").mockRejectedValue(new Error("unexpected download"));
 		try {
 			process.env.OMP_OFFLINE = " TrUe ";
 			delete process.env.PI_GRAMMARS_URL;

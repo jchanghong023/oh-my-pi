@@ -26,6 +26,14 @@ export interface BashApprovalPatternRule {
 const EMPTY_BASH_PATTERNS: BashApprovalPatternRule[] = [];
 
 const EMPTY_STRING_ARRAY: string[] = [];
+
+// Perl keeps reading switches after consuming an argument to -e/-E, -I, or -m/-M.
+// Treat quoted and escaped text as part of that argument, not as more switches.
+const PERL_ARGUMENT = String.raw`(?:[^ \t\r\n;|&<>()'"\\]|\\[^\n]|'[^']*'|"(?:[^"\\]|\\[\s\S])*")+`;
+const PERL_SWITCH_CLUSTER = "(?:[0-7acfglnpSstTuUwWX]|d(?!t?[:=])|V(?!:))*";
+const PERL_SWITCH_VALUE = String.raw`(?:[eEImM](?:${PERL_ARGUMENT}|[ \t]+(?!#)${PERL_ARGUMENT})|(?:[CDFx]|dt?[:=]|V:)(?:${PERL_ARGUMENT})?)`;
+const PERL_IN_PLACE_PATTERN = String.raw`^[ \t]*perl[ \t]+(?:-(?=[^ \t\r\n-])${PERL_SWITCH_CLUSTER}${PERL_SWITCH_VALUE}?[ \t]+)*-${PERL_SWITCH_CLUSTER}i`;
+
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	{
 		// `cat` that sends stdout to a file or reads a heredoc writes rather than
@@ -55,7 +63,7 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 		message: "Use the `edit` tool instead of sed -i. It provides diff preview and fuzzy matching.",
 	},
 	{
-		pattern: "^\\s*perl\\s+.*-[pn]?i",
+		pattern: PERL_IN_PLACE_PATTERN,
 		tool: "edit",
 		message: "Use the `edit` tool instead of perl -i. It provides diff preview and fuzzy matching.",
 	},
@@ -234,8 +242,7 @@ export const cfgBashDirenv = register({
 		tab: "shell",
 		group: "Bash",
 		label: "自动加载 direnv",
-		description:
-			"自动将仓库的 direnv/devenv `.envrc` 加载到 bash 会话，无需手动执行 `direnv exec` 即可使用 devenv 工具和环境变量。遵循 direnv 允许列表：未执行过 `direnv allow` 的 `.envrc` 绝不会运行",
+		description: "使用内置 direnv 加载项目环境变量，无需安装外部 direnv，并遵循其允许和拒绝规则",
 	},
 });
 
@@ -247,8 +254,7 @@ export const cfgBashDirenvLoadTimeoutMs = register({
 		tab: "shell",
 		group: "Bash",
 		label: "direnv 加载超时（毫秒）",
-		description:
-			"首次 `direnv export` 的最长等待时间（devenv Shell 冷启动可能较慢）；超时后会话将在没有 direnv 环境的情况下运行",
+		description: "内置 direnv 执行 .envrc 的最长等待时间（devenv 冷启动可能较慢）；超时后不加载其导出的变量",
 	},
 });
 

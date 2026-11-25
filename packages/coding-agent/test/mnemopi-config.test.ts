@@ -4,7 +4,8 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadMnemopiConfig, type MnemopiBackendConfig } from "@oh-my-pi/pi-coding-agent/mnemopi/config";
 import { getMemoriesDir } from "@oh-my-pi/pi-utils";
-import { apiEmbeddingsAvailable, isApiEmbeddingModel } from "@oh-my-pi/pi-mnemopi/config";
+import { available, isApiModel } from "@oh-my-pi/pi-mnemopi/core/embeddings";
+import { withMnemopiRuntimeOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
 
 // `mnemopi.embeddingVariant` selects the concrete local embedding model, while an
 // explicit `mnemopi.embeddingModel` is an advanced override that wins. Scoping is
@@ -135,26 +136,24 @@ describe("loadMnemopiConfig database path resolution", () => {
 });
 
 describe("OpenRouter embedding endpoint credentials", () => {
-	it("keeps the existing www alias on the official credential-required route", () => {
-		const env = { OPENROUTER_BASE_URL: "https://www.openrouter.ai/api/v1" };
-		expect(isApiEmbeddingModel("intfloat/multilingual-e5-large", env)).toBe(false);
-		expect(apiEmbeddingsAvailable({ ...env, MNEMOPI_EMBEDDING_MODEL: "openai/text-embedding-3-small" })).toBe(false);
-		expect(
-			apiEmbeddingsAvailable({
-				...env,
-				MNEMOPI_EMBEDDING_MODEL: "openai/text-embedding-3-small",
-				OPENROUTER_API_KEY: "explicit-key",
-			}),
-		).toBe(true);
+	it("keeps the existing www alias on the official credential-required route", async () => {
+		const apiUrl = "https://www.openrouter.ai/api/v1";
+		const model = "openai/text-embedding-3-small";
+		const check = (apiKey: string) =>
+			withMnemopiRuntimeOptions({ embeddings: { disabled: false, apiUrl, apiKey, model } }, available);
+		expect(await check("")).toBe(false);
+		expect(await check("explicit-key")).toBe(true);
 	});
 
 	it.each([
 		"https://openrouter.ai.gateway.invalid/api/v1",
 		"https://gateway.invalid/openrouter.ai/api/v1",
 		"https://custom.openrouter.ai/api/v1",
-	])("keeps custom gateways outside the official host credential gate: %s", baseUrl => {
-		const env = { OPENROUTER_BASE_URL: baseUrl };
-		expect(isApiEmbeddingModel("intfloat/multilingual-e5-large", env)).toBe(true);
-		expect(apiEmbeddingsAvailable(env)).toBe(true);
+	])("keeps custom gateways outside the official host credential gate: %s", async apiUrl => {
+		const model = "intfloat/multilingual-e5-large";
+		await withMnemopiRuntimeOptions({ embeddings: { disabled: false, apiUrl, apiKey: "", model } }, async () => {
+			expect(isApiModel(model)).toBe(true);
+			expect(await available()).toBe(true);
+		});
 	});
 });

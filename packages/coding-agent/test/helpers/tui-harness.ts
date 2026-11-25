@@ -64,17 +64,22 @@ function nativeDraftMatches(screen: string, expected: string, cursor: { x: numbe
 	while (first < end && lines[first]!.startsWith("   ")) first++;
 	if (cursor.y < first) return false;
 	if (!expected) return cursor.y === first && cursor.x === 3;
-	// With the IME-safe caret, the last input row can be above a separate
-	// bottom rule instead of sharing the rule itself.
-	if (cursor.y < end && (cursor.y !== end - 1 || !/^╰─[ ─]*╯\s*$/u.test(lines[end]!))) return false;
+	// A short draft may be followed by the reserved blank input row and a separate IME-safe bottom rule.
+	const closing = lines[end]!;
+	if (cursor.y < end) {
+		if (!/^╰─[ ─]*╯\s*$/u.test(closing)) return false;
+		if (lines.slice(cursor.y + 1, end).some(row => !/^│ +[│█]\s*$/u.test(row))) return false;
+	}
+	const boxWidth = Bun.stringWidth(closing.trimEnd());
 	const rows = lines.slice(first, cursor.y + 1);
 	let remaining = expected;
 	for (const [index, row] of rows.entries()) {
 		const last = index === rows.length - 1;
 		const bottom = first + index === end;
 		const limit = row.search(bottom ? /─?╯\s*$/u : /[│█]\s*$/u);
-		if (!row.startsWith(bottom ? "╰─ " : "│  ") || limit < 3) return false;
-		const content = row.slice(3, limit);
+		const open = last && !bottom && Bun.stringWidth(row.trimEnd()) < boxWidth;
+		if (!row.startsWith(bottom ? "╰─ " : "│  ") || (!open && limit < 3)) return false;
+		const content = row.slice(3, open ? undefined : limit);
 		let input = content.trimEnd();
 		if (last) {
 			// PTY cursor coordinates count cells, not UTF-16 code units.

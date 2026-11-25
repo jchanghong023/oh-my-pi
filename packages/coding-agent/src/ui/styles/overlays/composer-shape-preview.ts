@@ -13,6 +13,7 @@ import { PREVIEW_PROMPT, type ComposerShapePreviewLook } from "../../overlays/co
 import {
 	type ComposerChromeContext,
 	type ComposerStatusContent,
+	composerRowLines,
 	composerShape,
 	type StatusAttachment,
 } from "../composer/shapes";
@@ -74,7 +75,7 @@ export function composerShapePreviewRows(theme: Theme, id: string, width: number
 	if (top !== undefined) rows.push(top);
 	for (const row of content?.overflow ?? []) rows.push(spaces(side) + row);
 	rows.push(
-		...shape.row({
+		...composerRowLines(shape, {
 			...chrome,
 			text: shape.filled ? caret : theme.fgResolved("text", caret),
 			pad: spaces(contentWidth - visibleWidth(prompt) - 1),

@@ -82,7 +82,7 @@ omp
 - **画布**：用 `/sketch` 手绘或贴图标注。附件加入草稿前可按 Esc 取消；PNG 成功加入后，由你手动发送。
 - **控制改动**：`/minimal` 要求最小充分改动和验证；`/workspace` 提醒 Agent 限定写入范围，不是沙箱。
 - **切换工作树**：`/wt <分支>` 切换会话工作树，不搬动或清理未提交的改动。
-- **网页转 Markdown**：`/crawl <URL>` 不调用模型，直接爬内网保存网页内容。
+- **网页转 Markdown**：`/crawl <URL>` 不调用模型，直接爬取并保存网页；`OMP_OFFLINE` 下不可用。读取单个内网链接可用 `omp read <URL>`；旧 `providers.fetch` 值 `native`、`trafilatura`、`lynx` 改用 `local`。
 - **循环与输入法**：`/loopn "检查" "复核"` 轮换提示词（`Esc` 停止）；`/jchime` 排查 Linux IBus/X11 中文输入问题。
 
 ## 7. 上游常用快捷键和内置命令

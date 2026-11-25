@@ -918,7 +918,7 @@ export const cfgTuiImeSafeCursor = register({
 		tab: "appearance",
 		group: "显示",
 		label: "输入法安全输入布局",
-		description: "将输入区底边框移至单独一行，避免 macOS 输入法预编辑文本将其挤开",
+		description: "将输入区底边框移至单独一行，避免 macOS 输入法预编辑文本将其挤开；需启用“显示硬件光标”",
 	},
 });
 

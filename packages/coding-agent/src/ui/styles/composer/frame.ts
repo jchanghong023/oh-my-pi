@@ -12,7 +12,7 @@
  */
 import type { UiNode } from "@oh-my-pi/pi-tui";
 import { type Block, type Cell, defineRolePainter, EMPTY_BLOCK, type PaintContext } from "@oh-my-pi/pi-tui/term/paint";
-import { setTerminalCompletionLayout } from "@oh-my-pi/pi-tui/term/painters/editor";
+import { caretOf, type EditorProps, setTerminalCompletionLayout } from "@oh-my-pi/pi-tui/term/painters/editor";
 import { visibleWidth } from "@oh-my-pi/pi-tui/text/width";
 import { fgSgr } from "@oh-my-pi/pi-tui/theme/color";
 import { type ComposerChromeContext, type ComposerStatus, caretOverflow, composerShape } from "./shapes";
@@ -31,6 +31,7 @@ export type ComposerTerm = {
 	readonly borderFaint?: boolean;
 	/** Dim every cell. */
 	readonly faint?: boolean;
+	/** Keep terminal chrome out of the hardware cursor's IME preedit space. */
 	readonly imeSafeCursor?: boolean;
 };
 
@@ -78,6 +79,7 @@ function paintComposer(node: UiNode, cx: PaintContext): Block {
 	const field = composerField(node);
 	const block = field ? cx.paint(field, wrapWidth + caretOverflow(shape, paddingX)) : EMPTY_BLOCK;
 
+	const imeSafeCursor = term.imeSafeCursor === true && shape.sideBorders;
 	// A status source draws for the shape's attachment at the cells inside its side chrome.
 	const status =
 		typeof term.status === "function"
@@ -96,6 +98,7 @@ function paintComposer(node: UiNode, cx: PaintContext): Block {
 		surface: text => surface(cx, text),
 		box: theme.symbols.box,
 		...(status ? { status } : {}),
+		...(imeSafeCursor ? { imeSafeCursor } : {}),
 	};
 	const gutter = shape.gutter ? shape.gutter.slice(0, gutterWidth) : "";
 	const rows: string[] = [];
@@ -104,29 +107,39 @@ function paintComposer(node: UiNode, cx: PaintContext): Block {
 	for (const row of status?.overflow ?? []) rows.push(" ".repeat(side) + row);
 	let cursor: Cell | undefined;
 	const fieldRows = block.rows;
-	const fieldProps = field?.props() as
-		| { cursor?: number; maxLines?: number; term?: { selection?: { from: number; to: number } } }
-		| undefined;
-	const caret = fieldProps?.cursor ?? 0;
-	const imeSafe =
-		term.imeSafeCursor && shape.sideBorders && !fieldProps?.term?.selection && !field?.fieldSelection?.range(caret);
+	const fieldProps = field?.props() as EditorProps | undefined;
 	const contentRows = Math.max(fieldRows.length, Math.min(2, fieldProps?.maxLines ?? 2));
+	const lastFieldRow = Math.max(0, fieldRows.length - 1);
 	for (let i = 0; i < contentRows; i++) {
 		const text = fieldRows[i] ?? "";
 		const width = visibleWidth(text);
-		if (block.cursor?.row === i) cursor = { row: rows.length, col: side + gutterWidth + block.cursor.col };
-		rows.push(
-			...shape.row({
-				...chrome,
-				text,
-				pad: " ".repeat(Math.max(0, contentWidth - width)),
-				gutter: i === 0 ? gutter : " ".repeat(gutterWidth),
-				first: i === 0,
-				last: i === contentRows - 1,
-				overflow: Math.max(0, width - contentWidth),
-				imeSafeTail: imeSafe === true && block.cursor?.row === i && block.cursor.col === width,
-			}),
-		);
+		const fieldCursor = block.cursor?.row === i ? block.cursor : undefined;
+		// Keep the last text row open throughout IME mode. Earlier rows only open at a focused, unselected line end.
+		const imeSafeCursorTail =
+			imeSafeCursor &&
+			(i === lastFieldRow ||
+				(fieldCursor?.col === width &&
+					fieldProps !== undefined &&
+					!fieldProps.term?.selection &&
+					!field?.fieldSelection?.range(caretOf(fieldProps))));
+		const rendered = shape.row({
+			...chrome,
+			text,
+			pad: " ".repeat(Math.max(0, contentWidth - width)),
+			gutter: i === 0 ? gutter : " ".repeat(gutterWidth),
+			first: i === 0,
+			last: i === contentRows - 1,
+			imeSafeCursorTail,
+			overflow: Math.max(0, width - contentWidth),
+		});
+		const textFirst = Array.isArray(rendered);
+		if (fieldCursor) {
+			cursor = {
+				row: rows.length + (textFirst ? 0 : rendered.textRow),
+				col: side + gutterWidth + fieldCursor.col,
+			};
+		}
+		rows.push(...(textFirst ? rendered : rendered.rows));
 	}
 	const bottom = shape.bottom?.(chrome);
 	if (bottom !== undefined) rows.push(bottom);

@@ -102,7 +102,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "../registry/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { registerPersistedSubagents } from "../registry/persisted-agents";
+import { isSessionTreeRef, registerPersistedSubagents } from "../registry/persisted-agents";
 import type { AgentCostSnapshot } from "./view-model/overlays/agent-hub-projection";
 import { sumSubagentTreeCost } from "./agent-hub-runtime";
 import {
@@ -430,7 +430,7 @@ import { PLAN_SAVE_SHEET, PlanSave } from "../ui/overlays/panels/plan-save";
 import { SESSION_INFO_SHEET, SessionInfo } from "../ui/overlays/panels/session-info";
 import { JOBS_SHEET, JobsPanel } from "../ui/overlays/pickers/jobs-panel";
 import { hasExtensionLinks, LinkBrowser, type LinkReply } from "../ui/overlays/pickers/link-browser";
-import { sheetScreen, showSheet } from "../ui/overlays/sheet";
+import { showSheet } from "../ui/overlays/sheet";
 import {
 	type BlockOptions,
 	type InputInterceptor,
@@ -1470,7 +1470,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				intro: true,
 				vim: cfgTuiVimMode.get(settings),
 				autocompleteMaxVisible: cfgAutocompleteMaxVisible.get(settings),
-				hardwareCursor: cfgShowHardwareCursor.get(settings),
+				hardwareCursor: cfgShowHardwareCursor.get(this.settings),
+				imeSafeCursor: cfgTuiImeSafeCursor.get(this.settings),
 			});
 		this.keybindings = KeybindingsManager.inMemory();
 		this.agent = session.agent;
@@ -1593,17 +1594,22 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#disposeInlineImageLimits = followInlineImageLimits(() => this.shell.size().rows);
 		this.#tray = new TrayFeed(
 			{
-				input: () =>
-					collectTrayInput({
+				input: () => {
+					// A collab guest's registry mirrors the host's session: every agent in it is the session's.
+					const root = this.collabGuest ? undefined : this.sessionManager.getSessionFile();
+					return collectTrayInput({
 						observers: this.#observerRegistry,
-						refs: getRunningSubagentBadgeRegistry(this.collabGuest, AgentRegistry.global()).list(),
+						refs: getRunningSubagentBadgeRegistry(this.collabGuest, AgentRegistry.global())
+							.list()
+							.filter(ref => isSessionTreeRef(ref, root)),
 						manager: this.session.asyncJobManager,
 						snapshot: () => this.session.getAsyncJobSnapshot({ recentLimit: Number.POSITIVE_INFINITY }),
 						irc: IrcBus.existing(),
 						showAgents: cfgDisplayPinnedAgents.get(settings) !== "off",
 						canFocus: this.collabGuest === undefined,
 						reviving: this.#trayReviving,
-					}),
+					});
+				},
 				main: () => this.#trayMain.state(id => runsInlineAgent(this.#observerRegistry.getSessions(), id)),
 				focusAgent: id => {
 					this.focusAgentSession(id).catch((error: unknown) =>
@@ -2203,8 +2209,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Load initial todos
 		await logger.time("InteractiveMode.init:todos", () => this.#loadTodoList());
 
-		// A prepaint frame may already own the terminal, but it did not receive the resolved IME setting.
-		this.composer.setImeSafeCursor(cfgTuiImeSafeCursor.get(this.settings));
+		// Reconcile the cursor layout on frames already started by prepaint or supplied by hosts.
+		batch(() => {
+			this.composer.setCaret(cfgShowHardwareCursor.get(this.settings) ? "terminal" : "drawn");
+			this.#frame.setImeSafeCursor(cfgTuiImeSafeCursor.get(this.settings));
+		});
 		if (!this.#ownsStartedUi) {
 			await this.#startShell(options.clearInitialTerminalHistory === true);
 			this.#ownsStartedUi = true;
@@ -3751,6 +3760,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		if (any("showHardwareCursor"))
 			this.composer.setCaret(cfgShowHardwareCursor.get(this.settings) ? "terminal" : "drawn");
+		if (any("tui.imeSafeCursor")) this.#frame.setImeSafeCursor(next["tui.imeSafeCursor"]);
 		if (any("autocompleteMaxVisible"))
 			this.composer.setAutocompleteMaxVisible(cfgAutocompleteMaxVisible.get(this.settings));
 		if (any("composer.shape")) this.syncComposerShape();
@@ -3843,7 +3853,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#syncFrameSettings();
 			resetDisplay = true;
 		}
-		if (any("tui.imeSafeCursor")) this.composer.setImeSafeCursor(next["tui.imeSafeCursor"]);
 		if (any("tui.titleState")) setTerminalTitleStateEnabled(cfgTuiTitleState.get(this.settings));
 		if (any("tui.titleSpinner")) setTerminalTitleSpinnerStyle(cfgTuiTitleSpinner.get(this.settings));
 		if (any("terminal.programStatus")) {
@@ -5612,26 +5621,21 @@ export class InteractiveMode implements InteractiveModeContext {
 						handle.close();
 					},
 				}),
-			{ onClose: () => resolve(result) },
+			{
+				focus: root => root.children().find(node => node.kind === "input") ?? root,
+				onClose: () => resolve(result),
+			},
 		);
 		return (await promise)?.path;
 	}
 
 	/**
-	 * The plan review's Save: write `planContent` to `presetPath`, or to a path the
-	 * operator picks (prefilled), and report it. The review stays open: its focus
-	 * comes back after the path prompt.
+	 * Export the plan to a chosen or preset path without resolving the review.
+	 * The review owns focus again when the path sheet closes.
 	 */
 	async #savePlan(planContent: string, title: string, presetPath?: string): Promise<void> {
-		let selectedPath = presetPath;
-		if (selectedPath === undefined) {
-			try {
-				selectedPath = await this.#promptPlanSavePath(planContent, title);
-			} finally {
-				const review = this.#planReviewOverlayHandle;
-				if (review && !review.closed) this.shell.focus(sheetScreen(this.shell, review));
-			}
-		}
+		const review = presetPath === undefined ? this.#planReview : undefined;
+		const selectedPath = presetPath ?? (await this.#promptPlanSavePath(planContent, title));
 		if (!selectedPath) return;
 
 		let destination: string;
@@ -5649,7 +5653,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			return;
 		}
-		this.showStatus(`Saved plan to ${shortenPath(destination)}`);
+		const message = `Saved plan to ${shortenPath(destination)}`;
+		if (review && this.#planReview === review && !this.shell.native()) review.setSaveNotice(message);
+		this.showStatus(message);
 	}
 
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {

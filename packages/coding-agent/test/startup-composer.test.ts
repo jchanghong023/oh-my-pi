@@ -43,6 +43,7 @@ import {
 	cfgStartupQuiet,
 	cfgStartupSetupWizard,
 	cfgStartupShowSplash,
+	cfgTuiImeSafeCursor,
 	cfgTuiResizeScrollback,
 	cfgTuiVimMode,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -259,6 +260,7 @@ describe("startup prepaint frame", () => {
 			resizeScrollback: cfgTuiResizeScrollback.get(settings),
 			autocompleteMaxVisible: cfgAutocompleteMaxVisible.get(settings),
 			vim: cfgTuiVimMode.get(settings),
+			imeSafeCursor: cfgTuiImeSafeCursor.get(settings),
 		};
 	});
 

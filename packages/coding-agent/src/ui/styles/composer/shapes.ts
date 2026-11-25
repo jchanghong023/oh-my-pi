@@ -62,6 +62,8 @@ export interface ComposerChromeContext {
 	readonly box: BoxGlyphs;
 	/** Status content for the top chrome, if the composer shows one. */
 	readonly status?: ComposerStatusContent;
+	/** Hardware-cursor IME layout is enabled; independent of where the caret is. */
+	readonly imeSafeCursor?: boolean;
 }
 
 /** One content row. */
@@ -76,9 +78,18 @@ export interface ComposerRowContext extends ComposerChromeContext {
 	readonly last: boolean;
 	/** Cells an end-of-row caret took from the right chrome's padding. */
 	readonly overflow: number;
-	/** Leave the cells after the hardware caret clear for IME preedit text. */
-	readonly imeSafeTail?: boolean;
+	/** Leave the space after this text row clear for terminal IME preedit. */
+	readonly imeSafeCursorTail?: boolean;
 }
+
+/** Terminal rows for one editor row; arrays place the text on their first row. */
+export type ComposerRowRender =
+	| string[]
+	| {
+			readonly rows: readonly string[];
+			/** Zero-based index in `rows` of the row containing the editor text. */
+			readonly textRow: number;
+	  };
 
 /** A composer shape (see the module docs). */
 export interface ComposerShape {
@@ -105,10 +116,16 @@ export interface ComposerShape {
 	sideWidth(paddingX: number): number;
 	/** Top chrome row, if any. */
 	top?(cx: ComposerChromeContext): string | undefined;
-	/** A content row in its chrome (usually one row). */
-	row(cx: ComposerRowContext): string[];
+	/** A content row in its chrome, with an explicit text position when chrome precedes it. */
+	row(cx: ComposerRowContext): ComposerRowRender;
 	/** Bottom chrome row, if any. */
 	bottom?(cx: ComposerChromeContext): string | undefined;
+}
+
+/** Paint a shape's content rows for surfaces that do not position a terminal caret. */
+export function composerRowLines(shape: ComposerShape, cx: ComposerRowContext): readonly string[] {
+	const rendered = shape.row(cx);
+	return Array.isArray(rendered) ? rendered : rendered.rows;
 }
 
 const shapes = new Map<string, ComposerShape>();
@@ -213,16 +230,7 @@ const box: ComposerShape = {
 	row(cx) {
 		const { box: g, paddingX } = cx;
 		const cells = rightCells(cx);
-		if (cx.imeSafeTail) {
-			const left = cx.border(`${g.vertical}${" ".repeat(paddingX)}`);
-			return cx.last
-				? [
-						left + cx.text,
-						cx.border(`${g.bottomLeft}${g.horizontal.repeat(Math.max(0, cx.width - 2))}${g.bottomRight}`),
-					]
-				: [left + cx.text];
-		}
-		if (cx.last) {
+		if (cx.last && !cx.imeSafeCursor) {
 			const left = cx.border(`${g.bottomLeft}${g.horizontal}${" ".repeat(Math.max(0, paddingX - 1))}`);
 			const right = cx.border(
 				`${" ".repeat(Math.max(0, cells - 2))}${cells >= 2 ? g.horizontal : ""}${g.bottomRight}`,
@@ -230,7 +238,13 @@ const box: ComposerShape = {
 			return [`${left}${cx.text}${cx.pad}${right}`];
 		}
 		const left = cx.border(`${g.vertical}${" ".repeat(paddingX)}`);
+		if (cx.imeSafeCursorTail) return [left + cx.text];
 		return [`${left}${cx.text}${cx.pad}${cx.border(`${" ".repeat(cells - 1)}${g.vertical}`)}`];
+	},
+	bottom(cx) {
+		if (!cx.imeSafeCursor) return undefined;
+		const { box: g, width } = cx;
+		return cx.border(`${g.bottomLeft}${g.horizontal.repeat(Math.max(0, width - 2))}${g.bottomRight}`);
 	},
 };
 
@@ -326,7 +340,7 @@ const field: ComposerShape = {
 	row(cx) {
 		const left = cx.accent("▐");
 		const body = " ".repeat(cx.paddingX) + cx.gutter + cx.text;
-		if (cx.imeSafeTail) return [left + cx.surface(body)];
+		if (cx.imeSafeCursorTail) return [left + cx.surface(body)];
 		return [left + cx.surface(body + cx.pad + " ".repeat(rightCells(cx) - 1)) + cx.accent("▌")];
 	},
 };
@@ -343,6 +357,8 @@ const rail: ComposerShape = {
 	paddingX: 1,
 	sideWidth: paddingX => paddingX + 1,
 	row(cx) {
+		if (cx.imeSafeCursorTail)
+			return [cx.accent("▎") + cx.surface(`${" ".repeat(cx.paddingX)}${cx.gutter}${cx.text}`)];
 		const fill = Math.max(0, cx.paddingX + 1 - cx.overflow);
 		return [
 			cx.accent("▎") + cx.surface(`${" ".repeat(cx.paddingX)}${cx.gutter}${cx.text}${cx.pad}${" ".repeat(fill)}`),
