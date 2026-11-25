@@ -117,12 +117,6 @@ describe("fork runtime defaults", () => {
 			await expect(evalTool.execute("disabled-js", { language: "js", code: "print(6 * 7)" })).rejects.toThrow(
 				/JavaScript backend is disabled/,
 			);
-			cfgEvalJs.override(settings, true);
-			expect(languages(evalTool)).toEqual(["py", "js"]);
-			const result = await evalTool.execute("enabled-js", { language: "js", code: "print(6 * 7)" });
-			expect(result.content).toEqual(
-				expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("42") })]),
-			);
 
 			for (const configured of [undefined, mode === "offline"]) {
 				const active =
@@ -155,6 +149,15 @@ describe("fork runtime defaults", () => {
 					setTerminalHeadless(previousHeadless);
 				}
 			}
+
+			if (mode === "offline") return;
+
+			cfgEvalJs.override(settings, true);
+			expect(languages(evalTool)).toEqual(["py", "js"]);
+			const result = await evalTool.execute("enabled-js", { language: "js", code: "print(6 * 7)" });
+			expect(result.content).toEqual(
+				expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("42") })]),
+			);
 
 			const file = path.join(agentDir, "config.yml");
 			const saved =

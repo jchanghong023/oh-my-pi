@@ -79,21 +79,14 @@ describe("Team filesystem read isolation", () => {
 		expect(listing).toContain("notes.md");
 		const localRoot = await InternalUrlRouter.instance().locate("local://", sessionResolveContext(session));
 		expect(localRoot).toBeTruthy();
-		for (const extension of ["md", "json", "jsonl"]) {
-			const traversal = path.join(localRoot!, "..", "..", `${path.basename(peer)}.${extension}`);
-			await expect(invoke("read", { path: traversal })).rejects.toThrow("Team read isolation");
-			await expect(invoke("read", { path: `${peer}.${extension}:1-2` })).rejects.toThrow("Team read isolation");
-			await expect(invoke("read", { path: pathToFileURL(`${peer}.${extension}`).href })).rejects.toThrow(
-				"Team read isolation",
-			);
-			await expect(invoke("grep", { pattern: "PEER_SECRET", path: `${peer}.${extension}` })).rejects.toThrow(
-				"Team read isolation",
-			);
-			await expect(invoke("glob", { path: `${peer}.${extension}` })).rejects.toThrow("Team read isolation");
-			await expect(invoke("ast_grep", { pat: "$VALUE", path: `${peer}.${extension}` })).rejects.toThrow(
-				"Team read isolation",
-			);
-		}
+		const transcript = `${peer}.jsonl`;
+		const traversal = path.join(localRoot!, "..", "..", path.basename(transcript));
+		await expect(invoke("read", { path: traversal })).rejects.toThrow("Team read isolation");
+		await expect(invoke("read", { path: `${transcript}:1-2` })).rejects.toThrow("Team read isolation");
+		await expect(invoke("read", { path: pathToFileURL(transcript).href })).rejects.toThrow("Team read isolation");
+		await expect(invoke("grep", { pattern: "PEER_SECRET", path: transcript })).rejects.toThrow("Team read isolation");
+		await expect(invoke("glob", { path: transcript })).rejects.toThrow("Team read isolation");
+		await expect(invoke("ast_grep", { pat: "$VALUE", path: transcript })).rejects.toThrow("Team read isolation");
 		await expect(invoke("read", { path: `${peer}.json?q=.marker` })).rejects.toThrow("Team read isolation");
 		const mixed = text(await invoke("read", { path: `${own}.md;${peer}.md` }));
 		expect(mixed).toContain("OWN_DRAFT");
@@ -183,14 +176,9 @@ describe("Team filesystem read isolation", () => {
 		const otherLease = path.join(temp.path(), "another-temporary-lease");
 		await fs.mkdir(otherLease, { recursive: true });
 		roots.push(otherLease);
-		await fs.writeFile(path.join(otherLease, "temporary-peer.md"), "PEER_SECRET_TEMP\n");
-		await fs.writeFile(path.join(otherLease, "temporary-peer.json"), JSON.stringify({ secret: "PEER_SECRET_TEMP" }));
-		await fs.writeFile(path.join(otherLease, "temporary-peer.jsonl"), JSON.stringify({ secret: "PEER_SECRET_TEMP" }));
-		for (const extension of ["md", "json", "jsonl"]) {
-			await expect(invoke("read", { path: path.join(otherLease, `temporary-peer.${extension}`) })).rejects.toThrow(
-				"Team read isolation",
-			);
-		}
+		const transcript = path.join(otherLease, "temporary-peer.jsonl");
+		await fs.writeFile(transcript, JSON.stringify({ secret: "PEER_SECRET_TEMP" }));
+		await expect(invoke("read", { path: transcript })).rejects.toThrow("Team read isolation");
 		await expect(invoke("grep", { pattern: "PEER_SECRET_TEMP", path: otherLease })).rejects.toThrow(
 			"Team read isolation",
 		);

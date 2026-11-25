@@ -321,7 +321,7 @@ const nativeAndIntegrationPackages = [
 
 // Discover coding-agent tests at file granularity before chunking. Full mode
 // uses Bun's test filename conventions.
-const forkCodingAgentDirectories = ["test/spec-driven/", "test/team/", "test/goals/", "test/todoloop/"];
+const forkCodingAgentDirectories = ["test/team/", "test/goals/", "test/todoloop/"];
 const forkCodingAgentFiles = new Set([
 	"test/acp-builtins.test.ts", // /wt consumer
 	"test/session/picker-worktrees.test.ts",
@@ -334,7 +334,6 @@ const forkCodingAgentFiles = new Set([
 	"test/cli/skill-list.test.ts",
 	"test/slash-commands/team-command.test.ts",
 	"test/slash-commands/guided-goal.test.ts",
-	"test/slash-commands/compact.test.ts",
 	"test/slash-commands/display.test.ts",
 	"test/slash-commands/jch-ime.test.ts",
 	"test/slash-commands/tan.test.ts",
@@ -373,8 +372,6 @@ const forkCodingAgentFiles = new Set([
 	"test/agent-session-snapcompact-reader.test.ts",
 	"test/session-manager/snapcompact-archive-persistence.test.ts",
 	"test/tools/approval.test.ts",
-	"test/compact-modes.test.ts",
-	"test/compaction.test.ts",
 	"test/snapcompact-inline.test.ts",
 	"test/event-controller-thinking-preview.test.ts",
 	"test/interactive-terminal-e2e.test.ts",
@@ -392,16 +389,9 @@ const forkCodingAgentFiles = new Set([
 	"test/autolearn-managed-skills.test.ts",
 	"test/bench-offline-company.test.ts",
 	"test/cli-explicit-extension-isolation.test.ts",
-	"test/cli/openwiki-ai-query.test.ts",
-	"test/cli/openwiki-dry-run.test.ts",
-	"test/cli/openwiki-generation.test.ts",
-	"test/cli/openwiki-process-boundary.test.ts",
-	"test/cli/openwiki-recovery.test.ts",
-	"test/cli/openwiki.test.ts",
 	"test/commit-conventional.test.ts",
 	"test/compact-status-spacing.test.ts",
 	"test/compact-tool-summary.test.ts",
-	"test/compaction-speculation.test.ts",
 	"test/composer-prediction-controller.test.ts",
 	"test/config-cli-revision-contract.test.ts",
 	"test/context-fits-model.test.ts",
@@ -440,15 +430,6 @@ const forkCodingAgentFiles = new Set([
 	"test/modes/goal-autopilot-websocket.test.ts",
 	"test/native-pipe-fallback-contract.test.ts",
 	"test/online-tiny-candidates.test.ts",
-	"test/openwiki/agents-instructions.test.ts",
-	"test/openwiki/host-lifecycle.test.ts",
-	"test/openwiki/model-selection.test.ts",
-	"test/openwiki/index-isolation.test.ts",
-	"test/openwiki/native-pool.test.ts",
-	"test/openwiki/query.test.ts",
-	"test/openwiki/resources.test.ts",
-	"test/openwiki/visualize-browser.test.ts",
-	"test/openwiki/visualize.test.ts",
 	"test/parallel-review-MagicSkills-regression.test.ts",
 	"test/parallel-review-OfflineStartup-regression.test.ts",
 	"test/parallel-review-ProviderCatalog-regression.test.ts",
@@ -469,7 +450,6 @@ const forkCodingAgentFiles = new Set([
 	"test/speculative-live-config.test.ts",
 	"test/speculative-read-integration.test.ts",
 	"test/startup-composer.test.ts",
-	"test/startup-python-diagnostic.test.ts",
 	"test/status-line-overflow.test.ts",
 	"test/stt-cloud.test.ts",
 	"test/stt-preflight.test.ts",
@@ -740,11 +720,7 @@ async function getCodingAgentTestPartition(all = false): Promise<CodingAgentTest
 function isIntegrationTest(testFile: string): boolean {
 	return (
 		/(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile) ||
-		/^(?:\.\/)?test\/openwiki\/visualize-browser\.test\.ts$/.test(testFile) ||
 		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
-		// Repository snapshots and bundled shell helpers spawn repeated native subprocesses.
-		testFile === "test/openwiki/native-pool.test.ts" ||
-		testFile === "test/spec-driven/resources.test.ts" ||
 		testFile === "test/tools/browser/crawl.test.ts"
 	);
 }
@@ -756,7 +732,6 @@ export function isIntegrationCommand(command: TestCommand): boolean {
 function isStartupTest(file: string): boolean {
 	return (
 		browserConsumerTests.has(file) ||
-		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
 		file === "test/zero-config-terminal.test.ts" ||
 		file === "test/startup-composer.test.ts" ||
 		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||

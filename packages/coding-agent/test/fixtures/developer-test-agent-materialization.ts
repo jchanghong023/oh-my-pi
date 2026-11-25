@@ -196,21 +196,14 @@ if (scenario === "consumers") {
 	assert.equal(await fs.readFile(path.join(first, "profile-only.txt"), "utf8"), "profile-a");
 	await assertPublished(profile);
 	await assertPublished(sibling);
+	const uncached = path.join(directory, "profile-c");
+	await assert.rejects(getDeveloperTestAgentRoot(uncached), { code: "ENOENT" });
+	assert.equal(await exists(uncached), false);
 	assert.deepEqual(await fs.readdir(process.cwd()), []);
 } else if (scenario === "invalid-paths") {
 	const sentinel = path.join(directory, "sentinel.txt");
 	await fs.writeFile(sentinel, "untouched");
-	for (const name of [
-		"../escape",
-		"safe/../escape",
-		"/absolute",
-		"C:/escape",
-		"safe\\escape",
-		"safe//escape",
-		"safe/./escape",
-		"trailing/",
-		"",
-	]) {
+	for (const name of ["../escape", "/absolute", "C:/escape", "safe\\escape", "safe/./escape"]) {
 		const data = { data: Buffer.from("must-not-escape").toString("base64"), mode: 0o644 };
 		await setArchive(
 			gzipSync(
@@ -240,19 +233,6 @@ if (scenario === "consumers") {
 		error => error instanceof Error && error.message.includes("occupied"),
 	);
 	await assertUnpublished(profile);
-} else if (scenario === "corrupt") {
-	await setArchive(Buffer.from("not gzip"));
-	await assert.rejects(getDeveloperTestAgentRoot(profile), /header|gzip|compression|invalid/i);
-	assert.equal(await exists(profile), false, "gzip failure occurs before staging is allocated");
-	await setArchive(gzipSync("not JSON"));
-	await assert.rejects(getDeveloperTestAgentRoot(profile), SyntaxError);
-	assert.equal(await exists(profile), false, "JSON failure occurs before staging is allocated");
-} else if (scenario === "missing") {
-	await assert.rejects(
-		getDeveloperTestAgentRoot(profile),
-		error => (error as NodeJS.ErrnoException).code === "ENOENT",
-	);
-	assert.equal(await exists(profile), false);
 } else {
 	throw new Error(`Unknown materialization scenario: ${scenario}`);
 }

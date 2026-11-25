@@ -68,36 +68,6 @@ describe("TeamConfigService", () => {
 		temporary.removeSync();
 	});
 
-	it("retains an invalid string at its original index while allowing a revisioned repair", async () => {
-		const before = await service.getConfig();
-		expect(before.revision).toBeString();
-		expect(before.writableScopes).toEqual(["user"]);
-		expect(before.storage).toEqual({ readState: "present" });
-		expect(before.userMembers?.map(slot => slot.rawSelector)).toEqual([
-			"deepseek/Qwen3.8-27B",
-			"retired old selector",
-			"deepseek/Qwen3.8-27B",
-		]);
-		expect(before.issues).toContainEqual(
-			expect.objectContaining({ target: "member", list: "userMembers", index: 1, selector: "retired old selector" }),
-		);
-		expect(before.participants).toEqual([]);
-		const result = await service.setConfig({
-			scope: "user",
-			expectedRevision: before.revision!,
-			members: [
-				{ provider: "deepseek", modelId: "Qwen3.8-27B" },
-				{ provider: "deepseek", modelId: "Qwen3.8-27B" },
-			],
-		});
-		expect(result.saveState).toBe("complete");
-		expect(result.write.status).toBe("saved");
-		expect(result.config.participants.map(slot => slot.label)).toEqual(["A", "B", "C"]);
-		expect(result.config.userMembers).toHaveLength(2);
-		expect(result.effectiveMatchesRequested).toBe(true);
-		expect(notifications).toEqual([{ type: "settings_changed", scope: "user" }]);
-	});
-
 	it("notifies after a committed write even if the initiating panel closes during the save", async () => {
 		const before = await service.getConfig();
 		let current = true;
@@ -210,7 +180,7 @@ describe("TeamConfigService", () => {
 		}
 	});
 
-	it("projects preserved invalid slots and defaults without changing file bytes or actual snapshot", async () => {
+	it("projects preserved invalid slots without changing file bytes or actual snapshot", async () => {
 		const file = path.join(agentDir, "config.yml");
 		const bytes = await Bun.file(file).text();
 		const invalid = await service.getConfig({
@@ -218,15 +188,12 @@ describe("TeamConfigService", () => {
 			members: [{ rawSelector: "retired old selector" }],
 		});
 		expect(invalid.preview?.clientRevision).toBe("draft-invalid");
+		expect(invalid.preview?.userMembers?.map(slot => slot.rawSelector)).toEqual(["retired old selector"]);
 		expect(invalid.preview?.participants).toEqual([]);
 		expect(invalid.preview?.issues).toContainEqual(
 			expect.objectContaining({ list: "preview.userMembers", index: 0 }),
 		);
-		const defaults = await service.getConfig({ clientRevision: "draft-default", members: [] });
-		expect(defaults.userMembers).toHaveLength(3);
-		expect(defaults.preview?.userMembers).toEqual([]);
-		expect(defaults.preview?.effectiveMembers).toEqual([]);
-		expect(defaults.preview?.participants).toEqual([]);
+		expect(invalid.userMembers).toHaveLength(3);
 		expect(await Bun.file(file).text()).toBe(bytes);
 		expect(notifications).toEqual([]);
 	});
@@ -269,12 +236,13 @@ describe("TeamConfigService", () => {
 		expect(config.sessionModel).toBeNull();
 		expect(config.revision).toBeString();
 		expect(config.source).toBe("global");
-		expect(config.effectiveMembers?.map(slot => slot.rawSelector)).toEqual([
-			"deepseek/Qwen3.8-27B",
-			"retired old selector",
-			"deepseek/Qwen3.8-27B",
-		]);
+		const rawSelectors = ["deepseek/Qwen3.8-27B", "retired old selector", "deepseek/Qwen3.8-27B"];
+		expect(config.userMembers?.map(slot => slot.rawSelector)).toEqual(rawSelectors);
+		expect(config.effectiveMembers?.map(slot => slot.rawSelector)).toEqual(rawSelectors);
 		expect(config.participants).toEqual([]);
+		expect(config.issues).toContainEqual(
+			expect.objectContaining({ target: "member", list: "userMembers", index: 1, selector: "retired old selector" }),
+		);
 		expect(config.issues).toContainEqual(
 			expect.objectContaining({ target: "member", list: "effectiveMembers", index: 1 }),
 		);

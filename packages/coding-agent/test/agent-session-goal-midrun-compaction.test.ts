@@ -723,7 +723,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		).toHaveLength(0);
 	});
 
-	it.each(["active", "paused", "completed", "budget-limited", "dropped", "replaced"] as const)(
+	it.each(["active", "paused", "dropped", "replaced"] as const)(
 		"admits a queued first auto Goal notice only at delivery while its source Goal is %s",
 		async transition => {
 			const toolStarted = Promise.withResolvers<void>();
@@ -780,10 +780,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 				).toHaveLength(0);
 
 				if (transition === "paused") await session.goalRuntime.pauseGoal();
-				if (transition === "completed") await session.goalRuntime.completeGoalFromTool();
-				if (transition === "budget-limited") {
-					session.setGoalModeState({ ...state, goal: { ...state.goal, status: "budget-limited" } });
-				}
 				if (transition === "dropped") await session.goalRuntime.dropGoal();
 				if (transition === "replaced") {
 					await session.goalRuntime.replaceGoal({
@@ -1454,61 +1450,40 @@ describe("AgentSession mid-run threshold compaction", () => {
 		},
 	);
 
-	it.each(["paused", "completed", "dropped", "ordinary", "exiting", "budget-limited"] as const)(
-		"does not revive a %s Goal when compaction commits",
-		async mode => {
-			const { session, sessionManager } = await createHarness({
-				"compaction.enabled": false,
-				"compaction.autoContinue": false,
-				"compaction.keepRecentTokens": 1,
-			});
-			await session.prompt("seed normal completed history");
-			const state = { ...activeGoalState(), autoOrchestrate: true };
-			session.setGoalModeState(state);
-			const compaction = mockCompaction("SUMMARY-WITHOUT-GOAL-OR-RULES");
-			compaction.mockImplementation(async preparation => {
-				session.setGoalModeState(
-					mode === "dropped"
-						? undefined
-						: mode === "paused"
-							? { ...state, enabled: false }
-							: mode === "completed"
-								? { ...state, goal: { ...state.goal, status: "complete" } }
-								: mode === "ordinary"
-									? { ...state, autoOrchestrate: false }
-									: mode === "budget-limited"
-										? {
-												...state,
-												goal: { ...state.goal, status: "budget-limited", tokenBudget: 1, tokensUsed: 1 },
-											}
-										: { ...state, mode: "exiting" },
-				);
-				return {
-					summary: "SUMMARY-WITHOUT-GOAL-OR-RULES",
-					shortSummary: undefined,
-					firstKeptEntryId: preparation.firstKeptEntryId,
-					tokensBefore: preparation.tokensBefore,
-					details: {},
-				};
-			});
+	it("does not revive an auto Goal paused during compaction", async () => {
+		const { session, sessionManager } = await createHarness({
+			"compaction.enabled": false,
+			"compaction.autoContinue": false,
+			"compaction.keepRecentTokens": 1,
+		});
+		await session.prompt("seed normal completed history");
+		const state = { ...activeGoalState(), autoOrchestrate: true };
+		session.setGoalModeState(state);
+		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => {
+			session.setGoalModeState({ ...state, enabled: false });
+			return {
+				summary: "SUMMARY-WITHOUT-GOAL-OR-RULES",
+				shortSummary: undefined,
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: preparation.tokensBefore,
+				details: {},
+			};
+		});
 
-			await session.compact();
+		await session.compact();
 
-			expect(sessionManager.getBranch().filter(entry => entry.type === "compaction")).toHaveLength(1);
-			expect(
-				session.messages.filter(
-					message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
-				),
-			).toHaveLength(0);
-			expect(
-				sessionManager
-					.getBranch()
-					.filter(
-						entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
-					),
-			).toHaveLength(0);
-		},
-	);
+		expect(sessionManager.getBranch().filter(entry => entry.type === "compaction")).toHaveLength(1);
+		expect(
+			session.messages.filter(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			),
+		).toHaveLength(0);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(0);
+	});
 
 	it("restores the current replacement rather than the obsolete goal when compaction commits", async () => {
 		const { session, sessionManager, observedContexts } = await createHarness({

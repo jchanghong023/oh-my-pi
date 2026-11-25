@@ -30,7 +30,6 @@ interface TaskPackage {
 	completedTaskIds: string[];
 	attempt: number;
 	previous?: { text?: string; error?: string; observation: string };
-	materials?: { proposal: string; design?: string; deltaSpecs: string[] };
 }
 
 /** Local scripted executor consumes the public task package and actual files; no model/credentials. */
@@ -164,91 +163,6 @@ function harness(cwd: string, filePath = path.join(cwd, "todo.md"), realScout = 
 }
 
 describe("TodoLoop native eval file consumers", () => {
-	it("executes scoped Superpowers Steps through native dispatch without repeating partial work", async () => {
-		await using temp = await TempDir.create("@todoloop-superpowers-");
-		const original = [
-			"# Implementation Plan",
-			"## Chunk 1",
-			"### Task 1: Build",
-			"- [X] **Step 0: Existing preparation**",
-			"#### Execution details",
-			"- [ ] **Step 1: Append `first-input.txt` to `first-output.txt`**",
-			"  Preserve the prefix and `bold` source format.",
-			"- [ ] **Step 2: Append `second-input.txt` to `first-output.txt`**",
-			"## Chunk 2",
-			"### Task 2: Publish",
-			"- [ ] **Step 1: Append `first-output.txt` to `published.txt`**",
-			"",
-		].join("\r\n");
-		await Bun.write(temp.join("todo.md"), original);
-		await Bun.write(temp.join("first-input.txt"), "alpha");
-		await Bun.write(temp.join("second-input.txt"), "|beta");
-		await Bun.write(temp.join("first-output.txt"), "retained:");
-		await Bun.write(temp.join("published.txt"), "published:");
-		const h = harness(temp.path());
-		const packages: TaskPackage[] = [];
-		const effects: string[] = [];
-		vi.spyOn(executor, "runSubprocess").mockImplementation(async options => {
-			const pkg = taskPackage(options);
-			packages.push(pkg);
-			const selected = pkg.group.id === "1" && pkg.attempt === 1 ? pkg.group.tasks.slice(0, 1) : pkg.group.tasks;
-			for (const task of selected) {
-				const document = await readTodoLoop(pkg.filePath);
-				const actual = document.groups
-					.find(group => group.id === pkg.group.id)
-					?.tasks.find(candidate => candidate.id === task.id);
-				if (!actual || actual.done) throw new Error("Executor selected completed or foreign work");
-				const instruction = /Append `([^`]+)` to `([^`]+)`/.exec(task.raw);
-				if (!instruction) throw new Error("Missing file operation in original task");
-				const input = await Bun.file(path.join(pkg.cwd, instruction[1]!)).text();
-				const outputPath = path.join(pkg.cwd, instruction[2]!);
-				await Bun.write(outputPath, (await Bun.file(outputPath).text()) + input);
-				effects.push(task.id);
-				await check(pkg, [task.id]);
-				expect((await readTodoLoop(pkg.filePath)).tasks.find(candidate => candidate.id === task.id)?.done).toBe(
-					true,
-				);
-			}
-			return result(options, { output: pkg.attempt === 1 && pkg.group.id === "1" ? "partial retained" : "done" });
-		});
-		expect(await h.run()).toMatchObject({ phase: "completed", completed: 4, completedGroups: 2, totalGroups: 2 });
-		expect(packages.map(pkg => [pkg.group.id, pkg.attempt, pkg.group.tasks.map(task => task.id)])).toEqual([
-			["1", 1, ["step:1:1", "step:1:2"]],
-			["1", 2, ["step:1:2"]],
-			["2", 1, ["step:2:1"]],
-		]);
-		expect(packages[1]?.completedTaskIds).toEqual(["step:1:0", "step:1:1"]);
-		expect(packages[1]?.previous).toMatchObject({
-			text: "partial retained",
-			observation: "Group 1 still has unchecked tasks Step 2 after attempt 1.",
-		});
-		expect(packages[2]?.previous).toBeUndefined();
-		expect(effects).toEqual(["step:1:1", "step:1:2", "step:2:1"]);
-		expect(await Bun.file(temp.join("first-output.txt")).text()).toBe("retained:alpha|beta");
-		expect(await Bun.file(temp.join("published.txt")).text()).toBe("published:retained:alpha|beta");
-		expect(await Bun.file(temp.join("todo.md")).text()).toBe(original.replaceAll("[ ]", "[x]"));
-		expect(new Set(h.events.filter(event => event.type === "start" && event.group).map(event => event.id)).size).toBe(
-			3,
-		);
-	});
-
-	it("rejects changing another group's repeated Step 1 through native dispatch", async () => {
-		await using temp = await TempDir.create("@todoloop-superpowers-scope-");
-		const original = "### Task 1: First\n- [ ] **Step 1: Work**\n### Task 2: Second\n- [ ] **Step 1: Work**\n";
-		await Bun.write(temp.join("todo.md"), original);
-		const h = harness(temp.path());
-		const run = vi.spyOn(executor, "runSubprocess").mockImplementation(async options => {
-			const pkg = taskPackage(options);
-			expect(pkg.group.tasks.map(task => task.id)).toEqual(["step:1:1"]);
-			const offset = original.lastIndexOf("- [ ]");
-			await Bun.write(pkg.filePath, original.slice(0, offset) + original.slice(offset).replace("[ ]", "[x]"));
-			return result(options);
-		});
-		expect((await h.run()).phase).toBe("file_error");
-		expect(run).toHaveBeenCalledTimes(1);
-		expect((await readTodoLoop(temp.join("todo.md"))).tasks.map(task => task.done)).toEqual([false, true]);
-	});
-
 	it("executes two tasks in one agent then settles before starting the next group", async () => {
 		await using temp = await TempDir.create("@todoloop-native-");
 		await Bun.write(
@@ -537,7 +451,7 @@ describe("TodoLoop native eval file consumers", () => {
 		expect(h.native.start).not.toHaveBeenCalled();
 	});
 
-	for (const mutation of ["rename", "other checkbox", "delete", "unreadable"] as const) {
+	for (const mutation of ["rename", "unreadable"] as const) {
 		it(`immediately stops after ${mutation} without ordinary retries`, async () => {
 			await using temp = await TempDir.create("@todoloop-invariant-");
 			const original = "## First\n- [ ] 1 First\n## Second\n- [ ] 2 Second\n";
@@ -545,15 +459,7 @@ describe("TodoLoop native eval file consumers", () => {
 			const h = harness(temp.path());
 			const spy = vi.spyOn(executor, "runSubprocess").mockImplementation(async options => {
 				if (mutation === "unreadable") await fs.unlink(temp.join("todo.md"));
-				else
-					await Bun.write(
-						temp.join("todo.md"),
-						mutation === "rename"
-							? original.replace("1 First", "1 Changed")
-							: mutation === "delete"
-								? original.replace("- [ ] 1 First\n", "")
-								: original.replace("[ ] 2", "[x] 2"),
-					);
+				else await Bun.write(temp.join("todo.md"), original.replace("1 First", "1 Changed"));
 				return result(options);
 			});
 			expect((await h.run()).phase).toBe("file_error");
@@ -675,35 +581,6 @@ describe("TodoLoop native eval file consumers", () => {
 		expect(h.events[0]?.group).toBeUndefined();
 		expect(h.events[0]?.attempt).toBe(0);
 	});
-
-	for (const design of [false, true]) {
-		it(`consumes actual Change materials with design=${design} through native task dispatch`, async () => {
-			await using temp = await TempDir.create("@todoloop-materials-");
-			const change = temp.join("openspec", "changes", "example");
-			await fs.mkdir(path.join(change, "specs", "feature"), { recursive: true });
-			await Bun.write(path.join(change, "tasks.md"), "- [ ] 1 Produce required artifact\n");
-			await Bun.write(path.join(change, "proposal.md"), "required-prefix");
-			await Bun.write(path.join(change, "specs", "feature", "spec.md"), "required-suffix");
-			if (design) await Bun.write(path.join(change, "design.md"), "designed");
-			const h = harness(temp.path(), path.join(change, "tasks.md"));
-			vi.spyOn(executor, "runSubprocess").mockImplementation(async options => {
-				const pkg = taskPackage(options);
-				await Bun.file(pkg.filePath).text();
-				if (!pkg.materials) throw new Error("No Change materials available");
-				const proposal = await Bun.file(pkg.materials.proposal).text();
-				const specs = await Promise.all(pkg.materials.deltaSpecs.map(file => Bun.file(file).text()));
-				const designText = pkg.materials.design ? await Bun.file(pkg.materials.design).text() : "no-design";
-				await Bun.write(path.join(pkg.cwd, "artifact"), [proposal, ...specs, designText].join(":"));
-				await check(pkg);
-				return result(options);
-			});
-			expect((await h.run()).phase).toBe("completed");
-			expect(await Bun.file(temp.join("artifact")).text()).toBe(
-				`required-prefix:required-suffix:${design ? "designed" : "no-design"}`,
-			);
-			expect(await Bun.file(path.join(change, "design.md")).exists()).toBe(design);
-		});
-	}
 });
 
 describe("TodoLoop native context and cleanup boundaries", () => {

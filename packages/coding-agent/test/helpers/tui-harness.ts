@@ -1,11 +1,9 @@
 import { expect } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { truncate } from "@oh-my-pi/pi-tui/text/width";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
-import { composerBounds, CompactScreenRecording } from "../helpers/compact-screen-recording";
 import {
 	contentText,
 	createProviderFixture,
@@ -18,14 +16,16 @@ import {
 const tuiTest = Bun.which("tui-test");
 const repo = path.resolve(import.meta.dir, "../../../..");
 type Scenario = {
-	reply?: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
-	setup?: (cwd: string, agentDir: string, env: NodeJS.ProcessEnv) => Promise<void>;
-	startupResponse?: string;
+	reply: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
 	configuration?: Record<string, unknown>;
-	screenDiagnostics?: boolean;
-	tuiTestBackend?: "alacritty";
-	onScreenFailureEvidence?: (directory: string) => void;
 };
+/** The default box composer paints its last input row on the bottom border. */
+export function composerBounds(screen: string) {
+	const lines = screen.split("\n");
+	const start = lines.findLastIndex(line => line.startsWith("╭── "));
+	const end = lines.findIndex((line, index) => index > start && line.startsWith("╰─"));
+	return { lines, start, end };
+}
 
 async function eventually<T>(read: () => Promise<T>, predicate: (value: T) => boolean, timeout = 60_000): Promise<T> {
 	const deadline = Date.now() + timeout;
@@ -123,7 +123,6 @@ async function withTui(
 		agentDir: string;
 		provider: ProviderFixture;
 		tui: (...args: string[]) => Promise<string>;
-		screen: CompactScreenRecording;
 	}) => Promise<void>,
 ): Promise<void> {
 	await using root = await TempDir.create("@omp-native-tui-");
@@ -183,7 +182,6 @@ async function withTui(
 		PI_NO_TITLE: "1",
 		PI_TEST_RUNTIME: "",
 		NO_PROXY: "127.0.0.1,localhost",
-		OPENSPEC_TELEMETRY: "0",
 		DO_NOT_TRACK: "1",
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_CONFIG_GLOBAL: root.join("gitconfig"),
@@ -213,26 +211,11 @@ async function withTui(
 			},
 		}),
 	);
-	await scenario.setup?.(cwd, agentDir, env);
 	const session = `dev-native-${crypto.randomUUID()}`;
-	const nativeArtifacts = root.join("tui-failures");
-	const explicitCast = root.join("mixed-session.cast");
-	let recordingStarted = false;
 	const commandStderr: Array<{ args: string[]; code: number; stderr: string }> = [];
 	async function invoke(target: string, ...args: string[]): Promise<string> {
 		if (!tuiTest) throw new Error("tui-test is required");
-		const diagnosticFlags = scenario.screenDiagnostics
-			? [
-					"--failure-artifacts",
-					nativeArtifacts,
-					"--failure-artifact-mode",
-					"text",
-					"--failure-artifact-recording",
-					"--diagnostic-context",
-					"journey=compact-mixed",
-				]
-			: [];
-		const child = Bun.spawn([tuiTest, "--session", target, ...diagnosticFlags, ...args], {
+		const child = Bun.spawn([tuiTest, "--session", target, ...args], {
 			cwd: repo,
 			env,
 			stdin: "ignore",
@@ -246,25 +229,15 @@ async function withTui(
 		]);
 		if (stderr || code !== 0) commandStderr.push({ args, code, stderr });
 		if (code !== 0) {
-			if (scenario.screenDiagnostics) throw new Error(`tui-test ${args[0] ?? "command"} exited ${code}`);
 			throw new Error(`tui-test ${args.join(" ")} exited ${code}:\n${stdout}\n${stderr}`);
 		}
 		return stdout;
 	}
-	const rawTui = (...args: string[]) => invoke(session, ...args);
-	const screen = new CompactScreenRecording(rawTui, nativeDraftSnapshot, size[0], size[1]);
-	const tui = (...args: string[]) => {
-		if (scenario.screenDiagnostics) screen.mark(`tui ${args[0] ?? "unknown"}`);
-		if (scenario.screenDiagnostics && args[0] === "resize") {
-			return screen.resize(Number(args[1]), Number(args[2]), () => rawTui(...args));
-		}
-		return rawTui(...args);
-	};
+	const tui = (...args: string[]) => invoke(session, ...args);
 	async function start(target: string, directory: string): Promise<void> {
 		await invoke(
 			target,
 			"run",
-			...(scenario.tuiTestBackend ? ["--backend", scenario.tuiTestBackend] : []),
 			"--cwd",
 			repo,
 			"--cols",
@@ -288,13 +261,9 @@ async function withTui(
 			"--",
 			"ordinary-root-beacon",
 		);
-		if (scenario.screenDiagnostics && target === session) {
-			await invoke(target, "record", "start", explicitCast);
-			recordingStarted = true;
-		}
 		// The scenario's actual ordinary reply must render before input resumes;
 		// an empty composer or startup boilerplate alone cannot prove readiness.
-		await invoke(target, "expect", "text", scenario.startupResponse ?? `${MARKER}_CHAT_READY`, "--timeout", "30000");
+		await invoke(target, "expect", "text", `${MARKER}_CHAT_READY`, "--timeout", "30000");
 		await invoke(target, "wait", "idle", "--timeout", "30000");
 	}
 	try {
@@ -309,96 +278,11 @@ async function withTui(
 				agentDir,
 				provider,
 				tui,
-				screen,
 			}),
 			provider.failure,
 		]);
 		expect(provider.failures).toEqual([]);
 	} catch (error) {
-		if (scenario.screenDiagnostics) {
-			// tui-test's automatic cast is ANSI output from the real PTY, not a
-			// stream of emulator-completed frames. Preserve it for replay only.
-			try {
-				await screen.stop();
-			} catch {
-				// Retain the triggering error, including a sampled transient.
-			}
-			screen.mark("assertion or command failure");
-			await screen.captureFailure();
-			let recordingStopError: unknown;
-			if (recordingStarted) {
-				try {
-					await rawTui("record", "stop");
-					recordingStarted = false;
-				} catch (stopError) {
-					recordingStopError = stopError;
-				}
-			}
-			const destination = path.join(os.tmpdir(), `omp-compact-screen-failure-${crypto.randomUUID()}`);
-			try {
-				await fs.mkdir(destination, { recursive: true });
-				scenario.onScreenFailureEvidence?.(destination);
-				const secrets = Object.entries(process.env)
-					.filter(
-						([key, value]) =>
-							/(?:key|token|secret|password|credential|authorization|(?:^|_)auth(?:_|$))/i.test(key) &&
-							value &&
-							value.length >= 4,
-					)
-					.map(([, value]) => value!);
-				const redact = (text: string) => {
-					for (const secret of secrets) {
-						text = text
-							.replaceAll(secret, "[REDACTED]")
-							.replaceAll(JSON.stringify(secret).slice(1, -1), "[REDACTED]");
-					}
-					return text;
-				};
-				await fs.writeFile(path.join(destination, "viewport-timeline.txt"), redact(screen.evidence()));
-				const recordingIssues: string[] = [];
-				try {
-					await fs.writeFile(path.join(destination, "automatic.cast"), redact(await rawTui("get-recording")));
-				} catch (recordingError) {
-					recordingIssues.push(`automatic recording: ${String(recordingError)}`);
-				}
-				try {
-					await fs.writeFile(
-						path.join(destination, "explicit.cast"),
-						redact(await fs.readFile(explicitCast, "utf8")),
-					);
-				} catch (recordingError) {
-					recordingIssues.push(`explicit recording: ${String(recordingError)}`);
-				}
-				if (recordingStopError) recordingIssues.push(`record stop: ${String(recordingStopError)}`);
-				for (const failure of commandStderr) {
-					if (failure.code !== 0 && (failure.args[0] === "record" || failure.args[0] === "get-recording"))
-						recordingIssues.push(`${failure.args.slice(0, 2).join(" ")} (${failure.code}): ${failure.stderr}`);
-				}
-				if (recordingIssues.length)
-					await fs.writeFile(path.join(destination, "recording-errors.txt"), redact(recordingIssues.join("\n")));
-				const copyText = async (source: string, target: string): Promise<void> => {
-					for (const entry of await fs.readdir(source, { withFileTypes: true })) {
-						const from = path.join(source, entry.name);
-						const to = path.join(target, entry.name);
-						if (entry.isDirectory()) {
-							await fs.mkdir(to, { recursive: true });
-							await copyText(from, to);
-						} else if (entry.isFile()) {
-							await fs.writeFile(to, redact(await fs.readFile(from, "utf8")));
-						}
-					}
-				};
-				try {
-					await copyText(nativeArtifacts, destination);
-				} catch (copyError) {
-					if ((copyError as NodeJS.ErrnoException).code !== "ENOENT") throw copyError;
-				}
-				console.error(`Compact mixed PTY failure evidence: ${destination}`);
-			} catch (diagnosticError) {
-				console.error("Unable to preserve compact mixed PTY evidence:", diagnosticError);
-			}
-			throw error;
-		}
 		// Preserve existing out-of-band program logs before TempDir cleanup.
 		try {
 			const logsDir = root.join("config", "logs");
@@ -426,13 +310,6 @@ async function withTui(
 		console.error("tui-test command stderr:", commandStderr);
 		throw error;
 	} finally {
-		if (recordingStarted) {
-			try {
-				await rawTui("record", "stop");
-			} catch {
-				// The process may already have exited; do not hide the original failure.
-			}
-		}
 		await tui("close");
 	}
 }

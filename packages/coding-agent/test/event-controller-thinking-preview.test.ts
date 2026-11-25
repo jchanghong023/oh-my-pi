@@ -351,22 +351,25 @@ describe("compact action dock", () => {
 		}
 	});
 
-	it("maps each tool category to its four-character action words and falls back to 调用 for unknown tools", async () => {
+	it("maps execution and write actions to four-character labels and falls back to 调用 for unknown tools", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
 		const cases: Array<{ name: string; args: Record<string, unknown>; running: string; done: string }> = [
-			{ name: "read", args: { path: "a.ts" }, running: "正在读取", done: "读取完成" },
 			{ name: "bash", args: { command: "echo hi" }, running: "正在执行", done: "执行完成" },
-			{ name: "write", args: { path: "a.ts", content: "x" }, running: "正在写入", done: "写入完成" },
 			{ name: "edit", args: { path: "a.ts", input: "*** Begin Patch" }, running: "正在写入", done: "写入完成" },
 			{ name: "mystery_tool", args: { query: "target" }, running: "正在调用", done: "调用完成" },
 		];
 		for (const [index, c] of cases.entries()) {
 			const id = `cat-${index}`;
 			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName: c.name, args: c.args });
-			expect(plain(h.rows())[1]).toStartWith(` Agent：${c.running}  `);
+			const row = plain(h.rows())[1]!;
+			expect(row).toStartWith(` Agent：${c.running}  `);
+			if (c.name === "mystery_tool") {
+				expect(row).toContain(c.name);
+				expect(row).toContain(c.args.query);
+			}
 			await live.emit({
 				type: "tool_execution_end",
 				toolCallId: id,
@@ -376,18 +379,6 @@ describe("compact action dock", () => {
 			});
 			expect(plain(h.rows())[1]).toStartWith(` Agent：上次${c.done}  `);
 		}
-		// An unmapped tool keeps its real name in the detail and is never labeled read/exec.
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "unknown",
-			toolName: "mystery_tool",
-			args: { query: "target" },
-		});
-		const row = plain(h.rows())[1]!;
-		expect(row).toContain("mystery_tool");
-		expect(row).toContain("target");
-		expect(row).not.toContain("正在读取");
-		expect(row).not.toContain("正在执行");
 	});
 
 	it("shows failure from isError without rejudging results, and keeps the object in the detail", async () => {

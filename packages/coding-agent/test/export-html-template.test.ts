@@ -145,10 +145,11 @@ describe("HTML export template", () => {
 			expect(integrity).toMatch(/^sha256-[A-Za-z0-9+/]{43}=$/);
 			expect(Buffer.from(integrity!.slice("sha256-".length), "base64").toHex()).toStartWith(match![1]!);
 		}
-		expect(scripts[2]!.getAttribute("src")).toBe(
-			"https://build.stencil.so/web/omp/19.0.1/export-viewer-1ae4bd46d3c40dc063601ddfbca2bf14fd7b57cb5bba470d3a6b5fc56f8f0f84.js",
-		);
-		expect(scripts[2]!.getAttribute("integrity")).toBe("sha256-GuS9RtPEDcBjYB3fvKK/FP17V8tbukcNOmtfxW+PD4Q=");
+		const viewer = scripts[2]!;
+		const viewerUrl = new URL(viewer.getAttribute("src")!);
+		expect(viewerUrl.origin).toBe("https://build.stencil.so");
+		expect(viewerUrl.pathname).toMatch(/^\/web\/omp\/\d+\.\d+\.\d+\/export-viewer-[a-f0-9]{64}\.js$/);
+		expect(viewer.getAttribute("integrity")).toMatch(/^sha256-[A-Za-z0-9+/]{43}=$/);
 		for (const script of scripts) {
 			expect(script.getAttribute("crossorigin")).toBe("anonymous");
 			expect(script.hasAttribute("defer")).toBe(true);
@@ -156,10 +157,13 @@ describe("HTML export template", () => {
 		}
 	});
 
-	test("compiled exports use the same hosted loader as npm exports despite the fork build version", async () => {
+	test("compiled exports use the same hosted viewer as npm exports despite the fork build version", async () => {
 		const npmHtml = await runProbe([process.execPath, bundlePath]);
 		const compiledHtml = await runProbe([compiledPath]);
-		expect(compiledHtml).toBe(npmHtml);
+		const npmViewer = parseHTML(npmHtml).document.querySelectorAll("script[src]")[2]!;
+		const compiledViewer = parseHTML(compiledHtml).document.querySelectorAll("script[src]")[2]!;
+		expect(compiledViewer.getAttribute("src")).toBe(npmViewer.getAttribute("src"));
+		expect(compiledViewer.getAttribute("integrity")).toBe(npmViewer.getAttribute("integrity"));
 		expect(await fs.readdir(bundleDir)).toEqual([path.basename(bundlePath)]);
 	});
 

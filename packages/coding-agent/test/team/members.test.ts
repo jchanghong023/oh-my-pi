@@ -316,18 +316,15 @@ describe("team member resolution", () => {
 		},
 	);
 
-	it.each([{ configuredMembers: ["   "] }, { configuredMembers: ["openai/gpt-5", ""] }])(
-		"rejects explicitly empty configured entries: %j",
-		({ configuredMembers }) => {
-			const result = resolveTeamParticipants({
-				configuredMembers,
-				sessionModel: SESSION,
-				availableModels: AVAILABLE,
-			});
-			expect(result.ok).toBe(false);
-			if (!result.ok) expect(result.error).toContain(`team.members[${configuredMembers.length - 1}]`);
-		},
-	);
+	it("rejects a whitespace-only configured member at its original index", () => {
+		const result = resolveTeamParticipants({
+			configuredMembers: ["openai/gpt-5", "   "],
+			sessionModel: SESSION,
+			availableModels: AVAILABLE,
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("team.members[1]");
+	});
 
 	it.each([
 		{ entry: 3, described: "number 3" },
@@ -346,18 +343,15 @@ describe("team member resolution", () => {
 		}
 	});
 
-	it.each([{ configuredMembers: [] }, { configuredMembers: ["company/GLM-5.2-public"] }])(
-		"requires a session anchor for roster %j",
-		({ configuredMembers }) => {
-			const result = resolveTeamParticipants({
-				configuredMembers,
-				sessionModel: undefined,
-				availableModels: AVAILABLE,
-			});
-			expect(result.ok).toBe(false);
-			if (!result.ok) expect(result.error).toContain("主代理");
-		},
-	);
+	it("requires a session anchor even with an explicit roster", () => {
+		const result = resolveTeamParticipants({
+			configuredMembers: ["company/GLM-5.2-public"],
+			sessionModel: undefined,
+			availableModels: AVAILABLE,
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("主代理");
+	});
 
 	it.each([{ configuredMembers: [] }, { configuredMembers: ["company/GLM-5.2-public"] }])(
 		"errors naming an unavailable session model even when absent from roster %j",

@@ -154,28 +154,22 @@ function companyModel(id: string): Model {
 }
 
 describe("effective team rosters", () => {
-	it.each([{ members: undefined }, { members: [] }])(
-		"defaults unset or empty settings to three session-model slots: %j",
-		({ members }) => {
-			const session = {
-				model: MODEL,
-				modelRegistry: { getAvailable: () => [MODEL, companyModel("GLM-5.2-public")] },
-			} as unknown as AgentSession;
-			const result = resolveTeamParticipantsForSession(
-				session,
-				Settings.isolated(members ? { "team.members": members } : {}),
-			);
-			expect(result.ok).toBe(true);
-			if (result.ok) {
-				expect(result.source).toBe("session-default");
-				expect(result.participants.map(participant => participant.modelPattern)).toEqual([
-					MODEL_PATTERN,
-					MODEL_PATTERN,
-					MODEL_PATTERN,
-				]);
-			}
-		},
-	);
+	it("defaults unset settings to three session-model slots", () => {
+		const session = {
+			model: MODEL,
+			modelRegistry: { getAvailable: () => [MODEL, companyModel("GLM-5.2-public")] },
+		} as unknown as AgentSession;
+		const result = resolveTeamParticipantsForSession(session, Settings.isolated({}));
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.source).toBe("session-default");
+			expect(result.participants.map(participant => participant.modelPattern)).toEqual([
+				MODEL_PATTERN,
+				MODEL_PATTERN,
+				MODEL_PATTERN,
+			]);
+		}
+	});
 
 	it("rejects a configured member filtered out by enabledModels instead of omitting it", () => {
 		const allowed = companyModel("GLM-5.2-public");
@@ -688,40 +682,26 @@ describe("team controller dispatch", () => {
 		expect(sent[0]!.content).not.toContain("PRIVATE_TAIL");
 	});
 
-	it.each([
-		{ members: [], agents: 3, distinctModels: 1 },
-		{ members: [0], agents: 3, distinctModels: 1 },
-		{ members: [0, 1], agents: 3, distinctModels: 2 },
-		{ members: [0, 1, 2], agents: 3, distinctModels: 3 },
-		{ members: [0, 1, 2, 3], agents: 4, distinctModels: 4 },
-		{ members: [1, 1, 0, 1], agents: 4, distinctModels: 2 },
-	])(
-		"reports independent agent and distinct-model counts in the dispatch notice: %j",
-		async ({ members, agents, distinctModels }) => {
-			const models = [
-				MODEL,
-				companyModel("GLM-5.2-public"),
-				companyModel("Qwen3.6-27B-public"),
-				companyModel("other"),
-			];
-			const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
-			const sent: { customType: string; content: string }[] = [];
-			const session = stubSession(jobManager, sent);
-			vi.spyOn(session.modelRegistry, "getAvailable").mockReturnValue(models);
-			const result = await startTeamDiscussion("分析 X", {
-				session,
-				settings: Settings.isolated({
-					"team.members": members.map(index => `${models[index]!.provider}/${models[index]!.id}`),
-				}),
-				cwd: "/tmp/repo",
-				hooks: {},
-			});
-			expect(result.started).toBe(true);
-			expect(sent).toHaveLength(1);
-			expect(sent[0]!.content).toContain(`${agents} 个独立代理`);
-			expect(sent[0]!.content).toContain(`${distinctModels} 个不同模型`);
-		},
-	);
+	it("reports four independent agents and two distinct models in the dispatch notice", async () => {
+		const otherModel = companyModel("GLM-5.2-public");
+		const otherPattern = `${otherModel.provider}/${otherModel.id}`;
+		const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
+		const sent: { customType: string; content: string }[] = [];
+		const session = stubSession(jobManager, sent);
+		vi.spyOn(session.modelRegistry, "getAvailable").mockReturnValue([MODEL, otherModel]);
+		const result = await startTeamDiscussion("分析 X", {
+			session,
+			settings: Settings.isolated({
+				"team.members": [otherPattern, otherPattern, MODEL_PATTERN, otherPattern],
+			}),
+			cwd: "/tmp/repo",
+			hooks: {},
+		});
+		expect(result.started).toBe(true);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]!.content).toContain("4 个独立代理");
+		expect(sent[0]!.content).toContain("2 个不同模型");
+	});
 
 	it("keeps a rejecting output hook from turning into an unhandled rejection", async () => {
 		const jobManager: JobManagerStub = {

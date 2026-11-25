@@ -12,14 +12,27 @@ const entries = [
 
 // Literal entry-specific budgets enforce the specification, rather than
 // deriving both the fixture and expected value from the same production constant.
-test.each(entries)("$level accepts its own finite-positive limit boundaries", ({ level, maximum, parse }) => {
+test.each(entries)("$level validates limits and options", ({ level, maximum, parse }) => {
 	for (const value of [0.125, maximum])
 		expect(parse([`--limit-seconds=${value}`])).toMatchObject({ limitSeconds: value });
 	for (const value of ["", "0", "-1", "NaN", "Infinity", String(maximum + 0.01)]) {
 		expect(parse([`--limit-seconds=${value}`])).toBeNull();
 	}
+	for (const args of [
+		["--limit-seconds=1", "--limit-seconds=2"],
+		["--limit=1"],
+		["--unrecognized"],
+		level === "fulltest" ? ["--debug", "anything"] : ["anything"],
+	]) {
+		expect(parse(args)).toBeNull();
+	}
 	if (level !== "fastcheck") expect(parse(["--debug"])).toMatchObject({ debug: true });
 	else expect(parse(["--debug"])).toBeNull();
+	if (level === "fulltest") {
+		expect(parse(["--debug", "--debug"])).toEqual({ debug: true });
+		expect(parse([`--limit-seconds=${maximum}`, "--debug"])).toEqual({ debug: true, limitSeconds: maximum });
+		expect(parse(["--debug", "--limit-seconds=0.25"])).toEqual({ debug: true, limitSeconds: 0.25 });
+	}
 });
 
 // Public error paths must reject before launching any checks, not merely return
@@ -27,31 +40,25 @@ test.each(entries)("$level accepts its own finite-positive limit boundaries", ({
 test.each(entries)(
 	"$level rejects invalid public argv with usage and a complete exit-2 summary",
 	async ({ level, maximum }) => {
-		for (const args of [
-			["--limit-seconds=1", "--limit-seconds=2"],
-			[`--limit-seconds=${maximum + 1}`],
-			["--unrecognized"],
-		]) {
-			const child = Bun.spawn([process.execPath, path.join(import.meta.dir, `${level}.ts`), ...args], {
-				env: { ...process.env, OMP_GATE_EVENT_TOKEN: "", OMP_GATE_EVENT_FILE: "", OMP_GATE_CLOCK_TOKEN: "" },
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-			const [exitCode, stdout, stderr] = await Promise.all([
-				child.exited,
-				new Response(child.stdout).text(),
-				new Response(child.stderr).text(),
-			]);
-			expect(exitCode, `${args.join(" ")}\n${stdout}\n${stderr}`).toBe(2);
-			expect(stdout + stderr).toContain(`Usage: bun run ${level}`);
-			expect(stdout).toMatch(
-				new RegExp(
-					`${level}: FAIL total=\\d+\\.\\ds compile_excluded=\\d+\\.\\ds budgeted=\\d+\\.\\ds limit=${maximum}\\.0s exit=2`,
-				),
-			);
-			expect(stdout + stderr).not.toContain("scope=repository-static");
-			expect(stdout + stderr).not.toContain("source tested after builds");
-		}
+		const args = ["--limit-seconds=1", "--limit-seconds=2"];
+		const child = Bun.spawn([process.execPath, path.join(import.meta.dir, `${level}.ts`), ...args], {
+			env: { ...process.env, OMP_GATE_EVENT_TOKEN: "", OMP_GATE_EVENT_FILE: "", OMP_GATE_CLOCK_TOKEN: "" },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(exitCode, `${args.join(" ")}\n${stdout}\n${stderr}`).toBe(2);
+		expect(stdout + stderr).toContain(`Usage: bun run ${level}`);
+		expect(stdout).toMatch(
+			new RegExp(
+				`${level}: FAIL total=\\d+\\.\\ds compile_excluded=\\d+\\.\\ds budgeted=\\d+\\.\\ds limit=${maximum}\\.0s exit=2`,
+			),
+		);
+		expect(stdout + stderr).not.toMatch(/scope=repository-static|source:? HEAD=|Test timing:/);
 	},
 	15_000,
 );

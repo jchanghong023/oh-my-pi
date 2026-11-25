@@ -39,7 +39,7 @@ test("command registration and version do not load addons or the default profile
 		probePath,
 		[
 			`import { commands } from ${JSON.stringify(registryUrl)};`,
-			'if (!commands.some(command => command.name === "openwiki")) throw new Error("OpenWiki not registered");',
+			'if (!commands.some(command => command.name === "agents")) throw new Error("Agents command not registered");',
 			'if (process.env.OMP_REGISTRY_PROFILE_SENTINEL) throw new Error("Default profile was loaded");',
 		].join("\n"),
 	);
@@ -50,6 +50,7 @@ test("command registration and version do not load addons or the default profile
 		HOME: home,
 		USERPROFILE: home,
 		OMP_CONFIG_ROOT: configRoot,
+		PI_BUILD_TIMESTAMP: "ignored-timestamp",
 	};
 	const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 	for (const args of [[probePath], [cliPath, "--version"]]) {
@@ -69,25 +70,19 @@ test("command registration and version do not load addons or the default profile
 	}
 });
 
-test("version and root help use the application version", async () => {
+test("root help uses the application version", async () => {
 	const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-	for (const argument of ["--version", "--help"]) {
-		const child = Bun.spawn([process.execPath, cliPath, argument], {
-			env: { ...process.env, PI_BUILD_TIMESTAMP: "ignored-timestamp" },
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const [exitCode, stdout, stderr] = await Promise.all([
-			child.exited,
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text(),
-		]);
-		expect(exitCode, stderr).toBe(0);
-		if (argument === "--version") {
-			expect(stdout.trim()).toBe(`${APP_NAME}/${VERSION}`);
-		} else {
-			expect(stdout).toContain(`${APP_NAME} v${VERSION}`);
-		}
-		expect(stdout).not.toContain("ignored-timestamp");
-	}
+	const child = Bun.spawn([process.execPath, cliPath, "--help"], {
+		env: { ...process.env, PI_BUILD_TIMESTAMP: "ignored-timestamp" },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [exitCode, stdout, stderr] = await Promise.all([
+		child.exited,
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+	]);
+	expect(exitCode, stderr).toBe(0);
+	expect(stdout).toContain(`${APP_NAME} v${VERSION}`);
+	expect(stdout).not.toContain("ignored-timestamp");
 });

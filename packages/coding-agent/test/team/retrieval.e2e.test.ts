@@ -12,7 +12,7 @@ import { SessionManager } from "../../src/session/session-manager";
 import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 import type { TeamRunResult } from "../../src/team/types";
 import { beginSettingsTest, restoreSettingsTestState } from "../helpers/settings-test-state";
-import { contentText, createProviderFixture, type ModelRequest, type Reply } from "../spec-driven/provider-fixture";
+import { contentText, createProviderFixture, type ModelRequest, type Reply } from "../helpers/provider-fixture";
 
 // Real registered /team handler -> native background owner -> every real child
 // SDK session -> HTTP model fixture -> actual grep/read tools -> durable report.

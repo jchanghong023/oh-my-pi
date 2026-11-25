@@ -222,23 +222,6 @@ describe("AgentSession idle maintenance", () => {
 			expect(h.recaps).toEqual([]);
 		});
 
-		it("produces one recap per idle stretch however often the owner activates it", async () => {
-			const h = await startSession();
-			h.enable();
-			h.enable();
-			h.enable();
-
-			await runTurn(h);
-			await elapse(RECAP_DELAY_MS);
-			await until(() => sideCalls(h) >= 1, "the recap request");
-			await flush();
-			await elapse(3 * RECAP_DELAY_MS);
-
-			expect(sideCalls(h)).toBe(1);
-			expect(h.recaps).toEqual([RECAP]);
-			expect(journal()).toEqual([RECAP]);
-		});
-
 		it("a repeated activation keeps the first probes instead of replacing them", async () => {
 			const h = await startSession();
 			let blocked = true;

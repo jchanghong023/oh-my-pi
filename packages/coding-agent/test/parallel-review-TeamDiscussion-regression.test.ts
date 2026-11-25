@@ -188,14 +188,54 @@ describe("team consumer regressions", () => {
 		expect(rechecks[0]!.task).not.toContain(participant.modelPattern);
 	});
 
-	it.each(["方案 **A** 可以采用。", "方案 `A` 可以作为最终选项。", "方案 [A](#a) 可采用。"])(
-		"rejects a visible adoption claim for a blocked Markdown-formatted label: %s",
-		body => {
-			const result = reportWithBody(body);
-			expect(result.ok).toBe(false);
-			if (!result.ok) expect(result.error).toContain("尚不可采用");
-		},
-	);
+	it.each([
+		"方案 **A** 可以采用。",
+		"方案 `A` 可以作为最终选项。",
+		"方案 [A](#a) 可采用。",
+		"方案 A，可以采用。",
+		"方案 A\n可以采用。",
+		"方案 A 使用 v1.0 接口，可以采用。",
+		"方案 A 使用 src/reader.ts，推荐。",
+		"方案 A 当前仍有未解决阻断问题，推荐。",
+	])("rejects a visible adoption claim across inline Markdown, punctuation or line wraps: %s", body => {
+		const result = reportWithBody(body);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("尚不可采用”的方案 A");
+	});
+
+	it.each([
+		["CRLF label and list", "方案 A：\r\n- 可以采用。", false],
+		["paragraph label and blockquote", "方案 A：\n> 可以采用。", false],
+		["conditional list", "方案 A：\n- 如果阻断问题解决，可以采用。", true],
+		["blank paragraph ends label ownership", "方案 A：\n\n- 可以采用。", true],
+		["sentence ends label ownership", "方案 A 尚不可采用。\n- 可以采用。", true],
+		["heading ends paragraph ownership", "方案 A：\n### 总结\n- 可以采用。", true],
+		["separately labeled lists", "方案 A：\n- 不可采用。\n\n方案 B：\n- 可以采用。", true],
+		["setext heading and adjacent list", "方案 A\n------\n- 可以采用。", false],
+		["CRLF paragraph under heading", "### 方案 A\r\n\r\n可以采用。", false],
+		["nested subsection inherits heading ownership", "### 方案 A\n\n#### 兼容性\n\n可以采用。", false],
+		["formatted heading", "### 方案 **A**\n\n可以采用。", false],
+		[
+			"nested eligible sibling section",
+			"## 候选方案\n\n### 方案 A\n\n不可采用。\n\n### 方案 B\n\n#### 兼容性\n\n可以采用。",
+			true,
+		],
+		["same-level generic heading drops ownership", "### 方案 A\n\n不可采用。\n\n### 总结\n\n可以采用。", true],
+		["higher-level heading pops ownership", "### 方案 A\n\n#### 兼容性\n\n## 总结\n\n可以采用。", true],
+		["eligible list overrides blocked heading", "### 方案 A\n\n方案 B：\n- 可以采用。", true],
+		["nested proposal overrides parent", "### 方案 A\n\n#### 方案 B\n\n可以采用。", true],
+		["return from nested proposal", "## 方案 A\n\n### 方案 B\n\n可以采用。\n\n### 兼容性\n\n可以采用。", false],
+		["fenced code cannot open an eligible section", "### 方案 A\n\n```md\n### 方案 B\n```\n\n可以采用。", false],
+	] as const)("scopes adoption claims across Markdown boundaries: %s", (_name, body, expectedOk) => {
+		const result = reportWithBody(body, { recommendedProposal: "B" });
+		expect(result.ok).toBe(expectedOk);
+		if (result.ok) {
+			expect(result.markdown).toContain("【推荐】方案 B");
+			expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
+		} else {
+			expect(result.error).toContain("尚不可采用”的方案 A");
+		}
+	});
 
 	it.each([
 		"方案 A 比方案 B 更值得推荐。",
@@ -207,12 +247,24 @@ describe("team consumer regressions", () => {
 		if (!result.ok) expect(result.error).toContain("尚不可采用”的方案 A");
 	});
 
+	it.each(["方案 A 和方案 B 可以作为选项。", "推荐方案 B 和方案 A。", "方案 A 可作为选项优于方案 B。"])(
+		"rejects an endorsement that applies to the blocked proposal alongside an eligible one: %s",
+		body => {
+			const result = reportWithBody(body, { recommendedProposal: "B" });
+			expect(result.ok).toBe(false);
+			if (!result.ok) expect(result.error).toContain("尚不可采用”的方案 A");
+		},
+	);
+
 	it.each([
 		"方案 B 比方案 A 更值得推荐。",
 		"方案 `B` 比 **A**方案 更可以采用。",
 		"方案 A 比方案 B 更不值得推荐。",
 		"方案 **A** 不可以采用；方案 B 比方案 A 更值得推荐。",
 		"方案 **A** 若阻断问题解决后才可采用；方案 B 比方案 A 更值得推荐。",
+		"方案 A（尚不可采用）劣于可作为选项的方案 B。",
+		"推荐方案 B 而不是尚不可采用的方案 A。",
+		"本次推荐，方案 A 的阻断问题源于旧接口缺少迁移。",
 	])("keeps a valid comparison subject despite a blocked object or qualified alternative: %s", body => {
 		const result = reportWithBody(body, { recommendedProposal: "B" });
 		expect(result.ok).toBe(true);
@@ -232,19 +284,24 @@ describe("team consumer regressions", () => {
 		},
 	);
 
-	it.each(["方案 A 不能作为首选。方案 B 满足验收标准。", "不应推荐方案 A。方案 B 满足验收标准。"])(
-		"keeps a valid recommendation alongside an ordinary negative statement: %s",
-		body => {
-			const result = reportWithBody(body, { recommendedProposal: "B" });
-			expect(result.ok).toBe(true);
-			if (result.ok) {
-				expect(result.markdown).toContain(body);
-				expect(result.markdown).toContain("【推荐】方案 B");
-				expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
-				expect(result.droppedRecommendation).toBe(false);
-			}
-		},
-	);
+	it.each([
+		"方案 A 不能作为首选。方案 B 满足验收标准。",
+		"不应推荐方案 A。方案 B 满足验收标准。",
+		"不建议采用方案 A。",
+		"方案 A 不列入可采用选项。",
+		"方案 A 不具备可采用条件。",
+		"方案 A 不被推荐。",
+		"### 方案 A（未通过审查，不作为可采用选项）\n不参与最终选择。",
+	])("keeps a valid recommendation alongside an ordinary negative statement: %s", body => {
+		const result = reportWithBody(body, { recommendedProposal: "B" });
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.markdown).toContain(body);
+			expect(result.markdown).toContain("【推荐】方案 B");
+			expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
+			expect(result.droppedRecommendation).toBe(false);
+		}
+	});
 
 	it.each(["reportMarkdown", "recommendationReason", "recommendationPreconditions"] as const)(
 		"rejects a blocked endorsement in emitted %s despite a valid structured recommendation",
@@ -258,9 +315,14 @@ describe("team consumer regressions", () => {
 		},
 	);
 
-	it("does not let a negative claim mask a later affirmative claim in the same clause", () => {
-		const result = reportWithBody("方案 A 不能作为首选，仍可以采用。", { recommendedProposal: "B" });
+	it.each([
+		"方案 A 不能作为首选，仍可以采用。",
+		"方案 A 可以采用，随后不再推荐。",
+		"方案 A 不列入可采用选项，但仍建议采用方案 A。",
+	])("rejects an affirmative adoption claim before or after a negation: %s", body => {
+		const result = reportWithBody(body, { recommendedProposal: "B" });
 		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("尚不可采用”的方案 A");
 	});
 
 	it("preserves negative and conditional adoption language in recommendation prose", () => {
@@ -283,6 +345,11 @@ describe("team consumer regressions", () => {
 		"方案 A 没有推荐价值，仍有未解决阻断。",
 		"方案 A 仅在全部阻断问题经复核通过后才可采用。",
 		"如果移除新增必填参数并恢复全部缺省兼容路径，再经过一次复核并确认阻断完全解除，方案 A 才可以采用。",
+		"问题解决后，建议采用方案 A。",
+		"方案 A 若前提满足可以作为最终选项。",
+		"方案 A 阻断问题解除之后可推荐。",
+		"若干问题确认后方可采用方案 A。",
+		"方案 A 在阻断问题解决后即可作为选项。",
 		"## 方案 B 与方案 A 的比较\n推荐前者，因为保留旧调用；后者有未解决阻断。",
 		"## 方案 B 与方案 A 的比较\n前者值得推荐；后者尚不可采用。",
 	])("delivers explicit negations, resolution conditions and the unblocked former alternative: %s", body => {
@@ -318,6 +385,9 @@ describe("team consumer regressions", () => {
 		"方案 A 没有推荐价值，仍可以采用。",
 		"方案 A 仅在全部阻断问题经复核通过后才可采用，同时仍推荐方案 A。",
 		"如果移除新增必填参数并恢复全部缺省兼容路径，再经过一次复核并确认阻断完全解除，方案 A 才可以采用，同时仍可采用。",
+		"方案 A 可以采用，同时仅在全部阻断问题经复核通过后才可采用。",
+		"推荐解决方案 A。",
+		"方案 A 已解决后端问题可以采用。",
 		"## 方案 B 与方案 A 的比较\n推荐后者。",
 		"## 方案 A 与方案 B 的比较\n推荐前者。",
 	])("rejects a real blocked endorsement after a qualification or comparison heading: %s", body => {
@@ -390,7 +460,7 @@ describe("team consumer regressions", () => {
 	);
 
 	it("completes orchestration with valid synthesis prose and retains the blocked alternative", async () => {
-		const body = "方案 B 没有推荐价值，仍有未解决阻断。";
+		const body = "### 未采纳方向\n方案 B 目前不可采用；待阻断问题修复后，方案 B 即可采用。";
 		const runner: TeamSubagentRunner = async call => {
 			switch (call.role) {
 				case "proposer":

@@ -100,15 +100,29 @@ function hasRenderedTui({ output }: TuiHandle): boolean {
 	return cursorControl && output.includes("π");
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, ms));
+// Prepaint accepts a draft before it enables submission. Type a local command
+// once and retry only Enter until the command acknowledges it.
+async function submitSlash(
+	handle: TuiHandle,
+	command: string,
+	acknowledged: () => boolean,
+	timeoutMs: number,
+): Promise<boolean> {
+	handle.session.write(command);
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline && activeTuis.has(handle)) {
+		if (acknowledged()) return true;
+		handle.session.write("\r");
+		await Bun.sleep(200);
+	}
+	return acknowledged();
 }
 
 async function waitFor(condition: () => boolean, timeoutMs: number): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		if (condition()) return true;
-		await sleep(200);
+		await Bun.sleep(200);
 	}
 	return condition();
 }
@@ -141,7 +155,7 @@ function tuiEnvironment(env: Record<string, string | undefined>): Record<string,
 	);
 }
 
-function startTui(argv: string[], env: Record<string, string | undefined>, projectCwd?: string): TuiHandle {
+function startTui(argv: string[], env: Record<string, string | undefined>, projectCwd: string): TuiHandle {
 	const session = new PtySession();
 	const handle: TuiHandle = {
 		session,
@@ -158,8 +172,8 @@ function startTui(argv: string[], env: Record<string, string | undefined>, proje
 	const result = session.startArgv(
 		{
 			application: process.execPath,
-			args: ["packages/coding-agent/src/cli.ts", ...(projectCwd ? ["--cwd", projectCwd] : []), ...argv],
-			cwd: repoRoot,
+			args: [path.join(repoRoot, "packages/coding-agent/src/cli.ts"), ...argv],
+			cwd: projectCwd,
 			cols: 120,
 			rows: 30,
 			env: tuiEnvironment(env),
@@ -283,21 +297,23 @@ if (!process.argv.includes("--team-group-only")) {
 			env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:1", ANTHROPIC_AUTH_TOKEN: "ui-smoke-fixture" },
 		}),
 	);
-	const baseEnv = tuiEnvironment({
+	const baseEnv = {
 		PI_CONFIG_DIR: path.basename(baseConfigRoot),
 		OMP_CONFIG_ROOT: baseConfigRoot,
 		OMP_PROFILE: "localci-ui",
 		PI_PROFILE: "",
 		OMP_OFFLINE: "1",
 		CLAUDE_CONFIG_DIR: baseClaudeDir,
-	});
+	};
 	const baseAgentDir = path.join(baseConfigRoot, "profiles", "localci-ui", "agent");
 	await fs.mkdir(baseAgentDir, { recursive: true, mode: 0o700 });
 	await fs.writeFile(
 		path.join(baseAgentDir, "config.yml"),
 		"composer:\n  shape: pi\nstartup:\n  setupWizard: false\n",
 	);
-	const main = startTui(["--profile", "localci-ui"], baseEnv);
+	const baseWorkspace = path.join(baseConfigRoot, "workspace");
+	await fs.mkdir(baseWorkspace);
+	const main = startTui(["--profile", "localci-ui", "--no-title"], baseEnv, baseWorkspace);
 	const rendered = await waitFor(() => hasRenderedTui(main), 120_000);
 	if (!rendered) {
 		fail(
@@ -307,17 +323,20 @@ if (!process.argv.includes("--team-group-only")) {
 	}
 	console.log(`ui-smoke: interface rendered (${main.totalBytes} bytes captured)`);
 
-	// ── 2. Liveness probe: a keypress must trigger a repaint ────────────────────
 	if (!teamOnly) {
-		const bytesBefore = main.totalBytes;
-		main.session.write("\x1b[Z"); // Shift-Tab (plan mode toggle): always handled by the composer
-		await sleep(1_500);
-		main.session.write("\x1b[Z"); // toggle back
-		await sleep(1_500);
-		if (main.totalBytes <= bytesBefore) {
-			fail("no repaint after keypress; the input loop looks dead", main.session);
+		// A local command's acknowledgement proves the input loop is live; bytes
+		// from the welcome animation do not.
+		const responsive = await submitSlash(
+			main,
+			"/jobs kill",
+			() => normalizePtyOutput(main.output).includes("Usage: /jobs kill"),
+			120_000,
+		);
+		if (!responsive) {
+			dumpTail(main);
+			fail("no local command response; the input loop looks dead", main.session);
 		}
-		console.log(`ui-smoke: input loop alive (+${main.totalBytes - bytesBefore} bytes after keypress)`);
+		console.log("ui-smoke: input loop responded to a local command");
 	}
 
 	// ── 3. Clean exit ───────────────────────────────────────────────────────────
@@ -355,65 +374,19 @@ const TEAM_PROFILE = "localci-ui-team";
 const TEAM_MODEL = "deepseek/glm-5.2";
 const teamConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-team-smoke-"));
 stubServerCleanup.run = () => removeFixture(teamConfigRoot);
-const TEAM_CONFIG_DIR_NAME = path.basename(teamConfigRoot);
 
 interface StubRequestLog {
-	model: string;
 	stage: string;
 	recheck?: boolean;
 	target?: string;
 	round?: number;
 }
 
-/** Plain-text SSE frames for main-session turns (no stage marker). */
-function stubPlainTextBody(requestModel: string, text: string): string {
-	stubMessageCounter += 1;
-	const frames: string[] = [];
-	frames.push(
-		`event: message_start\ndata: ${JSON.stringify({
-			type: "message_start",
-			message: {
-				id: `msg_stub_${stubMessageCounter}`,
-				type: "message",
-				role: "assistant",
-				model: requestModel,
-				content: [],
-				stop_reason: null,
-				usage: { input_tokens: 16, output_tokens: 8 },
-			},
-		})}\n\n`,
-	);
-	frames.push(
-		`event: content_block_start\ndata: ${JSON.stringify({
-			type: "content_block_start",
-			index: 0,
-			content_block: { type: "text", text: "" },
-		})}\n\n`,
-	);
-	frames.push(
-		`event: content_block_delta\ndata: ${JSON.stringify({
-			type: "content_block_delta",
-			index: 0,
-			delta: { type: "text_delta", text },
-		})}\n\n`,
-	);
-	frames.push(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`);
-	frames.push(
-		`event: message_delta\ndata: ${JSON.stringify({
-			type: "message_delta",
-			delta: { stop_reason: "end_turn" },
-			usage: { output_tokens: 24 },
-		})}\n\n`,
-	);
-	frames.push(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
-	return frames.join("");
-}
-
 const STUB_BLOCKING_ISSUE = "新增必填 options 参数会破坏不传该参数的旧调用。";
 const STUB_DEFAULT_BLOCKING_ISSUE = "提案未定义 options 缺省时的行为，无法保证旧调用语义不变。";
 
 function reviewPayload(target: string, round: number, recheck: boolean): Record<string, unknown> {
-	if (recheck && invalidRequiredRecheck) {
+	if (recheck && target === "C") {
 		return {
 			noSubstantiveIssues: true,
 			reviewSummary: "没有新增问题，但故意遗漏仍需逐项裁决的历史阻断 ID。",
@@ -505,7 +478,7 @@ function revisionPayload(target: string, round: number): Record<string, unknown>
 				: [
 						// A failed first recheck cannot close F1. The next revision
 						// must still answer it as well as F2 before it can be rechecked.
-						...(invalidRequiredRecheck
+						...(target === "C"
 							? [
 									{
 										findingId: `${target}-F1`,
@@ -578,7 +551,7 @@ function stagePayload(
 			return {
 				reportMarkdown:
 					"### 需求与验收标准\n增加新功能，旧调用无需修改。\n\n### 核心方案\n比较可选 options 参数与缺省兼容路径。\n\n### 关键依据\n原始提案、逐条修订与新审查者裁决；可采用状态以结构化追踪为准。",
-				recommendedProposal: "A",
+				recommendedProposal: "C",
 				recommendationReason: "满足全部验收标准且改动最小",
 				recommendationPreconditions: "旧调用保留缺省路径，修订后的接口必须经过兼容性验证",
 				hardConstraintViolations: [],
@@ -590,16 +563,10 @@ function stagePayload(
 
 const stubRequests: StubRequestLog[] = [];
 let stubMessageCounter = 0;
-/** When > 0, team-stage requests sleep this long first (cancellation case). */
-let slowTeamStagesMs = 0;
-let invalidRequiredRecheck = false;
+let holdProposals = false;
+let abortedProposals = 0;
 
-function stubSseBody(
-	requestModel: string,
-	input: Record<string, unknown>,
-	withThinking: boolean,
-	toolName = "yield",
-): string {
+function stubSseBody(requestModel: string, input: Record<string, unknown>, withThinking: boolean): string {
 	stubMessageCounter += 1;
 	const frames: string[] = [];
 	frames.push(
@@ -639,7 +606,7 @@ function stubSseBody(
 		`event: content_block_start\ndata: ${JSON.stringify({
 			type: "content_block_start",
 			index,
-			content_block: { type: "tool_use", id: `toolu_stub_${stubMessageCounter}`, name: toolName, input: {} },
+			content_block: { type: "tool_use", id: `toolu_stub_${stubMessageCounter}`, name: "yield", input: {} },
 		})}\n\n`,
 	);
 	frames.push(
@@ -661,11 +628,9 @@ function stubSseBody(
 	return frames.join("");
 }
 
-function messageTexts(message: unknown): { texts: string[]; hasToolResult: boolean; toolResultFailed: boolean } {
+function messageTexts(message: unknown): string[] {
 	const content = (message as { content?: unknown }).content;
 	const texts: string[] = [];
-	let hasToolResult = false;
-	let toolResultFailed = false;
 	if (typeof content === "string") {
 		texts.push(content);
 	} else if (Array.isArray(content)) {
@@ -673,17 +638,14 @@ function messageTexts(message: unknown): { texts: string[]; hasToolResult: boole
 			if (typeof block !== "object" || block === null) continue;
 			const type = (block as { type?: string }).type;
 			if (type === "text") texts.push((block as { text?: string }).text ?? "");
-			if (type === "tool_result") {
-				hasToolResult = true;
-				toolResultFailed ||= !("is_error" in block) || block.is_error !== false;
-			}
 		}
 	}
-	return { texts, hasToolResult, toolResultFailed };
+	return texts;
 }
 
 const stubServer = Bun.serve({
 	port: 0,
+	idleTimeout: 0,
 	hostname: "127.0.0.1",
 	fetch: async request => {
 		const url = new URL(request.url);
@@ -694,12 +656,11 @@ const stubServer = Bun.serve({
 		const requestModel = typeof body.model === "string" ? body.model : "stub-model";
 		const messages = Array.isArray(body.messages) ? body.messages : [];
 		let stage: string | undefined;
-		let dispatchJobId: string | undefined;
 		let recheck = false;
 		let target: string | undefined;
 		let round: number | undefined;
 		for (const message of messages) {
-			for (const text of messageTexts(message).texts) {
+			for (const text of messageTexts(message)) {
 				const match = /\[team-stage:([a-z]+)([^\]]*)\]/.exec(text);
 				if (match) {
 					stage = match[1]!;
@@ -708,50 +669,18 @@ const stubServer = Bun.serve({
 					const roundMatch = /\bround=(\d+)\b/.exec(match[2]!);
 					round = roundMatch ? Number(roundMatch[1]) : undefined;
 				}
-				const dispatchMatch = /\[team-dispatch (bg_\w+)\]/.exec(text);
-				if (dispatchMatch) dispatchJobId = dispatchMatch[1];
 			}
 		}
-		if (!stage) {
-			// Plain main-session turn. The LAST message decides the scripted reply:
-			// - a CANCELTEAM text request → `write proc://<id>/kill` tool_use (the
-			//   real user-facing cancellation path for /team background jobs);
-			// - the tool-result follow-up of that write call → closing text;
-			// - anything else → warm-up chatter.
-			const last = messages.at(-1);
-			const lastInfo = last ? messageTexts(last) : { texts: [], hasToolResult: false, toolResultFailed: false };
-			const wantsCancel = lastInfo.texts.some(text => text.includes("CANCELTEAM"));
-			if (wantsCancel && dispatchJobId) {
-				stubRequests.push({ model: requestModel, stage: "proc-cancel" });
-				return new Response(
-					stubSseBody(requestModel, { path: `proc://${dispatchJobId}/kill`, content: "" }, false, "write"),
-					{
-						status: 200,
-						headers: {
-							"content-type": "text/event-stream",
-							"request-id": `req_stub_${stubRequests.length}`,
-						},
-					},
-				);
-			}
-			if (lastInfo.toolResultFailed) {
-				return new Response("Cancellation tool returned an error", { status: 500 });
-			}
-			const closing = lastInfo.hasToolResult;
-			stubRequests.push({ model: requestModel, stage: closing ? "main-close" : "main-chat" });
-			return new Response(
-				stubPlainTextBody(
-					requestModel,
-					closing ? "CANCELDONE 已取消该后台任务。" : "MAINOK 已了解上下文，请继续。",
-				),
-				{
-					status: 200,
-					headers: { "content-type": "text/event-stream", "request-id": `req_stub_${stubRequests.length}` },
-				},
-			);
+		if (!stage) return new Response("Expected a Team stage request", { status: 500 });
+		stubRequests.push({ stage, recheck, target, round });
+		if (holdProposals && stage === "proposal") {
+			// Don't let proposals finish until the client cancels them. Count
+			// real disconnects before closing the PTY or the fixture server.
+			request.signal.addEventListener("abort", () => abortedProposals++, { once: true });
+			return new Response(new ReadableStream<Uint8Array>(), {
+				headers: { "content-type": "text/event-stream" },
+			});
 		}
-		stubRequests.push({ model: requestModel, stage, recheck, target, round });
-		if (slowTeamStagesMs > 0) await sleep(slowTeamStagesMs);
 		const withThinking = Boolean(body.thinking);
 		return new Response(
 			stubSseBody(requestModel, { data: stagePayload(stage, recheck, target, round) }, withThinking),
@@ -779,9 +708,6 @@ try {
 			"  members:",
 			"    - deepseek/glm-5.2",
 			"    - deepseek/glm-4.6",
-			"tools:",
-			"  approval:",
-			"    write: allow",
 			"startup:",
 			"  setupWizard: false",
 			"",
@@ -816,65 +742,36 @@ try {
 		"utf8",
 	);
 
+	const teamWorkspace = path.join(teamConfigRoot, "workspace");
+	await fs.mkdir(teamWorkspace);
+	const startTeamTui = () =>
+		startTui(
+			["--profile", TEAM_PROFILE, "--model", TEAM_MODEL, "--no-title"],
+			{
+				OMP_CONFIG_ROOT: teamConfigRoot,
+				OMP_PROFILE: TEAM_PROFILE,
+				PI_PROFILE: "",
+				PI_CODING_AGENT_DIR: "",
+			},
+			teamWorkspace,
+		);
 	console.log("ui-smoke: starting /team TUI case…");
-	const team = startTui(["--profile", TEAM_PROFILE, "--model", TEAM_MODEL], {
-		PI_CONFIG_DIR: TEAM_CONFIG_DIR_NAME,
-		// Keep host offline defaults out of this fixture.
-		OMP_OFFLINE: "",
-		OMP_PROFILE: TEAM_PROFILE,
-		PI_PROFILE: "",
-		PI_CODING_AGENT_DIR: "",
-	});
-	const teamRendered = await waitFor(() => hasRenderedTui(team), 120_000);
-	if (!teamRendered) {
+	const team = startTeamTui();
+	if (!(await waitFor(() => hasRenderedTui(team), 120_000))) {
 		dumpTail(team);
 		fail("/team TUI did not render within 120 s", team.session);
 	}
-	// Warm the session with one plain chat turn first — the realistic /team
-	// usage pattern (the report lands in an ongoing conversation) and it gives
-	// the main-agent view a settled chat region before the command runs.
-	// The greeting can land while the welcome animation still owns the input
-	// path and get dropped, so re-send until the stub round-trip is confirmed.
-	console.log("ui-smoke: /team TUI rendered; warming up with a plain chat turn…");
-	let warmed = false;
-	for (let attempt = 1; attempt <= 3 && !warmed; attempt++) {
-		if (attempt > 1) console.log(`ui-smoke: warm-up not confirmed; re-sending greeting (attempt ${attempt})…`);
-		team.session.write("简单打个招呼\r");
-		warmed = await waitFor(() => normalizePtyOutput(team.output).includes("MAINOK"), 20_000);
-	}
-	if (!warmed) {
+	if (
+		!(await submitSlash(
+			team,
+			"/team Compare API extensions that preserve existing callers",
+			() => normalizePtyOutput(team.output).includes("[team-dispatch "),
+			60_000,
+		))
+	) {
 		dumpTail(team);
-		fail("main-session warm-up turn did not complete within the retry budget", team.session);
+		fail("/team dispatch notice did not appear within 60 s", team.session);
 	}
-	// MAINOK matches mid-stream; let the warm-up turn settle before dispatch.
-	// The final report itself waits for idle and is durably appended without
-	// starting another model turn or entering a volatile next-turn queue.
-	let settledBytes = team.totalBytes;
-	let settled = false;
-	for (let attempt = 0; attempt < 40; attempt++) {
-		await sleep(500);
-		if (team.totalBytes === settledBytes) {
-			settled = true;
-			break;
-		}
-		settledBytes = team.totalBytes;
-	}
-	if (!settled) console.log("ui-smoke: note — output still growing after warm-up; continuing anyway");
-	console.log("ui-smoke: warm-up reply rendered; submitting /team command…");
-
-	team.session.write("/team 如何在不破坏旧接口的前提下扩展模块？\r");
-
-	// ASCII anchors: PTY chunks can split multibyte UTF-8, so the waits match
-	// ASCII markers emitted by the controller/report, not Chinese prose.
-	const dispatched = await waitFor(() => normalizePtyOutput(team.output).includes("[team-dispatch "), 60_000);
-	if (!dispatched) {
-		dumpTail(team);
-		fail(
-			`/team dispatch notice did not appear within 60 s (stub requests: ${stubRequests.map(r => r.stage).join(",") || "none"})`,
-			team.session,
-		);
-	}
-	console.log("ui-smoke: /team dispatched; waiting for the final report…");
 
 	// Server-side ground truth first (the synthesis stage ran), then the
 	// report's type marker in the transcript render. The dispatch breadcrumb
@@ -888,98 +785,33 @@ try {
 			team.session,
 		);
 	}
-	const completed = await waitFor(() => normalizePtyOutput(team.output).includes("team-result"), 60_000);
-	if (!completed) {
+	const completed = await waitFor(() => {
+		const output = normalizePtyOutput(team.output);
+		return output.includes("team-incomplete") || (output.includes("team-result") && output.includes("B-F2"));
+	}, 60_000);
+	if (!completed || normalizePtyOutput(team.output).includes("team-incomplete")) {
 		dumpTail(team);
 		fail(
-			`/team final report did not appear after synthesis (stub requests: ${stubRequests.map(r => r.stage).join(",")})`,
+			`/team final report with remaining blocker did not render (stub: ${stubRequests.map(r => r.stage).join(",")})`,
 			team.session,
 		);
 	}
-	// The failure message carries the distinct ASCII marker team-incomplete.
-	if (normalizePtyOutput(team.output).includes("team-incomplete")) {
-		dumpTail(team);
-		fail("/team run finished with the incomplete marker instead of a report", team.session);
-	}
-	const stageCounts = new Map<string, number>();
-	for (const request of stubRequests) {
-		stageCounts.set(request.stage, (stageCounts.get(request.stage) ?? 0) + 1);
-	}
-	console.log(`ui-smoke: /team report rendered; stub stages: ${JSON.stringify([...stageCounts])}`);
-	const initialReviewCount = stubRequests.filter(request => request.stage === "review" && !request.recheck).length;
-	const recheckCount = stubRequests.filter(request => request.stage === "review" && request.recheck).length;
+	// One discussion exercises all five stages, with valid partial closure
+	// on B and invalid required rechecks on C. Focused tests cover the matrix.
+	const stages = new Set(stubRequests.map(request => request.stage));
 	if (
-		(stageCounts.get("proposal") ?? 0) < 3 ||
-		(stageCounts.get("alignment") ?? 0) < 1 ||
-		initialReviewCount < 3 ||
-		(stageCounts.get("revision") ?? 0) < 6 ||
-		recheckCount < 6 ||
-		(stageCounts.get("synthesis") ?? 0) < 1
-	) {
-		fail(`/team did not exercise the expected stages: ${JSON.stringify([...stageCounts])}`, team.session);
-	}
-	const reviewedTargets = new Set(
-		stubRequests.filter(request => request.stage === "review" && !request.recheck).map(request => request.target),
-	);
-	if ([...reviewedTargets].sort().join(",") !== "A,B,C") {
-		fail("/team did not review all three independent proposer slots", team.session);
-	}
-	for (const target of reviewedTargets) {
-		for (const round of [1, 2]) {
-			const revised = stubRequests.some(
-				request => request.stage === "revision" && request.target === target && request.round === round,
-			);
-			const rechecked = stubRequests.some(
-				request =>
-					request.stage === "review" && request.recheck && request.target === target && request.round === round,
-			);
-			if (!target || !revised || !rechecked) {
-				fail(`/team did not exercise partial closure for ${target}, round ${round}`, team.session);
-			}
-		}
-	}
-	if (!(await waitFor(() => normalizePtyOutput(team.output).includes("B-F2"), 20_000))) {
-		fail("/team did not visibly preserve the remaining B-F2 blocker after partial closure", team.session);
-	}
-
-	// Run another real command through the same TUI. A clean new-findings
-	// verdict without exact historical decisions must fail both rechecks,
-	// remain non-adoptable and never inherit the first run's recommendation.
-	invalidRequiredRecheck = true;
-	const invalidRequestsStart = stubRequests.length;
-	const invalidOutputStart = team.output.length;
-	team.session.write("/team 验证必需复核遗漏裁决时不得推荐\r");
-	if (
-		!(await waitFor(
-			() => stubRequests.slice(invalidRequestsStart).some(request => request.stage === "synthesis"),
-			120_000,
-		))
-	)
-		fail("/team invalid-recheck case never reached synthesis", team.session);
-	const invalidRequests = stubRequests.slice(invalidRequestsStart);
-	for (const target of ["A", "B", "C"]) {
-		for (const stage of ["revision", "review"]) {
-			const rounds = invalidRequests
-				.filter(
+		!["proposal", "alignment", "review", "revision", "synthesis"].every(stage => stages.has(stage)) ||
+		!["B", "C"].every(target =>
+			[1, 2].every(round =>
+				stubRequests.some(
 					request =>
-						request.stage === stage && request.target === target && (stage !== "review" || request.recheck),
-				)
-				.map(request => request.round)
-				.sort();
-			if (rounds.join(",") !== "1,2") {
-				fail(`/team invalid-recheck case did not spend exactly two ${stage} rounds for ${target}`, team.session);
-			}
-		}
-	}
-	if (
-		!(await waitFor(() => {
-			const output = normalizePtyOutput(team.output.slice(invalidOutputStart));
-			return output.includes("修订后必需复核未完成") && output.includes("A-F1");
-		}, 60_000))
+						request.stage === "review" && request.recheck && request.target === target && request.round === round,
+				),
+			),
+		)
 	) {
-		fail("/team invalid-recheck result did not visibly retain A-F1 and the failed-recheck gate", team.session);
+		fail(`/team did not exercise all stages and required rechecks (stub: ${[...stages].join(",")})`, team.session);
 	}
-	invalidRequiredRecheck = false;
 
 	team.session.write("\x04");
 	const teamOutcome = await waitForCleanExit(team, "/team TUI");
@@ -1003,115 +835,60 @@ try {
 			}
 		}
 	}
-	const completedReport = persistedReports.find(report => report.includes("【推荐】方案 A"));
+	const report = persistedReports[0];
+	const rows = report?.split("\n");
+	const partial = rows?.find(row => row.startsWith("| 方案 B | ⛔ 尚不可采用"));
+	const invalid = rows?.find(row => row.startsWith("| 方案 C | ⛔ 尚不可采用"));
 	if (
-		!completedReport ||
-		!completedReport.includes("| 方案 A | ✅ 可作为选项") ||
-		!completedReport.includes("| 方案 B | ⛔ 尚不可采用") ||
-		!completedReport.includes("B-F2") ||
-		completedReport.includes("【推荐】方案 B") ||
-		!completedReport.includes("选择仅确认该方案")
-	)
-		fail("/team partial-closure report lost the persisted blocker, recommendation gate or closing contract");
-	const invalidReport = persistedReports.find(report => report.includes("修订后必需复核未完成"));
-	if (
-		!invalidReport ||
-		invalidReport.includes("【推荐】") ||
-		invalidReport.includes("✅ 可作为选项") ||
-		!["A-F1", "A-F2", "B-F1", "B-F2", "C-F1", "C-F2"].every(id => invalidReport.includes(id))
-	)
-		fail("/team invalid required rechecks were not durably gated with all historical blocker IDs");
+		persistedReports.length !== 1 ||
+		!report?.includes("| 方案 A | ✅ 可作为选项") ||
+		!partial?.includes("B-F2") ||
+		partial.includes("B-F1") ||
+		!invalid?.includes("修订后必需复核未完成") ||
+		!invalid.includes("C-F1") ||
+		!invalid.includes("C-F2") ||
+		!report.includes("否决了综合子调用对“C”的推荐") ||
+		report.includes("【推荐】") ||
+		!report.includes("选择仅确认该方案")
+	) {
+		fail("/team persisted report lost the partial closure, invalid-recheck gate or closing contract");
+	}
 	console.log("ui-smoke: /team case PASS — real TUI run rendered and persisted the final /team report");
 	await recordUiCase("team-report-persisted");
 
-	// ── 5. /team cancellation propagation against a slow stub ──────────────────
-	// team.md §7 requires cancellation across concurrent subagents to be
-	// verified in the UI smoke. Drives the real user-facing path: a chat turn
-	// whose scripted reply issues `write proc://<id>/kill` (job cancel),
-	// which aborts the job's signal; the propagation must reach every in-flight
-	// subagent so no later stage (alignment/synthesis) is ever requested.
+	// Cancel through the real jobs command while all three proposals are in flight.
 	console.log("ui-smoke: starting /team cancellation case…");
-	slowTeamStagesMs = 6_000;
+	holdProposals = true;
 	const requestsBeforeCancel = stubRequests.length;
-	const cancelTui = startTui(["--profile", TEAM_PROFILE, "--model", TEAM_MODEL], {
-		PI_CONFIG_DIR: TEAM_CONFIG_DIR_NAME,
-		OMP_OFFLINE: "",
-		OMP_PROFILE: TEAM_PROFILE,
-		PI_PROFILE: "",
-		PI_CODING_AGENT_DIR: "",
-	});
-	const cancelRendered = await waitFor(() => hasRenderedTui(cancelTui), 120_000);
-	if (!cancelRendered) {
+	const cancelTui = startTeamTui();
+	if (!(await waitFor(() => hasRenderedTui(cancelTui), 120_000))) {
 		dumpTail(cancelTui);
 		fail("/team cancel TUI did not render within 120 s", cancelTui.session);
 	}
-	// Warm up like the success case: on a fresh session the dispatch
-	// breadcrumb's first render can lag by seconds, and this case must issue
-	// the cancel long before the slow proposals settle. Re-send on the same
-	// dropped-greeting race the success case guards against.
-	let cancelWarmed = false;
-	for (let attempt = 1; attempt <= 3 && !cancelWarmed; attempt++) {
-		if (attempt > 1) console.log(`ui-smoke: cancel warm-up not confirmed; re-sending greeting (attempt ${attempt})…`);
-		cancelTui.session.write("简单打个招呼\r");
-		cancelWarmed = await waitFor(() => normalizePtyOutput(cancelTui.output).includes("MAINOK"), 20_000);
-	}
-	if (!cancelWarmed) {
+	const dispatchId = () => /\[team-dispatch (bg_\w+)\]/.exec(normalizePtyOutput(cancelTui.output))?.[1];
+	if (!(await submitSlash(cancelTui, "/team Compare proposals before cancellation", () => !!dispatchId(), 60_000))) {
 		dumpTail(cancelTui);
-		fail("/team cancel case: warm-up turn did not complete", cancelTui.session);
+		fail("/team cancel case: no dispatch notice appeared", cancelTui.session);
 	}
-	{
-		let settledBytes = cancelTui.totalBytes;
-		let settled = false;
-		for (let attempt = 0; attempt < 40; attempt++) {
-			await sleep(500);
-			if (cancelTui.totalBytes === settledBytes) {
-				settled = true;
-				break;
-			}
-			settledBytes = cancelTui.totalBytes;
-		}
-		if (!settled) console.log("ui-smoke: note — cancel case output still settling; continuing");
-	}
-	cancelTui.session.write("/team 再分析一个慢速问题\r");
-	// Wait on the stub, not the TUI render: the slow proposals are in flight
-	// the moment the first request lands, and the cancel must beat their 6 s
-	// delay regardless of how fast the breadcrumb paints.
-	const proposalInFlight = await waitFor(
-		() => stubRequests.slice(requestsBeforeCancel).some(request => request.stage === "proposal"),
+	const proposalsInFlight = await waitFor(
+		() => stubRequests.slice(requestsBeforeCancel).filter(request => request.stage === "proposal").length === 3,
 		30_000,
 	);
-	if (!proposalInFlight) {
+	if (!proposalsInFlight || abortedProposals !== 0) {
 		dumpTail(cancelTui);
-		fail("/team cancel case: no proposal request reached the stub", cancelTui.session);
+		fail("/team cancel case: three live proposals were not in flight before cancellation", cancelTui.session);
 	}
-	console.log("ui-smoke: proposals in flight; issuing proc:// cancel via a chat turn…");
-	cancelTui.session.write("CANCELTEAM 请取消刚才的 /team 后台任务\r");
-	const cancelConfirmed = await waitFor(() => normalizePtyOutput(cancelTui.output).includes("CANCELDONE"), 60_000);
+	const jobId = dispatchId()!;
+	cancelTui.session.write(`/jobs kill ${jobId}\r`);
+	const cancelConfirmed = await waitFor(
+		() =>
+			abortedProposals === 3 && normalizePtyOutput(cancelTui.output).includes(`Cancelled background job ${jobId}.`),
+		60_000,
+	);
 	if (!cancelConfirmed) {
 		dumpTail(cancelTui);
 		fail(
-			`/team cancel case: proc:// cancel round-trip did not complete (stub: ${stubRequests
-				.slice(requestsBeforeCancel)
-				.map(r => r.stage)
-				.join(",")})`,
-			cancelTui.session,
-		);
-	}
-	// The slow stage delay gives uncancelled runs plenty of time to advance;
-	// none of the post-fan-out stages may appear after the cancel turn.
-	await sleep(12_000);
-	const lateStages = stubRequests
-		.slice(requestsBeforeCancel)
-		.filter(
-			request =>
-				request.stage === "alignment" ||
-				request.stage === "review" ||
-				request.stage === "revision" ||
-				request.stage === "synthesis",
-		);
-	if (lateStages.length > 0) {
-		fail(
-			`/team cancel case: stages ran after cancellation (${lateStages.map(r => r.stage).join(",")})`,
+			`/team cancel case: job ${jobId} did not cancel all proposals (${abortedProposals}/3 disconnected)`,
 			cancelTui.session,
 		);
 	}
@@ -1119,6 +896,10 @@ try {
 	const cancelOutcome = await waitForCleanExit(cancelTui, "/team cancel TUI");
 	if (cancelOutcome.exitCode !== 0) {
 		fail(`/team cancel TUI exited with code ${cancelOutcome.exitCode} (expected 0)`);
+	}
+	const lateStages = stubRequests.slice(requestsBeforeCancel).filter(request => request.stage !== "proposal");
+	if (lateStages.length > 0) {
+		fail(`/team cancel case: stages ran after cancellation (${lateStages.map(r => r.stage).join(",")})`);
 	}
 	console.log("ui-smoke: /team cancellation case PASS — cancel reached the orchestrator before any later stage");
 } catch (error) {

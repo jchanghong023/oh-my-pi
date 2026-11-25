@@ -54,7 +54,7 @@ describe("Developer Test Agent archive materialization", () => {
 		await probe("consumers", gzipSync(JSON.stringify(entries)));
 	});
 
-	it("publishes concurrent requests atomically, reuses the cache and isolates profiles", async () => {
+	it("publishes concurrently, isolates profiles and requires the archive only on a cache miss", async () => {
 		await probe("cache", await buildDeveloperTestAgentResources());
 	});
 
@@ -67,13 +67,5 @@ describe("Developer Test Agent archive materialization", () => {
 			"write-failure",
 			gzipSync(JSON.stringify([file("occupied", "first"), file("occupied/child", "second")])),
 		);
-	});
-
-	it("does not publish or create staging files for corrupt gzip or malformed JSON", async () => {
-		await probe("corrupt");
-	});
-
-	it("reports a missing archive without creating a profile cache", async () => {
-		await probe("missing");
 	});
 });

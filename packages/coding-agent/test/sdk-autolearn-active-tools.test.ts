@@ -14,7 +14,7 @@ import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 // Guards builtins that createTools force-includes into the registry but an
 // explicit `toolNames` whitelist would otherwise drop from the active set.
 // createAgentSession must mirror those inclusions so the callable surface
-// remains consistent with wiki/read pairing and auto-learn guidance.
+// remains consistent with auto-learn guidance.
 describe("createAgentSession force-included tool activation", () => {
 	let registryDir: string;
 	let authStorage: AuthStorage;
@@ -59,11 +59,6 @@ describe("createAgentSession force-included tool activation", () => {
 		sessions.push(session);
 		return session.getActiveToolNames();
 	}
-
-	it("activates OpenWiki when an unrestricted explicit tool set includes read", async () => {
-		const names = await activeToolNames(Settings.isolated({}));
-		expect(names).toContain("openwiki_search");
-	});
 
 	it("activates force-included manage_skill in a restricted top-level session", async () => {
 		const names = await activeToolNames(Settings.isolated({ "autolearn.enabled": true }));

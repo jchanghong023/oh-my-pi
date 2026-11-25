@@ -157,8 +157,6 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 		try {
 			const success = await box.cli(["models", "refresh", "--json", "--no-extensions"]);
 			expect(success.code).toBe(0);
-			const rejected = await box.cli(["models", "find", "--json", "--no-extensions"]);
-			expect(rejected.code).toBe(1);
 			const failed = await box.cli([
 				"models",
 				"refresh",

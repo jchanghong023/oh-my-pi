@@ -67,11 +67,11 @@
 
 - 三层门禁直接运行既有 Bun／Cargo 原语，记录 Git 版本和工作区状态，保留预算和失败汇总；不扫描全仓内容指纹，也不因运行期间源码或临时文件变化中止或自动重跑。fastcheck 不运行测试，保留原有工具和增量编译缓存。slowtest 运行本机 fulltest 及适用的 WSL fulltest，各端独立选测并保留固定提交同步；不缓存门禁或完整命令结果，也不引入自建结果缓存框架。
 - `bun scripts/monitor-system.ts` 在 Windows 后台启动性能采集器，每 2 秒将 CPU、内存、各磁盘卷容量及各物理磁盘 I/O 繁忙度、读写速率和队列长度写入系统临时目录 `omp-test-monitor-*/samples.jsonl`，启动后立即返回。入口使用 TypeScript/Bun，常驻 PowerShell 进程读取 Windows 原生性能计数器，避免每轮创建进程。`--stop <监控目录>` 请求停止并保留数据；`--report <监控目录>` 显示 CPU/内存及各磁盘 I/O 均值、峰值和容量，可在采集中读取。数据包含时间戳和采集耗时，便于对齐测试阶段；容量使用率与 I/O 繁忙度分开记录。
-- 日常 `bun run test`、`test:ts`、fulltest 和 slowtest 测 fork 自有功能：OpenSpec、Team/Goal、OpenWiki、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI、状态栏、审批/个人命令/默认值及分发消费者契约。`/wt` 策略由消费者测试覆盖，不展开完整上游 task/worktree 与 pi-vcs。
+- 日常 `bun run test`、`test:ts`、fulltest 和 slowtest 测 fork 自有功能：Team/Goal、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI、状态栏、审批/个人命令/默认值及分发消费者契约。不再维护 spec-driven、OpenSpec 或 OpenWiki 专项测试。`/wt` 策略由消费者测试覆盖，不展开完整上游 task/worktree 与 pi-vcs。
 - 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 与旁支包完整回归，以及纯上游继承或仅 bugfix 专项不随日常门禁运行，即使规格记载亦然；上游测试文件及已有显式手动入口保留。真实 PTY 保留不同错误、状态和焦点边界；当前消费者仍覆盖适用的冷启动、准备失败／EOF、冷恢复、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源。独立 Python SDK、Robomp、legacy 通用 SDK 只保留手动入口。静态检查和编译范围不缩减，不新增 skip 或放宽时限。
 - 默认 Bun 门禁只在 fork 白名单内以 `--changed` 按变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不回退上游全量。`CI` 与本地 TS 的 `OMP_TEST_SHARD` 不改变本地范围；仓库脚本自测仅对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 入口保留。
 - 根目录的 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为 Git 测试选测输入，不会单独触发 Bun 全量回退或独立 UI smoke。混合变更仍按其他运行输入判断；包内 Markdown、提示词等运行资源不在排除范围内。缺少合格基线和显式 `--full` 时的行为不变。
-- `bun run fulltest --full` 显式覆盖当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 与仓库脚本测试，不使用 fork 白名单、变更选测、testmon 或环境分片；默认范围不变。全量模式不发现或运行 `vendor/openwiki` 子模块自身的测试，OMP 宿主侧的 OpenWiki 集成测试仍在范围内。测试自身 skip、平台不支持、真实桌面输入与另需单独授权的集成仍受原边界约束。
+- `bun run fulltest --full` 显式覆盖当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 与仓库脚本测试，不使用 fork 白名单、变更选测、testmon 或环境分片；默认范围不变。全量模式不发现或运行 `vendor/openwiki` 子模块自身的测试。测试自身 skip、平台不支持、真实桌面输入与另需单独授权的集成仍受原边界约束。
 - 全量门禁不自动执行 POSIX 安装路由用例；需要时在支持 POSIX `sh` 的环境中显式运行 `bun test ./scripts/install-tests/fork-installer-routing.test.ts`，也可通过 `bun run test:scripts` 执行。默认 fulltest 仍按变更选入仓库脚本自测。
 - 本地 Markdown 索引退役后，`bun run test:rs` 和默认 fulltest／slowtest 的 Rust 测试范围 `rust-fork-features` 没有选中的测试，记录 `not-selected`；不执行 Nextest、Cargo doctest 或 cargo-delta，不生成虚构用例或 PASS。显式 `bun run test:rs --full` 和 `bun run fulltest --full` 保留完整 workspace 的 Nextest 和 Cargo doctest；静态检查、编译及正常 Cargo 增量缓存不变。
 - Windows 的 Rust 门禁、本地 native 构建和发布 native 构建共用 VS Build Tools 的 CMake/Ninja 探测，优先使用现有 `PATH` 中的工具；Rust 门禁找不到 `vswhere` 时仍交给 Cargo 报告缺失工具。

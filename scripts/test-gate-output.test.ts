@@ -10,19 +10,17 @@ const failures = pathToFileURL(path.join(import.meta.dir, "test-gate-failure-eve
 
 // These are real nested process/pipe boundaries, not console spies. A successful
 // command must disappear only from presentation, never from execution or JUnit.
-test.each(["fastcheck", "fulltest", "slowtest"])(
-	"%s hides successful commands but retains their structured results",
-	async level => {
-		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gate-output-"));
-		const marker = path.join(directory, "executed");
-		try {
-			const source = `
+test("fulltest hides successful commands but retains their structured results", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gate-output-"));
+	const marker = path.join(directory, "executed");
+	try {
+		const source = `
 import * as fs from "node:fs/promises";
 import { runGate } from ${JSON.stringify(runtime)};
 import { endTestRun, recordTestProducer, writeCommandCase } from ${JSON.stringify(reporting)};
 const dir = ${JSON.stringify(directory)};
 const started = performance.now();
-const result = await runGate(${JSON.stringify(level)}, async gate => {
+const result = await runGate("fulltest", async gate => {
   gate.onFinalize(code => endTestRun({id:"presentation",dir,startedAt:new Date().toISOString(),startedMs:started,scope:"presentation fixture",owner:true,sourceRevision:null,dirtyState:null,dirtyStateIdentity:null}, code));
   const command = [process.execPath, "-e", ${JSON.stringify(`await Bun.write(${JSON.stringify(marker)}, "successful work ran"); console.log("SUCCESS_STDOUT_SENTINEL"); console.error("SUCCESS_STDERR_SENTINEL");`)}];
   const before = performance.now();
@@ -34,44 +32,42 @@ const result = await runGate(${JSON.stringify(level)}, async gate => {
 }, {failureOnlyOutput:true});
 process.exit(result.exitCode);
 `;
-			const child = Bun.spawn([process.execPath, "-e", source], {
-				env: {
-					...process.env,
-					OMP_TEST_REPORT_DIR: directory,
-					OMP_GATE_EVENT_TOKEN: "",
-					OMP_GATE_EVENT_FILE: "",
-					OMP_GATE_CLOCK_TOKEN: "",
-				},
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-			const [exitCode, stdout, stderr] = await Promise.all([
-				child.exited,
-				new Response(child.stdout).text(),
-				new Response(child.stderr).text(),
-			]);
-			expect(exitCode, stdout + stderr).toBe(0);
-			expect(stdout + stderr).not.toContain("SUCCESS_");
-			expect(stdout).toMatch(new RegExp(`${level}: PASS total=\\d+\\.\\ds .* exit=0`));
-			expect(stdout).toContain(path.join(directory, "run.json"));
-			expect(await fs.readFile(marker, "utf8")).toBe("successful work ran");
-			const report = await Bun.file(path.join(directory, "run.json")).json();
-			expect(report).toMatchObject({
-				completion: "complete",
-				exitCode: 0,
-				reconciliation: { cases: 1, executed: 1, failures: 0 },
-			});
-			expect(report.producers).toHaveLength(1);
-			expect(report.producers[0]).toMatchObject({ status: "passed", report: "available", exitCode: 0 });
-			const xml = await fs.readFile(path.join(directory, report.producers[0].reportPath), "utf8");
-			expect(xml).toContain('name="SUCCESS_CASE_SENTINEL"');
-			expect(xml).toMatch(/time="\d+\.\d{6}"/);
-		} finally {
-			await fs.rm(directory, { recursive: true, force: true });
-		}
-	},
-	20_000,
-);
+		const child = Bun.spawn([process.execPath, "-e", source], {
+			env: {
+				...process.env,
+				OMP_TEST_REPORT_DIR: directory,
+				OMP_GATE_EVENT_TOKEN: "",
+				OMP_GATE_EVENT_FILE: "",
+				OMP_GATE_CLOCK_TOKEN: "",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(exitCode, stdout + stderr).toBe(0);
+		expect(stdout + stderr).not.toContain("SUCCESS_");
+		expect(stdout).toMatch(/fulltest: PASS total=\d+\.\ds .* exit=0/);
+		expect(stdout).toContain(path.join(directory, "run.json"));
+		expect(await fs.readFile(marker, "utf8")).toBe("successful work ran");
+		const report = await Bun.file(path.join(directory, "run.json")).json();
+		expect(report).toMatchObject({
+			completion: "complete",
+			exitCode: 0,
+			reconciliation: { cases: 1, executed: 1, failures: 0 },
+		});
+		expect(report.producers).toHaveLength(1);
+		expect(report.producers[0]).toMatchObject({ status: "passed", report: "available", exitCode: 0 });
+		const xml = await fs.readFile(path.join(directory, report.producers[0].reportPath), "utf8");
+		expect(xml).toContain('name="SUCCESS_CASE_SENTINEL"');
+		expect(xml).toMatch(/time="\d+\.\d{6}"/);
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+}, 20_000);
 
 // Authenticated failure notification must flush diagnostics while the failing
 // command remains blocked, and ordinary failure must not cancel later work.

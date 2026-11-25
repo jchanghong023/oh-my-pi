@@ -276,22 +276,17 @@ test("integration chunk classification matches coding-agent test paths only", ()
 		isIntegrationCommand(command("packages/coding-agent", ["test/unit.test.ts", "test/process.e2e.test.ts"])),
 	).toBe(true);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integration/session.test.ts"]))).toBe(true);
-	for (const file of ["test/openwiki/native-pool.test.ts", "test/spec-driven/resources.test.ts"]) {
-		expect(isIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
-		expect(isLimitedIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
-		expect(isIntegrationCommand(command("packages/tui", [file]))).toBe(false);
-	}
+	const browserCrawl = "test/tools/browser/crawl.test.ts";
+	expect(isIntegrationCommand(command("packages/coding-agent", [browserCrawl]))).toBe(true);
+	expect(isLimitedIntegrationCommand(command("packages/coding-agent", [browserCrawl]))).toBe(true);
+	expect(isIntegrationCommand(command("packages/tui", [browserCrawl]))).toBe(false);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integrationish.test.ts"]))).toBe(false);
 	expect(isIntegrationCommand(command("packages/tui", ["test/process.e2e.test.ts"]))).toBe(false);
 });
 
 test("startup integration chunks bypass only the heavy integration limit", () => {
 	const command = (file: string) => ({ label: "chunk", cwd: "packages/coding-agent", command: ["bun", "test", file] });
-	for (const file of [
-		"test/spec-driven/tui-compact-mixed.e2e.test.ts",
-		"test/goals/goal-autopilot-tui.e2e.test.ts",
-		"test/goals/goal-ctrl-enter-tui.e2e.test.ts",
-	]) {
+	for (const file of ["test/goals/goal-autopilot-tui.e2e.test.ts", "test/goals/goal-ctrl-enter-tui.e2e.test.ts"]) {
 		expect(isIntegrationCommand(command(file))).toBe(true);
 		expect(isLimitedIntegrationCommand(command(file))).toBe(false);
 	}
@@ -314,17 +309,7 @@ test("bounded pool fills ordinary workers past the cap4 heavy queue and drains e
 			isLimitedIntegrationCommand({
 				label: item,
 				cwd: "packages/coding-agent",
-				command: [
-					"bun",
-					"test",
-					item === "h1"
-						? "test/openwiki/native-pool.test.ts"
-						: item === "h5"
-							? "test/spec-driven/resources.test.ts"
-							: item.startsWith("h")
-								? "test/integration/session.test.ts"
-								: "test/unit.test.ts",
-				],
+				command: ["bun", "test", item.startsWith("h") ? "test/integration/session.test.ts" : "test/unit.test.ts"],
 			}),
 		4,
 		async item => {
@@ -488,7 +473,7 @@ test("startup file workers use the fulltest budget without exceeding CPU or comm
 				isLimitedIntegrationCommand({
 					label: "startup",
 					cwd: "packages/coding-agent",
-					command: ["bun", "test", "test/spec-driven/tui-compact-mixed.e2e.test.ts"],
+					command: ["bun", "test", "test/goals/goal-autopilot-tui.e2e.test.ts"],
 				}),
 			4,
 			async file => {
@@ -877,14 +862,8 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/collab-web/test/transcript.test.tsx",
 			"packages/collab-web/test/tool-view.test.tsx",
 			"packages/collab-web/test/markdown.test.tsx",
-			"packages/coding-agent/test/spec-driven/resources.test.ts",
-			"packages/coding-agent/test/spec-driven/skill-policy.test.ts",
-			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
 			"packages/coding-agent/test/team/integration.test.ts",
 			"packages/coding-agent/test/goals/goal-runtime.test.ts",
-			"packages/coding-agent/test/cli/openwiki.test.ts",
-			"packages/coding-agent/test/openwiki/resources.test.ts",
-			"packages/coding-agent/test/openwiki/model-selection.test.ts",
 			"packages/coding-agent/test/lsp/edits.test.ts",
 			"packages/coding-agent/test/acp-builtins.test.ts",
 			"packages/tui/test/composer-inline-shrink.test.ts",
@@ -959,9 +938,7 @@ test("local suites select fork consumers and drain failures without widening to 
 		expect(await executed()).toEqual([]);
 		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--defer-startup", "--only-startup"], {}, 1);
 		const startupFiles = [
-			"test/spec-driven/tui-compact-mixed.e2e.test.ts",
-			"test/spec-driven/tui-resources.e2e.test.ts",
-			"test/spec-driven/tui-capabilities.e2e.test.ts",
+			"test/goals/goal-autopilot-public-views.test.ts",
 			"test/goals/goal-autopilot-tui.e2e.test.ts",
 			"test/goals/goal-ctrl-enter-tui.e2e.test.ts",
 			"test/startup-composer.test.ts",

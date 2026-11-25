@@ -1749,18 +1749,18 @@ describe("parseSkillInvocation", () => {
 		it("parses a collision-namespaced skill mid-prompt", () => {
 			// `<namespace>/<name>` is the address a differing same-name skill gets,
 			// and mid-prompt completion inserts it, so the token must invoke it.
-			expect(parseSkillInvocation("fix the bug /skill:superpowers/tdd focus on auth")).toEqual({
-				name: "superpowers/tdd",
+			expect(parseSkillInvocation("fix the bug /skill:workspace/review focus on auth")).toEqual({
+				name: "workspace/review",
 				args: "fix the bug focus on auth",
-				prompt: "fix the bug /skill:superpowers/tdd focus on auth",
+				prompt: "fix the bug /skill:workspace/review focus on auth",
 			});
 		});
 
 		it("invokes every skill that mid-prompt completion suggests, namespaced ones included", async () => {
 			const provider = new CombinedAutocompleteProvider(
 				[
-					{ name: "skill:tdd", description: "Local test-driven development" },
-					{ name: "skill:superpowers/tdd", description: "Plugin test-driven development" },
+					{ name: "skill:review", description: "Local code review" },
+					{ name: "skill:workspace/review", description: "Plugin code review" },
 				],
 				os.tmpdir(),
 			);
@@ -1768,7 +1768,7 @@ describe("parseSkillInvocation", () => {
 			const lines = [`${before} focus on auth`];
 			const suggestions = await provider.getSuggestions(lines, 0, before.length);
 			const values = suggestions?.items.map(item => item.value) ?? [];
-			expect(values).toEqual(expect.arrayContaining(["skill:tdd", "skill:superpowers/tdd"]));
+			expect(values).toEqual(expect.arrayContaining(["skill:review", "skill:workspace/review"]));
 
 			for (const item of suggestions?.items ?? []) {
 				const accepted = provider.applyCompletion(lines, 0, before.length, item, suggestions?.prefix ?? "");

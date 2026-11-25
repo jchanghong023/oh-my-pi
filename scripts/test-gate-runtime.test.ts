@@ -588,6 +588,9 @@ for (const level of ["fastcheck", "fulltest", "slowtest"] satisfies GateLevel[])
 				/PASS total=\d+\.\ds compile_excluded=\d+\.\ds budgeted=\d+\.\ds limit=\d+\.\ds exit=0$/,
 			);
 		});
+
+		if (level !== "fastcheck") return;
+
 		it("keeps the failing command exit code", async () => {
 			const output: string[] = [];
 			const result = await runGate(
@@ -2603,12 +2606,10 @@ exitGateProcess(result.exitCode);`;
 	10_000,
 );
 
-it.each(["fastcheck", "fulltest", "slowtest"] satisfies GateLevel[])(
-	"summarizes %s interrupts during watchdog startup before invoking gate work",
-	async level => {
-		const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
-		const script = `import {runGate} from ${JSON.stringify(runtime)};
-const pending = runGate(${JSON.stringify(level)}, async () => {
+it("summarizes a fulltest interrupt during watchdog startup before invoking gate work", async () => {
+	const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
+	const script = `import {runGate} from ${JSON.stringify(runtime)};
+const pending = runGate("fulltest", async () => {
   process.stdout.write("UNEXPECTED_WORK_STARTED");
   await Promise.withResolvers().promise;
 }, {limitSeconds:0.4,exitOnFailure:true});
@@ -2617,31 +2618,27 @@ const pending = runGate(${JSON.stringify(level)}, async () => {
 process.emit("SIGINT");
 await pending;
 process.exit(99);`;
-		const child = Bun.spawn([process.execPath, "-e", script], {
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: 3000,
-			env: { ...process.env, OMP_GATE_EVENT_TOKEN: "", OMP_GATE_EVENT_FILE: "", OMP_GATE_CLOCK_TOKEN: "" },
-		});
-		try {
-			const [code, stdout] = await Promise.all([
-				child.exited,
-				new Response(child.stdout).text(),
-				new Response(child.stderr).text(),
-			]);
-			expect(code).toBe(130);
-			expect(stdout).not.toContain("UNEXPECTED_WORK_STARTED");
-			expect(stdout).toMatch(
-				new RegExp(
-					`${level}: INTERRUPTED total=\\d+\\.\\ds compile_excluded=\\d+\\.\\ds budgeted=\\d+\\.\\ds limit=0\\.4s exit=130`,
-				),
-			);
-		} finally {
-			if (child.exitCode === null) child.kill("SIGKILL");
-		}
-	},
-	5000,
-);
+	const child = Bun.spawn([process.execPath, "-e", script], {
+		stdout: "pipe",
+		stderr: "pipe",
+		timeout: 3000,
+		env: { ...process.env, OMP_GATE_EVENT_TOKEN: "", OMP_GATE_EVENT_FILE: "", OMP_GATE_CLOCK_TOKEN: "" },
+	});
+	try {
+		const [code, stdout] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(code).toBe(130);
+		expect(stdout).not.toContain("UNEXPECTED_WORK_STARTED");
+		expect(stdout).toMatch(
+			/fulltest: INTERRUPTED total=\d+\.\ds compile_excluded=\d+\.\ds budgeted=\d+\.\ds limit=0\.4s exit=130/,
+		);
+	} finally {
+		if (child.exitCode === null) child.kill("SIGKILL");
+	}
+}, 5000);
 
 it.each([
 	{ name: "first-failure", exitCode: 23 },

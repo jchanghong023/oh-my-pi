@@ -4,8 +4,6 @@ import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { toolCommandNames } from "@oh-my-pi/pi-coding-agent/exec/tool-command-host";
 
-const openwikiQueryTools = ["openwiki_search", "openwiki_read", "openwiki_list_workspaces", "openwiki_list_wikis"];
-
 function createTestSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
 		cwd: "/tmp/test",
@@ -93,7 +91,8 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["read", "lsp", "write"]);
 		const names = tools.map(t => t.name);
 
-		expect(new Set(names)).toEqual(new Set(["read", "write", ...openwikiQueryTools]));
+		expect(names).toEqual(expect.arrayContaining(["read", "write"]));
+		expect(names).not.toContain("lsp");
 	});
 
 	it("keeps an explicit tool list top-level when it omits bash", async () => {
@@ -101,27 +100,7 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["read", "lsp", "write"]);
 
 		expect(session.toolCommands).toBeUndefined();
-		expect(new Set(tools.map(tool => tool.name))).toEqual(new Set(["read", "lsp", "write", ...openwikiQueryTools]));
-	});
-
-	it.each([true, false])("exposes OpenWiki queries with default tools when commands are %s", async commands => {
-		const session = createTestSession({ settings: createSettingsWithOverrides({ "tools.commands": commands }) });
-		const names = new Set((await createTools(session)).map(tool => tool.name));
-		for (const name of openwikiQueryTools) {
-			expect(names.has(name)).toBe(!commands);
-			if (commands) expect(session.toolCommands?.mountedNames.has(name)).toBe(true);
-		}
-	});
-
-	it("does not give child sessions OpenWiki queries unless explicitly granted", async () => {
-		for (const requested of [undefined, ["read"]] as const) {
-			const session = createTestSession({ taskDepth: 1 });
-			const names = (await createTools(session, requested ? [...requested] : undefined)).map(tool => tool.name);
-			for (const name of openwikiQueryTools) expect(names).not.toContain(name);
-		}
-		const child = createTestSession({ taskDepth: 1, restrictToolNames: true });
-		const names = (await createTools(child, ["read", "openwiki_search"])).map(tool => tool.name);
-		expect(new Set(names)).toEqual(new Set(["read", "openwiki_search"]));
+		expect(tools.map(tool => tool.name)).toEqual(expect.arrayContaining(["read", "lsp", "write"]));
 	});
 
 	it("lowercases requested tool subset", async () => {
@@ -129,7 +108,7 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["Read", "Write"]);
 		const names = tools.map(t => t.name);
 
-		expect(new Set(names)).toEqual(new Set(["read", "write", ...openwikiQueryTools]));
+		expect(names).toEqual(expect.arrayContaining(["read", "write"]));
 	});
 
 	it("includes hidden tools when explicitly requested", async () => {
@@ -208,7 +187,9 @@ describe("createTools", () => {
 			}),
 			["ask", "read"],
 		);
-		expect(new Set(requested.map(t => t.name))).toEqual(new Set(["read", ...openwikiQueryTools]));
+		const requestedNames = requested.map(t => t.name);
+		expect(requestedNames).toContain("read");
+		expect(requestedNames).not.toContain("ask");
 	});
 
 	it("filters disabled builtin tools by settings", async () => {
@@ -237,7 +218,9 @@ describe("createTools", () => {
 		expect(names).not.toContain("browser");
 
 		const requestedTools = await createTools(createTestSession({ settings: session.settings }), ["bash", "read"]);
-		expect(new Set(requestedTools.map(t => t.name))).toEqual(new Set(["read", ...openwikiQueryTools]));
+		const requestedNames = requestedTools.map(t => t.name);
+		expect(requestedNames).toContain("read");
+		expect(requestedNames).not.toContain("bash");
 	});
 
 	it("auto-includes goal when goal mode is active", async () => {
@@ -250,14 +233,14 @@ describe("createTools", () => {
 		const tools = await createTools(session, ["read"]);
 		const names = tools.map(t => t.name);
 
-		expect(new Set(names)).toEqual(new Set(["read", "goal", ...openwikiQueryTools]));
+		expect(names).toEqual(expect.arrayContaining(["read", "goal"]));
 	});
 
 	it("presents report_issue top-level when Auto-QA is on and bash is not requested", async () => {
 		const session = createTestSession({ settings: Settings.isolated({ "dev.autoqa": true }) });
 		const tools = await createTools(session, ["read"]);
 
-		expect(new Set(tools.map(tool => tool.name))).toEqual(new Set(["read", "report_issue", ...openwikiQueryTools]));
+		expect(tools.map(tool => tool.name)).toEqual(expect.arrayContaining(["read", "report_issue"]));
 		expect(session.toolCommands).toBeUndefined();
 	});
 

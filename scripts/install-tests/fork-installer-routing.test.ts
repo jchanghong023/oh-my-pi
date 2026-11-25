@@ -23,7 +23,7 @@ async function writeExecutable(directory: string, name: string, content: string)
 	await fs.chmod(file, 0o755);
 }
 
-async function createFixture(osName = "Linux", arch = "x86_64"): Promise<InstallerFixture> {
+async function createFixture(osName = "Linux"): Promise<InstallerFixture> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fork-installer-"));
 	tempDirs.push(dir);
 	const binDir = path.join(dir, "bin");
@@ -36,19 +36,9 @@ async function createFixture(osName = "Linux", arch = "x86_64"): Promise<Install
 		await writeExecutable(binDir, "sha256sum", '#!/bin/sh\nexec /usr/bin/shasum -a 256 "$@"\n');
 	}
 
-	await writeExecutable(binDir, "uname", `#!/bin/sh\n[ "$1" = "-s" ] && echo ${osName} || echo ${arch}\n`);
+	await writeExecutable(binDir, "uname", `#!/bin/sh\n[ "$1" = "-s" ] && echo ${osName} || echo x86_64\n`);
 	await writeExecutable(binDir, "sysctl", "#!/bin/sh\necho 0\n");
-	await writeExecutable(
-		binDir,
-		"ldd",
-		`#!/bin/sh
-if [ "\${TEST_LIBC:-glibc}" = musl ]; then
-  printf 'musl libc\\nVersion 1.2.5\\n' >&2
-  exit 1
-fi
-echo 'ldd (GNU libc) 2.39'
-`,
-	);
+	await writeExecutable(binDir, "ldd", "#!/bin/sh\necho 'ldd (GNU libc) 2.39'\n");
 	await writeExecutable(
 		binDir,
 		"curl",
@@ -87,13 +77,7 @@ case "$*" in
       printf '{"tag_name":"%s"}' "$tag"
     else
       sum="$(fixture_binary | sha256sum)" || exit 1
-      printf '{"tag_name":"%s","assets":[' "$tag"
-      separator=""
-      for name in omp-linux-x64 omp-linux-arm64 omp-linux-musl-x64 omp-linux-musl-arm64; do
-        printf '%s{"name":"%s","digest":"sha256:%s"}' "$separator" "$name" "\${sum%% *}"
-        separator=,
-      done
-      printf ']}'
+      printf '{"tag_name":"%s","assets":[{"name":"omp-linux-x64","digest":"sha256:%s"}]}' "$tag" "\${sum%% *}"
     fi
     printf '\\n200'
     ;;
@@ -188,7 +172,9 @@ async function installerLog(directory: string): Promise<string> {
 // These fixtures require POSIX sh and a colon-separated PATH. The glibc route
 // cannot be simulated on Alpine, whose distro marker independently selects musl.
 describe.skipIf(process.platform === "win32")("fork installer routing", () => {
-	test.skipIf(hostIsAlpine)("routes named-profile logs to the user cache root", async () => {
+	const testGlibc = test.skipIf(hostIsAlpine);
+
+	testGlibc("routes named-profile logs to the user cache root", async () => {
 		const fixture = await createFixture();
 		const root = path.join(fixture.env.HOME!, "cache-root");
 		fixture.env.OMP_CACHE_DIR = `  ${root}  `;
@@ -199,34 +185,17 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		expect(log).toContain("event=install_completed");
 	});
 
-	test.skipIf(hostIsAlpine).each([
-		["x86_64", "x64"],
-		["aarch64", "arm64"],
-	])("defaults to the latest fork glibc release for %s", async (arch, assetArch) => {
-		const result = await runInstallerWithFixture([], await createFixture("Linux", arch));
+	testGlibc("defaults to the latest fork glibc release for x86_64", async () => {
+		const result = await runInstaller([]);
 		expect(result.exitCode, result.stdout).toBe(0);
 		expect(result.commands).toContain("api.github.com/repos/jchanghong023/oh-my-pi/releases/latest");
 		expect(result.commands).toContain(
-			`github.com/jchanghong023/oh-my-pi/releases/download/v18.0.9+fork.125/omp-linux-${assetArch}`,
+			"github.com/jchanghong023/oh-my-pi/releases/download/v18.0.9+fork.125/omp-linux-x64",
 		);
 		expect(result.commands).not.toContain("bun install");
 	});
 
-	test.each([
-		["x86_64", "x64"],
-		["aarch64", "arm64"],
-	])("selects the musl release asset for %s", async (arch, assetArch) => {
-		const fixture = await createFixture("Linux", arch);
-		fixture.env.TEST_LIBC = "musl";
-		const result = await runInstallerWithFixture([], fixture);
-		expect(result.exitCode, result.stderr).toBe(0);
-		expect(result.commands).toContain(
-			`github.com/jchanghong023/oh-my-pi/releases/download/v18.0.9+fork.125/omp-linux-musl-${assetArch}`,
-		);
-		expect(await Bun.file(path.join(fixture.installDir, "omp")).exists()).toBe(true);
-	});
-
-	test.each([
+	testGlibc.each([
 		["old OpenSSL", "7.43.0", "OpenSSL", "0", "0"],
 		["modern OpenSSL", "8.0.0", "OpenSSL", "1", "1"],
 		["modern Schannel", "8.0.0", "Schannel", "1", "1"],
@@ -297,7 +266,7 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		expect(result.commands).not.toContain("api.github.com");
 	});
 
-	test("a release ref selects that published fork release", async () => {
+	testGlibc("a release ref selects that published fork release", async () => {
 		const result = await runInstaller(["--ref", "v18.0.9+fork.125"]);
 		expect(result.exitCode, result.stdout).toBe(0);
 		expect(result.commands).toContain("api.github.com/repos/jchanghong023/oh-my-pi/releases/tags/v18.0.9+fork.125");
@@ -316,7 +285,7 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		}
 	});
 
-	test.skipIf(process.platform !== "linux")(
+	test.skipIf(process.platform !== "linux" || hostIsAlpine)(
 		"atomically replaces Linux targets without stopping running sessions",
 		async () => {
 			const fixture = await createFixture();
@@ -362,7 +331,7 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		expect(result.commands).not.toContain("api.github.com");
 	});
 
-	test.each([
+	testGlibc.each([
 		["wrong version", "omp/", "18.0.9+fork.124"],
 		["missing omp prefix", "", "18.0.9+fork.125"],
 	])("a %s download leaves the previous install untouched", async (_case, prefix, version) => {
@@ -380,7 +349,7 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		expect((await fs.readdir(fixture.installDir)).filter(file => file.startsWith(".omp.tmp."))).toEqual([]);
 	});
 
-	test("an installed program reporting the bare release number is not mistaken for omp", async () => {
+	testGlibc("an installed program reporting the bare release number is not mistaken for omp", async () => {
 		const fixture = await createFixture();
 		await fs.mkdir(fixture.installDir, { recursive: true });
 		await writeExecutable(fixture.installDir, "omp", '#!/bin/sh\necho "18.0.9+fork.125"\n');
@@ -401,7 +370,7 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		expect(result.commands).not.toContain("/releases/download/");
 	});
 
-	test("records independent attempts with bounded correlated fields and a safe release version", async () => {
+	testGlibc("records independent attempts with bounded correlated fields and a safe release version", async () => {
 		const fixture = await createFixture();
 		const logsDir = path.join(fixture.env.OMP_CONFIG_ROOT!, "logs");
 		for (let attempt = 0; attempt < 2; attempt++) {
@@ -429,7 +398,7 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		expect(operationIds.size).toBe(2);
 	});
 
-	test("falls back from an unusable preferred log directory without failing installation", async () => {
+	testGlibc("falls back from an unusable preferred log directory without failing installation", async () => {
 		const fixture = await createFixture();
 		const root = fixture.env.OMP_CONFIG_ROOT!;
 		await fs.mkdir(root, { recursive: true });

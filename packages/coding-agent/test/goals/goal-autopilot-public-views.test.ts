@@ -7,24 +7,23 @@ import { createAgentSession } from "../../src/sdk";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
-import { composerBounds } from "../helpers/compact-screen-recording";
-import { contentText, createProviderFixture, MARKER } from "../spec-driven/provider-fixture";
+import { contentText, createProviderFixture, MARKER } from "../helpers/provider-fixture";
 import { deadline, goalCliFixture } from "./goal-cli-fixture";
 import {
 	clearNativeDraft,
+	composerBounds,
 	eventually,
 	nativeDraftMatches,
 	nativeDraftSnapshot,
-	tuiTest,
 	repo,
+	tuiTest,
 	withTui,
-} from "../spec-driven/tui-harness";
+} from "../helpers/tui-harness";
 
 type Entry = Record<string, unknown>;
 type PublicFixture = Awaited<ReturnType<typeof goalCliFixture>>;
 type PersistedJournal = { file: string; entries: Entry[] };
 const noticeType = "goal-auto-orchestrate-context";
-const commands: Array<"goal" | "goal-autopilot"> = ["goal", "goal-autopilot"];
 
 async function journals(agentDir: string): Promise<PersistedJournal[]> {
 	const files = await fs.readdir(agentDir, { recursive: true });
@@ -272,9 +271,8 @@ describe("Goal public management and history views", () => {
 		const noticeContent = originalNotice.content;
 		if (typeof noticeContent !== "string") throw new Error("Expected the persisted Goal notification text");
 		expect(views.dumps.map(dump => dump.split(noticeContent).length)).toEqual([2]);
-		const original = notices(saved.entries)[0]!;
 		const entryViews = notices(views.entries);
-		expect(entryViews).toEqual([original]);
+		expect(entryViews).toEqual([originalNotice]);
 		const messageViews = views.messages.filter(
 			message => message.role === "custom" && message.customType === noticeType,
 		);
@@ -287,239 +285,196 @@ describe("Goal public management and history views", () => {
 			attribution: messageView.attribution,
 			display: messageView.display,
 		}).toEqual({
-			customType: original.customType,
-			content: original.content,
-			details: original.details,
+			customType: originalNotice.customType,
+			content: originalNotice.content,
+			details: originalNotice.details,
 			attribution: "user",
-			display: original.display,
+			display: originalNotice.display,
 		});
 		expect(provider.requests).toHaveLength(count);
-		expect(notices((await journal(config.agentDir, sessionId)).entries)).toEqual([original]);
+		expect(notices((await journal(config.agentDir, sessionId)).entries)).toEqual([originalNotice]);
 	}, 90_000);
 
-	test.each(commands)(
-		"native TUI completes, manages and cold-restores %s through real keys",
-		async origin => {
-			if (!tuiTest)
-				throw new Error("tui-test is required for the real Goal command/completion/cold-recovery contract");
-			let turns = 0;
-			await withTui(
-				{
-					configuration: {
-						tools: { commands: false },
-						skills: { enabled: false },
-						compaction: { enabled: false },
-						goal: { continuationModes: [] },
-					},
-					reply: request => {
-						const lastUser = request.messages.filter(message => message.role === "user").at(-1);
-						return {
-							text: contentText(lastUser?.content).includes("ordinary-root-beacon")
-								? `${MARKER}_CHAT_READY`
-								: `GOAL_PUBLIC_REPLY_${++turns}`,
-						};
-					},
+	test("native TUI completes, manages and cold-restores an autopilot goal through real keys", async () => {
+		if (!tuiTest) throw new Error("tui-test is required for the real Goal command/completion/cold-recovery contract");
+		let turns = 0;
+		await withTui(
+			{
+				configuration: {
+					tools: { commands: false },
+					skills: { enabled: false },
+					compaction: { enabled: false },
+					goal: { continuationModes: [] },
 				},
-				[120, 40],
-				async ({ tui, cwd, agentDir, provider }) => {
-					const waitDraft = (text: string) =>
-						eventually(
-							() => nativeDraftSnapshot(tui),
-							({ screen, cursor }) => nativeDraftMatches(screen, text, cursor),
-						);
-					const complete = async (text: string, candidate: string, completed: string) => {
-						await waitDraft("");
-						await tui("type", text);
-						// Tab before the async popup is painted can merely open it (or
-						// dismiss a stale prefix). Ghost text is not an accepted completion.
-						const selected = new RegExp(`^❯\\s+(?:\\S+\\s+)?${candidate}(?:\\s|$)`, "mu");
-						const popup = (screen: string) => {
-							const { lines, end } = composerBounds(screen);
-							return end < 0 ? "" : lines.slice(end + 1).join("\n");
-						};
-						const ready = await eventually(
-							() => nativeDraftSnapshot(tui),
-							({ screen, cursor }) => nativeDraftMatches(screen, text, cursor) && selected.test(popup(screen)),
-						);
-						await tui("key", "press", "Tab");
-						await waitDraft(completed);
-						await clearNativeDraft(tui);
-						return popup(ready.screen);
+				reply: request => {
+					const lastUser = request.messages.filter(message => message.role === "user").at(-1);
+					return {
+						text: contentText(lastUser?.content).includes("ordinary-root-beacon")
+							? `${MARKER}_CHAT_READY`
+							: `GOAL_PUBLIC_REPLY_${++turns}`,
 					};
-					const submit = async (text: string) => {
-						// tui-test submit appends text and Enter without acknowledging
-						// editor consumption. Keep each native key transition observable.
-						await waitDraft("");
-						await tui("type", text);
-						await waitDraft(text);
-						await tui("key", "press", "Enter");
-					};
-					const initialCalls = provider.requests.length;
-					// Each case exercises its own completion namespace on the same fresh TUI.
-					const screen = await complete(origin === "goal" ? "/goa" : "/goal-auto", origin, `/${origin}`);
-					// The ambiguous prefix must expose both commands, while Tab
-					// accepts the selected ordinary command rather than its alias.
-					if (origin === "goal") expect(screen).toContain("goal-autopilot");
-					for (const [head, completion] of [
-						["se", "set"],
-						["sh", "show"],
-						["pa", "pause"],
-						["re", "resume"],
-						["dr", "drop"],
-						["bu", "budget"],
-					]) {
-						await complete(`/${origin} ${head}`, completion, `/${origin} ${completion}`);
-					}
-					expect(provider.requests).toHaveLength(initialCalls);
-					const objective = `GOAL_PUBLIC_${origin === "goal" ? "ORDINARY" : "AUTO"} preserve the terminal target`;
-					await submit(`/${origin} ${objective}`);
-					await tui("expect", "text", "GOAL_PUBLIC_REPLY_1", "--timeout", "30000");
-					const saved = await eventually(
-						async () =>
-							(await journals(agentDir)).find(item =>
-								item.entries.some(
-									entry =>
-										entry.type === "mode_change" &&
-										isRecord(entry.data) &&
-										isRecord(entry.data.goal) &&
-										entry.data.goal.objective === objective,
-								),
-							),
-						Boolean,
+				},
+			},
+			[120, 40],
+			async ({ tui, cwd, agentDir, provider }) => {
+				const waitDraft = (text: string) =>
+					eventually(
+						() => nativeDraftSnapshot(tui),
+						({ screen, cursor }) => nativeDraftMatches(screen, text, cursor),
 					);
-					if (!saved) throw new Error("Native Goal did not persist its target");
-					const sessionId = saved.entries.find(entry => entry.type === "session")!.id as string;
-					const targetId = goal(saved.entries).id;
-					const noticeBytes = notices(saved.entries).map(entry => JSON.stringify(entry));
-					expect(noticeBytes).toHaveLength(origin === "goal-autopilot" ? 1 : 0);
-					const read = async () => (await journal(agentDir, sessionId)).entries;
-					const calls = provider.requests.length;
-					for (const prefix of commands) {
-						await submit(`/${prefix} show`);
-						await tui("expect", "text", `Objective: ${objective}`, "--timeout", "30000");
-						await submit(`/${prefix} budget 900000`);
-						await eventually(read, entries => goal(entries).tokenBudget === 900000);
-						await submit(`/${prefix} budget off`);
-						await eventually(read, entries => goal(entries).tokenBudget === undefined);
-						await submit(`/${prefix} pause`);
-						await eventually(read, entries => goal(entries).status === "paused");
-						await submit(`/${prefix} resume`);
-						await eventually(read, entries => goal(entries).status === "active");
-						await submit(`/${prefix} drop`);
-						await tui("expect", "text", "Drop goal?", "--timeout", "30000");
-						await tui("key", "press", "Escape");
-						await eventually(
-							() => nativeDraftSnapshot(tui),
-							value => nativeDraftMatches(value.screen, "", value.cursor),
-						);
-						expect(goal(await read())).toMatchObject({
-							id: targetId,
-							objective,
-							auto: origin === "goal-autopilot",
-							status: "active",
-						});
-						expect(notices(await read()).map(entry => JSON.stringify(entry))).toEqual(noticeBytes);
-					}
-					expect(provider.requests).toHaveLength(calls);
-					// `restart()` launches a greeting session; `/resume` after it is a
-					// live switch that deliberately preserves active Goals. Cold restoration
-					// must load the saved file at CLI startup, whose lifecycle pauses it.
-					const root = path.dirname(path.dirname(agentDir));
-					const coldEnv = {
-						...Object.fromEntries(
-							Object.entries(process.env).map(([key, value]) => [
-								key,
-								/(?:key|token|secret|password|credential|authorization|(?:^|_)auth(?:_|$))/i.test(key)
-									? ""
-									: value,
-							]),
-						),
-						TZ: "UTC",
-						OMP_CONFIG_ROOT: path.dirname(agentDir),
-						PI_CODING_AGENT_DIR: agentDir,
-						PI_CONFIG_DIR: ".omp",
-						OMP_PROFILE: "default",
-						PI_PROFILE: "",
-						HOME: path.join(root, "home"),
-						USERPROFILE: path.join(root, "home"),
-						TEMP: path.join(root, "tmp"),
-						TMP: path.join(root, "tmp"),
-						OMP_OFFLINE: "0",
-						PI_NO_TITLE: "1",
-						PI_TEST_RUNTIME: "",
-						NO_PROXY: "127.0.0.1,localhost",
-						OPENSPEC_TELEMETRY: "0",
-						DO_NOT_TRACK: "1",
-						GIT_CONFIG_NOSYSTEM: "1",
-						GIT_CONFIG_GLOBAL: path.join(root, "gitconfig"),
-						GIT_CONFIG_COUNT: "0",
+				const complete = async (text: string, candidate: string, completed: string) => {
+					await waitDraft("");
+					await tui("type", text);
+					// Tab before the async popup is painted can merely open it (or
+					// dismiss a stale prefix). Ghost text is not an accepted completion.
+					const selected = new RegExp(`^❯\\s+(?:\\S+\\s+)?${candidate}(?:\\s|$)`, "mu");
+					const popup = (screen: string) => {
+						const { lines, end } = composerBounds(screen);
+						return end < 0 ? "" : lines.slice(end + 1).join("\n");
 					};
-					await tui("close");
-					await tui(
-						"run",
-						"--cwd",
-						repo,
-						"--cols",
-						"120",
-						"--rows",
-						"40",
-						...Object.entries(coldEnv)
-							.filter((entry): entry is [string, string] => entry[1] !== undefined)
-							.flatMap(([key, value]) => ["--env", `${key}=${value}`]),
-						"--",
-						Bun.which("bun") ?? process.execPath,
-						"run",
-						"dev",
-						"--cwd",
-						cwd,
-						"--session",
-						saved.file,
-						"--no-extensions",
-						"--no-rules",
-						"--no-title",
-						"--model",
-						"deepseek/chat-a",
+					await eventually(
+						() => nativeDraftSnapshot(tui),
+						({ screen, cursor }) => nativeDraftMatches(screen, text, cursor) && selected.test(popup(screen)),
 					);
-					await eventually(read, entries => goal(entries).status === "paused");
-					await tui("expect", "text", "GOAL_PUBLIC_REPLY_1", "--timeout", "30000");
-					await submit("/goal-autopilot show");
-					await tui("expect", "text", `Objective: ${objective}`, "--timeout", "30000");
-					expect(goal(await read())).toMatchObject({
-						id: targetId,
-						objective,
-						auto: origin === "goal-autopilot",
-						status: "paused",
-					});
-					expect(notices(await read()).map(entry => JSON.stringify(entry))).toEqual(noticeBytes);
-					expect(provider.requests).toHaveLength(calls);
-					await submit("/goal-autopilot resume");
-					await eventually(read, entries => goal(entries).status === "active");
-					const replacement = origin === "goal" ? "goal-autopilot" : "goal";
-					await submit(`/${replacement} set GOAL_PUBLIC_REPLACEMENT`);
-					await tui("expect", "text", "GOAL_PUBLIC_REPLY_2", "--timeout", "30000");
-					const replaced = await read();
-					expect(goal(replaced)).toMatchObject({
-						objective: "GOAL_PUBLIC_REPLACEMENT",
-						auto: replacement === "goal-autopilot",
-					});
-					expect(goal(replaced).id).not.toBe(targetId);
-					expect(notices(replaced)).toHaveLength(1);
-					expect(
-						notices(replaced)
-							.slice(0, noticeBytes.length)
-							.map(entry => JSON.stringify(entry)),
-					).toEqual(noticeBytes);
-					await submit(`/${origin} drop`);
-					await tui("expect", "text", "Drop goal?", "--timeout", "30000");
+					await tui("key", "press", "Tab");
+					await waitDraft(completed);
+					await clearNativeDraft(tui);
+				};
+				const submit = async (text: string) => {
+					// tui-test submit appends text and Enter without acknowledging
+					// editor consumption. Keep each native key transition observable.
+					await waitDraft("");
+					await tui("type", text);
+					await waitDraft(text);
 					await tui("key", "press", "Enter");
-					await tui("expect", "text", "Goal dropped.", "--timeout", "30000");
-					const dropped = await read();
-					expect(mode(dropped).mode).toBe("none");
-					expect(notices(dropped)).toEqual(notices(replaced));
-					expect(provider.requests).toHaveLength(calls + 1);
-				},
-			);
-		},
-		120_000,
-	);
+				};
+				const initialCalls = provider.requests.length;
+				await complete("/goal-auto", "goal-autopilot", "/goal-autopilot");
+				await complete("/goal-autopilot bu", "budget", "/goal-autopilot budget");
+				expect(provider.requests).toHaveLength(initialCalls);
+				const objective = "GOAL_PUBLIC_AUTO preserve the terminal target";
+				await submit(`/goal-autopilot ${objective}`);
+				await tui("expect", "text", "GOAL_PUBLIC_REPLY_1", "--timeout", "30000");
+				const saved = await eventually(
+					async () =>
+						(await journals(agentDir)).find(item =>
+							item.entries.some(
+								entry =>
+									entry.type === "mode_change" &&
+									isRecord(entry.data) &&
+									isRecord(entry.data.goal) &&
+									entry.data.goal.objective === objective,
+							),
+						),
+					Boolean,
+				);
+				if (!saved) throw new Error("Native Goal did not persist its target");
+				const sessionId = saved.entries.find(entry => entry.type === "session")!.id as string;
+				const targetId = goal(saved.entries).id;
+				const noticeBytes = notices(saved.entries).map(entry => JSON.stringify(entry));
+				expect(noticeBytes).toHaveLength(1);
+				const read = async () => (await journal(agentDir, sessionId)).entries;
+				const calls = provider.requests.length;
+				await submit("/goal budget 900000");
+				await eventually(read, entries => goal(entries).tokenBudget === 900000);
+				await submit("/goal-autopilot drop");
+				await tui("expect", "text", "Drop goal?", "--timeout", "30000");
+				await tui("key", "press", "Escape");
+				await waitDraft("");
+				expect(goal(await read())).toMatchObject({ id: targetId, auto: true, status: "active" });
+				expect(provider.requests).toHaveLength(calls);
+				// `restart()` launches a greeting session; `/resume` after it is a
+				// live switch that deliberately preserves active Goals. Cold restoration
+				// must load the saved file at CLI startup, whose lifecycle pauses it.
+				const root = path.dirname(path.dirname(agentDir));
+				const coldEnv = {
+					...Object.fromEntries(
+						Object.entries(process.env).map(([key, value]) => [
+							key,
+							/(?:key|token|secret|password|credential|authorization|(?:^|_)auth(?:_|$))/i.test(key)
+								? ""
+								: value,
+						]),
+					),
+					TZ: "UTC",
+					OMP_CONFIG_ROOT: path.dirname(agentDir),
+					PI_CODING_AGENT_DIR: agentDir,
+					PI_CONFIG_DIR: ".omp",
+					OMP_PROFILE: "default",
+					PI_PROFILE: "",
+					HOME: path.join(root, "home"),
+					USERPROFILE: path.join(root, "home"),
+					TEMP: path.join(root, "tmp"),
+					TMP: path.join(root, "tmp"),
+					OMP_OFFLINE: "0",
+					PI_NO_TITLE: "1",
+					PI_TEST_RUNTIME: "",
+					NO_PROXY: "127.0.0.1,localhost",
+					OPENSPEC_TELEMETRY: "0",
+					DO_NOT_TRACK: "1",
+					GIT_CONFIG_NOSYSTEM: "1",
+					GIT_CONFIG_GLOBAL: path.join(root, "gitconfig"),
+					GIT_CONFIG_COUNT: "0",
+				};
+				await tui("close");
+				await tui(
+					"run",
+					"--cwd",
+					repo,
+					"--cols",
+					"120",
+					"--rows",
+					"40",
+					...Object.entries(coldEnv)
+						.filter((entry): entry is [string, string] => entry[1] !== undefined)
+						.flatMap(([key, value]) => ["--env", `${key}=${value}`]),
+					"--",
+					Bun.which("bun") ?? process.execPath,
+					"run",
+					"dev",
+					"--cwd",
+					cwd,
+					"--session",
+					saved.file,
+					"--no-extensions",
+					"--no-rules",
+					"--no-title",
+					"--model",
+					"deepseek/chat-a",
+				);
+				await eventually(read, entries => goal(entries).status === "paused");
+				await tui("expect", "text", "GOAL_PUBLIC_REPLY_1", "--timeout", "30000");
+				await submit("/goal-autopilot show");
+				await tui("expect", "text", `Objective: ${objective}`, "--timeout", "30000");
+				expect(goal(await read())).toMatchObject({
+					id: targetId,
+					objective,
+					auto: true,
+					tokenBudget: 900000,
+					status: "paused",
+				});
+				expect(notices(await read()).map(entry => JSON.stringify(entry))).toEqual(noticeBytes);
+				expect(provider.requests).toHaveLength(calls);
+				await submit("/goal-autopilot resume");
+				await eventually(read, entries => goal(entries).status === "active");
+				await submit("/goal set GOAL_PUBLIC_REPLACEMENT");
+				await tui("expect", "text", "GOAL_PUBLIC_REPLY_2", "--timeout", "30000");
+				const replaced = await read();
+				expect(goal(replaced)).toMatchObject({
+					objective: "GOAL_PUBLIC_REPLACEMENT",
+					auto: false,
+				});
+				expect(goal(replaced).id).not.toBe(targetId);
+				expect(notices(replaced).map(entry => JSON.stringify(entry))).toEqual(noticeBytes);
+				await submit("/goal-autopilot drop");
+				await tui("expect", "text", "Drop goal?", "--timeout", "30000");
+				await tui("key", "press", "Enter");
+				await tui("expect", "text", "Goal dropped.", "--timeout", "30000");
+				const dropped = await read();
+				expect(mode(dropped).mode).toBe("none");
+				expect(notices(dropped)).toEqual(notices(replaced));
+				expect(provider.requests).toHaveLength(calls + 1);
+			},
+		);
+	}, 120_000);
 });

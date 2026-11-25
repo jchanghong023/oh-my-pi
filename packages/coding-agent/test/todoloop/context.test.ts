@@ -12,7 +12,6 @@ interface TaskPackage {
 	completedTaskIds: string[];
 	attempt: number;
 	previous?: TodoLoopPreviousAttempt;
-	materials?: { proposal: string; design?: string; deltaSpecs: string[] };
 }
 
 const roots: string[] = [];
@@ -49,8 +48,8 @@ async function build(filePath: string, cwd: string, previous?: TodoLoopPreviousA
 
 /**
  * Deterministic file consumer, NOT a native agent/model obedience test.
- * It consumes the rendered package, real Markdown references, and material
- * constraints to perform a group's file tasks. Native dispatch owns fresh sessions,
+ * It consumes the rendered package and real Markdown references to perform a group's
+ * file tasks. Native dispatch owns fresh sessions,
  * tools, cwd enforcement, and conversation isolation; its next-stage tests must
  * pass buildTodoLoopGroupPrompt's output through the real task bridge.
  */
@@ -65,15 +64,8 @@ async function consumeFiles(rendered: string): Promise<{ reads: string[]; output
 	const references = [...tasks.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(match =>
 		path.resolve(path.dirname(input.filePath), match[1]!),
 	);
-	const materials = input.materials
-		? [
-				input.materials.proposal,
-				...(input.materials.design ? [input.materials.design] : []),
-				...input.materials.deltaSpecs,
-			]
-		: [];
 	const fragments: string[] = [];
-	for (const filePath of new Set([...references, ...materials])) {
+	for (const filePath of new Set(references)) {
 		const content = await read(filePath);
 		for (const match of content.matchAll(/^Output fragment: (.+)$/gm)) fragments.push(match[1]!);
 	}
@@ -133,73 +125,6 @@ describe("TodoLoop group file context", () => {
 		]);
 	});
 
-	test("packages active Superpowers steps with scoped IDs and CRLF text, excluding fenced examples", async () => {
-		const cwd = await workspace();
-		const filePath = path.join(cwd, "work.md");
-		const original = [
-			"# Implementation Plan",
-			"```markdown",
-			"- [ ] **Step 1: Write result.txt using material output fragments**",
-			"```",
-			"## Chunk 1",
-			"### Task 7: Write artifacts",
-			"- [X] **Step 0: Existing work**",
-			"#### Instructions",
-			"- [ ] **Step 1: Write result.txt using material output fragments**",
-			"  Preserve `existing` content.",
-			"- [ ] **Step 2: Continue in the same context**",
-			"## Chunk 2",
-			"### Task 7: Write artifacts",
-			"- [ ] **Step 1: Write result.txt using material output fragments**",
-			"",
-		].join("\r\n");
-		await writeFile(filePath, original);
-		const pkg = taskPackage(await build(filePath, cwd));
-		expect(pkg.group.id).toBe("1");
-		expect(pkg.group.tasks).toEqual([
-			{
-				id: "step:1:1",
-				label: "Step 1",
-				raw: "- [ ] **Step 1: Write result.txt using material output fragments**\r\n  Preserve `existing` content.",
-			},
-			{ id: "step:1:2", label: "Step 2", raw: "- [ ] **Step 2: Continue in the same context**" },
-		]);
-		expect(pkg.completedTaskIds).toEqual(["step:1:0"]);
-	});
-
-	for (const withDesign of [true, false]) {
-		test(`consumes same Change proposal and delta constraints ${withDesign ? "with" : "without"} optional design`, async () => {
-			const cwd = await workspace();
-			const change = path.join(cwd, "openspec", "changes", "sample");
-			const filePath = path.join(change, "tasks.md");
-			const proposal = path.join(change, "proposal.md");
-			const design = path.join(change, "design.md");
-			const delta = path.join(change, "specs", "result", "spec.md");
-			await writeFile(
-				filePath,
-				"# Task\n\n## Active\n- [ ] 1 Write result.txt using material output fragments\n## Later\n- [ ] 2 Later\n",
-			);
-			await writeFile(proposal, "# Proposal\nOutput fragment: proposal\n");
-			await writeFile(delta, "# Result delta\nOutput fragment: delta\n");
-			if (withDesign) await writeFile(design, "# Design\nOutput fragment: design\n");
-			await writeFile(path.join(cwd, "result.txt"), "kept:");
-			await writeFile(
-				path.join(cwd, "openspec", "changes", "other", "proposal.md"),
-				"Output fragment: wrong-change\n",
-			);
-			const rendered = await build(filePath, cwd);
-			const consumed = await consumeFiles(rendered);
-			expect(consumed.reads).toContain(proposal);
-			expect(consumed.reads).toContain(delta);
-			expect(consumed.reads.includes(design)).toBe(withDesign);
-			expect(await Bun.file(consumed.output).text()).toBe(
-				withDesign ? "kept:proposal|design|delta" : "kept:proposal|delta",
-			);
-			expect((await readTodoLoop(filePath)).tasks.map(task => task.done)).toEqual([true, false]);
-			if (!withDesign) expect(await fs.readdir(change)).not.toContain("design.md");
-		});
-	}
-
 	test("reads updated reference constraints on retry without losing prior edits", async () => {
 		const cwd = await workspace();
 		const filePath = path.join(cwd, "work.md");
@@ -216,21 +141,5 @@ describe("TodoLoop group file context", () => {
 		const rendered = await build(filePath, cwd, previous);
 		const consumed = await consumeFiles(rendered);
 		expect(await Bun.file(consumed.output).text()).toBe("first-attempt:changed");
-	});
-
-	test("reports missing or unreadable required/discovered materials without generation", async () => {
-		const cwd = await workspace();
-		const change = path.join(cwd, "openspec", "changes", "broken");
-		const filePath = path.join(change, "tasks.md");
-		await writeFile(filePath, "- [ ] 1 Work\n");
-		await expect(build(filePath, cwd)).rejects.toThrow();
-		await writeFile(path.join(change, "proposal.md"), "# Proposal\n");
-		// A directory at a material path fails portably; no chmod/root dependence.
-		await fs.mkdir(path.join(change, "design.md"));
-		await expect(build(filePath, cwd)).rejects.toThrow();
-		await fs.rmdir(path.join(change, "design.md"));
-		await fs.mkdir(path.join(change, "specs", "broken-capability", "spec.md"), { recursive: true });
-		await expect(build(filePath, cwd)).rejects.toThrow();
-		expect(await fs.readdir(change)).not.toContain("design.md");
 	});
 });

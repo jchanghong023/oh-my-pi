@@ -727,12 +727,11 @@ describe("proc:// background jobs", () => {
 });
 
 describe("bash services via proc://", () => {
-	it.each([false, true])("leaves the service running when its logs fail (readiness: %s)", async withReadiness => {
+	it("leaves the service running when its logs fail", async () => {
 		const unit = serviceUnit("log-failure-service", {
-			state: withReadiness ? "ready" : "running",
+			state: "running",
 			owner: "Main",
 			pids: [12345],
-			...(withReadiness ? { readyAt: Date.now() } : {}),
 		});
 		const operations: DaemonOp["op"][] = [];
 		const client = stubClient(async operation => {
@@ -746,10 +745,9 @@ describe("bash services via proc://", () => {
 		try {
 			await expect(
 				new BashTool(session).execute("service-log-failure", {
-					command: "printf 'READY\\n'",
+					command: "printf 'service output\\n'",
 					name: unit.key,
 					pty: false,
-					...(withReadiness ? { ready: { log: "READY", timeout: 5 } } : {}),
 				}),
 			).rejects.toThrow("service output log is unreadable");
 			expect(hasLiveOwnedService(session)).toBeTrue();

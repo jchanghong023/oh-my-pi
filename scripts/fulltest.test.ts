@@ -5,17 +5,16 @@ import * as path from "node:path";
 import { BrowserPlatform, computeExecutablePath, detectBrowserPlatform } from "@oh-my-pi/pi-utils/browsers";
 import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
 import { FULLTEST_BUN_CAPACITY_FILE, testTimeoutMs } from "./ci-test-ts";
-import { parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
+import { gatePoolWidth } from "./fastcheck";
 import {
 	fulltestCommands,
 	fulltestWorkerAllocation,
 	gateCpuBudget,
-	parseFulltestArgs,
 	removeFulltestHome,
 	runFulltest,
 	selectChangedScriptTests,
 } from "./fulltest";
-import { runGate, GATE_LIMIT_SECONDS, type GateCommand, type GateRun } from "./test-gate-runtime";
+import { runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { bunRequiresFullSelection, captureChangedPaths, type SourceRevision } from "./test-gate-source";
 import type { TestReportRun } from "./test-reporting";
 import { runGateCommands } from "./test-gate-scheduler";
@@ -1023,6 +1022,7 @@ describe("fulltest lane scheduling", () => {
 					} else if (command.label === "smoke/isolated native TUI PTY") {
 						expect(activeScripts).toBe(0);
 						expect(activeHeavyWorkers).toBe(0);
+						if (cpuBudget === 1) expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
 						trailingSeen.push(command.label);
 					}
 				},
@@ -1196,93 +1196,91 @@ describe("fulltest lane scheduling", () => {
 			]);
 		});
 	}
-	for (const cpuBudget of [1, 3]) {
-		test(`serializes heavy lanes on ${cpuBudget} CPUs without omitting suites`, async () => {
-			const revision: SourceRevision = { head: "head", dirty: false, status: "" };
-			const seen: string[] = [];
-			const staticStarted = Promise.withResolvers<void>();
-			const ordinaryStarted = Promise.withResolvers<void>();
-			const rustStarted = Promise.withResolvers<void>();
-			const smokeStarted = Promise.withResolvers<void>();
-			const finishStatic = Promise.withResolvers<void>();
-			const finishOrdinary = Promise.withResolvers<void>();
-			const finishRust = Promise.withResolvers<void>();
-			const finishSmoke = Promise.withResolvers<void>();
-			const gate = {
-				signal: new AbortController().signal,
-				charged: async <T>(operation: () => T | Promise<T>) => operation(),
-				run: async () => {},
-				childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
-				record: (error: unknown) => error,
-				fail: (error: unknown) => error,
-			} as unknown as GateRun;
-			const run = runFulltest(
-				gate,
-				{ debug: false, full: true },
-				{
-					cpuBudget,
-					captureSourceRevision: async () => revision,
-					scriptTestFiles: async () => [],
-					captureChangedPaths: async () => [],
-					fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
-					runGateCommands: async (_runner, commands, options) => {
-						for (const command of commands) {
-							seen.push(command.label);
-							if (command.label === "static/TS") {
-								expect(options?.concurrency).toBe(1);
-								staticStarted.resolve();
-								await finishStatic.promise;
-							} else if (command.label === "test/TypeScript full suite") {
-								expect(command.argv).toContain("--shared-fulltest-pool");
-								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
-								expect(command.env?.OMP_FULLTEST_BUN_MAX_CAPACITY).toBeUndefined();
-								ordinaryStarted.resolve();
-								await finishOrdinary.promise;
-							} else if (command.label === "test/Rust workspace") {
-								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
-								rustStarted.resolve();
-								await finishRust.promise;
-							} else if (command.label === "smoke/isolated native TUI PTY") {
-								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe(String(Math.min(3, cpuBudget)));
-								smokeStarted.resolve();
-								await finishSmoke.promise;
-							}
+	test("serializes heavy lanes on 3 CPUs without omitting suites", async () => {
+		const revision: SourceRevision = { head: "head", dirty: false, status: "" };
+		const seen: string[] = [];
+		const staticStarted = Promise.withResolvers<void>();
+		const ordinaryStarted = Promise.withResolvers<void>();
+		const rustStarted = Promise.withResolvers<void>();
+		const smokeStarted = Promise.withResolvers<void>();
+		const finishStatic = Promise.withResolvers<void>();
+		const finishOrdinary = Promise.withResolvers<void>();
+		const finishRust = Promise.withResolvers<void>();
+		const finishSmoke = Promise.withResolvers<void>();
+		const gate = {
+			signal: new AbortController().signal,
+			charged: async <T>(operation: () => T | Promise<T>) => operation(),
+			run: async () => {},
+			childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
+			record: (error: unknown) => error,
+			fail: (error: unknown) => error,
+		} as unknown as GateRun;
+		const run = runFulltest(
+			gate,
+			{ debug: false, full: true },
+			{
+				cpuBudget: 3,
+				captureSourceRevision: async () => revision,
+				scriptTestFiles: async () => [],
+				captureChangedPaths: async () => [],
+				fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
+				runGateCommands: async (_runner, commands, options) => {
+					for (const command of commands) {
+						seen.push(command.label);
+						if (command.label === "static/TS") {
+							expect(options?.concurrency).toBe(1);
+							staticStarted.resolve();
+							await finishStatic.promise;
+						} else if (command.label === "test/TypeScript full suite") {
+							expect(command.argv).toContain("--shared-fulltest-pool");
+							expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
+							expect(command.env?.OMP_FULLTEST_BUN_MAX_CAPACITY).toBeUndefined();
+							ordinaryStarted.resolve();
+							await finishOrdinary.promise;
+						} else if (command.label === "test/Rust workspace") {
+							expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
+							rustStarted.resolve();
+							await finishRust.promise;
+						} else if (command.label === "smoke/isolated native TUI PTY") {
+							expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("3");
+							smokeStarted.resolve();
+							await finishSmoke.promise;
 						}
-					},
+					}
 				},
-			);
-			try {
-				await staticStarted.promise;
-				expect(seen).not.toContain("test/TypeScript full suite");
-				expect(seen).not.toContain("test/Rust workspace");
-				finishStatic.resolve();
-				await ordinaryStarted.promise;
-				expect(seen.indexOf("static/TS")).toBeLessThan(seen.indexOf("test/TypeScript full suite"));
-				expect(seen).not.toContain("test/Rust workspace");
-				finishOrdinary.resolve();
-				await rustStarted.promise;
-				expect(seen).not.toContain("smoke/isolated native TUI PTY");
-				finishRust.resolve();
-				await smokeStarted.promise;
-				finishSmoke.resolve();
-				await run;
-				for (const label of [
-					"test/Python suites",
-					"test/Go SDK",
-					"test/Rust SDK",
-					"smoke/isolated native TUI PTY",
-					"test/TypeScript full suite",
-				])
-					expect(seen).toContain(label);
-			} finally {
-				finishStatic.resolve();
-				finishOrdinary.resolve();
-				finishRust.resolve();
-				finishSmoke.resolve();
-				await run;
-			}
-		});
-	}
+			},
+		);
+		try {
+			await staticStarted.promise;
+			expect(seen).not.toContain("test/TypeScript full suite");
+			expect(seen).not.toContain("test/Rust workspace");
+			finishStatic.resolve();
+			await ordinaryStarted.promise;
+			expect(seen.indexOf("static/TS")).toBeLessThan(seen.indexOf("test/TypeScript full suite"));
+			expect(seen).not.toContain("test/Rust workspace");
+			finishOrdinary.resolve();
+			await rustStarted.promise;
+			expect(seen).not.toContain("smoke/isolated native TUI PTY");
+			finishRust.resolve();
+			await smokeStarted.promise;
+			finishSmoke.resolve();
+			await run;
+			for (const label of [
+				"test/Python suites",
+				"test/Go SDK",
+				"test/Rust SDK",
+				"smoke/isolated native TUI PTY",
+				"test/TypeScript full suite",
+			])
+				expect(seen).toContain(label);
+		} finally {
+			finishStatic.resolve();
+			finishOrdinary.resolve();
+			finishRust.resolve();
+			finishSmoke.resolve();
+			await run;
+		}
+	});
 });
 
 describe("gate-local profile fixture isolation", () => {
@@ -1489,45 +1487,6 @@ describe("standard gate charged-budget parameters", () => {
 		expect(allocation.serial).toBe(false);
 		expect(allocation.ordinary).toBeGreaterThan(1);
 		expect(allocation.scripts).toBe(0);
-	});
-
-	test("fastcheck accepts only a finite positive downward limit", () => {
-		expect(parseFastcheckArgs(["--limit-seconds=0.25"])).toEqual({ limitSeconds: 0.25 });
-		const fastcheckMax = GATE_LIMIT_SECONDS.fastcheck;
-		expect(parseFastcheckArgs([`--limit-seconds=${fastcheckMax}`])).toEqual({ limitSeconds: fastcheckMax });
-		for (const args of [
-			[`--limit-seconds=${fastcheckMax + 0.01}`],
-			["--limit-seconds=0"],
-			["--limit-seconds=-1"],
-			["--limit-seconds=Infinity"],
-			["--limit-seconds=NaN"],
-			["--limit-seconds=1", "--limit-seconds=2"],
-			["--limit=1"],
-			["--debug"],
-			["anything"],
-		]) {
-			expect(parseFastcheckArgs(args)).toBeNull();
-		}
-	});
-
-	test("fulltest retains debug and rejects budget relaxation or ambiguous options", () => {
-		expect(parseFulltestArgs(["--debug", "--debug"])).toEqual({ debug: true });
-		const max = GATE_LIMIT_SECONDS.fulltest;
-		expect(parseFulltestArgs([`--limit-seconds=${max}`, "--debug"])).toEqual({ debug: true, limitSeconds: max });
-		expect(parseFulltestArgs(["--debug", "--limit-seconds=0.25"])).toEqual({ debug: true, limitSeconds: 0.25 });
-		for (const args of [
-			[`--limit-seconds=${max + 0.01}`],
-			["--limit-seconds=0"],
-			["--limit-seconds=-1"],
-			["--limit-seconds=Infinity"],
-			["--limit-seconds=NaN"],
-			["--limit-seconds=1", "--limit-seconds=2"],
-			["--limit=1"],
-			["--other"],
-			["--debug", "anything"],
-		]) {
-			expect(parseFulltestArgs(args)).toBeNull();
-		}
 	});
 });
 

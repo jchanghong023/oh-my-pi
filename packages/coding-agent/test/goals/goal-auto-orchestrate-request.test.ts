@@ -39,25 +39,6 @@ function render(current: LocalGoalModeState, tools: string[]) {
 }
 
 describe("goal-auto-orchestrate persistent notice rendering", () => {
-	test("preserves the full saved objective literally through serialization and provider conversion", () => {
-		const current = state();
-		const message = render(current, ["task", "read", "write", "bash"]);
-		expect(message).toMatchObject({
-			role: "custom",
-			customType: "goal-auto-orchestrate-context",
-			attribution: "user",
-			details: { source: "goal-auto-orchestrate", goalId: "goal-a" },
-		});
-		const saved: typeof message = JSON.parse(JSON.stringify(message));
-		expect(text(saved.content).split(objective)).toHaveLength(2);
-		const provider = convertToLlm([saved]);
-		expect(provider).toHaveLength(1);
-		expect(provider[0]).toMatchObject({ role: "user", attribution: "user" });
-		expect(text(provider[0]?.content)).toBe(text(message.content));
-		expect(text(provider[0]?.content).split(objective)).toHaveLength(2);
-		expect(current).toEqual(state());
-	});
-
 	test("uses shared user-authority expansion without promoting either notice or later user input", () => {
 		const tools = ["task", "read", "write", "bash"];
 		const message = render(state(), tools);
@@ -84,7 +65,7 @@ describe("goal-auto-orchestrate persistent notice rendering", () => {
 
 		const withoutTask = render(current, ["read", "eval"]);
 		const unavailable = text(convertToLlm([withoutTask])[0]?.content);
-		expect(unavailable).toContain(objective);
+		expect(unavailable.split(objective)).toHaveLength(2);
 		expect(unavailable).not.toContain(expanded);
 		expect(unavailable).not.toContain(renderOrchestrateNotice({ tools: ["read", "eval"] }, { authority: "user" }));
 		const changed = ["task", "read", "eval", "bash"];

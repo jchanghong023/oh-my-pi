@@ -13,14 +13,6 @@ describe("compact tool parameter summaries", () => {
 			args: { ops: [{ pat: "oldApi($$$)", out: "PRIVATE_REPLACEMENT" }], paths: ["src/**/*.ts"] },
 			visible: ["src/**/*.ts"],
 		},
-		{ name: "openwiki_search", args: { query: "mbist failure" }, visible: ["mbist failure"] },
-		{
-			name: "openwiki_read",
-			args: { page: "architecture/jobs.md", sections: ["retry"] },
-			visible: ["architecture/jobs.md"],
-		},
-		{ name: "openwiki_list_wikis", args: { workspace: "engineering" }, visible: ["engineering"] },
-		{ name: "openwiki_list_workspaces", args: { wiki: "project-wiki" }, visible: ["project-wiki"] },
 		{ name: "edit", args: { input: patch }, visible: ["hello.txt"] },
 		{ name: "apply_patch", args: { input: patch }, visible: ["hello.txt"] },
 		{ name: "edit", args: { path: "source.ts", content: "PRIVATE_REPLACEMENT" }, visible: ["source.ts"] },
@@ -195,7 +187,6 @@ describe("compact tool parameter summaries", () => {
 		{ name: "update_notes", args: { body: "PRIVATE_NOTE" } },
 		{ name: "run_experiment", args: { timeout_seconds: 600 } },
 		{ name: "new_context", args: {} },
-		{ name: "openwiki_list_workspaces", args: {} },
 		{ name: "custom_mcp_tool", args: { payload: "PRIVATE_PAYLOAD" } },
 	])("keeps $name payloads out of its summary", ({ name, args }) => {
 		expect(summarizeCompactTool(name, args)).toEqual({ detail: "" });
@@ -216,7 +207,7 @@ describe("compact tool parameter summaries", () => {
 
 	it("ignores wrong-type schema fields and leaves input objects unchanged", () => {
 		const args = Object.freeze({ action: {}, query: "Widget", path: [], i: 7, title: ["PRIVATE_TITLE"] });
-		expect(summarizeCompactTool("openwiki_search", args).detail).toContain("Widget");
+		expect(summarizeCompactTool("custom_mcp_tool", args).detail).toBe("Widget");
 		expect(args).toEqual({ action: {}, query: "Widget", path: [], i: 7, title: ["PRIVATE_TITLE"] });
 		for (const name of [
 			"lsp",

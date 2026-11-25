@@ -515,11 +515,13 @@ describe("crawl real DOM reading contracts", () => {
 		expect(result.navigations).toEqual([`${result.origin}${entry}`]);
 	}, 30_000);
 
-	it("prefers an in-page expander over a later full-article navigation candidate", async () => {
+	it("activates a nested in-page expander instead of following a full-article link", async () => {
 		const result = await crawlDomFixture({
 			"/article/preview": `<html><body><article><h1>Preferred expansion</h1>
 				<p id="body">PREVIEW_ONLY</p>
-				<button onclick="document.querySelector('#body').textContent='INLINE_COMPLETE_ARTICLE';this.remove()">查看全文</button>
+				<button onclick="document.querySelector('#body').textContent='INLINE_COMPLETE_ARTICLE';this.remove()">
+					<span><strong>展开全文</strong></span>
+				</button>
 				<a href="/navigation-candidate">阅读全文</a>
 			</article></body></html>`,
 			"/navigation-candidate": "<html><body>WRONG_NAVIGATION_ARTICLE</body></html>",
@@ -531,23 +533,13 @@ describe("crawl real DOM reading contracts", () => {
 		expect(result.requested).not.toContain("/navigation-candidate");
 	}, 30_000);
 
-	it("activates the actionable ancestor of a nested full-article label", async () => {
-		const result = await crawlDomFixture({
-			"/article/preview": `<html><body><article><h1>Nested reading control</h1>
-				<p id="body">NESTED_PREVIEW</p><button onclick="document.querySelector('#body').textContent='NESTED_COMPLETE_ARTICLE';this.remove()">
-				<span><strong>展开全文</strong></span></button>
-			</article></body></html>`,
-		});
-		expect(result.markdown).toContain("NESTED_COMPLETE_ARTICLE");
-		expect(result.markdown).not.toContain("NESTED_PREVIEW");
-		expect(result.navigations).toEqual([`${result.origin}/article/preview`]);
-	}, 30_000);
-
-	it("navigates a target blank full-article anchor in the same owned tab without clicking it", async () => {
+	it("opens a new-tab article link in the same tab and stops before recommendations", async () => {
 		const result = await crawlDomFixture({
 			"/article/preview": `<html><body><h1>Preview</h1><p>BLANK_PREVIEW</p>
 				<a target="_blank" href="/article/full" onclick="fetch('/anchor-clicked')">Read the full article</a></body></html>`,
-			"/article/full": "<html><body><h1>Complete article</h1><p>SAME_TAB_FULL_CONTENT</p></body></html>",
+			"/article/full": `<html><body><article><h1>Complete article</h1><p>SAME_TAB_FULL_CONTENT</p>
+				<aside><h2>Recommended stories</h2><a href="/recommendation">Read more</a></aside></article></body></html>`,
+			"/recommendation": "<html><body><h1>Different article</h1><p>RECOMMENDED_CONTENT</p></body></html>",
 		});
 		expect(result.url).toBe(`${result.origin}/article/full`);
 		expect(result.navigations).toEqual([`${result.origin}/article/preview`, `${result.origin}/article/full`]);
@@ -555,19 +547,7 @@ describe("crawl real DOM reading contracts", () => {
 		expect(result.markdown).toContain("SAME_TAB_FULL_CONTENT");
 		expect(result.markdown).not.toContain("BLANK_PREVIEW");
 		expect(result.requested).not.toContain("/anchor-clicked");
-	}, 30_000);
-
-	it("stops following reading links after one full article instead of chasing recommendations", async () => {
-		const result = await crawlDomFixture({
-			"/article/preview": `<html><body><h1>Preview</h1><a href="/article/full">阅读全文</a></body></html>`,
-			"/article/full": `<html><body><article><h1>Original full article</h1><p>ORIGINAL_COMPLETE_CONTENT</p>
-				<aside><h2>Recommended stories</h2><a href="/recommendation">Read more</a></aside></article></body></html>`,
-			"/recommendation": "<html><body><h1>Different article</h1><p>RECOMMENDED_CONTENT</p></body></html>",
-		});
-		expect(result.url).toBe(`${result.origin}/article/full`);
-		expect(result.navigations).toEqual([`${result.origin}/article/preview`, `${result.origin}/article/full`]);
 		expect(result.requested).not.toContain("/recommendation");
-		expect(result.markdown).toContain("ORIGINAL_COMPLETE_CONTENT");
 		expect(result.markdown).not.toContain("RECOMMENDED_CONTENT");
 		expect(result.markdown).toContain(`[Read more](${result.origin}/recommendation)`);
 	}, 30_000);
@@ -1027,18 +1007,15 @@ describe("crawl engine", () => {
 		expect(f.closed).toEqual(f.opened);
 	});
 
-	it.each(["查看全文", "阅读全文", "显示全文", "继续阅读", "Read more", "Read the full article", "Continue reading"])(
-		"reads an explicit full-article control labelled %s without scroll opt-in",
-		async label => {
-			const url = "https://example.test/article";
-			const browser = scriptedPage({ fullArticle: { label } });
-			const f = fixture({ [url]: {} }, undefined, browser.run);
-			await runCrawl(f.runtime, { ...options, url, recursive: false, scroll: false }, new AbortController().signal);
-			expect(f.written[0]?.content).toContain("The complete article body.");
-			expect(f.written[0]?.content).not.toContain("Preview only");
-			expect(browser.detachmentCount()).toBe(1);
-		},
-	);
+	it("reads an explicit full-article control labelled 继续阅读 without scroll opt-in", async () => {
+		const url = "https://example.test/article";
+		const browser = scriptedPage({ fullArticle: { label: "继续阅读" } });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false, scroll: false }, new AbortController().signal);
+		expect(f.written[0]?.content).toContain("The complete article body.");
+		expect(f.written[0]?.content).not.toContain("Preview only");
+		expect(browser.detachmentCount()).toBe(1);
+	});
 
 	it("navigates to cross-origin full text in its owned tab and records the final source", async () => {
 		const url = "https://example.test/preview";

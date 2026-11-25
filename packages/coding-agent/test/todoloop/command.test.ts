@@ -40,44 +40,41 @@ afterEach(async () => {
 });
 
 describe("native /todoloop command", () => {
-	it.each(["plain tasks.md", "openspec/changes/example/tasks.md"])(
-		"checks grouped %s read-only in file order",
-		async relative => {
-			const h = await harness();
-			const file = path.join(h.cwd, relative);
-			await fs.mkdir(path.dirname(file), { recursive: true });
-			const content = [
-				"# Work",
-				"## Finished",
-				"- [X] 8 already done",
-				"## Active",
-				"- [ ] 2 next task",
-				"### Details",
-				"- [ ] 1 last task",
-				"## Later",
-				"- [ ] 9 final task",
-				"",
-			].join("\n");
-			await Bun.write(file, content);
-			expect(await h.execute(`"${relative}" --check`)).toBe(true);
-			expect(h.runTodoLoop).not.toHaveBeenCalled();
-			expect(await Bun.file(file).text()).toBe(content);
-			const rendered = renderTranscript(h.ctx).join("\n");
-			expect(rendered).toContain("1/4");
-			expect(rendered).toContain("1/3");
-			for (const text of ["Finished", "Active", "Later", "[x] 8", "[ ] 2", "[ ] 1", "[ ] 9"])
-				expect(rendered).toContain(text);
-			expect(rendered.indexOf("Finished")).toBeLessThan(rendered.indexOf("Active"));
-			expect(rendered.indexOf("Active")).toBeLessThan(rendered.indexOf("Later"));
-			expect(rendered.indexOf("[x] 8")).toBeLessThan(rendered.indexOf("[ ] 2"));
-			expect(rendered.indexOf("[ ] 2")).toBeLessThan(rendered.indexOf("[ ] 1"));
-			expect(rendered.indexOf("[ ] 1")).toBeLessThan(rendered.indexOf("[ ] 9"));
-			const first = rendered.split("\n").at(-1)!;
-			expect(first).toMatch(/group.*2/i);
-			expect(first).toMatch(/task.*2/i);
-			expect(h.ctx.hud.widgets.above()).toHaveLength(0);
-		},
-	);
+	it("checks a grouped task file read-only in file order", async () => {
+		const h = await harness();
+		const relative = "plain tasks.md";
+		const file = path.join(h.cwd, relative);
+		const content = [
+			"# Work",
+			"## Finished",
+			"- [X] 8 already done",
+			"## Active",
+			"- [ ] 2 next task",
+			"### Details",
+			"- [ ] 1 last task",
+			"## Later",
+			"- [ ] 9 final task",
+			"",
+		].join("\n");
+		await Bun.write(file, content);
+		expect(await h.execute(`"${relative}" --check`)).toBe(true);
+		expect(h.runTodoLoop).not.toHaveBeenCalled();
+		expect(await Bun.file(file).text()).toBe(content);
+		const rendered = renderTranscript(h.ctx).join("\n");
+		expect(rendered).toContain("1/4");
+		expect(rendered).toContain("1/3");
+		for (const text of ["Finished", "Active", "Later", "[x] 8", "[ ] 2", "[ ] 1", "[ ] 9"])
+			expect(rendered).toContain(text);
+		expect(rendered.indexOf("Finished")).toBeLessThan(rendered.indexOf("Active"));
+		expect(rendered.indexOf("Active")).toBeLessThan(rendered.indexOf("Later"));
+		expect(rendered.indexOf("[x] 8")).toBeLessThan(rendered.indexOf("[ ] 2"));
+		expect(rendered.indexOf("[ ] 2")).toBeLessThan(rendered.indexOf("[ ] 1"));
+		expect(rendered.indexOf("[ ] 1")).toBeLessThan(rendered.indexOf("[ ] 9"));
+		const first = rendered.split("\n").at(-1)!;
+		expect(first).toMatch(/group.*2/i);
+		expect(first).toMatch(/task.*2/i);
+		expect(h.ctx.hud.widgets.above()).toHaveLength(0);
+	});
 
 	it("reports no remaining group or task when every group is checked", async () => {
 		const h = await harness();

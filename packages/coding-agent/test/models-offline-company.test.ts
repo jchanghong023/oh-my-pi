@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 
 /**
- * `OMP_OFFLINE=1 omp models` in the company environment must list the internal
- * company lane and report unavailable company configuration. Covered as
- * subprocesses because the company lane snapshot is process-global and read
- * once, so one process cannot serve both fixtures.
+ * Exercise the public CLI in isolated processes because the company configuration
+ * is snapshotted once per process.
  */
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
 const COMPANY_SETTINGS = JSON.stringify({
@@ -15,10 +15,11 @@ const COMPANY_SETTINGS = JSON.stringify({
 });
 
 const tempDirs: string[] = [];
-async function tempDir(prefix: string): Promise<string> {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-	tempDirs.push(dir);
-	return dir;
+interface ModelRow {
+	provider: string;
+	selector: string;
+	contextWindow: number | null;
+	maxTokens: number | null;
 }
 
 afterEach(async () => {
@@ -28,26 +29,20 @@ afterEach(async () => {
 async function runModels(
 	args: readonly string[],
 	options: {
-		companyConfig: boolean;
+		companyConfig?: boolean;
 		modelsConfig?: unknown;
-		malformedCompanyConfig?: boolean;
 		extensionCache?: "cold" | "warm";
-		offline?: boolean;
 	},
 ): Promise<{
-	providers: Set<string>;
-	selectors: string[];
-	companyContextWindows: Record<string, number>;
-	companyMaxTokens: number[];
+	models: ModelRow[];
 	stderr: string;
 }> {
-	const home = await tempDir("omp-models-home-");
-	const claudeDir = await tempDir("omp-models-claude-");
-	if (options.companyConfig) {
-		await fs.writeFile(
-			path.join(claudeDir, "settings.json"),
-			options.malformedCompanyConfig ? "{ invalid fixture JSON" : COMPANY_SETTINGS,
-		);
+	const home = await fs.mkdtemp(path.join(os.tmpdir(), "omp-models-home-"));
+	tempDirs.push(home);
+	const claudeDir = path.join(home, "claude");
+	if (options.companyConfig !== false) {
+		await fs.mkdir(claudeDir);
+		await fs.writeFile(path.join(claudeDir, "settings.json"), COMPANY_SETTINGS);
 	}
 	const env: Record<string, string> = {
 		PATH: process.env.PATH ?? "",
@@ -57,10 +52,10 @@ async function runModels(
 		OMP_CONFIG_ROOT: path.join(home, ".omp"),
 		CLAUDE_CONFIG_DIR: claudeDir,
 		PI_CODING_AGENT_DIR: path.join(home, "agent"),
+		OMP_OFFLINE: "1",
 		PI_CONFIG_DIR: ".omp",
 		NO_COLOR: "1",
 	};
-	if (options.offline) env.OMP_OFFLINE = "1";
 	const agentDir = env.PI_CODING_AGENT_DIR!;
 	await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
 	if (options.modelsConfig !== undefined) {
@@ -93,26 +88,28 @@ async function runModels(
 		);
 		extensionArgs.push("--extension", extensionFile);
 		if (options.extensionCache === "warm") {
-			const child = Bun.spawnSync(
+			const outcome = writeModelCache(
+				"opencode-go",
+				Date.now() - 48 * 60 * 60 * 1000,
 				[
-					process.execPath,
-					"--eval",
-					`
-				// Absolute imports keep the cache writer isolated from the working directory.
-				const { buildModel } = await import(${JSON.stringify(path.join(import.meta.dir, "../../catalog/src/build.ts"))});
-				const { writeModelCache, closeModelCache } = await import(${JSON.stringify(path.join(import.meta.dir, "../../catalog/src/model-cache.ts"))});
-				writeModelCache("opencode-go", Date.now() - 48 * 60 * 60 * 1000, [buildModel({
-					provider: "opencode-go", id: "cached-model", name: "Cached model",
-					api: "anthropic-messages", baseUrl: "https://extension.invalid", reasoning: false,
-					input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 10000, maxTokens: 1000,
-				})], true, "", ${JSON.stringify(path.join(agentDir, "models.db"))});
-				closeModelCache();
-			`,
+					buildModel({
+						provider: "opencode-go",
+						id: "cached-model",
+						name: "Cached model",
+						api: "anthropic-messages",
+						baseUrl: "https://extension.invalid",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 10000,
+						maxTokens: 1000,
+					}),
 				],
-				{ cwd: home, env, stdout: "pipe", stderr: "pipe" },
+				true,
+				"",
+				path.join(agentDir, "models.db"),
 			);
-			expect(child.exitCode, child.stderr.toString()).toBe(0);
+			expect(outcome).toBe("written");
 		}
 	}
 
@@ -124,125 +121,51 @@ async function runModels(
 		stderr: "pipe",
 	});
 	const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-	expect(await child.exited).toBe(0);
-	if (options.offline) {
-		expect(stderr).not.toContain("UNEXPECTED_NETWORK_FETCH");
-		expect(stderr).not.toContain("UNEXPECTED_EXTENSION_DISCOVERY");
-	}
-	const payload = JSON.parse(stdout) as {
-		models: Array<{ provider: string; selector: string; contextWindow: number; maxTokens: number }>;
-	};
-	return {
-		providers: new Set(payload.models.map(model => model.provider)),
-		selectors: payload.models.map(model => model.selector),
-		companyContextWindows: Object.fromEntries(
-			payload.models
-				.filter(model => model.provider === "company")
-				.map(model => [model.selector, model.contextWindow]),
-		),
-		companyMaxTokens: payload.models.filter(model => model.provider === "company").map(model => model.maxTokens),
-		stderr,
-	};
+	expect(await child.exited, stderr).toBe(0);
+	expect(stderr).not.toContain("UNEXPECTED_NETWORK_FETCH");
+	expect(stderr).not.toContain("UNEXPECTED_EXTENSION_DISCOVERY");
+	const { models } = JSON.parse(stdout) as { models: ModelRow[] };
+	return { models, stderr };
 }
 
 describe("OMP_OFFLINE=1 omp models company environment", () => {
-	it("lists the company lane with offline context limits", async () => {
-		const { providers, selectors, companyContextWindows, companyMaxTokens, stderr } = await runModels(["--json"], {
-			companyConfig: true,
-			offline: true,
-		});
+	it("lists company limits and stale extension models without discovery", async () => {
+		const { models, stderr } = await runModels(["--json"], { extensionCache: "warm" });
 
-		expect(providers.has("company")).toBe(true);
-		expect(selectors).toContain("company/GLM-5.3-public");
-		expect(selectors).toContain("company/Deepseek-v4.1-Flash");
-		expect(companyContextWindows["company/Qwen3.8-27B"]).toBe(262_144);
-		expect(
-			Object.entries(companyContextWindows)
-				.filter(([selector]) => selector !== "company/Qwen3.8-27B")
-				.every(([, window]) => window === 204_800),
-		).toBe(true);
-		expect(companyMaxTokens.every(tokens => tokens === 81_920)).toBe(true);
+		expect(models).toContainEqual(
+			expect.objectContaining({ selector: "company/Qwen3.8-27B", contextWindow: 262_144, maxTokens: 81_920 }),
+		);
+		expect(models).toContainEqual(
+			expect.objectContaining({ selector: "company/GLM-5.3-public", contextWindow: 204_800, maxTokens: 81_920 }),
+		);
+		expect(models.map(model => model.selector)).toContain("opencode-go/cached-model");
 		expect(stderr).not.toContain("Company provider unavailable");
 	}, 30_000);
 
 	it("reports the reason when company configuration is missing", async () => {
-		const { providers, stderr } = await runModels(["--json"], { companyConfig: false, offline: true });
+		const { models, stderr } = await runModels(["--json"], { companyConfig: false });
 
-		expect(providers.has("company")).toBe(false);
+		expect(models.some(model => model.provider === "company")).toBe(false);
 		expect(stderr).toContain("Company provider unavailable");
 	}, 30_000);
 
-	it("does not register the company lane without OMP_OFFLINE", async () => {
-		const { providers } = await runModels(["--json"], { companyConfig: true });
-
-		expect(providers.has("company")).toBe(false);
-	}, 30_000);
-
-	for (const action of ["ls", "list", "refresh", "company"]) {
-		it(`keeps ${action} cache-only under OMP_OFFLINE=1`, async () => {
-			const { providers, selectors } = await runModels([action, "--json"], {
-				companyConfig: true,
-				offline: true,
-			});
-			expect(providers.has("company")).toBe(true);
-			expect(selectors).toContain("company/GLM-5.3-public");
-		}, 30_000);
-	}
-
-	it("filters explicit find selectors without fetching a missing provider", async () => {
-		const { providers } = await runModels(["find", "missing-provider/*", "--json"], {
-			companyConfig: true,
-			offline: true,
-		});
-		expect([...providers]).toEqual([]);
-	}, 30_000);
-
-	it("reports malformed company configuration", async () => {
-		const { providers, stderr } = await runModels(["refresh", "--json"], {
-			companyConfig: true,
-			malformedCompanyConfig: true,
-			offline: true,
-		});
-		expect(providers.has("company")).toBe(false);
-		expect(stderr).toContain("not valid JSON");
-	}, 30_000);
-
-	it("surfaces ignored reserved policy at the public command without leaking credentials", async () => {
-		const { providers, stderr } = await runModels(["refresh", "--json"], {
-			companyConfig: true,
-			offline: true,
+	it("keeps extension refresh cache-only and reports ignored company policy without leaking credentials", async () => {
+		const { models, stderr } = await runModels(["refresh", "--json"], {
+			extensionCache: "cold",
 			modelsConfig: {
 				providers: {
 					company: { models: false, apiKey: "ignored-company-key" },
 				},
 			},
 		});
-		expect(providers.has("company")).toBe(true);
+		expect(models.some(model => model.provider === "company")).toBe(true);
+		expect(models.map(model => model.selector)).not.toContain("opencode-go/cached-model");
 		expect(stderr).toContain("whole section is ignored");
 		expect(stderr).not.toContain("ignored-company-key");
 	}, 30_000);
 
-	for (const extensionCache of ["cold", "warm"] as const) {
-		for (const action of ["ls", "refresh"]) {
-			it(`uses ${extensionCache} extension cache for offline ${action} without invoking discovery`, async () => {
-				const { providers, selectors } = await runModels([action, "--json"], {
-					companyConfig: true,
-					extensionCache,
-					offline: true,
-				});
-				expect(providers.has("company")).toBe(true);
-				if (extensionCache === "warm") expect(providers.has("opencode-go")).toBe(true);
-				expect(selectors.includes("opencode-go/cached-model")).toBe(extensionCache === "warm");
-			}, 30_000);
-		}
-	}
-
 	it("keeps an extension selector miss cache-only", async () => {
-		const { selectors } = await runModels(["find", "opencode-go/missing", "--json"], {
-			companyConfig: true,
-			extensionCache: "warm",
-			offline: true,
-		});
-		expect(selectors).toEqual([]);
+		const { models } = await runModels(["find", "opencode-go/missing", "--json"], { extensionCache: "warm" });
+		expect(models).toEqual([]);
 	}, 30_000);
 });

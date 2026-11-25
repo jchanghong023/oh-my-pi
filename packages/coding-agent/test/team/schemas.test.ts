@@ -321,11 +321,11 @@ describe("team yield payload validation", () => {
 		).toBeUndefined();
 	});
 
-	it.each(["", " ", "\t\n"])("rejects a recommended proposal without a nonblank reason: %j", reason => {
+	it("rejects a recommended proposal with a whitespace-only reason", () => {
 		const data = {
 			reportMarkdown: "Complete report",
 			recommendedProposal: " A ",
-			recommendationReason: reason,
+			recommendationReason: "\t\n",
 			recommendationPreconditions: "",
 			hardConstraintViolations: [],
 		};

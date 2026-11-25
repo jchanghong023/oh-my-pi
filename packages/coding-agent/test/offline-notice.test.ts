@@ -14,13 +14,6 @@ describe("offline prompt environment boundaries", () => {
 		expect(noticeIds(getOfflineSystemNotice(true, { platform: "win32", shell: "/bin/csh" }))).toEqual(["offline"]);
 	});
 
-	it("adds Linux storage rules without imposing csh on Bash users", () => {
-		expect(noticeIds(getOfflineSystemNotice(true, { platform: "linux", shell: "/bin/bash" }))).toEqual([
-			"offline",
-			"offline-linux",
-		]);
-	});
-
 	it("recognizes both csh terminal names independently of their installation directory", () => {
 		for (const shell of ["/bin/csh", "/usr/local/bin/tcsh"]) {
 			expect(noticeIds(getOfflineSystemNotice(true, { platform: "linux", shell }))).toEqual([

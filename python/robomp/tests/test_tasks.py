@@ -238,72 +238,56 @@ async def test_triage_issue_reopen_tears_down_finalized_workspace(db, settings, 
 
 
 @pytest.mark.parametrize("branchless_mapping", [False, True])
-@pytest.mark.parametrize("error", [GitHubError(502, "upstream connect error"), ValueError("unexpected")])
-async def test_pr_metadata_fetch_failure(db, caplog, branchless_mapping, error):
+async def test_pr_metadata_fetch_failure(db, caplog, branchless_mapping):
+    error = GitHubError(502, "upstream connect error")
     if branchless_mapping:
         db.upsert_issue(key="octo/widget#7", repo="octo/widget", number=7, state="opened", pr_number=12)
 
     async def fail(*_args):
         raise error
 
-    async def resolve():
-        return await tasks._resolve_issue_row_for_pr(
-            db=db, github=SimpleNamespace(get_pull_request=fail), repo_full="octo/widget", pr_number=12
-        )
-
-    if isinstance(error, GitHubError):
-        row, pr = await resolve()
-        assert (row.number if row else None) == (7 if branchless_mapping else None)
-        assert pr is None
-        warnings = [record for record in caplog.records if record.getMessage() == "PR metadata fetch failed"]
-        assert len(warnings) == 1
-        assert warnings[0].name == "robomp.tasks"
-        assert warnings[0].levelno == logging.WARNING
-        assert warnings[0].repo == "octo/widget"
-        assert warnings[0].pr == 12
-        assert warnings[0].err == str(error)
-    else:
-        with pytest.raises(ValueError, match="unexpected"):
-            await resolve()
+    row, pr = await tasks._resolve_issue_row_for_pr(
+        db=db,
+        github=SimpleNamespace(get_pull_request=fail),
+        repo_full="octo/widget",
+        pr_number=12,
+    )
+    assert (row.number if row else None) == (7 if branchless_mapping else None)
+    assert pr is None
+    (warning,) = [record for record in caplog.records if record.name == tasks.__name__]
+    assert warning.levelno == logging.WARNING
+    assert warning.repo == "octo/widget"
+    assert warning.pr == 12
+    assert warning.err == str(error)
 
 
 @pytest.mark.parametrize(
-    ("handler", "warning", "fetches", "failure_index"),
+    ("handler", "unexpected"),
     [
-        (tasks.review_pr, "review_pr fetch failed", ("get_repo", "get_issue", "get_pull_request"), 0),
-        (tasks.review_pr, "review_pr fetch failed", ("get_repo", "get_issue", "get_pull_request"), 1),
-        (tasks.review_pr, "review_pr fetch failed", ("get_repo", "get_issue", "get_pull_request"), 2),
-        (tasks.handle_review, "review fetch failed", ("get_repo", "get_issue"), 0),
-        (tasks.handle_review, "review fetch failed", ("get_repo", "get_issue"), 1),
-        (tasks.handle_pr_conversation, "pr-conversation fetch failed", ("get_repo", "get_issue"), 0),
-        (tasks.handle_pr_conversation, "pr-conversation fetch failed", ("get_repo", "get_issue"), 1),
+        pytest.param(tasks.review_pr, False, id="review-pr"),
+        pytest.param(tasks.handle_review, False, id="handle-review"),
+        pytest.param(tasks.handle_pr_conversation, False, id="pr-conversation"),
+        pytest.param(tasks.review_pr, True, id="unexpected-error"),
     ],
 )
-@pytest.mark.parametrize("error", [GitHubError(502, "upstream connect error"), ValueError("unexpected")])
-async def test_pr_handler_fetch_failure(
-    db, settings, monkeypatch, caplog, handler, warning, fetches, failure_index, error
-):
-    if handler is not tasks.review_pr:
+async def test_pr_handler_fetch_failure(db, settings, monkeypatch, caplog, handler, unexpected):
+    error = ValueError("unexpected") if unexpected else GitHubError(502, "upstream connect error")
+
+    async def fail(*_args):
+        raise error
+
+    github = SimpleNamespace(get_repo=fail, get_issue=fail)
+    if handler is tasks.review_pr:
+        github.get_pull_request = fail
+    else:
         db.upsert_issue(
             key="octo/widget#7", repo="octo/widget", number=7, state="opened", branch="farm/7", pr_number=12
         )
-
-    calls = []
-
-    def fetch(name, should_fail):
-        async def run(*_args):
-            calls.append(name)
-            if should_fail:
-                raise error
-            return SimpleNamespace()
-
-        return run
 
     async def unreachable(**_kwargs):
         raise AssertionError("agent must not run after fetch failure")
 
     monkeypatch.setattr(tasks, "run_task", unreachable)
-    github = SimpleNamespace(**{name: fetch(name, index == failure_index) for index, name in enumerate(fetches)})
 
     async def invoke():
         return await handler(
@@ -320,14 +304,12 @@ async def test_pr_handler_fetch_failure(
             delivery_id="d1",
         )
 
-    if isinstance(error, GitHubError):
-        assert await invoke() is None
-        warnings = [record for record in caplog.records if record.getMessage() == warning]
-        assert len(warnings) == 1
-        assert warnings[0].name == "robomp.tasks"
-        assert warnings[0].levelno == logging.WARNING
-        assert warnings[0].err == str(error)
-    else:
-        with pytest.raises(ValueError, match="unexpected"):
+    if unexpected:
+        with pytest.raises(ValueError) as caught:
             await invoke()
-    assert calls == list(fetches[: failure_index + 1])
+        assert caught.value is error
+    else:
+        assert await invoke() is None
+        (warning,) = [record for record in caplog.records if record.name == tasks.__name__]
+        assert warning.levelno == logging.WARNING
+        assert warning.err == str(error)

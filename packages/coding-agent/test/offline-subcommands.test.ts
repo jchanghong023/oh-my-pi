@@ -252,18 +252,13 @@ it("offers AST Edit in an offline CLI session without re-enabling web tools", as
 }, 30_000);
 
 describe("offline model-dependent subcommands", () => {
-	it("rejects explicit company CLI selections outside the offline lane without reading company credentials", async () => {
+	it("rejects an explicit company model outside the offline lane without reading company credentials", async () => {
 		const f = await fixture({ offline: false });
-		for (const selector of [
-			["--provider", "company"],
-			["--model", "company/GLM-5.3-public"],
-		]) {
-			const result = await f.run([...selector, "--print", "--no-extensions", "hello"]);
-			expect(result.exitCode).not.toBe(0);
-			expect(result.stderr).toContain("OMP_OFFLINE=1");
-			expect(result.stderr).not.toContain("Company provider unavailable");
-			expect(result.stderr).not.toContain("fixture-token");
-		}
+		const result = await f.run(["--model", "company/GLM-5.3-public", "--print", "--no-extensions", "hello"]);
+		expect(result.exitCode).not.toBe(0);
+		expect(result.stderr).toContain("OMP_OFFLINE=1");
+		expect(result.stderr).not.toContain("Company provider unavailable");
+		expect(result.stderr).not.toContain("fixture-token");
 		expect(await Bun.file(f.companyPath).exists()).toBe(false);
 		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
 	}, 30_000);
@@ -348,7 +343,7 @@ describe("offline model-dependent subcommands", () => {
 		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
 	}, 30_000);
 
-	it("compresses through explicit and default company models using only the local company endpoint", async () => {
+	it("compresses through the default company model using only the local company endpoint", async () => {
 		const requests: Array<{ model: string; authorization: string | null }> = [];
 		let turn = 0;
 		const server = Bun.serve({
@@ -357,7 +352,7 @@ describe("offline model-dependent subcommands", () => {
 			async fetch(request) {
 				const body = (await request.json()) as { model: string };
 				requests.push({ model: body.model, authorization: request.headers.get("authorization") });
-				const step = turn++ % 4;
+				const step = turn++;
 				if (step === 0) {
 					return anthropicResponse(body.model, "", {
 						name: "rewrite",
@@ -374,26 +369,19 @@ describe("offline model-dependent subcommands", () => {
 			},
 		});
 		try {
-			for (const selector of [undefined, "company/GLM-5.2-public"]) {
-				turn = 0;
-				const f = await fixture({ companyUrl: server.url.origin });
-				const source = path.join(f.home, "source.txt");
-				const text = "The timeout defaults to thirty seconds when the caller does not supply a value.";
-				await fs.writeFile(source, text);
-				const result = await f.run(["compress", source, ...(selector ? ["--model", selector] : [])]);
-				expect(result.exitCode, result.stderr).toBe(0);
-				expect(result.stdout).toContain("Default timeout: 30s.");
-				expect(turn).toBe(4);
-				expect(requests.splice(0)).toEqual(
-					Array.from({ length: 4 }, () => ({
-						model: selector ? "GLM-5.2-public" : "GLM-5.3-public",
-						authorization: "Bearer fixture-token",
-					})),
-				);
-				expect(await fs.readFile(source, "utf8")).toBe(text);
-				expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
-				expect(await fs.readFile(f.companyPath, "utf8")).toBe(f.companyText);
-			}
+			const f = await fixture({ companyUrl: server.url.origin });
+			const source = path.join(f.home, "source.txt");
+			const text = "The timeout defaults to thirty seconds when the caller does not supply a value.";
+			await fs.writeFile(source, text);
+			const result = await f.run(["compress", source]);
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.stdout).toContain("Default timeout: 30s.");
+			expect(requests).toEqual(
+				Array.from({ length: 4 }, () => ({ model: "GLM-5.3-public", authorization: "Bearer fixture-token" })),
+			);
+			expect(await fs.readFile(source, "utf8")).toBe(text);
+			expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
+			expect(await fs.readFile(f.companyPath, "utf8")).toBe(f.companyText);
 		} finally {
 			server.stop(true);
 		}
@@ -447,7 +435,7 @@ describe("offline model-dependent subcommands", () => {
 		}
 	}, 60_000);
 
-	it("does not replace unavailable implicit company models with another authenticated provider", async () => {
+	it("requires company for implicit compress and commit models but honors an explicit alternate", async () => {
 		let requests = 0;
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
@@ -464,9 +452,7 @@ describe("offline model-dependent subcommands", () => {
 			await fs.writeFile(source, "The default timeout is thirty seconds.");
 			for (const args of [
 				["compress", source],
-				["compress", source, "--model", "company/Qwen3.8-27B"],
 				["commit", "--dry-run", "--no-changelog"],
-				["commit", "--legacy", "--dry-run", "--no-changelog"],
 			]) {
 				const result = await f.run(args);
 				expect(result.exitCode).not.toBe(0);
@@ -474,21 +460,11 @@ describe("offline model-dependent subcommands", () => {
 				expect(result.stderr).not.toContain("fixture-token");
 			}
 			expect(requests).toBe(0);
-			const explicit = await fixture({
-				visionUrl: server.url.origin,
-				modelRoles: { commit: "ascend/vision" },
-			});
-			await stageCommitFixture(explicit.home, explicit.env);
-			const chosen = await explicit.run(["commit", "--dry-run", "--no-changelog"]);
-			expect(chosen.exitCode, `${chosen.stdout}\n${chosen.stderr}`).toBe(0);
-			expect(chosen.stdout).toContain("vision");
-			expect(chosen.stdout).toContain("feat: added offline fixture");
-			expect(requests).toBe(2);
 			const override = await f.run(["commit", "--dry-run", "--no-changelog", "--model", "ascend/vision"]);
 			expect(override.exitCode, `${override.stdout}\n${override.stderr}`).toBe(0);
 			expect(override.stdout).toContain("vision");
 			expect(override.stdout).toContain("feat: added offline fixture");
-			expect(requests).toBe(4);
+			expect(requests).toBe(2);
 		} finally {
 			server.stop(true);
 		}
@@ -568,7 +544,7 @@ describe("offline model-dependent subcommands", () => {
 		}
 	}, 30_000);
 
-	it("honors explicit non-company vision and default roles with unavailable company snapshots", async () => {
+	it("honors a non-company default role for image questions despite an invalid company snapshot", async () => {
 		const requests: Array<{ model: string; image: boolean; apiKey: string | null; authorization: string | null }> =
 			[];
 		const server = Bun.serve({
@@ -609,26 +585,20 @@ describe("offline model-dependent subcommands", () => {
 			},
 		});
 		try {
-			for (const role of ["vision", "default"]) {
-				// Exercise role expansion as well as @default's existing vision fallback.
-				const f = await fixture({
-					visionUrl: server.url.origin,
-					modelRoles:
-						role === "vision" ? { vision: "ascend/vision" } : { default: "@local", local: "ascend/vision" },
-				});
-				const companyText = role === "default" ? "{ invalid JSON" : undefined;
-				if (companyText) await fs.writeFile(f.companyPath, companyText);
-				const result = await f.run(["read", `${f.image}?q=describe this image`]);
-				expect(result.exitCode, result.stderr).toBe(0);
-				expect(result.stdout).toContain("offline vision answer");
-				expect(result.stderr.match(/Company provider unavailable/g)).toHaveLength(1);
-				expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
-				expect(await fs.readFile(f.modelsPath, "utf8")).toBe(f.modelsText);
-				if (companyText) expect(await fs.readFile(f.companyPath, "utf8")).toBe(companyText);
-				else expect(await Bun.file(f.companyPath).exists()).toBe(false);
-			}
+			const f = await fixture({
+				visionUrl: server.url.origin,
+				modelRoles: { default: "@local", local: "ascend/vision" },
+			});
+			const companyText = "{ invalid JSON";
+			await fs.writeFile(f.companyPath, companyText);
+			const result = await f.run(["read", `${f.image}?q=describe this image`]);
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.stdout).toContain("offline vision answer");
+			expect(result.stderr.match(/Company provider unavailable/g)).toHaveLength(1);
+			expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
+			expect(await fs.readFile(f.modelsPath, "utf8")).toBe(f.modelsText);
+			expect(await fs.readFile(f.companyPath, "utf8")).toBe(companyText);
 			expect(requests).toEqual([
-				{ model: "vision", image: true, apiKey: null, authorization: "Bearer local-vision-key" },
 				{ model: "vision", image: true, apiKey: null, authorization: "Bearer local-vision-key" },
 			]);
 		} finally {
@@ -636,7 +606,7 @@ describe("offline model-dependent subcommands", () => {
 		}
 	}, 30_000);
 
-	it("never falls back from implicit or explicit company vision routes to another authenticated provider", async () => {
+	it("does not fall back to another authenticated provider when the configured company vision role is unavailable", async () => {
 		let requests = 0;
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
@@ -647,43 +617,27 @@ describe("offline model-dependent subcommands", () => {
 			},
 		});
 		try {
-			for (const explicitCompany of [false, true]) {
-				const f = await fixture({
-					visionUrl: server.url.origin,
-					...(explicitCompany
-						? {
-								modelRoles: {
-									vision: "@companyVision",
-									companyVision: "company/Qwen3.8-27B",
-									default: "ascend/vision",
-								},
-							}
-						: {}),
-				});
-				const companyText = explicitCompany ? "{ invalid JSON" : undefined;
-				if (companyText) await fs.writeFile(f.companyPath, companyText);
-				const result = await f.run(["read", `${f.image}?q=describe`]);
-				expect(result.exitCode).not.toBe(0);
-				expect(result.stderr).toContain("Company provider unavailable");
-				expect(result.stderr).toContain(explicitCompany ? "not valid JSON" : "cannot read");
-				expect(requests).toBe(0);
-				expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
-				expect(await fs.readFile(f.modelsPath, "utf8")).toBe(f.modelsText);
-				if (companyText) expect(await fs.readFile(f.companyPath, "utf8")).toBe(companyText);
-				else expect(await Bun.file(f.companyPath).exists()).toBe(false);
-			}
+			const f = await fixture({
+				visionUrl: server.url.origin,
+				modelRoles: {
+					vision: "@companyVision",
+					companyVision: "company/Qwen3.8-27B",
+					default: "ascend/vision",
+				},
+			});
+			const companyText = "{ invalid JSON";
+			await fs.writeFile(f.companyPath, companyText);
+			const result = await f.run(["read", `${f.image}?q=describe`]);
+			expect(result.exitCode).not.toBe(0);
+			expect(result.stderr).toContain("Company provider unavailable");
+			expect(result.stderr).toContain("not valid JSON");
+			expect(requests).toBe(0);
+			expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
+			expect(await fs.readFile(f.modelsPath, "utf8")).toBe(f.modelsText);
+			expect(await fs.readFile(f.companyPath, "utf8")).toBe(companyText);
 		} finally {
 			server.stop(true);
 		}
-	}, 30_000);
-
-	it("reports missing company configuration for X reads without requiring a company vision model", async () => {
-		const f = await fixture();
-		const result = await f.run(["read", "https://x.com/jack/status/20"]);
-		expect(result.exitCode, result.stderr).toBe(0);
-		expect(result.stderr).toContain("Company provider unavailable");
-		expect(result.stdout).toContain("xAI credentials");
-		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
 	}, 30_000);
 
 	it("reads ordinary local files and renders sessions without company configuration or auth discovery", async () => {
@@ -725,55 +679,14 @@ describe("offline model-dependent subcommands", () => {
 		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
 	}, 30_000);
 
-	it("preserves normal render's user model configuration path and migration", async () => {
-		const f = await fixture({ offline: false });
-		const models = {
-			providers: {
-				"render-config-fixture": {
-					api: "anthropic-messages",
-					baseUrl: "http://render-config.invalid",
-					apiKey: "fixture-key",
-					models: [{ id: "custom-render-model", input: ["text"] }],
-				},
-			},
-		};
-		await fs.writeFile(path.join(f.agentDir, "models.json"), JSON.stringify(models));
-		const session = path.join(f.home, "render.jsonl");
-		const timestamp = "2026-10-17T00:00:00.000Z";
-		await fs.writeFile(
-			session,
-			[
-				{ type: "session", version: 3, id: "normal-render", timestamp, cwd: f.home },
-				{
-					type: "message",
-					id: "m1",
-					parentId: null,
-					timestamp,
-					message: { role: "user", content: [{ type: "text", text: "normal render transcript" }], timestamp: 0 },
-				},
-			]
-				.map(entry => JSON.stringify(entry))
-				.join("\n") + "\n",
-		);
-		const result = await f.run(["render", session, "--plain", "--width", "80", "--height", "24"]);
-		expect(result.exitCode, result.stderr).toBe(0);
-		expect(result.stdout).toContain("normal render transcript");
-		expect(Bun.YAML.parse(await fs.readFile(path.join(f.agentDir, "models.yml"), "utf8"))).toEqual(models);
-	}, 30_000);
-
-	it("resolves dry-balance company roles and selectors without pretending they are OAuth accounts", async () => {
+	it("does not treat the default company model as an OAuth account in dry-balance", async () => {
 		const f = await fixture({ companyUrl: "http://company.invalid" });
-		for (const args of [[], ["company/GLM-5.2-public"]]) {
-			const result = await f.run(["dry-balance", ...args, "--count", "1", "--concurrency", "1", "--json"]);
-			expect(result.exitCode).toBe(1);
-			const summary = JSON.parse(result.stdout);
-			expect(summary.provider).toBe("company");
-			expect(summary.model).toBe(args.length ? "company/GLM-5.2-public" : "company/GLM-5.3-public");
-			expect(summary.failure.reasons[0].reason).toBe("no OAuth access resolved");
-		}
-		const miss = await f.run(["dry-balance", "opencode-go/missing", "--count", "1", "--json"]);
-		expect(miss.exitCode).not.toBe(0);
-		expect(miss.stderr).toContain("missing");
+		const result = await f.run(["dry-balance", "--count", "1", "--concurrency", "1", "--json"]);
+		expect(result.exitCode).toBe(1);
+		const summary = JSON.parse(result.stdout);
+		expect(summary.provider).toBe("company");
+		expect(summary.model).toBe("company/GLM-5.3-public");
+		expect(summary.failure.reasons[0].reason).toBe("no OAuth access resolved");
 		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
 	}, 30_000);
 

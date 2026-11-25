@@ -33,7 +33,9 @@ async function invoke(root: string, action: "set" | "reset") {
 
 describe("explicit config CLI revision-safe persistence", () => {
 	for (const action of ["set", "reset"] as const) {
-		it.each([undefined, "temperature: [broken\n", "temperature: 0.2\ntemperature: 0.4\n"])(
+		const rejectedSources =
+			action === "set" ? [undefined, "temperature: 0.2\ntemperature: 0.4\n"] : ["temperature: [broken\n"];
+		it.each(rejectedSources)(
 			`${action} refuses missing or unparseable configuration without creating or overwriting it: %s`,
 			async source => {
 				const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-config-revision-"));

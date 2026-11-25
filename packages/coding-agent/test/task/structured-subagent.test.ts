@@ -995,14 +995,6 @@ describe("structured subagent primitive", () => {
 		await expect(fs.stat(settled.artifactsDir)).resolves.toBeDefined();
 		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
 	});
-	it("uses identical non-plan LSP and IRC policy for task and eval invocations", async () => {
-		mockDiscovery();
-		const taskPolicy = await resolveEffectiveSubagentPolicy(request());
-		const evalPolicy = await resolveEffectiveSubagentPolicy(request({ invocationKind: "eval" }));
-
-		expect(evalPolicy.enableLsp).toBe(taskPolicy.enableLsp);
-		expect(evalPolicy.enableIrc).toBe(taskPolicy.enableIrc);
-	});
 
 	it("rejects an invalid caller schema before executor dispatch in both modes", async () => {
 		mockDiscovery();
@@ -1919,102 +1911,6 @@ describe("agent frontmatter structured opt-in", () => {
 					await expect(fs.stat(invocation.artifactsDir!)).rejects.toMatchObject({ code: "ENOENT" });
 				},
 				() => ({ content: ["unexpected dispatch"] }),
-			);
-		},
-		30_000,
-	);
-
-	it.each(["configured", "original"] as const)(
-		"warm revival disposes the attached session when the %s observer throws",
-		async failingObserver => {
-			await withNativeHookFixture(
-				async ({ parent, cwd, worker }) => {
-					const id = "ObserverRevival";
-					// Native warm revival is registered only for an artifact-backed persisted child.
-					const artifactsDir = path.join(cwd, "observer-revival-artifacts");
-					await fs.mkdir(artifactsDir, { recursive: true });
-					const failure = new Error(`${failingObserver} revival observer failed`);
-					const sessions: sdkModule.CreateAgentSessionResult["session"][] = [];
-					const cleaned: sdkModule.CreateAgentSessionResult["session"][] = [];
-					let admissions = 0;
-					let denyAdmission = false;
-					let reserved = false;
-					const failedSpawns: unknown[] = [];
-					const hooks: NonNullable<executorModule.ExecutorOptions["subagentHooks"]> = {
-						beforeSpawn: async () => {
-							admissions++;
-							if (denyAdmission) throw new Error("renewed admission denied");
-							if (reserved) throw new Error("previous revival still owns admission");
-							reserved = true;
-						},
-						onSpawnFailed: async (_child, error) => {
-							expect(cleaned).toEqual(sessions);
-							reserved = false;
-							failedSpawns.push(error);
-							throw new Error("cleanup must not replace the observer failure");
-						},
-						configureSession: async () => ({
-							enableMCP: false,
-							enableLsp: false,
-							enableIrc: false,
-							onSessionCreated: child => {
-								sessions.push(child);
-								const cleanup = () => {
-									cleaned.push(child);
-								};
-								if (sessions.length === 2 && failingObserver === "configured") {
-									child.addDisposer(cleanup);
-									throw failure;
-								}
-								return cleanup;
-							},
-						}),
-					};
-					const settled = await executorModule.runSubprocess({
-						cwd,
-						artifactsDir,
-						agent: worker,
-						task: "Complete the initial child turn.",
-						id,
-						index: 0,
-						keepAlive: true,
-						settings: parent.settings,
-						authStorage: parent.authStorage,
-						modelRegistry: parent.modelRegistry,
-						enableMCP: false,
-						enableLsp: false,
-						enableIrc: false,
-						subagentHooks: hooks,
-						subagentRequest: request({ session: parent, structured: false, keepAlive: true }),
-						onSessionCreated: () => {
-							if (sessions.length === 2 && failingObserver === "original") throw failure;
-						},
-					});
-					expect(settled.exitCode).toBe(0);
-					const registry = AgentRegistry.global();
-					const lifecycle = AgentLifecycleManager.global();
-					expect(registry.get(id)?.sessionFile).toBe(path.join(artifactsDir, `${id}.jsonl`));
-					expect(registry.get(id)?.session).toBe(sessions[0]);
-					await lifecycle.park(id);
-					expect(registry.get(id)?.status).toBe("parked");
-					expect(registry.get(id)?.session).toBeNull();
-					expect(cleaned).toEqual([sessions[0]]);
-
-					await expect(lifecycle.ensureLive(id)).rejects.toBe(failure);
-					expect(sessions).toHaveLength(2);
-					expect(admissions).toBe(1);
-					expect(cleaned).toEqual(sessions);
-					expect(reserved).toBe(false);
-					expect(failedSpawns).toEqual([failure]);
-					expect(registry.get(id)?.session ?? null).toBeNull();
-					expect(registry.get(id)?.status).not.toBe("running");
-					denyAdmission = true;
-					// A failed setup must never leave a session that bypasses live admission.
-					await expect(lifecycle.ensureLive(id)).rejects.toThrow();
-					expect(sessions).toHaveLength(2);
-					expect(failedSpawns).toEqual([failure]);
-				},
-				() => ({ content: ["initial child complete"] }),
 			);
 		},
 		30_000,

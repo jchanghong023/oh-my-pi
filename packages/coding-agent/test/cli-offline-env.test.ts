@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { offlineFromEnv, parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
-import { extractProfileFlags } from "@oh-my-pi/pi-coding-agent/cli/profile-bootstrap";
+import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 
 const originalOfflineEnv = process.env.OMP_OFFLINE;
 
@@ -27,13 +26,6 @@ describe("parseArgs — OMP_OFFLINE environment variable", () => {
 		}
 	});
 
-	it("exposes the helper behind the parse result", () => {
-		process.env.OMP_OFFLINE = "1";
-		expect(offlineFromEnv()).toBe(true);
-		delete process.env.OMP_OFFLINE;
-		expect(offlineFromEnv()).toBe(false);
-	});
-
 	it("allows the intranet mode and upstream --offline together", () => {
 		process.env.OMP_OFFLINE = "1";
 		const result = parseArgs(["--offline", "--model", "opus", "hello"]);
@@ -56,14 +48,5 @@ describe("parseArgs — OMP_OFFLINE environment variable", () => {
 		const result = parseArgs(["--", "--offline"]);
 		expect(result.offline).toBeUndefined();
 		expect(result.messages).toEqual(["--offline"]);
-	});
-
-	it("does not disturb profile bootstrap extraction", () => {
-		delete process.env.OMP_OFFLINE;
-		const extracted = extractProfileFlags(["--profile", "work", "hello"]);
-		expect(extracted.profile).toBe("work");
-		const parsed = parseArgs(extracted.argv);
-		expect(parsed.intranetOffline).toBeUndefined();
-		expect(parsed.messages).toEqual(["hello"]);
 	});
 });

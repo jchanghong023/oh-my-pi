@@ -199,49 +199,6 @@ describe("TodoLoop file parsing", () => {
 		expect(after.groups.map(group => group.id)).toEqual(before.groups.map(group => group.id));
 	});
 
-	it("preserves original Superpowers syntax, numeric identities and group-local Step identities", async () => {
-		const content = [
-			"# Implementation Plan",
-			"```markdown",
-			"###### Example",
-			"- [ ] **Step 99: Ignore this**",
-			"```",
-			"    ### Indented example",
-			"    - [ ] **Step 99: Ignore this too**",
-			"### Task: Shared",
-			"- [X] **Step 1: Inspect `source.ts`**",
-			"- [ ] **Step 2: Implement behavior**",
-			"  preserving continuation\\",
-			"",
-			"## Chunk background, not a group",
-			"- [ ] 1 Numeric task",
-			"#### Checks",
-			"- [ ] 1.2 Numeric child",
-			"### Empty",
-			"### Task: Shared",
-			"- [ ] **Step 1: Inspect `source.ts`**",
-			"",
-		].join("\r\n");
-		const filePath = await fixture(content);
-		const snapshot = await readTodoLoop(filePath);
-		expect(snapshot.content).toBe(content);
-		expect(snapshot.groups.map(group => ({ id: group.id, ids: group.tasks.map(task => task.id) }))).toEqual([
-			{ id: "1", ids: ["step:1:1", "step:1:2", "1", "1.2"] },
-			{ id: "2", ids: ["step:2:1"] },
-		]);
-		expect(snapshot.tasks[0]).toEqual({
-			id: "step:1:1",
-			label: "Step 1",
-			text: "Inspect `source.ts`",
-			done: true,
-			line: 9,
-		});
-		expect(snapshot.tasks[1].text).toBe("Implement behavior\npreserving continuation\\");
-		expect(snapshot.tasks[2]).toEqual({ id: "1", text: "Numeric task", done: false, line: 14 });
-		expect(snapshot.tasks[4].label).toBe("Step 1");
-		expect(await fs.readFile(filePath, "utf8")).toBe(content);
-	});
-
 	it("assigns automatic identities to unnumbered text without colliding with explicit numbers", async () => {
 		const snapshot = await readTodoLoop(
 			await fixture("- [x] Previous work\n- [ ] 1..2 Work\n- [ ] 1 Numbered work\n- [ ] Next work\n"),
@@ -255,24 +212,6 @@ describe("TodoLoop file parsing", () => {
 		["duplicate id", "- [ ] 2 Work\n+ [X] 2 Other", /duplicate task number 2/],
 		["empty body", "- [ ] 1.2   ", /empty task body/],
 		["duplicate numeric across groups", "## One\n- [ ] 1 Work\n## Two\n- [ ] 1 Other", /duplicate task number 1/],
-		[
-			"duplicate Step in group",
-			"### Work\n- [ ] **Step 1: Work**\n#### Detail\n- [x] **Step 1: Other**",
-			/duplicate Step number 1/,
-		],
-		[
-			"duplicate headerless Step",
-			"- [ ] **Step 1: Work**\n## Later\n- [ ] **Step 1: Other**",
-			/duplicate Step number 1/,
-		],
-		["missing Step number", "- [ ] **Step : Work**", /invalid Step task/],
-		["invalid Step number", "- [ ] **Step 1.2: Work**", /invalid Step task/],
-		["missing Step colon", "- [ ] **Step 1 Work**", /invalid Step task/],
-		["unclosed Step bold", "- [ ] **Step 1: Work", /invalid Step task/],
-		["single closing Step bold", "- [ ] **Step 1: Work*", /invalid Step task/],
-		["empty Step body", "- [ ] **Step 1: **", /empty task body/],
-		["missing Step body", "- [ ] **Step 1:**\n  continuation cannot supply the description", /empty task body/],
-		["trailing Step content", "- [ ] **Step 1: Work** extra", /invalid Step task/],
 		["invalid state", "- [~] 1 Work", /invalid checkbox state/],
 		["empty state", "- [] 1 Work", /invalid checkbox state/],
 		["padded state", "- [ x ] 1 Work", /invalid checkbox state/],
@@ -319,7 +258,7 @@ describe("TodoLoop Markdown format and update compatibility", () => {
 			next: "auto:2",
 		},
 		{
-			name: "OpenSpec numbered tasks in ordered lists with CRLF hard breaks",
+			name: "numbered Markdown tasks in ordered lists with CRLF hard breaks",
 			lines: [
 				"## Implement",
 				"1. [ ] 1.1 Load commands\\",
@@ -331,20 +270,6 @@ describe("TodoLoop Markdown format and update compatibility", () => {
 			eol: "\r\n",
 			ids: ["1.1", "1.2", "2.1"],
 			next: "1.2",
-		},
-		{
-			name: "Superpowers Steps with CR newlines and group-local repeated numbers",
-			lines: [
-				"### Implement",
-				"- [ ] **Step 1: Write the regression**",
-				"  Exercise the real file consumer.",
-				"* [ ] **Step 2: Fix the parser**",
-				"### Deliver",
-				"- [ ] **Step 1: Report evidence**",
-			],
-			eol: "\r",
-			ids: ["step:1:1", "step:1:2", "step:2:1"],
-			next: "step:1:2",
 		},
 		{
 			name: "BOM-prefixed headerless nested tasks with tab-padded markers",
@@ -396,22 +321,22 @@ describe("TodoLoop Markdown format and update compatibility", () => {
 			"Build",
 			"and verify",
 			"----------",
-			"- [ ] **Step 1: Implement**",
+			"- [ ] 1 Implement",
 			"",
 			"Review",
 			"------",
-			"- [ ] **Step 2: Inspect**",
+			"- [ ] 2 Inspect",
 			"## Deliver",
-			"- [ ] **Step 3: Publish**",
+			"- [ ] 3 Publish",
 		].join("\n");
 		const filePath = await fixture(content);
 		const before = await readTodoLoop(filePath);
 		expect(before.groups.map(group => [group.title, group.tasks.map(task => task.id)])).toEqual([
-			["Build\nand verify", ["step:1:1"]],
-			["Review", ["step:2:2"]],
-			["Deliver", ["step:3:3"]],
+			["Build\nand verify", ["1"]],
+			["Review", ["2"]],
+			["Deliver", ["3"]],
 		]);
-		await fs.writeFile(filePath, content.replace("[ ] **Step 1: Implement", "[x] **Step 1: Implement"));
+		await fs.writeFile(filePath, content.replace("[ ] 1 Implement", "[x] 1 Implement"));
 		const after = await readTodoLoop(filePath);
 		validateTodoLoopChange(before, after, "1");
 		expect(after.groups.find(group => group.tasks.some(task => !task.done))?.title).toBe("Review");
@@ -490,64 +415,6 @@ const original =
 	"# Work\n\n## Earlier\n- [x] 8 Earlier\n## Current\n- [ ] 3 Current\\\n  required continuation\n## Later\n- [ ] 1 Later\n";
 
 describe("TodoLoop snapshot invariants", () => {
-	it("scopes repeated Step 1 updates and append-only notes by full group identity on real rereads", async () => {
-		const content = [
-			"# Superpowers plan",
-			"### Same task title",
-			"- [ ] **Step 1: Run the check**",
-			"",
-			"  Original first-group evidence",
-			"### Same task title",
-			"- [ ] **Step 1: Run the check**",
-			"",
-			"  Original second-group evidence",
-			"",
-		].join("\n");
-		const filePath = await fixture(content);
-		const before = await readTodoLoop(filePath);
-		const firstDone = content.replace("- [ ] **Step 1:", "- [x] **Step 1:");
-		await fs.writeFile(filePath, firstDone);
-		const wrongGroup = await readTodoLoop(filePath);
-		expect(() => validateTodoLoopChange(before, wrongGroup, "2")).toThrow(/non-current group task step:1:1/);
-		validateTodoLoopChange(before, wrongGroup, "1");
-		const currentDone = firstDone
-			.replace("- [ ] **Step 1:", "- [X] **Step 1:")
-			.replace(
-				"  Original second-group evidence",
-				"  Original second-group evidence\n\n  Current-group check passed",
-			);
-		await fs.writeFile(filePath, currentDone);
-		const after = await readTodoLoop(filePath);
-		validateTodoLoopChange(wrongGroup, after, "2");
-		expect(after.tasks.map(task => task.id)).toEqual(["step:1:1", "step:2:1"]);
-		expect(after.groups.every(group => group.tasks.every(task => task.done))).toBe(true);
-		for (const changed of [
-			currentDone.replace("[x] **Step 1:", "[X] **Step 1:"),
-			currentDone.replace("Original first-group evidence", "Changed first-group evidence"),
-			currentDone.replace("Original second-group evidence", "Changed second-group evidence"),
-			currentDone.replace(
-				"  Original first-group evidence",
-				"  Original first-group evidence\n\n  Wrong-group note",
-			),
-		]) {
-			await fs.writeFile(filePath, changed);
-			expect(() => validateTodoLoopChange(after, parseTodoLoop(changed), "2")).toThrow(/original content changed/);
-		}
-	});
-
-	it("rejects changing Step identities, group boundaries and immutable raw bold source", () => {
-		const content = "### First\n- [ ] **Step 1: Work**\n### Second\n- [ ] **Step 1: Work**\n";
-		const before = parseTodoLoop(content);
-		for (const changed of [
-			content.replace("**Step 1: Work**", "**Step 2: Work**"),
-			content.replace("### Second", "## Second"),
-			content.replace("### First", "#### First"),
-			content.replace("**Step 1: Work**", "**Step 1:  Work**"),
-		]) {
-			expect(() => validateTodoLoopChange(before, parseTodoLoop(changed), "1")).toThrow();
-		}
-	});
-
 	it("accepts current completion and append-only independent notes despite changed line numbers", async () => {
 		const path = await fixture(original);
 		const before = await readTodoLoop(path);

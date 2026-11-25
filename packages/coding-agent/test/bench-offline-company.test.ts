@@ -12,9 +12,7 @@ import type { BenchSummary } from "../src/cli/bench-cli";
 const RUNTIME_MODULE = path.join(import.meta.dir, "../src/cli/bench-runtime.ts");
 const SETTINGS_MODULE = path.join(import.meta.dir, "../src/config/settings.ts");
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
-const COMPANY_SETTINGS = JSON.stringify({
-	env: { ANTHROPIC_BASE_URL: "http://company.invalid", ANTHROPIC_AUTH_TOKEN: "fixture-token" },
-});
+const COMPANY_TOKEN = "fixture-token";
 
 const tempDirs: string[] = [];
 async function tempDir(prefix: string): Promise<string> {
@@ -27,266 +25,152 @@ afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
-async function isolatedEnv(companyConfig: boolean, offline = false): Promise<Record<string, string>> {
+async function isolatedEnv(companyUrl: string | null = "http://company.invalid"): Promise<Record<string, string>> {
 	const home = await tempDir("omp-bench-home-");
-	const claudeDir = await tempDir("omp-bench-claude-");
-	if (companyConfig) await fs.writeFile(path.join(claudeDir, "settings.json"), COMPANY_SETTINGS);
-	const env: Record<string, string> = {
+	const claudeDir = path.join(home, "claude");
+	if (companyUrl !== null) {
+		await fs.mkdir(claudeDir);
+		await fs.writeFile(
+			path.join(claudeDir, "settings.json"),
+			JSON.stringify({ env: { ANTHROPIC_BASE_URL: companyUrl, ANTHROPIC_AUTH_TOKEN: COMPANY_TOKEN } }),
+		);
+	}
+	const agentDir = path.join(home, "agent");
+	await fs.mkdir(agentDir, { mode: 0o700 });
+	return {
 		PATH: process.env.PATH ?? "",
 		SystemRoot: process.env.SystemRoot ?? "",
 		HOME: home,
 		USERPROFILE: home,
 		OMP_CONFIG_ROOT: path.join(home, ".omp"),
 		CLAUDE_CONFIG_DIR: claudeDir,
-		PI_CODING_AGENT_DIR: path.join(home, "agent"),
+		PI_CODING_AGENT_DIR: agentDir,
 		PI_CONFIG_DIR: ".omp",
+		OMP_OFFLINE: "1",
 		NO_COLOR: "1",
 	};
-	if (offline) env.OMP_OFFLINE = "1";
-	const agentDir = env.PI_CODING_AGENT_DIR!;
-	await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-	return env;
 }
 
-interface RoleProbe {
-	smolRole: string | null;
-	tinyRole: string | null;
-	smolSelector: string | null;
-	tinySelector: string | null;
-}
-
-interface ProbeResult {
-	providers: string[];
-	companySelector: string | null;
-	companyContextWindow: number | null;
-	companyCredentialAvailable: boolean;
-	offlineRequests: number;
-	smolSelector: string | null;
-	tinySelector: string | null;
-	smolRole: string | null;
-	explicitSelector: string | null;
-	inheritedSmolSelector: string | null;
-	subsequentProviders: string[];
-	inheritedProviders: string[];
-	inheritedRequests: number;
-	ordinaryInheritedProviders: string[];
-	subsequentRoles: RoleProbe | null;
-	ordinaryInheritedRoles: RoleProbe | null;
-	hostSmolRole: string | null;
-	hostTinyRole: string | null;
-}
-
-/** Resolve selectors through the real bench runtime; unresolved selectors come back null. */
-async function probeBenchRuntime(
-	env: Record<string, string>,
-	offline: boolean,
-	hostRoleDefaults: Record<string, string> = {},
-): Promise<ProbeResult> {
+async function probeBenchRuntime(env: Record<string, string>, checks: string): Promise<void> {
 	const script = `
+		import assert from "node:assert/strict";
+
 		let requests = 0;
 		globalThis.fetch = async () => { requests++; throw new Error("fixture forbids model discovery"); };
-		// Import only after the request guard to cover the real loading boundary.
+		// Install the guard before importing the runtime and its providers.
 		const { createDefaultBenchRuntime, resolveBenchTargets } = await import(${JSON.stringify(RUNTIME_MODULE)});
 		const { Settings } = await import(${JSON.stringify(SETTINGS_MODULE)});
-		const hostSettings = await Settings.init({ cwd: process.cwd() });
-		hostSettings.setModelRoleDefaults(${JSON.stringify(hostRoleDefaults)});
-		const runtime = await createDefaultBenchRuntime({ offline: ${offline} });
-		let closed = false;
-		try {
-			// getAll includes disabled catalog entries; probe the real enabled/credentialed provider surface.
-			const providers = [...new Set(runtime.modelRegistry.getAvailable().map(model => model.provider))].sort();
-			const companyModel = runtime.modelRegistry.getAll().find(model => model.provider === "company" && model.id === "GLM-5.2-public");
-			const resolve = async (selector, subject = runtime) => {
-				try {
-					const [target] = await resolveBenchTargets([selector], subject.modelRegistry, subject.settings, () => {});
-					return target ? \`\${target.model.provider}/\${target.model.id}\` : null;
-				} catch {
-					return null;
-				}
-			};
-			const probeRoles = async subject => ({
-				smolRole: subject.settings?.getModelRole("smol") ?? null,
-				tinyRole: subject.settings?.getModelRole("tiny") ?? null,
-				smolSelector: await resolve("@smol", subject),
-				tinySelector: await resolve("@tiny", subject),
-			});
-			const result = {
-				providers,
-				companySelector: await resolve("GLM-5.2-public"),
-				companyContextWindow: companyModel?.contextWindow ?? null,
-				companyCredentialAvailable: companyModel ? !!(await runtime.modelRegistry.getApiKey(companyModel)) : false,
-				smolSelector: await resolve("@smol"),
-				tinySelector: await resolve("@tiny"),
-				smolRole: runtime.settings?.getModelRole("smol") ?? null,
-				explicitSelector: await resolve("company/GLM-5.2-public"),
-				inheritedSmolSelector: null,
-				offlineRequests: requests,
-				subsequentProviders: [],
-				inheritedProviders: [],
-				inheritedRequests: 0,
-				ordinaryInheritedProviders: [],
-				subsequentRoles: null,
-				ordinaryInheritedRoles: null,
-				hostSmolRole: hostSettings.getModelRole("smol") ?? null,
-				hostTinyRole: hostSettings.getModelRole("tiny") ?? null,
-			};
-			if (${offline}) {
-				const inherited = await createDefaultBenchRuntime();
-				try {
-					result.inheritedProviders = [...new Set(inherited.modelRegistry.getAvailable().map(model => model.provider))];
-					try {
-						const [target] = await resolveBenchTargets(["@smol"], inherited.modelRegistry, inherited.settings, () => {});
-						result.inheritedSmolSelector = target ? \`\${target.model.provider}/\${target.model.id}\` : null;
-					} catch {}
-					try {
-						await resolveBenchTargets(["offline-probe-missing"], inherited.modelRegistry, inherited.settings, () => {});
-					} catch {}
-					result.inheritedRequests = requests - result.offlineRequests;
-				} finally { inherited.close?.(); }
-				runtime.close?.();
-				closed = true;
-				const ordinary = await createDefaultBenchRuntime({ offline: false });
-				try {
-					result.subsequentProviders = [...new Set(ordinary.modelRegistry.getAvailable().map(model => model.provider))];
-					result.subsequentRoles = await probeRoles(ordinary);
-				} finally { ordinary.close?.(); }
-				const ordinaryInherited = await createDefaultBenchRuntime();
-				try {
-					result.ordinaryInheritedProviders = [...new Set(ordinaryInherited.modelRegistry.getAvailable().map(model => model.provider))];
-					result.ordinaryInheritedRoles = await probeRoles(ordinaryInherited);
-				} finally { ordinaryInherited.close?.(); }
-			}
-			console.log(JSON.stringify(result));
-		} finally {
-			if (!closed) runtime.close?.();
-		}
+		const withRuntime = async (options, check) => {
+			const runtime = await createDefaultBenchRuntime(options);
+			try { await check(runtime); } finally { runtime.close?.(); }
+		};
+		const hasCompany = runtime => runtime.modelRegistry.getAvailable().some(model => model.provider === "company");
+		const resolve = async (runtime, selector) => {
+			const [target] = await resolveBenchTargets([selector], runtime.modelRegistry, runtime.settings, () => {});
+			return \`\${target.model.provider}/\${target.model.id}\`;
+		};
+		${checks}
 	`;
 	const child = Bun.spawn([process.execPath, "--eval", script], {
 		cwd: env.HOME,
 		env,
 		stdin: "ignore",
-		stdout: "pipe",
+		stdout: "ignore",
 		stderr: "pipe",
 	});
-	const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-	const exitCode = await child.exited;
-	if (exitCode !== 0) throw new Error(`bench runtime probe failed (${exitCode}): ${stderr}`);
-	return JSON.parse(stdout) as ProbeResult;
+	const stderr = await new Response(child.stderr).text();
+	expect(await child.exited, stderr).toBe(0);
 }
 
 describe("OMP_OFFLINE=1 omp bench company environment", () => {
-	it("resolves company selectors and inherits the offline lane", async () => {
-		const env = await isolatedEnv(true, true);
-		const probe = await probeBenchRuntime(env, true);
-
-		expect(probe.providers).toContain("company");
-		expect(probe.companySelector).toBe("company/GLM-5.2-public");
-		expect(probe.companyContextWindow).toBe(204_800);
-		expect(probe.companyCredentialAvailable).toBe(true);
-		expect(probe.smolSelector).toBe("company/Qwen3.8-27B");
-		expect(probe.tinySelector).toBe("company/Qwen3.6-35B-A3B");
-		expect(probe.explicitSelector).toBe("company/GLM-5.2-public");
-		expect(probe.inheritedSmolSelector).toBe("company/Qwen3.8-27B");
-		expect(probe.offlineRequests).toBe(0);
-		expect(probe.subsequentProviders).not.toContain("company");
-		expect(probe.inheritedProviders).toContain("company");
-		expect(probe.inheritedRequests).toBe(0);
-		expect(probe.ordinaryInheritedProviders).not.toContain("company");
-		expect(probe.hostSmolRole).toBeNull();
-		expect(probe.hostTinyRole).toBeNull();
-		for (const roles of [probe.subsequentRoles, probe.ordinaryInheritedRoles]) {
-			expect(roles).toEqual({
-				smolRole: null,
-				tinyRole: null,
-				smolSelector: expect.any(String),
-				tinySelector: expect.any(String),
+	it("inherits the offline lane without leaking its role defaults into later runtimes", async () => {
+		const env = await isolatedEnv();
+		await fs.writeFile(
+			path.join(env.PI_CODING_AGENT_DIR!, "models.yml"),
+			JSON.stringify({
+				providers: {
+					"probe-gateway": {
+						api: "openai-completions",
+						baseUrl: "http://discovery.invalid",
+						apiKey: "probe-key",
+						discovery: { type: "openai-models-list" },
+					},
+				},
+			}),
+		);
+		await probeBenchRuntime(
+			env,
+			`
+			const host = await Settings.init({ cwd: process.cwd() });
+			const publicModel = "deepseek/deepseek-v4-flash";
+			host.setModelRoleDefaults({ smol: publicModel });
+			await withRuntime({ offline: true }, async runtime => {
+				assert.equal(await resolve(runtime, "GLM-5.2-public"), "company/GLM-5.2-public");
 			});
-			expect(roles!.smolSelector).not.toMatch(/^company\//);
-			expect(roles!.tinySelector).not.toMatch(/^company\//);
-		}
-		const agentDir = env.PI_CODING_AGENT_DIR!;
-		expect(await Bun.file(path.join(agentDir, "config.yml")).exists()).toBe(false);
+			await withRuntime(undefined, async runtime => {
+				assert.ok(hasCompany(runtime));
+				assert.equal(await resolve(runtime, "@smol"), "company/Qwen3.8-27B");
+				assert.ok(runtime.modelRegistry.getDiscoverableProviders().includes("probe-gateway"));
+				await assert.rejects(() => resolve(runtime, "probe-gateway/offline-probe-missing"), /Could not resolve model/);
+				assert.equal(requests, 0);
+			});
+			assert.equal(host.getModelRole("smol"), publicModel);
+			await withRuntime({ offline: false }, async runtime => {
+				assert.ok(!hasCompany(runtime));
+				assert.equal(await resolve(runtime, "@smol"), publicModel);
+			});
+		`,
+		);
 	}, 30_000);
 
 	it("keeps company selectors unavailable without a company config under OMP_OFFLINE", async () => {
-		const env = await isolatedEnv(false, true);
-		const probe = await probeBenchRuntime(env, true);
-
-		expect(probe.providers).not.toContain("company");
-		expect(probe.companySelector).toBeNull();
-		expect(probe.offlineRequests).toBe(0);
-		expect(probe.smolRole).toBeNull();
-		expect(probe.inheritedRequests).toBe(0);
-	}, 30_000);
-
-	it("preserves configured roles instead of replacing them with offline defaults", async () => {
-		const env = await isolatedEnv(true, true);
-		const configDir = path.join(env.HOME!, ".omp");
-		await fs.mkdir(configDir, { recursive: true });
-		const config = "modelRoles:\n  smol: company/GLM-5.2-public\n  tiny: deepseek/deepseek-v4-flash\n";
-		const configPath = path.join(configDir, "config.yml");
-		await fs.writeFile(configPath, config);
-		env.PI_CONFIG_FILES = configPath;
-		const probe = await probeBenchRuntime(env, true);
-		expect(probe.smolSelector).toBe("company/GLM-5.2-public");
-		expect(probe.inheritedSmolSelector).toBe("company/GLM-5.2-public");
-		expect(probe.tinySelector).toBe("deepseek/deepseek-v4-flash");
-		for (const roles of [probe.subsequentRoles, probe.ordinaryInheritedRoles]) {
-			expect(roles).toEqual({
-				smolRole: "company/GLM-5.2-public",
-				tinyRole: "deepseek/deepseek-v4-flash",
-				smolSelector: null,
-				tinySelector: "deepseek/deepseek-v4-flash",
+		await probeBenchRuntime(
+			await isolatedEnv(null),
+			`
+			await withRuntime({ offline: true }, async runtime => {
+				assert.ok(!hasCompany(runtime));
+				assert.equal(runtime.settings.getModelRole("smol") ?? null, null);
+				await assert.rejects(() => resolve(runtime, "company/GLM-5.2-public"), /Could not resolve model/);
+				assert.equal(requests, 0);
 			});
-		}
-		expect(await fs.readFile(configPath, "utf8")).toBe(config);
+		`,
+		);
 	}, 30_000);
 
-	it("preserves host role defaults outside each offline runtime", async () => {
-		const env = await isolatedEnv(true, true);
-		const publicModel = "deepseek/deepseek-v4-flash";
-		const probe = await probeBenchRuntime(env, true, { smol: publicModel, tiny: publicModel });
-		expect(probe.smolSelector).toBe("company/Qwen3.8-27B");
-		expect(probe.tinySelector).toBe("company/Qwen3.6-35B-A3B");
-		expect(probe.hostSmolRole).toBe(publicModel);
-		expect(probe.hostTinyRole).toBe(publicModel);
-		for (const roles of [probe.subsequentRoles, probe.ordinaryInheritedRoles]) {
-			expect(roles).toEqual({
-				smolRole: publicModel,
-				tinyRole: publicModel,
-				smolSelector: publicModel,
-				tinySelector: publicModel,
-			});
-		}
-	}, 30_000);
-
-	it("honors explicit role clears without acquiring company defaults", async () => {
-		const env = await isolatedEnv(true, true);
+	it("honors configured and explicitly cleared roles instead of applying company defaults", async () => {
+		const env = await isolatedEnv();
 		const configPath = path.join(env.HOME!, "roles.yml");
-		const config = "modelRoles:\n  default: null\n  smol: null\n  tiny: null\n";
+		const config = "modelRoles:\n  default: null\n  smol: null\n  tiny: deepseek/deepseek-v4-flash\n";
 		await fs.writeFile(configPath, config);
 		env.PI_CONFIG_FILES = configPath;
-		const probe = await probeBenchRuntime(env, true);
-		expect(probe.smolRole).toBeNull();
-		expect(probe.smolSelector).not.toBeNull();
-		expect(probe.tinySelector).not.toBeNull();
-		expect(probe.smolSelector).not.toMatch(/^company\//);
-		expect(probe.tinySelector).not.toMatch(/^company\//);
+		await probeBenchRuntime(
+			env,
+			`
+			await withRuntime({ offline: true }, async runtime => {
+				assert.equal(await resolve(runtime, "@tiny"), "deepseek/deepseek-v4-flash");
+				assert.equal(runtime.settings.getModelRole("smol") ?? null, null);
+				assert.ok(!(await resolve(runtime, "@smol")).startsWith("company/"));
+			});
+		`,
+		);
 		expect(await fs.readFile(configPath, "utf8")).toBe(config);
 	}, 30_000);
 
 	it("does not install company role defaults when the provider is disabled", async () => {
-		const env = await isolatedEnv(true, true);
-		const configDir = path.join(env.HOME!, ".omp");
-		await fs.mkdir(configDir, { recursive: true });
-		await fs.writeFile(path.join(configDir, "config.yml"), "disabledProviders:\n  - company\n");
-		env.PI_CONFIG_FILES = path.join(configDir, "config.yml");
-		const probe = await probeBenchRuntime(env, true);
-		expect(probe.providers).not.toContain("company");
-		expect(probe.inheritedProviders).not.toContain("company");
-		expect(probe.companyCredentialAvailable).toBe(false);
-		expect(probe.smolRole).toBeNull();
-		expect(probe.explicitSelector).toBeNull();
+		const env = await isolatedEnv();
+		const configPath = path.join(env.HOME!, "disabled.yml");
+		await fs.writeFile(configPath, "disabledProviders:\n  - company\n");
+		env.PI_CONFIG_FILES = configPath;
+		await probeBenchRuntime(
+			env,
+			`
+			await withRuntime({ offline: true }, async runtime => {
+				assert.ok(!hasCompany(runtime));
+				assert.equal(runtime.settings.getModelRole("smol") ?? null, null);
+				await assert.rejects(() => resolve(runtime, "company/GLM-5.2-public"), /Could not resolve model/);
+			});
+		`,
+		);
 	}, 30_000);
 
 	it("runs a public company benchmark without discovery or raw credential dumps under PI_REQ_DEBUG", async () => {
@@ -338,17 +222,8 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 			},
 		});
 		try {
-			const env = await isolatedEnv(true, true);
+			const env = await isolatedEnv(`${server.url.origin}/prefix/v1/`);
 			env.PI_REQ_DEBUG = "1";
-			await fs.writeFile(
-				path.join(env.CLAUDE_CONFIG_DIR!, "settings.json"),
-				JSON.stringify({
-					env: {
-						ANTHROPIC_BASE_URL: `${server.url.origin}/prefix/v1/`,
-						ANTHROPIC_AUTH_TOKEN: "fixture-token",
-					},
-				}),
-			);
 			const guard = path.join(env.HOME!, "network-guard.ts");
 			const endpoint = `${server.url.origin}/prefix/v1/messages`;
 			await fs.writeFile(
@@ -389,7 +264,7 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 			expect(requests).toEqual([
 				{
 					url: endpoint,
-					authorization: "Bearer fixture-token",
+					authorization: `Bearer ${COMPANY_TOKEN}`,
 					apiKey: null,
 					model: modelId,
 				},

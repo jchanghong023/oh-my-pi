@@ -124,7 +124,8 @@ describe("Team configuration editor", () => {
 	};
 	const members = async () => parseDocument(await Bun.file(file).text()).toJS().team.members;
 
-	it("hides advanced storage and run details by default and never presents a chat main model", async () => {
+	it("starts with advanced details collapsed and toggles them with v and V without saving", async () => {
+		const before = await Bun.file(file).text();
 		await open();
 		const rendered = await screen();
 		expect(rendered).toContain("有序草稿");
@@ -133,11 +134,6 @@ describe("Team configuration editor", () => {
 		expect(rendered).not.toContain("实际运行槽位");
 		expect(rendered).not.toContain("拟保存用户名单");
 		expect(rendered).not.toContain("主模型（对齐/综合）");
-	});
-
-	it("toggles advanced read-only details with v and V without saving or exposing a chat model", async () => {
-		await open();
-		const before = await Bun.file(file).text();
 		press("v");
 		const expanded = await screen();
 		for (const detail of ["用户原值", "当前有效名单", "实际运行槽位", "拟保存用户名单", "预计运行槽位"]) {

@@ -29,7 +29,6 @@ import {
 import { approvalTargetKey, approvalTreeSearchKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
-import { OpenWikiReadTool, OpenWikiSearchTool } from "@oh-my-pi/pi-coding-agent/tools/openwiki";
 import { shortenPath } from "@oh-my-pi/pi-coding-agent/utils/render-utils";
 import { getAgentDir, isRecord, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
@@ -201,7 +200,7 @@ describe("always-ask-cached resolution", () => {
 		});
 	});
 
-	it("uses read policy for native OpenWiki queries and write policy for file writes", () => {
+	it("uses write policy for native file writes", () => {
 		const agentDir = freshAgentDir();
 		const session: ToolSession = {
 			cwd: agentDir,
@@ -211,13 +210,7 @@ describe("always-ask-cached resolution", () => {
 			settings: Settings.isolated({}),
 		};
 		const write = new WriteTool(session);
-		const grants = getApprovalGrants(agentDir, "index-query");
-		for (const tool of [new OpenWikiSearchTool(session), new OpenWikiReadTool(session)]) {
-			expect(resolveApproval(tool, {}, "always-ask-cached", { write: "deny" }, grants).policy).toBe("allow");
-			for (const policy of ["prompt", "deny"] as const) {
-				expect(resolveApproval(tool, {}, "always-ask-cached", { [tool.name]: policy }, grants).policy).toBe(policy);
-			}
-		}
+		const grants = getApprovalGrants(agentDir, "file-write");
 		const args = { path: "notes.txt", content: "{}" };
 		expect(write.approvalCacheTargets(args)).toEqual([approvalTargetKey(agentDir, args.path)!]);
 		expect(resolveApproval(write, args, "always-ask-cached", {}, grants).policy).toBe("prompt");

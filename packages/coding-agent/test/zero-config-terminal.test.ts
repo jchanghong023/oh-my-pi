@@ -93,7 +93,7 @@ describe("zero-OMP-config offline terminal entry", () => {
 			running = pty.startArgv(
 				{
 					application: process.execPath,
-					args: [cli, "--cwd", cwd, "--auto-approve", "--no-session"],
+					args: [cli, "--cwd", cwd, "--auto-approve", "--no-session", "--no-title"],
 					cwd,
 					cols: 120,
 					rows: 30,
@@ -114,8 +114,10 @@ describe("zero-OMP-config offline terminal entry", () => {
 				.catch(() => {});
 			await waitFor(() => Bun.stripANSI(output).includes("GLM-5.3-public"), "company-model startup");
 			pty.write("ZERO_CONFIG_REQUEST: write proof.txt then finish.\r");
-			await waitFor(() => requests.some(zeroConfigHasToolResult), "native write tool result");
-			await waitFor(() => Bun.stripANSI(output).includes("ZERO_CONFIG_COMPLETE"), "rendered model completion");
+			await waitFor(
+				() => requests.some(zeroConfigHasToolResult) && Bun.stripANSI(output).includes("ZERO_CONFIG_COMPLETE"),
+				"native write tool result and rendered model completion",
+			);
 			expect(await fs.readFile(path.join(cwd, "proof.txt"), "utf8")).toBe("ZERO_CONFIG_TOOL_EFFECT");
 			const main = requests.filter(request => request.tools?.some(tool => tool.name === "write"));
 			expect(main.some(request => JSON.stringify(request.messages).includes("ZERO_CONFIG_REQUEST"))).toBe(true);
@@ -124,11 +126,12 @@ describe("zero-OMP-config offline terminal entry", () => {
 			await waitFor(() => exited, "normal terminal exit");
 			expect(await running).toMatchObject({ exitCode: 0, cancelled: false, timedOut: false });
 		} finally {
-			if (running && !exited) {
-				pty.kill();
+			try {
+				if (running && !exited) pty.kill();
+				if (running) await running;
+			} finally {
+				await server.stop(true);
 			}
-			if (running) await running;
-			await server.stop(true);
 		}
 	}, 120_000);
 });

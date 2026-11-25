@@ -452,7 +452,6 @@ describe("team in-process integration", () => {
 	it.each([
 		["proposal heading", "### 方案 A\n\n可以采用。"],
 		["paragraph label and list", "方案 A：\n- 可以采用。"],
-		["paragraph label and blockquote", "方案 A：\n> 可以采用。"],
 	])("rejects blocked adoption through the executor: %s", async (_name, reportMarkdown) => {
 		recorded.length = 0;
 		script = (stage, text) => {

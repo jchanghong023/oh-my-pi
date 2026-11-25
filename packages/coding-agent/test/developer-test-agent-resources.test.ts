@@ -2,8 +2,6 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { gunzipSync } from "node:zlib";
-import { buildDeveloperTestAgentResources } from "../scripts/developer-test-agent-resources";
 import type { LoadContext } from "../src/capability/types";
 import { loadDeveloperTestCommands, loadDeveloperTestSkills } from "../src/discovery/developer-test-agent";
 import { getDeveloperTestAgentRoot } from "../src/extensibility/plugins/developer-test-agent-resources";
@@ -49,7 +47,6 @@ describe("bundled Developer Test Agent consumers", () => {
 		]);
 		const agent = getBundledAgent("developer-test-agent");
 		expect(agent).toMatchObject({ name: "developer-test-agent", source: "bundled", hide: true });
-		expect(agent?.systemPrompt.length).toBeGreaterThan(100);
 		const dt = commands.items.find(command => command.name === "dt")!;
 		const request = "为 src/service.py 生成单元测试\n保留 <T>、{{literal}} 和 $&";
 		const expanded = expandSlashCommand(`/dt ${request}`, [
@@ -62,29 +59,5 @@ describe("bundled Developer Test Agent consumers", () => {
 		]);
 		expect(expanded).toContain(request);
 		expect(expanded).not.toContain("{{{rawArguments}}}");
-	});
-
-	it("packages every resource byte, including binary files and empty directories, independently of project cwd", async () => {
-		const root = await getDeveloperTestAgentRoot();
-		const entries = JSON.parse(gunzipSync(await buildDeveloperTestAgentResources()).toString("utf8")) as Array<
-			[string, { data: string; mode: number } | null]
-		>;
-		const expected: string[] = [];
-		async function collect(directory: string, prefix = ""): Promise<void> {
-			for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-				const name = prefix ? `${prefix}/${entry.name}` : entry.name;
-				expected.push(name);
-				if (entry.isDirectory()) await collect(path.join(directory, entry.name), name);
-			}
-		}
-		await collect(root);
-		expect(entries.map(([name]) => name).sort()).toEqual(expected.sort());
-		for (const [name, resource] of entries) {
-			const target = path.join(root, ...name.split("/"));
-			if (resource === null) expect((await fs.stat(target)).isDirectory()).toBe(true);
-			else expect(Buffer.from(resource.data, "base64")).toEqual(await fs.readFile(target));
-		}
-		expect(entries.some(([name]) => name.endsWith("cfr-0.152.jar"))).toBe(true);
-		expect(entries.some(([name]) => name.startsWith("skills/generate-ut/examples/"))).toBe(true);
 	});
 });

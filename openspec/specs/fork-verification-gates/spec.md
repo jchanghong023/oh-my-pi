@@ -59,7 +59,7 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - 三层门禁及根脚本直接调用既有 Bun／Cargo 检查、构建与测试原语，保持平台限制和报告语义；fastcheck 不运行测试，保留既有工具及增量编译缓存，但不缓存门禁或完整命令结果以免执行。不建立 fork 专用 Bazel 验证图或自建结果缓存框架。上游原有显式目标 Bazel 工具及其 CI 原生产物不属于此门禁改动。
 - 日常门禁包含真实 Rust 编译和 Clippy：`check:rs` 依次运行 `cargo fmt --all -- --check`、`cargo build --workspace`（保留既有 vendored fork 排除）和与 `lint:rs` 相同的 workspace Clippy（保留既有第三方排除、`--no-deps` 与 `-D warnings`）。编译必须生成并链接产物，不能以 Clippy／`cargo check` 代替；fastcheck 及复用它的 fulltest／slowtest 均检查 Rust 编译器与 Clippy 警告并以非零退出阻断。固定工具链、显式 `lint:rs`／`fix:rs` 入口、其他检查和测试范围及预算保持不变。
 - Windows 的 Rust 门禁、本地 native 构建和发布 native 构建共用 VS Build Tools 的 CMake/Ninja 探测，优先使用现有 `PATH` 中的工具；Rust 门禁找不到 `vswhere` 时由 Cargo 报告缺失工具。
-- 日常 `bun run test`、`test:ts`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。保留 OpenSpec 原生技能与资源、Team/Goal（包括取消与持久化）、OpenWiki、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
+- 日常 `bun run test`、`test:ts`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。测试覆盖 Team/Goal（包括取消与持久化）、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界，不再维护 spec-driven、OpenSpec 或 OpenWiki 专项测试。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
 - 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留。真实 PTY 中普通 TUI 的错误、状态和焦点边界保留。
 - 默认 fulltest 的普通 Bun 测试在 fork 白名单内以原生 `--changed` 根据变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不能回退整个上游测试集。新 compact 的显示差异纳入普通 Bun 消费者范围，不再设始终完整运行的 compact 专属通道。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。仓库脚本自测只在对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 保留。
 - collab-web 的 fork 白名单仅纳入 `test/composer.test.tsx`、`test/transcript.test.tsx`、`test/tool-view.test.tsx`、`test/markdown.test.tsx`，不纳入整个 collab-web 或通用 VCS 套件。测试发现、文件计数、空选择探针和报告 MUST 同时识别 `.test.tsx`。
@@ -67,7 +67,7 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - 保留 `scripts/ci-test-ts.ts` 白名单内适用的原生 Agent／TUI 消费者覆盖及原生 MCP 能力边界，不扩大整个上游 agent 或通用 Browser 套件，也不增加 MCP 连接／授权验收。
 - 显示验证 MUST 覆盖 clean 基线、compact 的本轮工具原始 Diff、固定两行活动区、隐藏独立模型处理忙碌提示，以及 detailed 的上游原组件。按普通消费者规则选测且只执行一次，复用必要的共享布局、渲染和恢复验证，不为 compact 新建专属通道或全工具矩阵。纯上下文压缩模式注册、算法、预算、队列和 `/compact` 参数派发不因名称相似纳入。
 - 根目录 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为 Git 测试选择输入，不触发 Bun 全量回退或独立 UI smoke；混合变更仍按其余运行输入判断。排除不扩大到包内 Markdown/prompt 等运行资源；缺少合格基线和显式 `--full` 的行为不变。
-- `bun run fulltest --full` 显式运行当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 和仓库脚本测试，但不发现或运行 `vendor/openwiki` 子模块自身的测试；OMP OpenWiki 消费者测试仍在范围内。不使用 fork 白名单、变更选测、pytest-testmon 或环境分片；默认 fulltest 及 slowtest 不变。保留测试自身的 skip、平台不支持、真实桌面输入及另需单独授权的集成边界；不因全量模式放宽门禁时限。
+- `bun run fulltest --full` 显式运行当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 和仓库脚本测试，但不发现或运行 `vendor/openwiki` 子模块自身的测试。不使用 fork 白名单、变更选测、pytest-testmon 或环境分片；默认 fulltest 及 slowtest 不变。保留测试自身的 skip、平台不支持、真实桌面输入及另需单独授权的集成边界；不因全量模式放宽门禁时限。
 - `bun run fulltest --full` 不自动运行 `scripts/install-tests/fork-installer-routing.test.ts`。默认 fulltest 仍按变更选测，`test:scripts` 和支持 POSIX `sh` 的显式单测入口保留。
 - 独立 Python SDK、Robomp 和 legacy 通用 SDK 不纳入默认 fork 门禁，手动入口保留；Robomp integration 仍须单独显式启用，Windows 原生调用报告不支持并非零退出。
 - `bun run test:rs`、默认 fulltest 和 slowtest 的 fork Rust 范围没有测试选择器。Rust 测试 scope 为 `rust-fork-features`，MUST 报告 `not-selected`、原因和零选择，不启动 Nextest、doctest 或变更选测工具，也不生成虚构的命令执行、JUnit、用例、耗时或测试 PASS。Rust 静态检查、真实编译及正常 Cargo 增量编译缓存不变。

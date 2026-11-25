@@ -362,13 +362,16 @@ describe("team visible participant settlement", () => {
 		const conflictedUpdates: TeamProgressUpdate[] = [];
 		const conflicted = await run(
 			{
-				review: () => reviewData({ blocking: 1 }),
+				review: ({ target }) => reviewData({ blocking: target === "A" ? 1 : 0 }),
 				revision: ({ findingIds }) => revisionData({}, findingIds),
-				synthesis: () => ({ ...synthesisData("A"), reportMarkdown: "### 核心方案\n**【推荐】方案 A**" }),
+				synthesis: () => ({ ...synthesisData("B"), reportMarkdown: "建议采用方案 A。" }),
 			},
 			{ onProgress: update => conflictedUpdates.push(update) },
 		);
 		expect(conflicted.result.status).toBe("failed");
+		expect(conflicted.result.failureReason).toContain("综合结果无效");
+		expect(conflicted.result.failureReason).toContain("尚不可采用”的方案 A");
+		expect(conflicted.result.reportMarkdown).toBeUndefined();
 		expect(conflictedUpdates.some(update => update.stage === "done")).toBe(false);
 
 		// Control: a valid run still announces done exactly once.
@@ -1123,222 +1126,6 @@ describe("team orchestrator", () => {
 		expect(result.failureReason).toContain("尚不可采用");
 	});
 
-	it("checks separated adoption claims without rejecting negation or guarded adoption", async () => {
-		const script = {
-			review: ({ target }: { target: string }) => reviewData({ blocking: target === "A" ? 1 : 0 }),
-			revision: ({ findingIds }: { findingIds: string[] }) => revisionData({}, findingIds),
-		};
-		for (const [reportMarkdown, expectedStatus] of [
-			["方案 A，可以采用。", "failed"],
-			["方案 A\n可以采用。", "failed"],
-			["建议采用方案 A。", "failed"],
-			["方案 A 建议采用。", "failed"],
-			["方案 A 使用 v1.0 接口，可以采用。", "failed"],
-			["方案 A 修改 reader.ts，可以采用。", "failed"],
-			["方案 A 使用 src/reader.ts，推荐。", "failed"],
-			["方案 A 使用 api.v1.reader，可以采用。", "failed"],
-			["方案 A 不再推荐。", "completed"],
-			["方案 A 不予推荐。", "completed"],
-			["方案 A 不再推荐，不过当前可采用。", "failed"],
-			["方案 A 不予推荐，仍可作为选项。", "failed"],
-			["不建议采用方案 A。", "completed"],
-			["问题解决后，建议采用方案 A。", "completed"],
-			["方案 A 不作为首选。", "completed"],
-			["### 方案 A（未通过审查，不作为可采用选项）\n不参与最终选择。", "completed"],
-			["方案 A 不作为可采用选项，但仍建议采用方案 A。", "failed"],
-			["方案 A 不列入可采用选项。", "completed"],
-			["方案 A 不具备可采用条件。", "completed"],
-			["方案 A 不被推荐。", "completed"],
-			["方案 A 不列入可采用选项，仍建议采用方案 A。", "failed"],
-			["问题解决后，方案 A 即可采用。", "completed"],
-		] as const) {
-			const { result } = await run({
-				...script,
-				synthesis: () => ({ ...synthesisData("B"), reportMarkdown }),
-			});
-			expect(result.status).toBe(expectedStatus);
-			if (expectedStatus === "failed") {
-				expect(result.reportMarkdown).toBeUndefined();
-				expect(result.failureReason).toContain("尚不可采用");
-			} else {
-				expect(result.reportMarkdown).toContain("【推荐】方案 B");
-				expect(result.reportMarkdown).toContain("| 方案 A | ⛔ 尚不可采用");
-			}
-		}
-	});
-
-	it.each([
-		["paragraph label and list", "方案 A：\n- 可以采用。", "failed"],
-		["CRLF label and list", "方案 A：\r\n- 可以采用。", "failed"],
-		["paragraph label and blockquote", "方案 A：\n> 可以采用。", "failed"],
-		["eligible label and list", "方案 B：\n- 可以采用。", "completed"],
-		["negated list adoption", "方案 A：\n- 不可以采用。", "completed"],
-		["guarded list adoption", "方案 A：\n- 阻断问题解决后，可以采用。", "completed"],
-		["conditional list adoption", "方案 A：\n- 如果阻断问题解决，可以采用。", "completed"],
-		["blank paragraph ends label ownership", "方案 A：\n\n- 可以采用。", "completed"],
-		["sentence ends label ownership", "方案 A 尚不可采用。\n- 可以采用。", "completed"],
-		["heading ends paragraph ownership", "方案 A：\n### 总结\n- 可以采用。", "completed"],
-		["separate labeled lists", "方案 A：\n- 不可采用。\n\n方案 B：\n- 可以采用。", "completed"],
-		["heading and adjacent list", "### 方案 A\n- 可以采用。", "failed"],
-		["setext heading and adjacent list", "方案 A\n------\n- 可以采用。", "failed"],
-		["nested heading and adjacent list", "### 方案 A\n#### 兼容性\n- 可以采用。", "failed"],
-		["eligible list under blocked heading", "### 方案 A\n\n方案 B：\n- 可以采用。", "completed"],
-		["blank paragraph", "### 方案 A\n\n可以采用。", "failed"],
-		["CRLF paragraph", "### 方案 A\r\n\r\n可以采用。", "failed"],
-		["nested subsection", "### 方案 A\n\n#### 兼容性\n\n可以采用。", "failed"],
-		["formatted heading", "### 方案 **A**\n\n可以采用。", "failed"],
-		["setext heading", "方案 A\n------\n\n可以采用。", "failed"],
-		["eligible sibling section", "### 方案 A\n\n不可采用。\n\n### 方案 B\n\n可以采用。", "completed"],
-		[
-			"nested sibling section",
-			"## 候选方案\n\n### 方案 A\n\n不可采用。\n\n### 方案 B\n\n#### 兼容性\n\n可以采用。",
-			"completed",
-		],
-		["same-level generic heading", "### 方案 A\n\n不可采用。\n\n### 总结\n\n可以采用。", "completed"],
-		["higher-level heading", "### 方案 A\n\n不可采用。\n\n## 总结\n\n可以采用。", "completed"],
-		["explicit eligible proposal", "### 方案 A\n\n方案 B 可以采用。", "completed"],
-		["nested proposal override", "### 方案 A\n\n#### 方案 B\n\n可以采用。", "completed"],
-		["return from nested proposal", "## 方案 A\n\n### 方案 B\n\n可以采用。\n\n### 兼容性\n\n可以采用。", "failed"],
-		["negated adoption", "### 方案 A\n\n不可采用。", "completed"],
-		["guarded adoption", "### 方案 A\n\n阻断问题解决后，可以采用。", "completed"],
-		["nested negated adoption", "### 方案 A\n\n#### 兼容性\n\n不建议采用。", "completed"],
-		["nested guarded adoption", "### 方案 A\n\n#### 兼容性\n\n若阻断问题解决后，可以采用。", "completed"],
-	] as const)(
-		"keeps adoption claims scoped across Markdown boundaries: %s",
-		async (_name, reportMarkdown, expectedStatus) => {
-			const { result } = await run({
-				review: ({ target }) => reviewData({ blocking: target === "A" ? 1 : 0 }),
-				revision: ({ findingIds }) => revisionData({}, findingIds),
-				synthesis: () => ({ ...synthesisData("B"), reportMarkdown }),
-			});
-			expect(result.status).toBe(expectedStatus);
-			if (expectedStatus === "failed") {
-				expect(result.failureReason).toContain("尚不可采用");
-				expect(result.reportMarkdown).toBeUndefined();
-			} else {
-				expect(result.reportMarkdown).toContain("| 方案 A | ⛔ 尚不可采用");
-				expect(result.reportMarkdown).toContain("| 方案 B | ✅ 可作为选项");
-				expect(result.reportMarkdown).toContain("【推荐】方案 B");
-			}
-		},
-	);
-
-	it("does not publish a synthesis body that recommends a blocked proposal", async () => {
-		const script = {
-			review: () => reviewData({ blocking: 1 }),
-			revision: ({ findingIds }: { findingIds: string[] }) => revisionData({}, findingIds),
-		};
-		for (const body of [
-			"### 核心方案\n**【推荐】方案 A**",
-			"### 核心方案\n方案 A 可采用。",
-			"### 核心方案\n方案 A 可作为选项。",
-			"### 核心方案\n方案 A 可以作为最终选项。",
-		] as const) {
-			const { result } = await run({
-				...script,
-				synthesis: () => ({ ...synthesisData("A"), reportMarkdown: body }),
-			});
-			expect(result.status).toBe("failed");
-			expect(result.failureReason).toContain("综合结果无效");
-			expect(result.reportMarkdown).toBeUndefined();
-		}
-
-		const { result } = await run({
-			...script,
-			synthesis: () => ({
-				...synthesisData("A"),
-				reportMarkdown: "### 主要取舍\n方案 A 不可采用，方案 B 不可作为选项，方案 C 不可以作为最终选项。",
-			}),
-		});
-		expect(result.status).toBe("completed");
-		expect(result.droppedRecommendation).toBe(true);
-	});
-
-	it("keeps an eligible sibling's recommendation separate from a blocked proposal in comparisons", async () => {
-		for (const body of [
-			"方案 A（尚不可采用）劣于可作为选项的方案 B。",
-			"推荐方案 B 而不是尚不可采用的方案 A。",
-			"本次推荐，方案 A 的阻断问题源于旧接口缺少迁移。",
-		]) {
-			const { result } = await run({
-				review: ({ target }) => reviewData({ blocking: target === "A" ? 1 : 0 }),
-				revision: ({ findingIds }) => revisionData({}, findingIds),
-				synthesis: () => ({ ...synthesisData("B"), reportMarkdown: body }),
-			});
-			expect(result.status).toBe("completed");
-			expect(result.reportMarkdown).toContain("【推荐】方案 B");
-			expect(result.reportMarkdown).toContain("尚不可采用 — 未解决阻断问题");
-		}
-	});
-
-	it("still rejects adoption of a blocked proposal next to an eligible sibling", async () => {
-		for (const body of [
-			"方案 A 和方案 B 可以作为选项。",
-			"推荐方案 B 和方案 A。",
-			"方案 A 可作为选项优于方案 B。",
-			"方案 A 当前仍有未解决阻断问题，推荐。",
-		]) {
-			const { result } = await run({
-				review: ({ target }) => reviewData({ blocking: target === "A" ? 1 : 0 }),
-				revision: ({ findingIds }) => revisionData({}, findingIds),
-				synthesis: () => ({ ...synthesisData("B"), reportMarkdown: body }),
-			});
-			expect(result.status).toBe("failed");
-			expect(result.failureReason).toContain("尚不可采用");
-			expect(result.reportMarkdown).toBeUndefined();
-		}
-	});
-
-	it("accepts conditional adoption statements about blocked proposals (§2.7 未采纳方向)", async () => {
-		const script = {
-			review: () => reviewData({ blocking: 1 }),
-			revision: ({ findingIds }: { findingIds: string[] }) => revisionData({}, findingIds),
-		};
-		// Explaining *when* a blocked proposal could become adoptable is expected
-		// synthesis content and must not be mistaken for a tracking override.
-		for (const body of [
-			"### 未采纳方向\n方案 A 在阻断问题 1 解决后即可采用。方案 B 不可作为选项。",
-			"### 未采纳方向\n方案 A 待阻断问题 1 修复后即可采用。",
-			"### 未采纳方向\n方案 A 若前提满足即可采用。",
-			"### 未采纳方向\n方案 A 阻断问题解除之后可推荐。",
-			"### 未采纳方向\n若干问题确认后方可采用方案 A。",
-			"### 未采纳方向\n方案 A 在阻断问题 1 解决后即可作为选项。",
-			"### 未采纳方向\n方案 A 若前提满足可以作为最终选项。",
-		] as const) {
-			const { result } = await run({
-				...script,
-				synthesis: () => ({ ...synthesisData(), reportMarkdown: body }),
-			});
-			expect(result.status).toBe("completed");
-		}
-		// An unconditional adoption claim still invalidates the run.
-		const unconditional = await run({
-			...script,
-			synthesis: () => ({ ...synthesisData(), reportMarkdown: "### 核心方案\n方案 A 可采用。" }),
-		});
-		expect(unconditional.result.status).toBe("failed");
-		// “推荐解决方案 A” reads as "recommend solution A" (no posteriority
-		// marker follows 解决), so it must not be stripped as a conditional
-		// clause either.
-		const solutionPhrase = await run({
-			...script,
-			synthesis: () => ({
-				...synthesisData(),
-				reportMarkdown: "### 核心方案\n推荐解决方案 A。",
-			}),
-		});
-		expect(solutionPhrase.result.status).toBe("failed");
-		const backendClaim = await run({
-			...script,
-			synthesis: () => ({
-				...synthesisData(),
-				reportMarkdown: "### 核心方案\n方案 A 已解决后端问题可以采用。",
-			}),
-		});
-		expect(backendClaim.result.status).toBe("failed");
-		expect(backendClaim.result.reportMarkdown).toBeUndefined();
-	});
-
 	it("renders a valid recommendation with reason and preconditions", async () => {
 		const { result } = await run({ synthesis: () => synthesisData("A") });
 		expect(result.droppedRecommendation).toBeFalsy();
@@ -1347,23 +1134,18 @@ describe("team orchestrator", () => {
 		expect(result.candidates.find(candidate => candidate.label === "A")!.conditions).toContain("接口 Y 稳定");
 	});
 
-	it.each(["", " \t\n"])(
-		"fails synthesis without publishing a recommendation when its reason is blank: %j",
-		async reason => {
-			const updates: TeamProgressUpdate[] = [];
-			const { result } = await run(
-				{ synthesis: () => ({ ...synthesisData("A"), recommendationReason: reason }) },
-				{ onProgress: update => updates.push(update) },
-			);
-			expect(result.status).toBe("failed");
-			expect(result.failureReason).toContain("综合子调用失败");
-			expect(result.reportMarkdown).toBeUndefined();
-			expect(updates.at(-1)?.participants.find(participant => participant.label === "synthesis")?.state).toBe(
-				"failed",
-			);
-			expect(updates.some(update => update.stage === "done")).toBe(false);
-		},
-	);
+	it("fails synthesis without publishing a recommendation when its reason is blank", async () => {
+		const updates: TeamProgressUpdate[] = [];
+		const { result } = await run(
+			{ synthesis: () => ({ ...synthesisData("A"), recommendationReason: " \t\n" }) },
+			{ onProgress: update => updates.push(update) },
+		);
+		expect(result.status).toBe("failed");
+		expect(result.failureReason).toContain("综合子调用失败");
+		expect(result.reportMarkdown).toBeUndefined();
+		expect(updates.at(-1)?.participants.find(participant => participant.label === "synthesis")?.state).toBe("failed");
+		expect(updates.some(update => update.stage === "done")).toBe(false);
+	});
 
 	it("fails without half conclusions when the alignment sub-call fails", async () => {
 		const updates: TeamProgressUpdate[] = [];

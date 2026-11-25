@@ -10,7 +10,7 @@ import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getTaskSchema } from "@oh-my-pi/pi-coding-agent/task/types";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
-import { contentText, createProviderFixture, type ModelRequest, type Reply } from "../spec-driven/provider-fixture";
+import { contentText, createProviderFixture, type ModelRequest, type Reply } from "../helpers/provider-fixture";
 
 const instruction = "MUST 全自动无人值守完成完整目标。";
 const objective = "GOAL_AUX_OBJECTIVE preserve this complete objective\n\nLiteral {{objective}} & <user> data.\tEND";

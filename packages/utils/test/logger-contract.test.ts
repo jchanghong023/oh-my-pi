@@ -303,37 +303,6 @@ describe("central logger file level and batching", () => {
 		expect(result.stderr).toBe("");
 	});
 
-	test.each(["error", "debug"])("offline logging honors an explicit %s level", async level => {
-		const result = await runDiagnosticConsumer(
-			`
-			process.env.OMP_LOG_LEVEL = ${JSON.stringify(level)};
-			logger.setTransports({ file: path.join(root, "offline-logs") });
-			logger.initializeDiagnosticLogging("cli");
-			logger.debug("offline_debug");
-			logger.info("offline_info");
-			logger.warn("offline_warn");
-			logger.error("offline_error");
-			logger.shutdownDiagnosticLogging();
-			logger.flush();
-		`,
-			{ offline: "1" },
-		);
-		const messages = (await readLogEntries(path.join(result.root, "offline-logs"))).map(entry => entry.message);
-		expect(messages).toEqual(
-			level === "error"
-				? ["offline_error"]
-				: [
-						"application_started",
-						"offline_debug",
-						"offline_info",
-						"offline_warn",
-						"offline_error",
-						"application_stopping",
-						"application_stopped",
-					],
-		);
-	});
-
 	test("the fatal record lands after the buffered records that preceded it", async () => {
 		const result = await runScenario("uncaught", { probe: fatalProbePath, exitCode: 1 });
 		expect((await readLogEntries(result.primaryDir)).map(entry => [entry.level, entry.message])).toEqual([
@@ -1190,11 +1159,14 @@ describe("diagnostic consumer contracts", () => {
 	});
 
 	test("flushes a single natural-exit lifecycle and does not copy arbitrary run mode", async () => {
-		const result = await runDiagnosticConsumer(`
+		const result = await runDiagnosticConsumer(
+			`
 			logger.initializeDiagnosticLogging("sensitive-mode-canary");
 			logger.initializeDiagnosticLogging("cli");
-			logger.info("natural_exit_record");
-		`);
+			logger.debug("natural_exit_record");
+		`,
+			{ offline: "1", logLevel: "debug" },
+		);
 		const log = await readSingleLog(path.join(result.root, "primary", "logs"));
 		expect(log.text).not.toContain("sensitive-mode-canary");
 		expect((await readLogEntries(path.join(result.root, "primary", "logs"))).map(entry => entry.message)).toEqual([

@@ -101,8 +101,6 @@ const sdkCustomTool = {
 	},
 } satisfies CustomTool;
 
-const openwikiQueryTools = ["openwiki_search", "openwiki_read", "openwiki_list_workspaces", "openwiki_list_wikis"];
-
 describe("createAgentSession defaultInactive tool activation", () => {
 	const tempDirs: string[] = [];
 
@@ -1798,131 +1796,20 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("activates OpenWiki queries alongside an explicit read list", async () => {
-		const tempDir = makeTempDir();
-
-		const { session } = await createAgentSession({
-			...baseOptions(tempDir),
-			toolNames: ["read"],
-		});
-
-		try {
-			for (const name of openwikiQueryTools) {
-				expect(session.getToolByName(name)).toBeDefined();
-				expect(session.getActiveToolNames()).toContain(name);
-			}
-		} finally {
-			await session.dispose();
-		}
-	});
-
-	it("mounts ambient OpenWiki queries with Bash without pinning an implicit write tool", async () => {
+	it("does not activate an implicit write tool with an explicit Bash list", async () => {
 		const tempDir = makeTempDir();
 		const settings = Settings.isolated({ "tools.commands": true });
 		const { session } = await createAgentSession({
 			...baseOptions(tempDir),
 			settings,
-			toolNames: ["read", "bash", "openwiki_search"],
+			toolNames: ["read", "bash"],
 		});
 		try {
-			expect(session.getActiveToolNames()).toContain("openwiki_search");
 			expect(session.getActiveToolNames()).not.toContain("write");
-			expect(session.getMountedToolCommandNames()).toEqual(expect.arrayContaining(openwikiQueryTools.slice(1)));
-			expect(session.getMountedToolCommandNames()).not.toContain("openwiki_search");
 			cfgToolsCommands.override(settings, false);
 			await session.reconcileBuiltinTools();
 			expect(session.getMountedToolCommandNames()).toEqual([]);
-			expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(openwikiQueryTools));
-		} finally {
-			await session.dispose();
-		}
-	});
-
-	it.each([0, 1])("preserves OpenWiki child boundaries through settings reconcile at depth %s", async taskDepth => {
-		const tempDir = makeTempDir();
-		const settings = Settings.isolated({ "tools.commands": false });
-		const { session } = await createAgentSession({
-			...baseOptions(tempDir),
-			settings,
-			taskDepth,
-			toolNames: ["read"],
-		});
-		try {
-			for (const enabled of [false, true, false]) {
-				cfgToolsCommands.override(settings, enabled);
-				await session.reconcileBuiltinTools();
-				for (const name of openwikiQueryTools) {
-					expect(session.getActiveToolNames().includes(name)).toBe(taskDepth === 0);
-					expect(session.getToolByName(name) !== undefined).toBe(taskDepth === 0);
-				}
-			}
-		} finally {
-			await session.dispose();
-		}
-	});
-
-	it("keeps explicitly granted OpenWiki queries available to a restricted child during reconcile", async () => {
-		const tempDir = makeTempDir();
-		const settings = Settings.isolated({ "tools.commands": false });
-		const { session } = await createAgentSession({
-			...baseOptions(tempDir),
-			settings,
-			taskDepth: 1,
-			restrictToolNames: true,
-			toolNames: ["read", "openwiki_search"],
-		});
-		try {
-			await session.reconcileBuiltinTools();
-			expect(session.getActiveToolNames()).toContain("openwiki_search");
-			for (const name of openwikiQueryTools.slice(1)) {
-				expect(session.getToolByName(name)).toBeUndefined();
-			}
-		} finally {
-			await session.dispose();
-		}
-	});
-
-	it("keeps default child sessions from gaining OpenWiki queries during reconcile", async () => {
-		const tempDir = makeTempDir();
-		const settings = Settings.isolated({ "tools.commands": false });
-		const { session } = await createAgentSession({ ...baseOptions(tempDir), settings, taskDepth: 1 });
-		try {
-			for (const enabled of [false, true, false]) {
-				cfgToolsCommands.override(settings, enabled);
-				await session.reconcileBuiltinTools();
-				for (const name of openwikiQueryTools) {
-					expect(session.getToolByName(name)).toBeUndefined();
-					expect(session.getMountedToolCommandNames()).not.toContain(name);
-				}
-			}
-		} finally {
-			await session.dispose();
-		}
-	});
-
-	it("does not force-activate an inactive extension replacing openwiki_search", async () => {
-		const tempDir = makeTempDir();
-		const replacement: ExtensionFactory = pi => {
-			pi.registerTool({
-				name: "openwiki_search",
-				label: "Extension Wiki Search",
-				description: "Inactive replacement for the built-in OpenWiki search tool.",
-				parameters: type({}),
-				defaultInactive: true,
-				async execute() {
-					return { content: [{ type: "text", text: "extension wiki search" }] };
-				},
-			});
-		};
-		const { session } = await createAgentSession({
-			...baseOptions(tempDir),
-			extensions: [replacement],
-			toolNames: ["read"],
-		});
-		try {
-			expect(session.getToolByName("openwiki_search")?.label).toBe("Extension Wiki Search");
-			expect(session.hasBuiltInTool("openwiki_search")).toBe(false);
-			expect(session.getActiveToolNames()).not.toContain("openwiki_search");
+			expect(session.getActiveToolNames()).not.toContain("write");
 		} finally {
 			await session.dispose();
 		}
@@ -2276,7 +2163,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 					"sdk_custom_tool",
 				]),
 			);
-			expect(activeToolNames).toContain("openwiki_search");
 			expect(activeToolNames).not.toContain("write");
 			expect(normal.getToolCommandEntries()).toEqual([]);
 			expect(normal.getAllToolNames()).toEqual(
@@ -2294,22 +2180,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			);
 		} finally {
 			await normal.dispose();
-		}
-	});
-
-	it("does not add OpenWiki queries to explicit tool lists without read", async () => {
-		const tempDir = makeTempDir();
-		const { session } = await createAgentSession({
-			...baseOptions(tempDir),
-			toolNames: ["bash"],
-		});
-
-		try {
-			const activeToolNames = session.getActiveToolNames();
-			expect(activeToolNames).toContain("bash");
-			for (const name of openwikiQueryTools) expect(activeToolNames).not.toContain(name);
-		} finally {
-			await session.dispose();
 		}
 	});
 
