@@ -117,8 +117,16 @@ OMP MUST 复用 OpenWiki 原有的规划 Agent、页面工作池、Claims、增�
 
 OMP MUST 内置 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`、`openwiki_list_wikis` 四项只读能力，在进程内直接调用 OpenWiki 查询逻辑，不通过 MCP。查询执行 MUST NOT 调用模型、启动生成／更新，或修改仓库 Wiki、Claims 和工作区注册表；OMP 对话的 OpenWiki 工具面 MUST NOT 包含生成生命周期工具。工具挂载方式 MUST NOT 扩大受限子代理的工具清单。
 
+`openwiki.tools.enabled` MUST 统一控制四项内置查询工具，普通与 offline 会话均默认关闭。开启后仍遵循已有工具清单与挂载规则。该设置仅控制 Agent 工具，`omp openwiki` 命令可独立使用。
+
+#### Scenario: 按设置启用或关闭内置查询
+- **WHEN** `openwiki.tools.enabled` 未配置或为 `false`
+- **THEN** 四项内置查询工具均不可用，显式工具清单也不能绕过设置
+- **WHEN** 将 `openwiki.tools.enabled` 改为 `true`
+- **THEN** 现有会话按原工具清单和挂载规则刷新工具与提示，切回 `false` 时移除四项工具
+
 #### Scenario: AI 搜索后读取章节
-- **WHEN** 用户要求 OMP 查询仓库 Wiki，AI 调用搜索并使用返回的 Wiki ID、页面和章节引用继续读取
+- **WHEN** 内置查询已启用，用户要求 OMP 查询仓库 Wiki，AI 调用搜索并使用返回的 Wiki ID、页面和章节引用继续读取
 - **THEN** 内置工具返回已有 Wiki 的搜索结果和对应完整章节，不需要用户安装或启动 OpenWiki MCP 服务
 - **AND** 正常零命中保持零命中，无 Wiki 或参数错误如实返回，不通过生成内容填补结果
 
@@ -149,12 +157,12 @@ OMP MUST 内置 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`
 - **AND** OpenWiki 原生生成 Agent 内部所需的计划／页面提交工具继续属于其生成执行链，不被注册到 OMP 普通对话工具面
 
 #### Scenario: 启用 `tools.commands` 且 Bash 可用时挂载为命令
-- **WHEN** OMP 非受限会话启用 `tools.commands`，且内置 Bash 工具可用
+- **WHEN** OMP 非受限会话启用 OpenWiki 查询和 `tools.commands`，且内置 Bash 工具可用
 - **THEN** 四项只读能力遵循现有 Bash 工具命令挂载规则，AI 可按需发现和调用
 - **AND** 命令派发保持只读权限语义，不因通过 Bash 传输而被视为文件写入
 
 #### Scenario: 不挂载命令时提供顶层工具
-- **WHEN** OMP 非受限会话关闭 `tools.commands` 或内置 Bash 工具不可用
+- **WHEN** OMP 非受限会话启用 OpenWiki 查询，且 `tools.commands` 已关闭或内置 Bash 工具不可用
 - **THEN** 四项只读查询工具按 OMP 既有规则作为顶层工具提供
 
 ### Requirement: 按需检索仓库 Wiki

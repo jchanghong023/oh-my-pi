@@ -650,7 +650,7 @@ export const cfgFindHitThreshold = register({
 export const cfgDebugEnabled = register({
 	id: "debug.enabled",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "tools",
 		group: "可用工具",
@@ -732,7 +732,7 @@ export const cfgRatchetEnabled = register({
 export const cfgArchiveEnabled = register({
 	id: "archive.enabled",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "tools",
 		group: "可用工具",
@@ -946,6 +946,18 @@ export const cfgWebSearchEnabled = register({
 		group: "可用工具",
 		label: "网页搜索",
 		description: "启用 web_search 工具以获取实时网页结果",
+	},
+});
+
+export const cfgOpenWikiToolsEnabled = register({
+	id: "openwiki.tools.enabled",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tools",
+		group: "可用工具",
+		label: "OpenWiki 查询",
+		description: "向 Agent 提供四项只读 OpenWiki 查询工具",
 	},
 });
 
@@ -1249,6 +1261,7 @@ export const cfgBuiltinToolGates = combine({
 	grep: cfgGrepEnabled,
 	launch: cfgLaunchEnabled,
 	lsp: cfgLspEnabled,
+	openWiki: cfgOpenWikiToolsEnabled,
 	security: cfgSecurityEnabled,
 	taskMaxRecursionDepth: cfgTaskMaxRecursionDepth,
 	todo: cfgTodoEnabled,

@@ -21,7 +21,7 @@ export const cfgEvalPy = register({
 export const cfgEvalJs = register({
 	id: "eval.js",
 	type: "boolean",
-	default: false,
+	default: true,
 	env: "PI_JS",
 	ui: {
 		tab: "shell",

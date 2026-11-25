@@ -17,6 +17,7 @@ afterEach(async () => {
 async function fixture(
 	options: {
 		companyUrl?: string;
+		readUrl?: string;
 		visionUrl?: string;
 		modelRoles?: Record<string, string>;
 		offline?: boolean;
@@ -93,7 +94,7 @@ async function fixture(
 		const original = globalThis.fetch.bind(globalThis);
 		globalThis.fetch = async (input, init) => {
 			const url = input instanceof Request ? input.url : String(input);
-			if (url !== ${JSON.stringify(endpoint)}) {
+			if (url !== ${JSON.stringify(endpoint)} && url !== ${JSON.stringify(options.readUrl)}) {
 				process.stderr.write("UNEXPECTED_NETWORK_FETCH\\n");
 				throw new Error("fixture forbids network discovery");
 			}
@@ -227,26 +228,46 @@ function anthropicCommitResponse(body: {
 	);
 }
 
-it("offers AST Edit in an offline CLI session without re-enabling web tools", async () => {
+it("offers AST Edit and fetches a URL in an offline CLI session with web search disabled", async () => {
 	let offered: string[] | undefined;
+	let toolResult: string | undefined;
+	const expectedContent = "fixture content fetched by the agent";
 	using server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
 		async fetch(request) {
-			const body = (await request.json()) as { model: string; tools?: Array<{ name: string }> };
+			if (new URL(request.url).pathname === "/page.txt") return new Response(expectedContent);
+			const body = (await request.json()) as {
+				model: string;
+				tools?: Array<{ name: string }>;
+				messages?: Array<{ content: string | Array<{ type: string; content?: unknown }> }>;
+			};
 			offered = body.tools?.map(tool => stripClaudeToolPrefix(tool.name));
-			return anthropicResponse(body.model, "offline tool list received");
+			const result = body.messages
+				?.flatMap(message => (typeof message.content === "string" ? [] : message.content))
+				.find(block => block.type === "tool_result");
+			if (result) {
+				toolResult = JSON.stringify(result.content);
+				return anthropicResponse(body.model, "offline URL read completed");
+			}
+			const read = body.tools?.find(tool => stripClaudeToolPrefix(tool.name) === "read");
+			return anthropicResponse(
+				body.model,
+				"read tool unavailable",
+				read && { name: read.name, input: { path: new URL("/page.txt", request.url).href } },
+			);
 		},
 	});
-	const f = await fixture({ companyUrl: server.url.href });
+	const f = await fixture({ companyUrl: server.url.href, readUrl: `${server.url.origin}/page.txt` });
 	await Bun.write(f.configPath, JSON.stringify({ tools: { commands: false } }));
 	const cleanupDaemon = await isolateDaemonForSmokeTest();
 	f.env.OMP_DAEMON_DIR = process.env.OMP_DAEMON_DIR!;
 	const result = await f
-		.run(["--config", f.configPath, "--no-session", "--print", "Show which editing tools are available."])
+		.run(["--config", f.configPath, "--no-session", "--print", "Read the fixture page."])
 		.finally(cleanupDaemon);
 	expect(result.exitCode, result.stderr).toBe(0);
-	expect(result.stdout.trim()).toBe("offline tool list received");
+	expect(result.stdout.trim()).toBe("offline URL read completed");
+	expect(toolResult).toContain(expectedContent);
 	expect(offered).toContain("ast_edit");
 	expect(offered).not.toContain("web_search");
 }, 30_000);

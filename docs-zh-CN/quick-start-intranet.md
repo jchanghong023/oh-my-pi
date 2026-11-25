@@ -36,7 +36,7 @@ omp
 - `OMP_CACHE_DIR`：可选性能目录，使用当前用户可访问的绝对路径；红区 Linux 默认使用 `/dev/shm/omp-<UID>`。缓存、统计、日志和运行依赖可避开网络磁盘。
 - `OMP_SKILLS_DIR`：可选团队共享技能目录；用 `/extensions` 查看或启停共享技能，不改共享文件。
 
-红区模式会暂时关闭 Web Search、Browser（含 `/crawl`）和 Fetch；本地文件和已配置、可达的内网服务仍可使用。
+红区模式会暂时关闭 Web Search 和 Browser（含 `/crawl`）。可以让 Agent 用 `read` 读取可达的内网 HTTP(S) 地址，`fetch.enabled` 默认开启，并遵循你的显式设置。
 
 红区默认关闭终端程序状态通知（OSC 7501），防止不兼容的终端把 `7501…state=working…` 显示成输入。旧版或曾手动开启时，可运行 `omp config set terminal.programStatus false`，然后重启 OMP。
 
@@ -60,7 +60,7 @@ omp
 ### 内置开源工具与技能
 
 - **OpenSpec**：内置需求管理，用 `omp openspec init` 初始化项目，再用 `/skill:openspec-propose` 起草变更。
-- **OpenWiki**：用 `omp openwiki code --init` 生成中文代码 Wiki，之后可以直接在聊天里问项目架构。
+- **OpenWiki**：用 `omp openwiki code --init` 生成中文代码 Wiki。Agent 的 Wiki 查询工具默认关闭，运行 `omp config set openwiki.tools.enabled true` 后，即可在聊天里让 Agent 查询已有 Wiki。
 - **Superpowers**：内置开源开发工作流，用 `/skill:brainstorming` 梳理方案。
 - **测试插件（Developer Test Agent）**：用 `/dt` 生成或修复 Python、Java、C/C++ 和 Go 单元测试。
 - **复用 Codex 技能**：默认发现已有的 Codex 用户技能，无需复制。

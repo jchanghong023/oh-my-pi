@@ -21,10 +21,11 @@ import { setTerminalHeadless, TempDir } from "@oh-my-pi/pi-utils";
 
 const defaults = {
 	"recap.enabled": false,
-	"debug.enabled": false,
-	"disassembler.backend": "none",
-	"archive.enabled": false,
-	"eval.js": false,
+	"debug.enabled": true,
+	"disassembler.backend": "auto",
+	"archive.enabled": true,
+	"eval.js": true,
+	"fetch.enabled": true,
 	"async.maxJobs": 32,
 	"startup.setupWizard": false,
 	"statusLine.compactThinkingLevel": false,
@@ -102,20 +103,23 @@ describe("fork runtime defaults", () => {
 			for (const depth of [0, 1]) {
 				const owner = toolSession(root.path(), settings, depth);
 				const plan = await resolveBuiltinToolPlan(owner, ["eval", "debug", "lsp"]);
-				expect(plan.names).toEqual(["eval"]);
-				const tools = await createTools(owner, ["eval"]);
-				expect(tools.some(tool => tool.name === "eval")).toBe(true);
-				expect(tools.some(tool => tool.name === "debug" || tool.name === "lsp")).toBe(false);
+				expect(plan.names).toEqual(["eval", "debug"]);
+				const tools = await createTools(owner, ["eval", "debug", "lsp"]);
+				const names = tools.map(tool => tool.name);
+				expect(names).toContain("eval");
+				expect(names).toContain("debug");
+				expect(names).not.toContain("lsp");
 			}
 			expect(probe).not.toHaveBeenCalled();
 			expect(start).not.toHaveBeenCalled();
 			const owner = toolSession(root.path(), settings);
 			const evalTool = new EvalTool(owner);
-			expect(languages(evalTool)).toEqual(["py"]);
+			expect(languages(evalTool)).toEqual(["py", "js"]);
 			expect(evalTool.docTopics().helpers).toContain("%pip");
-			expect(evalTool.docTopics().helpers).not.toContain("%bun");
-			await expect(evalTool.execute("disabled-js", { language: "js", code: "print(6 * 7)" })).rejects.toThrow(
-				/JavaScript backend is disabled/,
+			expect(evalTool.docTopics().helpers).toContain("%bun");
+			const result = await evalTool.execute("default-js", { language: "js", code: "print(6 * 7)" });
+			expect(result.content).toEqual(
+				expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("42") })]),
 			);
 
 			for (const configured of [undefined, mode === "offline"]) {
@@ -152,26 +156,21 @@ describe("fork runtime defaults", () => {
 
 			if (mode === "offline") return;
 
-			cfgEvalJs.override(settings, true);
-			expect(languages(evalTool)).toEqual(["py", "js"]);
-			const result = await evalTool.execute("enabled-js", { language: "js", code: "print(6 * 7)" });
-			expect(result.content).toEqual(
-				expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("42") })]),
-			);
-
 			const file = path.join(agentDir, "config.yml");
 			const saved =
-				"theme:\n  dark: anthracite\ncomposer:\n  predictions: false\nterminal:\n  programStatus: false\nask:\n  timeout: 9\neval:\n  js: true\n";
+				"theme:\n  dark: anthracite\ncomposer:\n  predictions: false\nterminal:\n  programStatus: false\nask:\n  timeout: 9\neval:\n  js: false\n";
 			await Bun.write(file, saved);
 			const configured = await Settings.loadReadOnly({ cwd: root.path(), agentDir });
 			expect(value(configured, "theme.dark")).toBe("anthracite");
 			expect(value(configured, "composer.predictions")).toBe(false);
 			expect(cfgTerminalProgramStatus.get(configured)).toBe(false);
 			expect(askTimeoutMs(configured)).toBe(9_000);
-			expect(languages(new EvalTool(toolSession(root.path(), configured)))).toEqual(["py", "js"]);
+			expect(languages(new EvalTool(toolSession(root.path(), configured)))).toEqual(["py"]);
 			expect(await Bun.file(file).text()).toBe(saved);
 			const savedJs = Bun.env.PI_JS;
 			try {
+				Bun.env.PI_JS = "1";
+				expect(languages(new EvalTool(toolSession(root.path(), configured)))).toEqual(["py", "js"]);
 				Bun.env.PI_JS = "0";
 				expect(languages(new EvalTool(toolSession(root.path(), configured)))).toEqual(["py"]);
 				cfgEvalJs.override(configured, true);

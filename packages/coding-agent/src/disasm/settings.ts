@@ -5,7 +5,7 @@ export const cfgDisassembler = register({
 	id: "disassembler.backend",
 	type: "enum",
 	values: ["auto", "ghidra", "ida", "binja", "none"] as const,
-	default: "none",
+	default: "auto",
 	ui: {
 		tab: "tools",
 		group: "Available Tools",

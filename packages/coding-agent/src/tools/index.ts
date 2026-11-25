@@ -102,6 +102,7 @@ import {
 	cfgGlobEnabled,
 	cfgGrepEnabled,
 	cfgLaunchEnabled,
+	cfgOpenWikiToolsEnabled,
 	cfgSecurityEnabled,
 	cfgTodoEnabled,
 	cfgToolsCommands,
@@ -710,7 +711,13 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		: toolNames
 			? normalizeToolNames(toolNames)
 			: undefined;
-	if (!restrictToolNames && requestedTools?.includes("read") && (session.taskDepth ?? 0) === 0) {
+	const openWikiToolsEnabled = cfgOpenWikiToolsEnabled.get(session.settings);
+	if (
+		openWikiToolsEnabled &&
+		!restrictToolNames &&
+		requestedTools?.includes("read") &&
+		(session.taskDepth ?? 0) === 0
+	) {
 		for (const name of OPENWIKI_QUERY_TOOL_NAMES) {
 			if (!requestedTools.includes(name)) requestedTools.push(name);
 		}
@@ -793,7 +800,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		// Default child tool sets must not silently gain OpenWiki access. Explicit
 		// grants remain available, as for other child-gated built-ins.
 		if (OPENWIKI_QUERY_TOOL_NAMES.includes(name)) {
-			return (session.taskDepth ?? 0) === 0 || requestedTools?.includes(name) === true;
+			return openWikiToolsEnabled && ((session.taskDepth ?? 0) === 0 || requestedTools?.includes(name) === true);
 		}
 		// Never in the default set. Explicitly activatable while goal.enabled and
 		// no goal record exists yet — /guided-goal enables it so the agent can

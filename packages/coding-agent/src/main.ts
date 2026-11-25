@@ -164,13 +164,7 @@ import { cfgGoalEnabled } from "./goals/settings";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "./plan-mode/settings";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
-import {
-	cfgAsyncPrintWake,
-	cfgLaunchPersist,
-	cfgFetchEnabled,
-	cfgToolsApprovalMode,
-	cfgWebSearchEnabled,
-} from "./tools/settings";
+import { cfgAsyncPrintWake, cfgLaunchPersist, cfgToolsApprovalMode, cfgWebSearchEnabled } from "./tools/settings";
 import { cfgBrowserEnabled } from "./tools/browser/settings";
 import { syncRelayInstallsOnStartup } from "./tools/browser/relay/installs";
 import { claimTerminal } from "./tools/browser/terminal-owner";
@@ -2238,7 +2232,6 @@ export async function runRootCommand(
 		if (parsedArgs.intranetOffline) {
 			cfgWebSearchEnabled.override(settingsInstance, false);
 			cfgBrowserEnabled.override(settingsInstance, false);
-			cfgFetchEnabled.override(settingsInstance, false);
 			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
 			cfgStartupCheckUpdate.override(settingsInstance, false);
 			cfgStartupSetupWizard.override(settingsInstance, false);

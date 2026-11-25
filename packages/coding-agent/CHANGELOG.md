@@ -17,6 +17,9 @@
 ### Breaking Changes
 ### Changed
 
+- JavaScript Eval and archive queries are enabled by default again, binary analysis defaults to automatic backend selection, and offline sessions honor `fetch.enabled` for URL reads.
+- The `debug` tool is enabled by default again.
+- OpenWiki query tools are off by default and can be enabled together with `openwiki.tools.enabled`.
 - Extensions, hooks and custom tools now render with the reactive `@oh-my-pi/pi-tui` API instead of its old component API. `renderCall`, `renderResult`, message and thinking renderers, `ctx.ui.custom`, `setWidget`, `setHeader` and `setFooter` return JSX nodes or `{ render(width): string[] }` rows objects. UI factories receive a `ui` host instead of the `TUI`. See [Migrating from pi-tui](../../docs/extensions.md#migrating-from-pi-tui).
 - The host supplies `@oh-my-pi/pi-tui`, including in compiled binaries. Imports of `@mariozechner/pi-tui` or `@earendil-works/pi-tui` show a migration error.
 - `ctx.ui.setEditorComponent`/`getEditorComponent` are removed: use the `ctx.ui.composer` hooks (`addKeyHandler`, `addDecorator`, `setSubmitTransform`, `setShape`).

@@ -119,7 +119,7 @@ omp 最初构建在 [Mario Zechner](https://github.com/mariozechner) 出色的 [
 
 ### 01 · 带工具调用的代码执行
 
-Eval 默认提供持久化的 Python 内核，可在单元内通过 `tool.read` 等接口调用 agent 的工具。JavaScript Eval 默认关闭；需要时可在配置中设置 `eval.js: true`，或在启动前设置 `PI_JS=1`。启用后，JavaScript 单元也能调用 agent 的工具。
+Eval 默认支持持久化的 Python 内核和 JavaScript 单元，两者都可通过 `tool.read` 等接口调用 Agent 工具。可设置 `eval.js: false` 或用 `PI_JS=0` 关闭 JavaScript 后端。
 
 ![omp TUI 正在运行 Python 代码并绘制图表。](assets/python.webp)
 
@@ -133,7 +133,7 @@ _[阅读 LSP 配置文档](docs/lsp-config.md)_
 
 ### 03 · 驱动真正的调试器
 
-`debug` 工具默认关闭。使用前需设置 `debug.enabled: true`，并准备目标语言对应的调试适配器。
+`debug` 工具默认开启。调试时需要目标语言对应的调试适配器，例如 Python 的 `debugpy`。可设置 `debug.enabled: false` 关闭该工具。
 
 C 二进制段错误：agent 挂上 lldb，单步走到出错的指针，读取栈帧。Go 服务卡住：它挂上 dlv，遍历 goroutine。Python 进程僵死：debugpy，暂停、检查、求值。而多数 agent 还在到处撒 print。
 
