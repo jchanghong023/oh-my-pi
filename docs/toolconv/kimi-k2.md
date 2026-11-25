@@ -156,10 +156,10 @@ With a server parser active (`--tool-call-parser kimi_k2`), the raw stream maps 
 
    ```json
    {
-     "role": "tool",
-     "tool_call_id": "functions.get_weather:0",
-     "name": "get_weather",
-     "content": "{\"weather\": \"Sunny\"}"
+   	"role": "tool",
+   	"tool_call_id": "functions.get_weather:0",
+   	"name": "get_weather",
+   	"content": "{\"weather\": \"Sunny\"}"
    }
    ```
 

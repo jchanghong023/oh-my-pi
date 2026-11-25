@@ -46,7 +46,6 @@ export default class Models extends Command {
 
 	static examples = [
 		`# List available chat models, grouped by provider\n  ${APP_NAME} models`,
-		`# List the company internal models (OMP_OFFLINE=1 enables the company lane)\n  OMP_OFFLINE=1 ${APP_NAME} models`,
 		`# List models of every catalog kind\n  ${APP_NAME} models --kind all`,
 		`# List one provider's models (any provider name works)\n  ${APP_NAME} models openai-codex`,
 		`# Find models by substring\n  ${APP_NAME} models find minimax`,

@@ -13,7 +13,6 @@ exports_files([
     "Cargo.lock",
     "rustfmt.toml",
 ])
-
 _ADDONS = {
     "linux-x64-baseline": ("//bazel/platforms:linux-x64-baseline", "pi_natives.linux-x64-baseline.node"),
     "linux-x64-modern": ("//bazel/platforms:linux-x64-modern", "pi_natives.linux-x64-modern.node"),

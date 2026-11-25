@@ -47,14 +47,14 @@ bun run serve --port 4700
 
    ```json
    {
-     "benchmark": "edit",
-     "model": "anthropic/claude-opus-4-8",
-     "tasks": 20,
-     "concurrency": 4,
-     "attempts": 2,
-     "jobName": "edit-baseline",
-     "role": "baseline",
-     "goal": "compare edit strategies"
+   	"benchmark": "edit",
+   	"model": "anthropic/claude-opus-4-8",
+   	"tasks": 20,
+   	"concurrency": 4,
+   	"attempts": 2,
+   	"jobName": "edit-baseline",
+   	"role": "baseline",
+   	"goal": "compare edit strategies"
    }
    ```
 

@@ -1481,7 +1481,7 @@ mod follow {
 					}
 				}
 				writer.flush().map_err(crate::tail::map_output_error)?;
-
+		
 				self.last.replace(path.to_owned());
 				self.update_metadata(path, None);
 				Ok(true)
@@ -2020,7 +2020,6 @@ mod follow {
 				}
 			}
 		}
-
 	}
 	
 	

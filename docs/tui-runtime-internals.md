@@ -120,3 +120,4 @@ native frames. See [native rendering](./tui-core-renderer.md#native-rendering-te
 ## Shutdown
 
 `Host.stop()` flushes before handing the terminal back: `TermBackend.flush()` composes one last frame that writes every live `main` block as it is now (settled or not: frozen), after the ledger a pending replay still owes, into history, with the dock as the viewport. Overlays and fullscreen layers are not part of it. When the writer cannot write inline yet (a resize borrow or quiet resize, an anchor probe), or the driver skipped it for an output backlog, the writer keeps that frame and writes it from the viewport top in `FrameWriter.stop()`, which then leaves any alternate buffer, places the shell cursor directly after the visible content, and restores autowrap and the cursor before the driver restores terminal modes. `Host.suspend()` does not flush; the backend replays history when it starts again after the external program returns.
+

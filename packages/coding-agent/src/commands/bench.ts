@@ -59,7 +59,6 @@ export default class Bench extends Command {
 	static examples = [
 		"# Compare TTFT and tok/s of two models\n  omp bench anthropic/claude-opus-4-5 openai/gpt-5.2",
 		"# Fuzzy selectors work\n  omp bench opus sonnet",
-		"# Benchmark the company internal models over the intranet (OMP_OFFLINE=1 enables the internal lane)\n  OMP_OFFLINE=1 omp bench GLM-5.2-public DeepSeek-V4-Flash-public",
 		"# Average over 3 runs each\n  omp bench opus gpt-5.2 --runs 3",
 		"# Rotate chat, prefill, and generation challenges in one run\n  omp bench opus sonnet --profile mix",
 		"# Isolate prompt-ingestion speed with a 64 KiB cache-busted input\n  omp bench opus sonnet --profile prefill --prefill-bytes 65536",

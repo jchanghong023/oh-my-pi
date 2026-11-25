@@ -132,7 +132,7 @@ const CUSTOM_TYPE_ACRONYMS: Readonly<Record<string, string>> = {
 	rpc: "RPC",
 	ttsr: "TTSR",
 	tui: "TUI",
-	toolCommands: "Tool commands",
+	toolCommands: "XDev",
 };
 
 function systemNoticeTitle(customType: string): string {

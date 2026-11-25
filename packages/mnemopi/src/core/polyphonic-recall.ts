@@ -4,9 +4,8 @@ import { type Env, polyphonicRecallEnabled } from "../config";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 import { backfillConsolidatedFacts, ensureVeracityConsolidator } from "./beam/consolidate";
 import type { BeamMemoryState, JsonValue, Metadata, RecallResult, RecallTierLabel } from "./beam/types";
-import { currentEmbeddingModel } from "./embeddings";
 import { EpisodicGraph, extractProperNouns } from "./episodic-graph";
-import { forEachRankContribution } from "./rank-fusion";
+import { currentEmbeddingModel } from "./embeddings";
 import { STOP_WORDS } from "./synonyms";
 import { VeracityConsolidator } from "./veracity-consolidation";
 
@@ -544,24 +543,24 @@ export class PolyphonicRecallEngine {
 	 */
 	combineVoices(...voiceResults: readonly VoiceRecallResult[][]): Map<string, PolyphonicResult> {
 		const combined = new Map<string, PolyphonicResult>();
-		const sorted = voiceResults.map(results =>
-			[...results].sort((a, b) => b.score - a.score || a.memoryId.localeCompare(b.memoryId)),
-		);
-		forEachRankContribution(
-			sorted,
-			result => result.memoryId,
-			(result, id, contribution) => {
-				let existing = combined.get(id);
+		for (const results of voiceResults) {
+			if (results.length === 0) continue;
+			const sorted = [...results].sort((a, b) => b.score - a.score || a.memoryId.localeCompare(b.memoryId));
+			const ranked = new Set<string>();
+			for (const result of sorted) {
+				if (ranked.has(result.memoryId)) continue;
+				ranked.add(result.memoryId);
+				let existing = combined.get(result.memoryId);
 				if (existing === undefined) {
-					existing = { memoryId: id, combinedScore: 0, voiceScores: {}, metadata: {} };
-					combined.set(id, existing);
+					existing = { memoryId: result.memoryId, combinedScore: 0, voiceScores: {}, metadata: {} };
+					combined.set(result.memoryId, existing);
 				}
+				const contribution = 1 / (POLYPHONIC_RRF_K + ranked.size);
 				existing.voiceScores[result.voice] = contribution;
 				existing.combinedScore += contribution;
 				Object.assign(existing.metadata, result.metadata);
-			},
-			POLYPHONIC_RRF_K,
-		);
+			}
+		}
 		return combined;
 	}
 	/**

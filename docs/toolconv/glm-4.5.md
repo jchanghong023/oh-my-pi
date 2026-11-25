@@ -269,9 +269,9 @@ With a server parser active (`--tool-call-parser glm45 --reasoning-parser glm45`
 
    ```json
    {
-     "role": "tool",
-     "tool_call_id": "call_abc123",
-     "content": "{\"temperature\": 26, \"unit\": \"celsius\", \"condition\": \"Sunny\"}"
+   	"role": "tool",
+   	"tool_call_id": "call_abc123",
+   	"content": "{\"temperature\": 26, \"unit\": \"celsius\", \"condition\": \"Sunny\"}"
    }
    ```
 

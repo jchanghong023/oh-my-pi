@@ -72,6 +72,7 @@ describe("MCP tool calls after dispatch", () => {
 		expect(await effects()).toEqual(["record_effect"]);
 
 		const recovered = await tool.execute("recover", {}, undefined, context);
+
 		expect(recovered.details?.isError).toBeFalsy();
 		expect(recovered.content).toEqual([{ type: "text", text: "effect recorded" }]);
 		// The host starts a fresh server for the next request; the session has nothing to reconnect.

@@ -848,3 +848,4 @@ mod tests {
 		assert_eq!(bytes, b"fifo");
 	}
 }
+
