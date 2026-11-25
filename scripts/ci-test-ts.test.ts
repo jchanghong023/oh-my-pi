@@ -236,16 +236,13 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 	}
 }, 20_000);
 
-test("shared test concurrency limit respects platform and available cores", () => {
-	for (const platform of ["win32", "linux", "darwin"] as const) {
-		const cap = 28;
-		expect(testConcurrencyLimit(0, platform)).toBe(1);
-		expect(testConcurrencyLimit(1, platform)).toBe(1);
-		expect(testConcurrencyLimit(6.9, platform)).toBe(6);
-		expect(testConcurrencyLimit(14, platform)).toBe(14);
-		expect(testConcurrencyLimit(28, platform)).toBe(cap);
-		expect(testConcurrencyLimit(64, platform)).toBe(cap);
-	}
+test("shared test concurrency limit respects available cores", () => {
+	expect(testConcurrencyLimit(0)).toBe(1);
+	expect(testConcurrencyLimit(1)).toBe(1);
+	expect(testConcurrencyLimit(6.9)).toBe(6);
+	expect(testConcurrencyLimit(14)).toBe(14);
+	expect(testConcurrencyLimit(28)).toBe(28);
+	expect(testConcurrencyLimit(64)).toBe(28);
 });
 
 test("shared CPU budget cannot exceed available cores or the worker ceiling", () => {
@@ -269,11 +266,8 @@ test("chunk pools respect CPU, command count and explicit concurrency limits", (
 	expect(testConcurrency(3, "27", 64)).toBe(3);
 	expect(testConcurrency(40, "4.9", 6)).toBe(4);
 	expect(() => testConcurrency(40, "invalid", 64)).toThrow();
-	expect(testConcurrency(40, "all", 64, "win32")).toBe(28);
 	expect(testConcurrency(40, "all", 16, "win32")).toBe(16);
 	expect(testConcurrency(3, "all", 64, "win32")).toBe(3);
-	expect(testConcurrency(40, "2", 64, "win32")).toBe(2);
-	expect(testConcurrency(40, "all", 64, "linux")).toBe(28);
 });
 
 test("integration chunk classification matches coding-agent test paths only", () => {

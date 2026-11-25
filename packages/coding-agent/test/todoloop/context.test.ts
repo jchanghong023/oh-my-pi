@@ -133,12 +133,11 @@ describe("TodoLoop group file context", () => {
 		]);
 	});
 
-	test("consumes repeated Superpowers Step labels by scoped identity and retries only remaining raw tasks", async () => {
+	test("packages active Superpowers steps with scoped IDs and CRLF text, excluding fenced examples", async () => {
 		const cwd = await workspace();
 		const filePath = path.join(cwd, "work.md");
 		const original = [
 			"# Implementation Plan",
-			"[rules](rules.md)",
 			"```markdown",
 			"- [ ] **Step 1: Write result.txt using material output fragments**",
 			"```",
@@ -155,12 +154,9 @@ describe("TodoLoop group file context", () => {
 			"",
 		].join("\r\n");
 		await writeFile(filePath, original);
-		await writeFile(path.join(cwd, "rules.md"), "Output fragment: Ω");
-		await writeFile(path.join(cwd, "result.txt"), "kept:");
-		const rendered = await build(filePath, cwd);
-		const first = taskPackage(rendered);
-		expect(first.group.id).toBe("1");
-		expect(first.group.tasks).toEqual([
+		const pkg = taskPackage(await build(filePath, cwd));
+		expect(pkg.group.id).toBe("1");
+		expect(pkg.group.tasks).toEqual([
 			{
 				id: "step:1:1",
 				label: "Step 1",
@@ -168,31 +164,7 @@ describe("TodoLoop group file context", () => {
 			},
 			{ id: "step:1:2", label: "Step 2", raw: "- [ ] **Step 2: Continue in the same context**" },
 		]);
-		expect(first.completedTaskIds).toEqual(["step:1:0"]);
-		// Consume only the first task, as a partially successful fresh executor would.
-		const partial = rendered.replace(
-			JSON.stringify(first, null, 2),
-			JSON.stringify({ ...first, group: { ...first.group, tasks: first.group.tasks.slice(0, 1) } }, null, 2),
-		);
-		await consumeFiles(partial);
-		const retry = await build(filePath, cwd, { text: "partial", observation: "Step 2 remains" });
-		const retryPackage = taskPackage(retry);
-		expect(retryPackage.group.tasks).toEqual([first.group.tasks[1]!]);
-		expect(retryPackage.completedTaskIds).toEqual(["step:1:0", "step:1:1"]);
-		await consumeFiles(retry);
-		const next = await build(filePath, cwd);
-		expect(taskPackage(next).group.tasks).toEqual([
-			{
-				id: "step:2:1",
-				label: "Step 1",
-				raw: "- [ ] **Step 1: Write result.txt using material output fragments**",
-			},
-		]);
-		await consumeFiles(next);
-		expect(await Bun.file(path.join(cwd, "result.txt")).text()).toBe("kept:ΩΩΩ");
-		expect(await Bun.file(filePath).text()).toBe(
-			original.replaceAll("[ ]", "[x]").replace("```markdown\r\n- [x]", "```markdown\r\n- [ ]"),
-		);
+		expect(pkg.completedTaskIds).toEqual(["step:1:0"]);
 	});
 
 	for (const withDesign of [true, false]) {

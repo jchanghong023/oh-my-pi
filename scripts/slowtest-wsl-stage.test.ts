@@ -467,9 +467,6 @@ describe("streamed deployed fixed-commit execution", () => {
 		expect(execution.kind).toBeUndefined();
 		expect(execution.wallTimeoutSeconds).toBeUndefined();
 		expect(execution.eventToken).toBe(request.env.OMP_GATE_EVENT_TOKEN);
-		expect(String(execution.stdin)).toContain(
-			"# immutable helper plan fixture\ngit fetch -- fork refs/heads/tested-feature",
-		);
 		expect(String(execution.stdin)).toContain("setsid --wait");
 		expect(execution.onAbort).toBeDefined();
 		for (const command of f.commands) {

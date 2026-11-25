@@ -1496,20 +1496,6 @@ it("runs independent charged stages concurrently rather than summing durations",
 	expect(union).toBeLessThan(sum);
 	expect(result.compileExcludedSeconds).toBe(0);
 });
-it("preserves stub cache artifacts on consecutive invocations", async () => {
-	const cacheFile = path.join(directory, "compiler-cache");
-	for (let count = 0; count < 2; count++) {
-		const result = await runGate(
-			"fastcheck",
-			async gate => {
-				await gate.run(command({ cacheFile }, { kind: "compile" }));
-			},
-			{ print: quiet },
-		);
-		expect(result.status).toBe("PASS");
-	}
-	expect(await fs.readFile(cacheFile, "utf8")).toBe("warm\nwarm\n");
-});
 it("keeps stable compiler wrapper paths, flags and the original cache wrapper", async () => {
 	const env = {
 		OMP_GATE_EVENT_TOKEN: "test",

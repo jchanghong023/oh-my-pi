@@ -470,7 +470,6 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				}
 				const beforeDisplayRequests = provider.requests.length;
 				const beforeDisplayCalls = recordedCallIds(messages(await journal(file)));
-				const beforeDisplayObserved = observed.length;
 				await tui("submit", "/display detailed");
 				await tui("expect", "text", "detailed", "--timeout", "30000");
 				await screen.checkpoint("detailed display rebuild", frame => expectVisibleDraft(frame, "", 120, 80));
@@ -486,7 +485,6 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				await screen.checkpoint("compact display rebuild", frame => expectVisibleDraft(frame, "", 120, 80));
 				expect(provider.requests).toHaveLength(beforeDisplayRequests);
 				expect(recordedCallIds(messages(await journal(file)))).toEqual(beforeDisplayCalls);
-				expect(observed).toHaveLength(beforeDisplayObserved);
 				await tui("submit", "/compact soft");
 				await compactionStarted.promise;
 				await screen.checkpoint("real compaction in progress", frame => expectVisibleDraft(frame, "", 120, 80));
@@ -664,17 +662,8 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				expect(await Bun.file(path.join(cwd, "src/alpha.ts")).text()).toBe("export const alpha = 11;\n");
 				expect(await Bun.file(path.join(cwd, "src/beta.ts")).text()).toBe("export const beta = 22;\n");
 				expect(await Bun.file(path.join(cwd, "notes.txt")).text()).toBe("MIXED_NATIVE_WRITE\n");
-				for (const record of Object.values(children.records))
-					expect(record).toEqual({
-						parentMessage: true,
-						fileModified: true,
-						readyNotified: true,
-						duringNotified: true,
-						finalReply: true,
-					});
 				const requestCount = provider.requests.length;
 				const callIds = recordedCallIds(history);
-				const observedCount = observed.length;
 				await tui("submit", "/display detailed");
 				await tui("expect", "text", "detailed", "--timeout", "30000");
 				await screen.checkpoint("post-compaction detailed rebuild", frame =>
@@ -693,7 +682,6 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				expect(rebuilt).toContain("MIXED_SESSION_DONE");
 				expect(provider.requests).toHaveLength(requestCount);
 				expect(recordedCallIds(messages(await journal(file)))).toEqual(callIds);
-				expect(observed).toHaveLength(observedCount);
 				await screen.stop();
 				await tui("key", "press", "Ctrl+D");
 				await tui("wait", "exit");

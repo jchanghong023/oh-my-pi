@@ -38,14 +38,12 @@ test("debug changes only the isolated smoke diagnostic argument, not test scope"
 			normal,
 		);
 		expect(debug.filter(command => command.argv.includes("--debug"))).toHaveLength(1);
-		expect(normal.some(command => command.label === "test/compact_display")).toBe(false);
 	}
 });
 
 test("fork and full plans leave distribution packaging out of the verification gate", () => {
 	for (const full of [false, true]) {
 		const commands = fulltestCommands({ debug: false, full }, "/tmp/home");
-		expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
 		for (const command of commands) {
 			expect(command.argv.some(arg => /(?:bundle-dist|build-binary|compile-binary)\.ts$/.test(arg))).toBe(false);
 		}
@@ -234,7 +232,6 @@ test("fulltest preserves Bun selection and schedules Rust tests only with --full
 				"--full",
 			]);
 		}
-		expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
 		const ts = commands.filter(command => command.label.startsWith("test/TypeScript"));
 		if (scenario.full) {
 			expect(

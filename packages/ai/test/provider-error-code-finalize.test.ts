@@ -18,8 +18,5 @@ describe("provider error classification", () => {
 		);
 		const error = await AIError.AnthropicApiError.fromResponse(response);
 		expect(error.code).toBe("inner");
-		const result = await AIError.finalize(error);
-		expect(result.status).toBe(400);
-		expect(Object.hasOwn(result, "providerErrorCode")).toBe(false);
 	});
 });

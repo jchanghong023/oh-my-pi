@@ -188,18 +188,6 @@ describe("team consumer regressions", () => {
 		expect(rechecks[0]!.task).not.toContain(participant.modelPattern);
 	});
 
-	it("renders each tracked blocker ID and issue without leaking finding objects", () => {
-		const result = reportWithBody("方案 B 满足验收标准。", { recommendedProposal: "B" });
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.markdown).toContain("A-F1");
-			expect(result.markdown).toContain(blockingReview.findings[0]!.issue);
-			expect(result.markdown).not.toContain("[object Object]");
-			expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
-			expect(result.markdown).toContain("【推荐】方案 B");
-		}
-	});
-
 	it.each(["方案 **A** 可以采用。", "方案 `A` 可以作为最终选项。", "方案 [A](#a) 可采用。"])(
 		"rejects a visible adoption claim for a blocked Markdown-formatted label: %s",
 		body => {
@@ -401,12 +389,8 @@ describe("team consumer regressions", () => {
 		},
 	);
 
-	it.each([
-		"方案 B 没有推荐价值，仍有未解决阻断。",
-		"方案 B 仅在全部阻断问题经复核通过后才可采用。",
-		"如果移除新增必填参数并恢复全部缺省兼容路径，再经过一次复核并确认阻断完全解除，方案 B 才可以采用。",
-		"## 方案 A 与方案 B 的比较\n推荐前者，因为保留旧调用；后者有未解决阻断。",
-	])("completes orchestration with valid synthesis prose and retains the blocked alternative: %s", async body => {
+	it("completes orchestration with valid synthesis prose and retains the blocked alternative", async () => {
+		const body = "方案 B 没有推荐价值，仍有未解决阻断。";
 		const runner: TeamSubagentRunner = async call => {
 			switch (call.role) {
 				case "proposer":

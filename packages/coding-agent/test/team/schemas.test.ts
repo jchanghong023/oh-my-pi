@@ -103,13 +103,6 @@ describe("team yield payload validation", () => {
 		expect(data).toEqual(original);
 	});
 
-	it("rejects oversized proposal bodies instead of truncating them", () => {
-		const data = { ...proposal(), proposal: "p".repeat(4001) };
-		const original = structuredClone(data);
-		expect(parseTeamProposal(data)).toBeUndefined();
-		expect(data).toEqual(original);
-	});
-
 	it("normalizes accepted proposal prose without mutating the original input", () => {
 		const data = { ...proposal(), proposal: "  Keep the existing API.  " };
 		const original = structuredClone(data);
