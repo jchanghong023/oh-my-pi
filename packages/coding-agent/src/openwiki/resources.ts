@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
+import { isOpenWikiSourceCheckout } from "./resource-dependencies";
 import { loadOpenWikiArchive } from "./visual-assets";
 
 const SKILLS_PREFIX = "skills/";
@@ -38,8 +39,18 @@ function skillsDigest(skills: ReadonlyMap<string, Uint8Array>): string {
 	return hash.digest("hex");
 }
 
-/** Materialize immutable bundled skills under the selected OMP profile. */
+/** Use checkout skills directly; releases materialize their bundled skills under the OMP profile. */
 export async function materializeOpenWikiSkills(agentDir: string): Promise<string> {
+	if (!process.env.PI_COMPILED && !process.env.PI_BUNDLED) {
+		const root = path.resolve(import.meta.dir, "../../../..");
+		if (isOpenWikiSourceCheckout(root)) {
+			const skillsDir = path.join(root, "vendor/openwiki/skills");
+			if (!(await Bun.file(path.join(skillsDir, "mermaid-diagrams/SKILL.md")).exists())) {
+				throw new Error("OpenWiki skills are missing. Initialize the OpenWiki submodule.");
+			}
+			return skillsDir;
+		}
+	}
 	const { files } = await loadOpenWikiArchive();
 	return materializeOpenWikiSkillsFromFiles(agentDir, files);
 }

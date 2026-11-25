@@ -42,6 +42,7 @@ import {
 import {
 	type EditorTerm,
 	type EditorTermRange,
+	hasTerminalCompletionRoom,
 	lastLayout,
 	lastWrapWidth,
 	layoutText,
@@ -493,7 +494,7 @@ export class Composer {
 		return this.#cursor;
 	}
 
-	/** Changes only when a draft is discarded or sent, not while it is edited. */
+	/** Changes when the draft is discarded, sent or replaced through history, not while it is edited. */
 	get draftGeneration(): number {
 		return this.#draftGeneration;
 	}
@@ -1204,6 +1205,7 @@ export class Composer {
 			};
 		}
 		this.#historyIndex = index;
+		this.#draftGeneration++;
 		const draft = index === -1 ? this.#historyDraft : null;
 		const entry = draft ?? this.#entries[index] ?? { text: "" };
 		const text = entry.text;
@@ -1557,6 +1559,7 @@ export class Composer {
 	/** Editor-local keys, without the app shortcuts that can replace a dialog owning the draft. */
 	handleDraftKey(key: KeyEvent): boolean {
 		if (key.kind === "release") return false;
+		if (this.#completion.peek() && !hasTerminalCompletionRoom(this.field)) this.#closeCompletion();
 		if (this.#finishJump(key)) return true;
 		const vim = this.#vim;
 		if (vim) {

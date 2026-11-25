@@ -354,17 +354,27 @@ class EmbeddedToolTurns {
 		}
 	}
 
-	restore(sessionId: string, context: Context): void {
-		context.messages = context.messages.map(message => {
-			if (message.role !== "assistant") return message;
-			const key = this.#key(sessionId, message);
-			if (!key) return message;
-			const turn = this.#turns.get(key);
-			if (!turn) return message;
+	restore(sessionId: string, context: Context, isResponses: boolean): void {
+		if (this.#turns.size === 0) return;
+		const restored: Context["messages"] = [];
+		for (const message of context.messages) {
+			const key = message.role === "assistant" ? this.#key(sessionId, message) : undefined;
+			const turn = key === undefined ? undefined : this.#turns.get(key);
+			if (key === undefined || !turn || message.role !== "assistant") {
+				restored.push(message);
+				continue;
+			}
+			// The Responses parser appends calls to the preceding text item,
+			// even if that item is independent of the cached turn.
+			const text = isResponses ? message.content[0] : undefined;
+			if (text?.type === "text" && !openaiResponses.matchesOutputText(turn.message, text)) {
+				restored.push({ ...message, content: [text] });
+			}
 			this.#turns.delete(key);
 			this.#turns.set(key, turn);
-			return turn.message;
-		});
+			restored.push(turn.message);
+		}
+		context.messages = restored;
 	}
 
 	clear(): void {
@@ -472,10 +482,11 @@ async function handleFormatEndpoint(
 				clientKey ?? deriveSessionId(parsed.modelId, { messages: parsed.context.messages.slice(0, 1) }),
 			])
 		: sessionId;
+	const isResponses = route.module === openaiResponses;
 	// Responses echoes only the wire call ID; keep the native ID in the cached turn.
-	const toWireToolCallId = route.module === openaiResponses ? openaiResponses.wireCallId : undefined;
+	const toWireToolCallId = isResponses ? openaiResponses.wireCallId : undefined;
 	parsed.options.promptCacheKey = sessionId;
-	toolTurns?.restore(toolTurnSessionId, parsed.context);
+	toolTurns?.restore(toolTurnSessionId, parsed.context, isResponses);
 
 	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
 	// expected to resolve the credential and pass it as `options.apiKey`.
@@ -493,6 +504,7 @@ async function handleFormatEndpoint(
 	if ("status" in apiKey) return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	const streamOpts = buildStreamOptions(parsed, model, controller.signal);
+	streamOpts.thinkingProbe = bootOpts.thinkingProbe;
 	// Only the upstream-bound options: `encodeStream` reads the caller's parsed
 	// request, and the Anthropic encoder answers its `anthropic-beta`.
 	applyCallerTrust(streamOpts, req, bootOpts.client !== undefined);
@@ -747,6 +759,8 @@ async function handlePiNative(
 	const streamOpts: SimpleStreamOptions = {
 		...parsed.options,
 		signal: controller.signal,
+		thinkingProbe:
+			bootOpts.thinkingProbe === false ? false : (parsed.options.thinkingProbe ?? bootOpts.thinkingProbe),
 		cursorExternalToolExecutor: true,
 		providerSessionState: lease.states,
 	};

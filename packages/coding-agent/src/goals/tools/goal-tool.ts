@@ -17,7 +17,7 @@ import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/tool-errors";
 
 import { goalAutopilotRequest } from "../request-context";
-import { completionBudgetReport, remainingTokens } from "../runtime";
+import { completionBudgetReport, GoalAutopilotCompletionRequest, remainingTokens } from "../runtime";
 import type { Goal, GoalToolDetails } from "../../tools/details/goal";
 
 const goalSchema = type({
@@ -100,13 +100,16 @@ export class GoalTool implements AgentTool<typeof goalSchema, GoalToolDetails> {
 			const paused = await runtime.pauseGoal();
 			response = buildGoalToolResponse(paused?.goal ?? null);
 		} else if (params.op === "resume") {
-			const resumed = await runtime.resumeGoal();
+			const resumed = await runtime.resumeGoal("tool", goalAutopilotRequest(context));
 			response = buildGoalToolResponse(resumed.goal);
 		} else if (params.op === "drop") {
 			const dropped = await runtime.dropGoal();
 			response = buildGoalToolResponse(dropped ?? null);
 		} else {
-			const completed = await runtime.completeGoalFromTool(goalAutopilotRequest(context));
+			const scope = context?.toolCall?.requestScope;
+			const completed = await runtime.completeGoalFromTool(
+				scope instanceof GoalAutopilotCompletionRequest ? scope : goalAutopilotRequest(context),
+			);
 			response = buildGoalToolResponse(completed, { includeCompletionReport: true });
 		}
 		let text: string;

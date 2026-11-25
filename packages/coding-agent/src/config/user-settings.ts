@@ -1,12 +1,13 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, isRecord, MAIN_CONFIG_FILENAMES } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { setYamlConfigValue } from "@oh-my-pi/pi-utils/yaml-config";
 import { isScalar, LineCounter, parseDocument, visit } from "yaml";
+import { writeFileAtomically } from "../utils/atomic-file";
+import { settingValuesEqual } from "./registry";
 import type { RawSettings, SettingProvenance } from "./settings";
-import { replaceFileAtomically } from "../utils/atomic-file";
 
 export interface UserSettingValue {
 	readState: "present" | "missing" | "invalid" | "unreadable";
@@ -58,7 +59,7 @@ export interface UserSettingMutation {
 }
 export interface UserSettingsStoreOptions {
 	agentDir: string;
-	/** Existing Settings migration, applied only in memory to identify reset sources. */
+	/** Existing Settings migration, applied only in memory. */
 	migrate?: (raw: RawSettings) => RawSettings;
 	/** Explicit CLI edits must not initialize a missing configuration. */
 	requireExisting?: boolean;
@@ -84,7 +85,6 @@ function canonical(value: unknown, ancestors = new Set<object>()): string {
 			if (Array.isArray(value)) return `[${value.map(item => canonical(item, ancestors)).join(",")}]`;
 			if (isRecord(value))
 				return `{${Object.keys(value)
-					.sort()
 					.map(key => `${JSON.stringify(key)}:${canonical(value[key], ancestors)}`)
 					.join(",")}}`;
 		} finally {
@@ -93,8 +93,8 @@ function canonical(value: unknown, ancestors = new Set<object>()): string {
 	}
 	return JSON.stringify(value) ?? String(value);
 }
-function equal(left: unknown, right: unknown): boolean {
-	return canonical(left) === canonical(right);
+function isExaEnabled(keys: readonly string[]): boolean {
+	return keys.length === 2 && keys[0] === "exa" && keys[1] === "enabled";
 }
 function emptyReceipt(): UserSettingSaveResult {
 	return {
@@ -173,65 +173,125 @@ export class UserSettingsStore {
 				if (isEnoent(error)) return { file, source: "", raw: {}, state: "missing" };
 				throw error;
 			}
-			try {
-				const lineCounter = new LineCounter();
-				const doc = parseDocument(source, { strict: true, uniqueKeys: true, prettyErrors: false, lineCounter });
-				if (doc.errors.length)
-					return {
-						file,
-						source,
-						raw: {},
-						state: "invalid",
-						message: doc.errors
-							.map(error => {
-								const position = lineCounter.linePos(error.pos[0]);
-								return `Invalid settings YAML: ${error.code} at line ${position.line}, column ${position.col}.`;
-							})
-							.join(" "),
-					};
-				visit(doc, {
-					Map: (_key, node) => {
-						const seen = new Set<string>();
-						for (const pair of node.items) {
-							if (!isScalar(pair.key)) throw new Error("Settings mapping keys must be scalar values.");
-							const key = String(pair.key.value);
-							if (seen.has(key)) throw new Error("Settings mapping contains duplicate logical keys.");
-							seen.add(key);
-						}
-					},
-				});
-				const raw: unknown = doc.toJS({ maxAliasCount: 100 });
-				if (raw !== null && raw !== undefined && !isRecord(raw))
-					throw new Error("Settings YAML must contain a mapping.");
-				canonical(raw);
-				return { file, source, raw: raw ?? {}, state: "present" };
-			} catch {
-				// yaml conversion/alias errors can also embed user content; never expose their raw messages.
+			return this.#parse(file, source);
+		} catch (error) {
+			return { file, source: "", raw: {}, state: "unreadable", message: String(error) };
+		}
+	}
+
+	#parse(file: string, source: string): LoadedSide {
+		try {
+			const lineCounter = new LineCounter();
+			const doc = parseDocument(source, { strict: true, uniqueKeys: true, prettyErrors: false, lineCounter });
+			if (doc.errors.length)
 				return {
 					file,
 					source,
 					raw: {},
 					state: "invalid",
-					message: "Settings YAML has an unsupported or invalid structure.",
+					message: doc.errors
+						.map(error => {
+							const position = lineCounter.linePos(error.pos[0]);
+							return `Invalid settings YAML: ${error.code} at line ${position.line}, column ${position.col}.`;
+						})
+						.join(" "),
 				};
-			}
-		} catch (error) {
-			return { file, source: "", raw: {}, state: "unreadable", message: String(error) };
+			visit(doc, {
+				Map: (_key, node) => {
+					const seen = new Set<string>();
+					for (const pair of node.items) {
+						if (!isScalar(pair.key)) throw new Error("Settings mapping keys must be scalar values.");
+						const key = String(pair.key.value);
+						if (seen.has(key)) throw new Error("Settings mapping contains duplicate logical keys.");
+						seen.add(key);
+					}
+				},
+			});
+			const raw: unknown = doc.toJS({ maxAliasCount: 100 });
+			if (raw !== null && raw !== undefined && !isRecord(raw))
+				throw new Error("Settings YAML must contain a mapping.");
+			canonical(raw);
+			return { file, source, raw: raw ?? {}, state: "present" };
+		} catch {
+			// yaml conversion/alias errors can also embed user content; never expose their raw messages.
+			return {
+				file,
+				source,
+				raw: {},
+				state: "invalid",
+				message: "Settings YAML has an unsupported or invalid structure.",
+			};
 		}
 	}
+
+	#legacyTheme(raw: RawSettings, keys: readonly string[]): string | undefined {
+		if (!this.#migrate || keys.length !== 2 || keys[0] !== "theme" || (keys[1] !== "dark" && keys[1] !== "light"))
+			return undefined;
+		const theme = leaf(raw, ["theme"]);
+		return typeof theme === "string" ? theme : undefined;
+	}
+
+	#hasInvalidParent(raw: RawSettings, keys: readonly string[]): boolean {
+		if (this.#legacyTheme(raw, keys) !== undefined) return false;
+		for (let length = 1; length < keys.length; length++) {
+			const parent = leaf(raw, keys.slice(0, length));
+			if (parent !== undefined && parent !== null && !isRecord(parent)) return true;
+		}
+		return false;
+	}
+
+	#legacyThemeEdit(theme: string, mutation: UserSettingMutation): UserSettingMutation[] {
+		const migratedTheme = this.#migrate!({ theme }).theme;
+		const parent = isRecord(migratedTheme) ? migratedTheme : {};
+		const slot = mutation.segments[1];
+		if (mutation.value === undefined) {
+			if (!Object.hasOwn(parent, slot)) return [];
+			delete parent[slot];
+		} else {
+			parent[slot] = mutation.value;
+		}
+		return [{ segments: ["theme"], value: parent }];
+	}
+
 	/** Remove legacy inputs too, preserving sibling outputs of a split migration. */
 	#resetMutations(raw: RawSettings, keys: readonly string[]): UserSettingMutation[] {
 		const result: UserSettingMutation[] = [{ segments: keys, value: undefined }];
 		if (!this.#migrate) return result;
+		if (isExaEnabled(keys)) {
+			// These three inputs participate in the old Exa AND migration. Updating
+			// or resetting the switch must not edit its unrelated legacy siblings.
+			for (const segments of [["exa", "enableSearch"], ["exa.enabled"], ["exa.enableSearch"]]) {
+				if (leaf(raw, segments) !== undefined) result.push({ segments, value: undefined });
+			}
+			return result;
+		}
 		const migrate = this.#migrate;
 		const set = (target: RawSettings, segments: readonly string[], value: unknown) => {
 			let parent: Record<string, unknown> = target;
 			for (const key of segments.slice(0, -1)) {
-				if (!isRecord(parent[key])) parent[key] = {};
-				parent = parent[key] as Record<string, unknown>;
+				const child = Object.hasOwn(parent, key) ? parent[key] : undefined;
+				if (isRecord(child)) parent = child;
+				else {
+					if (value === undefined) return;
+					const mapping = {};
+					Object.defineProperty(parent, key, {
+						value: mapping,
+						enumerable: true,
+						writable: true,
+						configurable: true,
+					});
+					parent = mapping;
+				}
 			}
-			if (value === undefined) delete parent[segments.at(-1)!];
-			else parent[segments.at(-1)!] = structuredClone(value);
+			const key = segments.at(-1)!;
+			if (value === undefined) delete parent[key];
+			else
+				Object.defineProperty(parent, key, {
+					value: structuredClone(value),
+					enumerable: true,
+					writable: true,
+					configurable: true,
+				});
 		};
 		const remaining = structuredClone(raw);
 		set(remaining, keys, undefined);
@@ -259,7 +319,7 @@ export class UserSettingsStore {
 			if (keys.every((key, index) => segments[index] === key)) return;
 			if (isRecord(value)) {
 				for (const [key, child] of Object.entries(value)) preserve(child, [...segments, key]);
-			} else if (!equal(value, leaf(after, segments))) result.push({ segments, value });
+			} else if (!settingValuesEqual(value, leaf(after, segments))) result.push({ segments, value });
 		};
 		preserve(before, []);
 		return result;
@@ -270,14 +330,10 @@ export class UserSettingsStore {
 			issues.push({ code: "missing", message: "User configuration does not exist; nothing was saved." });
 		const side = (loaded: LoadedSide): UserSettingValue => {
 			if (loaded.message) issues.push({ code: loaded.state, message: loaded.message });
-			if (loaded.state === "present")
-				for (let length = 1; length < keys.length; length++) {
-					const parent = leaf(loaded.raw, keys.slice(0, length));
-					if (parent !== undefined && parent !== null && !isRecord(parent)) {
-						issues.push({ code: "invalid", message: "Setting parent must be a mapping." });
-						return { readState: "invalid" };
-					}
-				}
+			if (loaded.state === "present" && this.#hasInvalidParent(loaded.raw, keys)) {
+				issues.push({ code: "invalid", message: "Setting parent must be a mapping." });
+				return { readState: "invalid" };
+			}
 			if (loaded.state === "present" || loaded.state === "missing") {
 				const value = leaf(loaded.raw, keys);
 				return { readState: value === undefined ? "missing" : "present", value };
@@ -286,14 +342,22 @@ export class UserSettingsStore {
 		};
 		const a = side(active);
 		const valid = issues.length === 0;
-		const activeReset = this.#resetMutations(active.raw, keys).map(mutation => [
-			mutation.segments,
-			leaf(active.raw, mutation.segments),
-		]);
 		const identity =
 			this.#revisionScope === "file"
 				? [this.#domain, active.file, active.source]
-				: [this.#domain, keys, active.file, canonical(a.value), canonical(activeReset)];
+				: [
+						this.#domain,
+						keys,
+						active.file,
+						canonical(a.value),
+						canonical(
+							this.#resetMutations(active.raw, keys).map(mutation => [
+								mutation.segments,
+								leaf(active.raw, mutation.segments),
+							]),
+						),
+						this.#legacyTheme(active.raw, keys),
+					];
 		return {
 			revision: valid ? createHash("sha256").update(JSON.stringify(identity)).digest("hex") : null,
 			...a,
@@ -347,71 +411,66 @@ export class UserSettingsStore {
 							"User configuration changed while acquiring locks. Read it before saving again.",
 						);
 					for (const mutation of mutations) {
-						if (mutation.checkBase && !equal(leaf(active.raw, mutation.segments), mutation.baseValue))
+						if (
+							mutation.checkBase &&
+							!settingValuesEqual(leaf(active.raw, mutation.segments), mutation.baseValue)
+						)
 							fail("revision_conflict", "A pending user setting conflicts with an external edit.");
-						for (let length = 1; length < mutation.segments.length; length++) {
-							const parent = leaf(active.raw, mutation.segments.slice(0, length));
-							if (parent !== undefined && parent !== null && !isRecord(parent))
-								fail("invalid_config", "Setting parent must be a mapping.");
-						}
+						if (this.#hasInvalidParent(active.raw, mutation.segments))
+							fail("invalid_config", "Setting parent must be a mapping.");
 					}
-					const prepare = (loaded: LoadedSide) => {
-						const edits = mutations.flatMap(mutation =>
-							mutation.value === undefined ? this.#resetMutations(loaded.raw, mutation.segments) : [mutation],
+					const migratedTargets: UserSettingMutation[] = [];
+					const edits = mutations.flatMap(mutation => {
+						const { segments, value } = mutation;
+						if (value === undefined || isExaEnabled(segments)) migratedTargets.push(mutation);
+						const theme = this.#legacyTheme(active.raw, segments);
+						if (theme !== undefined) return this.#legacyThemeEdit(theme, mutation);
+						if (value === undefined) return this.#resetMutations(active.raw, segments);
+						if (isExaEnabled(segments)) return [...this.#resetMutations(active.raw, segments).slice(1), mutation];
+						return [mutation];
+					});
+					const confirms = (raw: RawSettings): boolean => {
+						if (!edits.every(mutation => settingValuesEqual(leaf(raw, mutation.segments), mutation.value)))
+							return false;
+						if (!this.#migrate || migratedTargets.length === 0) return true;
+						const migrated = this.#migrate(structuredClone(raw));
+						return migratedTargets.every(mutation =>
+							settingValuesEqual(leaf(migrated, mutation.segments), mutation.value),
 						);
-						return {
-							edits,
-							source: edits.reduce(
-								(source, mutation) => setYamlConfigValue(source, mutation.segments, mutation.value),
-								loaded.source,
-							),
-						};
 					};
-					const activePrepared = prepare(active);
-					const commit = async (
-						loaded: LoadedSide,
-						prepared: { edits: readonly UserSettingMutation[]; source: string },
-					) => {
-						const { edits, source } = prepared;
-						if (edits.every(mutation => equal(leaf(loaded.raw, mutation.segments), mutation.value))) {
-							receipt.write = { status: "unchanged" };
-							if (this.#revisionScope === "file")
-								receipt.revision = this.#snapshot(loaded, mutations[0].segments).revision ?? undefined;
-							return;
-						}
-						const temp = `${loaded.file}.${randomUUID()}.tmp`;
-						let publishing = false;
+					if (confirms(active.raw)) {
+						receipt.write = { status: "unchanged" };
+						if (this.#revisionScope === "file") receipt.revision = snapshot.revision ?? undefined;
+					} else {
+						const source = edits.reduce(
+							(source, mutation) => setYamlConfigValue(source, mutation.segments, mutation.value),
+							active.source,
+						);
+						// Check what the serialized YAML actually supplies (including merge keys)
+						// before replacing the user's file.
+						const prepared = this.#parse(active.file, source);
+						if (prepared.message) fail("invalid_config", prepared.message);
+						if (!confirms(prepared.raw))
+							fail(
+								"invalid_config",
+								"Serialized configuration cannot apply the requested edit without changing its source.",
+							);
+						let published = false;
 						try {
-							await fs.mkdir(path.dirname(loaded.file), { recursive: true, mode: 0o700 });
-							const handle = await fs.open(temp, "wx", 0o600);
-							try {
-								await handle.writeFile(source, "utf8");
-								await handle.sync();
-							} finally {
-								await handle.close();
-							}
-							publishing = true;
-							await replaceFileAtomically(temp, loaded.file);
+							await writeFileAtomically(active.file, source);
+							published = true;
 							const readback = await this.#load(this.#activeDir);
-							if (
-								readback.file !== loaded.file ||
-								readback.message ||
-								(this.#requireExisting && readback.state !== "present") ||
-								!edits.every(mutation => equal(leaf(readback.raw, mutation.segments), mutation.value))
-							)
+							if (readback.file !== active.file || readback.state !== "present" || !confirms(readback.raw))
 								throw new Error("Configuration readback could not confirm the saved fields.");
 							receipt.write = { status: "saved" };
 							if (this.#revisionScope === "file")
 								receipt.revision = this.#snapshot(readback, mutations[0].segments).revision ?? undefined;
 						} catch (error) {
-							receipt.write = { status: publishing ? "unknown" : "failed", message: String(error) };
-							receipt.saveState = publishing ? "unknown" : "failed";
+							receipt.write = { status: published ? "unknown" : "failed", message: String(error) };
+							receipt.saveState = published ? "unknown" : "failed";
 							fail("persistence_failed", "User configuration persistence did not complete.");
-						} finally {
-							await fs.rm(temp, { force: true }).catch(() => {});
 						}
-					};
-					await commit(active, activePrepared);
+					}
 					receipt.saveState = "complete";
 					return receipt;
 				});

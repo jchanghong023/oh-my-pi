@@ -14,17 +14,30 @@ import {
 	resolveApproval,
 	resolveApprovalFromContext,
 } from "../approval";
+import type { CrawlBrowserOperation } from "../browser";
 import { expandTilde } from "../path-utils";
 import { enforcePlanModeWrite, targetsLocalSandbox } from "../plan-mode-guard";
 import { WriteTool } from "../write";
+
+/** Carry host-only ownership through AgentSession without passing it as prelude arguments. */
+class CrawlBrowserInvocation {
+	constructor(
+		readonly parameters: unknown,
+		readonly operation: CrawlBrowserOperation,
+	) {}
+}
 
 /** Invoke the live browser prelude using the owning session's normal authorization. */
 export async function crawlBrowserRequest(
 	session: AgentSession,
 	parameters: unknown,
 	signal?: AbortSignal,
+	operation?: CrawlBrowserOperation,
 ): Promise<AgentToolResult<unknown>> {
-	return session.invokeCrawlBrowser(parameters, signal);
+	return session.invokeCrawlBrowser(
+		operation ? new CrawlBrowserInvocation(parameters, operation) : parameters,
+		signal,
+	);
 }
 
 /** Create a new Markdown file without replacing an existing file. */
@@ -49,7 +62,14 @@ export async function invokeCrawlBrowserWithSession(
 	if (offlineFromEnv()) throw new Error("Browser is disabled in OMP_OFFLINE mode.");
 	const context = session.getToolContext?.();
 	if (!context) throw new Error("Browser crawl requires a live tool context.");
-	return invokeEvalPrelude("browser", parameters, { session, context, signal, toolCallId: `crawl-${randomUUID()}` });
+	const crawl = parameters instanceof CrawlBrowserInvocation ? parameters : undefined;
+	return invokeEvalPrelude("browser", crawl ? crawl.parameters : parameters, {
+		session,
+		context,
+		signal,
+		toolCallId: `crawl-${randomUUID()}`,
+		crawlBrowser: crawl?.operation,
+	});
 }
 
 export async function writeCrawlMarkdownWithSession(
@@ -93,7 +113,7 @@ export async function writeCrawlMarkdownWithSession(
 				throw new Error('Tool "write" requires approval but no interactive UI is available.');
 			}
 			const answer = await untilAborted(signal, () =>
-				requestApproval(context.ui!, tool, args, { reason: approval.reason }),
+				requestApproval(context.ui!, tool, args, { reason: approval.reason, signal }),
 			);
 			if (answer === "deny") throw new Error("Tool call denied by user: write");
 		}

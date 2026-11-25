@@ -133,6 +133,7 @@ class TeamConfigPanel {
 				(snapshot.userMembers !== undefined &&
 					!this.#dirty() &&
 					!this.#saving &&
+					(adoptRevision || this.#snapshot?.revision === this.#revision) &&
 					snapshot.revision !== this.#revision);
 			this.#snapshot = snapshot;
 			if (refreshDraft) {
@@ -142,6 +143,8 @@ class TeamConfigPanel {
 							? { ...slot.model, originalSelector: slot.rawSelector }
 							: { rawSelector: slot.rawSelector },
 					) ?? null;
+				this.#selected = Math.max(0, Math.min(this.#selected, (this.#draft?.length ?? 0) - 1));
+				this.#followSelection = true;
 				this.#baseline = JSON.stringify(this.#draft);
 				this.#revision = snapshot.revision;
 				this.#message = first ? "本地有序草稿；重复模型是独立代理槽位，保存后供后续讨论使用。" : "已重读外部配置。";
@@ -270,17 +273,17 @@ class TeamConfigPanel {
 			if (!this.#current()) return;
 			++this.#readGeneration;
 			this.#snapshot = result.config;
-			this.#message = `${result.saveState}：${result.effectiveMatchesRequested ? "保存且生效" : "已保存但有效值受高层覆盖"}；${printable(result.write)} ${result.effectiveNote ?? ""}`;
-			if (result.saveState === "complete") {
-				this.#baseline = JSON.stringify(this.#draft);
-				this.#revision = result.config.revision;
-			}
+			this.#message = `${result.saveState}：${result.effectiveMatchesRequested ? "保存且生效" : "已保存但未生效"}；${printable(result.write)} ${result.effectiveNote ?? ""}`;
+			this.#baseline = JSON.stringify(this.#draft);
+			this.#revision = result.config.revision;
 		} catch (error) {
 			if (!this.#current()) return;
 			++this.#readGeneration;
 			if (error instanceof TeamConfigError && error.data?.config) this.#snapshot = error.data.config;
 			if (error instanceof TeamConfigError) {
-				const write = error.data ? `${error.data.saveState}；${printable(error.data.write)}` : "";
+				const write = error.data
+					? `${error.data.write.status === "saved" ? "写入已提交；" : ""}${printable(error.data.write)}`
+					: "";
 				const issues = error.data?.issues?.map(issue => issue.message).join("；");
 				this.#message = `${error.code}：${error.message}；${write}${issues ? `；${issues}` : ""}。草稿保留；R 重读比较，禁止自动重试。`;
 			} else {

@@ -48,6 +48,8 @@ export interface MnemopiEmbeddingRuntimeOptions {
 	model?: string;
 	/** Whether the resolved remote embedding endpoint may be called. */
 	allowRemote?: (baseUrl: string) => boolean;
+	/** Redirect policy read before each attempt. `"error"` stops at the 3xx response without retrying it. */
+	requestRedirect?: () => RequestInit["redirect"];
 	/** Whether local inference and loading an uncached local model are allowed. */
 	allowLocal?: () => boolean;
 	allowLocalLoad?: () => boolean;
@@ -102,6 +104,7 @@ export interface ResolvedMnemopiEmbeddingRuntimeOptions {
 	disabled?: boolean;
 	model?: string;
 	allowRemote?: (baseUrl: string) => boolean;
+	requestRedirect?: () => RequestInit["redirect"];
 	allowLocal?: () => boolean;
 	allowLocalLoad?: () => boolean;
 	apiUrl?: string;

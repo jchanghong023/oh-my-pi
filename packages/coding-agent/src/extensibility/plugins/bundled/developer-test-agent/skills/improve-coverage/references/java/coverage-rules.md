@@ -15,12 +15,14 @@
 > **Windows 路径处理（重要）**：`{SKILL_DIR}` 替换为 skill 加载时提供的 "Base directory" 路径。在 Windows 上该路径含反斜杠（如 `C:\Users\...\skills\improve-coverage`）。**在 Bash 命令中必须将反斜杠替换为正斜杠**（如 `C:/Users/.../skills/improve-coverage/scripts/java/extract-maven-config.js`），否则反斜杠被 Bash 转义导致 `Cannot find module` 错误。
 
 ```bash
-node "{SKILL_DIR}/scripts/java/extract-maven-config.js" <projectDir>
+node "{SKILL_DIR}/scripts/java/extract-maven-config.js" "{projectDir}"
 ```
 
-- **有配置时**：`mvn test -q -Dtest={ClassName} -s "{settingsPath}" {mavenProperties}`
-- **无配置时**：`mvn test -q -Dtest={ClassName}`
-- 脚本无输出时从目标项目的 `AGENTS.md` 或 `DT_AGENTS.md` 读取 Maven 配置段，都没有则使用默认 Maven 命令。
+- `settingsPath` 非空时作为设置文件路径；`mavenProperties` 仅包含 Maven CLI 的 `-Dkey=value` 参数。直接执行 `mvn` 时，每条属性作为独立参数，含空格时给整个参数加引号。
+- `vmOptions` 非空时将原值存入 Bash 变量 `vmOptions`，通过命令级 `MAVEN_OPTS` 追加到已有 JVM 选项，不放入 Maven CLI 或 `codecovcli --param`。`codecovcli` 启动的 Maven 进程继承此环境变量。
+- 三个字段独立可选：缺少哪个就省略对应设置。脚本输出 `{}` 或无输出时，从目标项目的 `AGENTS.md` 或 `DT_AGENTS.md` 读取 Maven 配置段，都没有则使用默认命令。
+- **Maven 测试示例**：`MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }$vmOptions" mvn test -q -Dtest="{ClassName}" -s "{settingsPath}" {mavenProperties}`
+- **无配置时的 Maven 测试**：`mvn test -q -Dtest="{ClassName}"`
 
 ## 覆盖率获取优先级
 
@@ -29,11 +31,11 @@ node "{SKILL_DIR}/scripts/java/extract-maven-config.js" <projectDir>
 1. **首选 — codecovcli**：执行 `codecovcli analyze` 命令获取覆盖率数据
 2. **备选 — JaCoCo**：codecovcli 执行失败（未安装、命令报错、超时等）后，执行 `mvn clean test jacoco:report` 命令，再通过 `extract-jacoco-coverage.js` 脚本提取覆盖率数据
 
-两种方式输出的覆盖率缓存文件格式一致（`.codecovcli/cache/java_{className}.json`），后续未覆盖分析流程无需区分数据来源。
+两种方式输出的类级统计缓存文件格式一致（`.codecovcli/cache/java_{className}.json`）；JaCoCo 的行号明细仅为源文件级。
 
 ## codecovcli 覆盖率分析命令
 
-- **有配置时**：`codecovcli analyze --class "{sourceClass}" --tests "{testClass}" --scenario class-level --settings "{settingsPath}" --param "{mavenProperties}"`
+- **有配置时**：`MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }$vmOptions" codecovcli analyze --class "{sourceClass}" --tests "{testClass}" --scenario class-level --settings "{settingsPath}" --param "{mavenProperties}"`
 - **无配置时**：`codecovcli analyze --class "{sourceClass}" --tests "{testClass}" --scenario class-level`
 
 ## JaCoCo 覆盖率分析命令（备选）
@@ -43,21 +45,25 @@ codecovcli 执行失败后使用。Maven 配置提取逻辑与 codecovcli 一致
 **Step 1 — 提取 Maven 配置**：
 
 ```bash
-node "{SKILL_DIR}/scripts/java/extract-maven-config.js" <projectDir>
+node "{SKILL_DIR}/scripts/java/extract-maven-config.js" "{projectDir}"
 ```
 
 **Step 2 — 执行 JaCoCo 测试命令**：
 
-- **有配置时**：`mvn clean test jacoco:report -pl {module} -Dtest={testClass} -DfailIfNoTests=false -s "{settingsPath}" {mavenProperties}`
-- **无配置时**：`mvn clean test jacoco:report -pl {module} -Dtest={testClass} -DfailIfNoTests=false`
+`{testClass}` 使用实际运行的测试类全名（含包名）；步骤 3 使用同一值定位 Surefire 报告。
+
+- **有配置时**：`MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }$vmOptions" mvn clean test jacoco:report -pl "{module}" -Dtest="{testClass}" -DfailIfNoTests=false -s "{settingsPath}" {mavenProperties}`
+- **无配置时**：`mvn clean test jacoco:report -pl "{module}" -Dtest="{testClass}" -DfailIfNoTests=false`
 
 **Step 3 — 提取覆盖率数据**：
 
 ```bash
-node "{SKILL_DIR}/scripts/java/extract-jacoco-coverage.js" {className} {module}/target/site/jacoco/jacoco.xml
+node "{SKILL_DIR}/scripts/java/extract-jacoco-coverage.js" "{className}" "{module}/target/site/jacoco/jacoco.xml" "{module}/target/surefire-reports" "{testClass}"
 ```
 
-脚本从 `jacoco.xml` 中提取指定类的覆盖率信息，生成 `.codecovcli/cache/java_{className}.json`，格式与 codecovcli 输出一致。
+脚本从 `jacoco.xml` 提取目标类的行和分支覆盖率统计，写入 `.codecovcli/cache/java_{className}.json`。终端中的 `Source File Missed Lines` 和 `Source File Covered Lines` 汇总同一源文件中的所有类，不是目标类的行号列表。
+
+分析未覆盖语句和设计测试时，仅将 `Source File Missed Lines` 作为候选，并对照源码确认行号仅属于目标类。不把源文件行号当作完整的类级明细；无法确认归属时，仅报告类级统计并说明缺少可确认的目标类行号。
 
 ## 覆盖率分类规则
 

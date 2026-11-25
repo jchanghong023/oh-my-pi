@@ -529,6 +529,7 @@ fn plain_statement(
 		}
 	}
 	if names_path(k, &name)
+		|| std::str::from_utf8(&name).is_err()
 		|| xtrace::on(k, cx, vp)
 		|| state::option(&mut k.root, cx.store, vp, crate::bash::store::OptId::Posix).unwrap_or(true)
 		|| state::option(&mut k.root, cx.store, vp, crate::bash::store::OptId::Keyword)
@@ -1864,8 +1865,7 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 					break Resolved::Intrinsic(id).into();
 				}
 			}
-			// Native byte names cannot designate a shell function or builtin.
-			if via != Via::Builtin && (external_only || !utf8_name) {
+			if external_only {
 				break if has_slash {
 					Target::External(absolute(&vp.cwd, name))
 				} else {
@@ -1888,7 +1888,8 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 			// Outside posix mode a function name may contain a slash. A host
 			// command that comes before functions skips them
 			// ([`Host::preempts_functions`](crate::bash::Host::preempts_functions)).
-			if via == Via::Plain
+			if utf8_name
+				&& via == Via::Plain
 				&& (!has_slash || !posix)
 				&& !special
 				&& (has_slash || !cx.host.preempts_functions(BStr::new(name)))
@@ -2042,8 +2043,9 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 			.any(|(n, _)| n.as_slice() == b"PATH" || (windows && n.as_slice() == b"PATHEXT"));
 		let mut sc = exec::take_scratch(vp);
 		let name = sc.exec.as_ref().map_or_default(|e| e.argv[0].clone());
+		let utf8_name = std::str::from_utf8(&name).is_ok();
 		if sc.io.as_ref().is_none_or(|io| io.search.is_none()) {
-			let hashed = if preferred || std_path || temp_path || std::str::from_utf8(&name).is_err() {
+			let hashed = if preferred || std_path || temp_path || !utf8_name {
 				None
 			} else {
 				match state::record(cx.store, vp, Key::CmdHash(BStr::new(&name))) {
@@ -2116,7 +2118,7 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 				// zsh `pathdirs` names (with a slash) are not hashed.
 				if !preferred
 					&& !temp_path
-					&& std::str::from_utf8(&name).is_ok()
+					&& utf8_name
 					&& (vp.mode.dialect() != crate::bash::ids::Dialect::Zsh || !name.contains(&b'/'))
 					&& state::option(&mut k.root, cx.store, vp, crate::bash::store::OptId::Hashall)
 						.unwrap_or(true)
@@ -2142,7 +2144,7 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 				let rctx = ResolveCtx { has_slash: false, via: Via::Plain };
 				let target = if let Some(original) = fallback {
 					original
-				} else if exec.exec_as.is_some() || std::str::from_utf8(&name).is_err() {
+				} else if exec.exec_as.is_some() || !utf8_name {
 					Target::NotFound
 				} else if cx.host.defers_to_path(BStr::new(&name), &exec.argv) {
 					// A deferred command whose shadowed program `PATH` lacks:
@@ -4420,6 +4422,32 @@ fn keep_sourced_positional(k: &mut Kernel, store: &mut dyn StateStore, vp: &mut 
 	}
 }
 
+/// An external at the end of a submitted labeled subshell run stands
+/// for the run itself, unless the shell still owes its own EXIT trap.
+pub(super) fn labeled_run_tail(vp: &Vproc) -> bool {
+	if !vp.transient
+		|| vp.lineage.label == 0
+		|| vp.runs.is_empty()
+		|| vp.own_traps.has(crate::bash::store::TrapKey::Exit)
+	{
+		return false;
+	}
+	let [frame] = vp.frames.as_slice() else {
+		return false;
+	};
+	let FrameKind::Script { what: ScriptKind::Run, stdin: false, src, pos, aux } = &frame.kind
+	else {
+		return false;
+	};
+	pos.0 as usize >= src.len()
+		&& aux.as_ref().is_none_or(|aux| aux.pending.is_none())
+		&& frame
+			.unit
+			.as_ref()
+			.and_then(|unit| unit.ops.get(frame.pc as usize + 1))
+			.is_some_and(|op| op.code == ir::Opcode::End)
+}
+
 /// Wait for what the command started.
 fn await_(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, line: u32) -> Option<Flow> {
 	let platform = k.engine.config().platform;
@@ -4575,8 +4603,6 @@ fn await_(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, line: u32) ->
 			}
 		},
 		Some(Awaited::Ext { pid }) => {
-			let replacing = matches!(st(vp).control, Some(Transfer::Exec));
-			let run = vp.runs.front().map(|run| run.id);
 			// Owned: a stop event below needs the kernel mutably.
 			let waker = k.waker.clone();
 			let mut tcx = Context::from_waker(&waker);
@@ -4610,29 +4636,27 @@ fn await_(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, line: u32) ->
 				Some(ExitStatus::Signaled(sig)) => Some(sig),
 				_ => None,
 			};
-			let status = match exit {
-				Some(ExitStatus::Exited(code)) => {
-					reaped = true;
-					code
-				},
+			let (status, signal) = match exit {
+				Some(ExitStatus::Exited(code)) => (code, None),
 				Some(ExitStatus::Signaled(sig)) => {
-					reaped = true;
-					if replacing && let Some(run) = run {
-						k.run_signals
-							.insert(run, super::RunSignal::External(i32::from(sig.number(platform))));
-					}
-					sig.exit_status(platform)
+					(sig.exit_status(platform), Some(i32::from(sig.number(platform))))
 				},
-				Some(ExitStatus::SignaledRaw(signal)) => {
-					reaped = true;
-					if replacing && let Some(run) = run {
-						k.run_signals
-							.insert(run, super::RunSignal::External(signal));
-					}
-					128 + signal
-				},
-				None => lost(k, vp, cx, op, line, Lost::Ext { vpid: vp.vpid, pid }),
+				Some(ExitStatus::SignaledRaw(signal)) => (128 + signal, Some(signal)),
+				None => (lost(k, vp, cx, op, line, Lost::Ext { vpid: vp.vpid, pid }), None),
 			};
+			reaped = exit.is_some();
+			if let Some(signal) = signal && let Some(run) = vp.runs.front().map(|run| run.id) {
+				let provenance = if matches!(st(vp).control, Some(Transfer::Exec)) {
+					Some(super::RunSignal::External(signal))
+				} else if labeled_run_tail(vp) {
+					Some(super::RunSignal::TailExternal(signal))
+				} else {
+					None
+				};
+				if let Some(provenance) = provenance {
+					k.run_signals.insert(run, provenance);
+				}
+			}
 			if reaped && vp.parent.is_none() && k.jobctl.has_pgrp() {
 				let text = vp
 					.frames

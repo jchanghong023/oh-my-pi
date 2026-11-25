@@ -41,7 +41,7 @@ use std::{
 	task::{Context, Poll, Waker},
 };
 
-use bstr::{BString, ByteSlice};
+use bstr::{BStr, BString, ByteSlice};
 use omp_builtins::extras::{CommandRunner, CommandStatus, EnvChange, Fd, ShellCommand};
 use tokio_util::sync::CancellationToken;
 
@@ -174,7 +174,7 @@ impl Extra {
 		}
 		// The externals of an ended command are no longer its label's.
 		for label in self.ended.drain(..) {
-			turn.log.forget(&[label]);
+			turn.log.clear_records(&[label]);
 			self.spare.push(label);
 		}
 		let running = self.running.as_ref()?;
@@ -499,10 +499,7 @@ impl Lookup {
 			};
 		}
 		let raw_args = command.args()[1..].iter().any(|arg| arg.to_str().is_none());
-		let name_bytes = os_bytes(name);
-		let accepts_raw = IntrinsicId::lookup(&name_bytes, ModeId::Bash).is_some()
-			|| matches!(name_bytes.as_slice(), b"timeout" | b"nohup");
-		if self.builtin(name) && (!raw_args || accepts_raw) {
+		if self.builtin(BStr::new(name.as_encoded_bytes()), raw_args) {
 			return Ok(Program::Builtin);
 		}
 		let path = command
@@ -539,13 +536,20 @@ impl Lookup {
 	/// this shell offers, a shell the engine runs itself (`env bash -c …`,
 	/// `xargs sh -c …`), or a session command of the run in flight
 	/// ([`PiHost::resolve`](crate::host::PiHost)).
-	fn builtin(&self, name: &OsStr) -> bool {
-		let name = os_bytes(name);
-		IntrinsicId::lookup(&name, ModeId::Bash).is_some()
-			|| self.config.lookup(name.as_bstr()).is_some()
-			|| self.config.native_extra(name.as_bstr()).is_some()
-			|| crate::sys::shebang::is_self_shell(&name)
-			|| self.config.commands.lookup(name.as_bstr()).is_some()
+	fn builtin(&self, name: &BStr, raw_args: bool) -> bool {
+		if IntrinsicId::lookup(name, ModeId::Bash).is_some() {
+			return true;
+		}
+		if raw_args {
+			return self
+				.config
+				.lookup(name)
+				.is_some_and(super::accepts_raw_args);
+		}
+		self.config.lookup(name).is_some()
+			|| self.config.native_extra(name).is_some()
+			|| crate::sys::shebang::is_self_shell(name)
+			|| self.config.commands.lookup(name).is_some()
 	}
 }
 
@@ -607,7 +611,7 @@ mod tests {
 		let name = OsStr::from_bytes(b"command-\xff");
 		symlink("/bin/sh", dir.path().join(name)).unwrap();
 		symlink("/bin/false", dir.path().join(name.to_string_lossy().as_ref())).unwrap();
-		let lookup = Lookup {
+		let mut lookup = Lookup {
 			path:   Some(".".into()),
 			cwd:    dir.path().to_path_buf(),
 			config: ToolConfig::default(),
@@ -637,6 +641,28 @@ mod tests {
 					.any(|part| part == program.as_bytes())
 			);
 		}
+		let command =
+			ShellCommand::new(vec!["time".into(), "-l".into(), "/bin/cat".into(), name.into()]);
+		let resolved = lookup
+			.program(&command)
+			.expect("embedded time without a PATH binary");
+		assert!(matches!(resolved, Program::Builtin));
+		assert_eq!(script(command, &resolved, &[]).args.unwrap()[3].as_slice(), name.as_bytes());
+
+		let command = ShellCommand::new(vec!["urlmap".into(), name.into()]);
+		assert!(matches!(lookup.program(&command), Ok(Program::Builtin)));
+
+		let command = ShellCommand::new(vec!["git".into(), name.into()]);
+		assert!(
+			matches!(lookup.program(&command), Err(err) if err.kind() == io::ErrorKind::NotFound)
+		);
+		lookup.config.git.guard = true;
+		assert!(matches!(lookup.program(&command), Ok(Program::Builtin)));
+
+		let command = ShellCommand::new(vec!["xargs".into(), name.into()]);
+		assert!(
+			matches!(lookup.program(&command), Err(err) if err.kind() == io::ErrorKind::NotFound)
+		);
 	}
 
 	#[test]

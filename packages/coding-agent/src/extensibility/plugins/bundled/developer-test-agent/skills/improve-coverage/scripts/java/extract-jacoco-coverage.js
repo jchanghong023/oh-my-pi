@@ -2,11 +2,12 @@
  * 从 jacoco.xml 中提取指定类的覆盖率信息，从 surefire 报告中提取测试执行结果，
  * 生成 .codecovcli/cache 格式的 JSON 文件。
  *
- * 用法: node extract-jacoco-coverage.js <类名> <jacoco.xml路径> [surefire目录]
+ * 用法: node extract-jacoco-coverage.js <类名> <jacoco.xml路径> [surefire目录 [测试类全名]]
  * 示例: node extract-jacoco-coverage.js ConfigPublishEmailBuilder apollo-portal/target/site/jacoco/jacoco.xml
- *       node extract-jacoco-coverage.js ConfigPublishEmailBuilder apollo-portal/target/site/jacoco/jacoco.xml apollo-portal/target/surefire-reports
+ *       node extract-jacoco-coverage.js ConfigPublishEmailBuilder apollo-portal/target/site/jacoco/jacoco.xml apollo-portal/target/surefire-reports com.example.tests.ConfigPublishEmailBuilderTest
  *
  * 如果不指定 surefire 目录，会自动从 jacoco.xml 路径推断（同级 target/surefire-reports）。
+ * 指定测试类全名时，仅查找该类的 Surefire 报告。
  *
  * 输出: <cwd>/.codecovcli/cache/java_<类名>.json
  */
@@ -17,7 +18,7 @@ const path = require('path');
 // ========== 参数解析 ==========
 const args = process.argv.slice(2);
 if (args.length < 2) {
-  console.error('用法: node extract-jacoco-coverage.js <类名> <jacoco.xml路径> [surefire目录]');
+  console.error('用法: node extract-jacoco-coverage.js <类名> <jacoco.xml路径> [surefire目录 [测试类全名]]');
   console.error('示例: node extract-jacoco-coverage.js ConfigPublishEmailBuilder apollo-portal/target/site/jacoco/jacoco.xml');
   process.exit(1);
 }
@@ -25,6 +26,7 @@ if (args.length < 2) {
 const className = args[0];
 const jacocoXmlPath = path.resolve(args[1]);
 const surefireDirArg = args[2] ? path.resolve(args[2]) : null;
+const testClassArg = args[3];
 
 // ========== 读取 jacoco.xml ==========
 if (!fs.existsSync(jacocoXmlPath)) {
@@ -34,30 +36,26 @@ if (!fs.existsSync(jacocoXmlPath)) {
 const xml = fs.readFileSync(jacocoXmlPath, 'utf-8');
 
 // ========== 查找目标类及其所在 package ==========
-const packageRegex = /<package\s+name="([^"]+)">([\s\S]*?)<\/package>/g;
+const packageRegex = /<package\s+name="[^"]*">([\s\S]*?)<\/package>/g;
 let pkgMatch;
 let found = null;
 
 while ((pkgMatch = packageRegex.exec(xml)) !== null) {
-  const pkgName = pkgMatch[1];
-  const pkgContent = pkgMatch[2];
+  const pkgContent = pkgMatch[1];
 
   const classBlockRegex = /<class\s+name="([^"]+)"\s+sourcefilename="([^"]+)"[^>]*>([\s\S]*?)<\/class>/g;
   let classMatch;
   while ((classMatch = classBlockRegex.exec(pkgContent)) !== null) {
-    const fullName = classMatch[1];
-    const sourceFile = classMatch[2];
-    const classContent = classMatch[3];
-    const simpleName = fullName.split('/').pop();
-    const fullClassNameFromXml = fullName.replace(/\//g, '.');
+    const [, fullName, sourceFile, classContent] = classMatch;
+    const simpleName = fullName.slice(fullName.lastIndexOf('/') + 1);
+    if (simpleName !== className && fullName.replace(/\//g, '.') !== className) continue;
 
-    // 支持简单类名（如 PropertyCopier）或完整类名（如 org.apache.ibatis.reflection.property.PropertyCopier）
-    if (simpleName === className || fullClassNameFromXml === className) {
-      found = { fullName, sourceFile, classContent, pkgName, pkgContent };
-      break;
+    if (found) {
+      console.error(`jacoco.xml 中类名不唯一: ${className} (${found.fullName}, ${fullName})`);
+      process.exit(1);
     }
+    found = { fullName, sourceFile, classContent, pkgContent };
   }
-  if (found) break;
 }
 
 if (!found) {
@@ -117,7 +115,7 @@ function validateCoverageData(total, covered) {
   return { valid: true };
 }
 
-// ========== 从 sourcefile 中提取行级覆盖详情 ==========
+// ========== 从 sourcefile 中提取同一源文件中所有类的汇总行明细 ==========
 const missedLines = [];
 const coveredLines = [];
 
@@ -170,13 +168,12 @@ let testFileLines = 0;
 if (fs.existsSync(surefireDir)) {
   // 搜索匹配的 surefire 报告文件
   // 命名规则: TEST-<fully.qualified.TestClassName>.xml
-  // 测试类名尝试: ClassNameTest, ClassNameIT, ClassNameTestCase
-  const testClassSuffixes = ['Test', 'IT', 'TestCase'];
-  const pkgPrefix = found.fullName.substring(0, found.fullName.lastIndexOf('/') + 1); // com/ctrip/.../
+  const testFullNames = testClassArg
+    ? [testClassArg]
+    : [`${fullClassName}Test`, `${fullClassName}IT`, `${fullClassName}TestCase`];
   let surefireFile = null;
 
-  for (const suffix of testClassSuffixes) {
-    const testFullName = (pkgPrefix + className + suffix).replace(/\//g, '.');
+  for (const testFullName of testFullNames) {
     const candidate = path.join(surefireDir, `TEST-${testFullName}.xml`);
     if (fs.existsSync(candidate)) {
       surefireFile = candidate;
@@ -185,14 +182,16 @@ if (fs.existsSync(surefireDir)) {
     }
   }
 
-  // 如果精确匹配不到，模糊搜索包含类名的报告文件
-  if (!surefireFile) {
-    const files = fs.readdirSync(surefireDir);
-    const pattern = new RegExp(`^TEST-.*${escapeRegex(className)}.*\\.xml$`);
-    const matched = files.find(f => pattern.test(f));
-    if (matched) {
-      surefireFile = path.join(surefireDir, matched);
-      testName = matched.replace(/^TEST-/, '').replace(/\.xml$/, '');
+  // 非标准测试类名只在同包内唯一匹配时采用。
+  if (!surefireFile && !testClassArg) {
+    const nameStart = fullClassName.lastIndexOf('.') + 1;
+    const packagePrefix = escapeRegex(fullClassName.slice(0, nameStart));
+    const simpleName = escapeRegex(fullClassName.slice(nameStart));
+    const pattern = new RegExp(`^TEST-${packagePrefix}[^.]*${simpleName}[^.]*\\.xml$`);
+    const matches = fs.readdirSync(surefireDir).filter(f => pattern.test(f));
+    if (matches.length === 1) {
+      surefireFile = path.join(surefireDir, matches[0]);
+      testName = matches[0].slice(5, -4);
     }
   }
 
@@ -224,7 +223,7 @@ console.log('============================================================');
 console.log('  Java 代码覆盖率报告');
 console.log('============================================================');
 console.log('');
-console.log('汇总信息：');
+console.log('汇总信息（类级）：');
 console.log('行覆盖率 (Line Coverage):');
 printTable([
   ['已覆盖行数', String(lineCovered)],
@@ -242,9 +241,10 @@ if (testName) {
   console.log(`测试类：${testName}`);
   console.log(`测试用例数：${totalTests} (通过: ${passedTests}, 失败: ${failedTests}, 错误: ${errors}, 跳过: ${skippedTests})`);
 }
-console.log(`Missed Lines:`);
+console.log(`源文件行明细：${found.sourceFile}（汇总同一源文件中的所有类，非目标类行明细）`);
+console.log('Source File Missed Lines:');
 console.log(`  ${missedLines.join(', ')}`);
-console.log(`Covered Lines:`);
+console.log('Source File Covered Lines:');
 console.log(`  ${coveredLines.join(', ')}`);
 
 // ========== 构建输出 JSON ==========

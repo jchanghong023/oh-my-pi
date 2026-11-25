@@ -20,6 +20,7 @@ import {
 	type ExtensionProvider,
 	isShadowedExtension,
 } from "../../../extensibility/inventory/types";
+import type { SkillCatalogEntry } from "../../../extensibility/skills";
 import { stableKey } from "../pickers/format";
 import {
 	isDiscoveredMcpServer,
@@ -65,6 +66,16 @@ export type ListRow =
 export interface ListSwitch {
 	readonly on: boolean;
 	readonly blocked?: string;
+}
+
+/** Why a disabled skill must be enabled somewhere other than its row switch. */
+export function skillToggleBlock(ext: Extension): string | undefined {
+	if (ext.kind !== "skill" || ext.state !== "disabled") return undefined;
+	const skill = ext.raw as Pick<SkillCatalogEntry, "toggleBlocked"> | null | undefined;
+	if (skill?.toggleBlocked) return sanitizeDisplayLine(skill.toggleBlocked);
+	if (ext.disabledReason === "provider-disabled") return "Provider disabled";
+	if (ext.disabledReason === "user-opt-in") return "Skill source not enabled";
+	return undefined;
 }
 
 const DEFAULT_MAX_VISIBLE = 15;
@@ -285,9 +296,9 @@ export class ExtensionListModel {
 		else if (row?.type === "user-source") {
 			if (this.#provider(row.providerId)?.enabled !== false) this.callbacks.onUserSourceToggle?.(row.providerId);
 		} else if (row?.type === "extension") {
-			// A shadowed copy shares the winner's id: toggling it would flip the winner.
-			if (isShadowedExtension(row.item) || this.masterDisabled()) return;
-			this.callbacks.onToggle?.(row.item.id, row.item.state === "disabled");
+			const toggle = this.selectedSwitch()!;
+			if (toggle.blocked) return;
+			this.callbacks.onToggle?.(row.item.id, !toggle.on);
 		}
 		this.touch();
 	}
@@ -391,6 +402,8 @@ export class ExtensionListModel {
 				: { on: row.enabled };
 		const on = row.item.state !== "disabled";
 		if (isShadowedExtension(row.item)) return { on, blocked: "Shadowed by another source" };
+		const skillBlock = skillToggleBlock(row.item);
+		if (skillBlock) return { on, blocked: skillBlock };
 		if (this.masterDisabled()) return { on, blocked: "Provider disabled" };
 		return { on };
 	}

@@ -8,12 +8,14 @@
  * `launch` — see #1496 for the original "args silently leak to the LLM"
  * regression that motivated the split.
  */
+import * as path from "node:path";
 import type { CommandEntry } from "@oh-my-pi/pi-utils/cli";
 import * as commandHelp from "./cli/command-help";
 import {
 	EXTENSION_SHADOWABLE_STRING_FLAGS,
 	flagConsumesValue,
 	OPTIONAL_VALUE_FLAGS,
+	PROFILE_BOOTSTRAP_BOUNDARY_ARG,
 	STRING_VALUE_FLAGS,
 	VALUELESS_FLAGS,
 } from "./cli/flag-tables";
@@ -22,6 +24,81 @@ import type * as LaunchHelp from "./commands/launch-help";
 function loadLaunchHelp(): typeof LaunchHelp.launchHelp {
 	const module: typeof LaunchHelp = require("./commands/launch-help");
 	return module.launchHelp;
+}
+
+type ResourceCommandName = "openspec" | "superpowers";
+
+function resourceCommand(name: ResourceCommandName, description: string) {
+	return {
+		name,
+		help: { description },
+		async load() {
+			const { Command } = await import("@oh-my-pi/pi-utils/cli");
+			return class ResourceCommand extends Command {
+				static description = description;
+
+				async run(): Promise<void> {
+					await runResourceCommand(name, this.argv);
+				}
+			};
+		},
+	};
+}
+
+const RESOURCE_COMMANDS = {
+	openspec: resourceCommand("openspec", "Run the bundled OpenSpec CLI"),
+	superpowers: resourceCommand("superpowers", "Run a trusted bundled Superpowers skill script"),
+};
+
+export function isResourceCommand(name: string | undefined): name is ResourceCommandName {
+	return name !== undefined && Object.hasOwn(RESOURCE_COMMANDS, name);
+}
+
+/** Run resource commands outside the framework so downstream tools own their flags. */
+export async function runResourceCommand(
+	name: ResourceCommandName,
+	argv: string[],
+	cwd = process.cwd(),
+): Promise<void> {
+	const script = argv[0];
+	if (name === "superpowers" && (!script || script === "--help" || script === "-h")) {
+		const usage =
+			"Usage: omp superpowers <relative-skill-script> [args...]\n\nExamples:\n  omp superpowers skills/writing-skills/render-graphs.js <skill-directory>\n  omp superpowers skills/subagent-driven-development/scripts/review-package [-C DIR] <plan-file> <base> <head> [output-file]\n\nRuns only trusted bundled Superpowers skill scripts. Run SDD helpers from the working tree being executed; sdd-workspace, task-brief and review-package also accept -C DIR. JavaScript uses OMP's embedded Bun; shell scripts require Bash and POSIX utilities (Git Bash on Windows). Graph rendering also requires Graphviz (dot).\n";
+		if (script) {
+			process.stdout.write(usage);
+			process.exitCode = 0;
+		} else {
+			process.stderr.write(usage);
+			process.exitCode = 2;
+		}
+		return;
+	}
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	process.once("SIGINT", abort);
+	process.once("SIGTERM", abort);
+	try {
+		const { runOpenSpec, runSuperpowersScript } = await import("./spec-driven/resources");
+		const result =
+			name === "openspec"
+				? await runOpenSpec(
+						argv,
+						cwd,
+						controller.signal,
+						process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY ? "terminal" : "capture",
+					)
+				: await runSuperpowersScript(script, argv.slice(1), cwd, controller.signal);
+		process.stdout.write(result.stdout);
+		process.stderr.write(result.stderr);
+		process.exitCode = result.exitCode;
+	} catch (error) {
+		if (name === "openspec") throw error;
+		process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+		process.exitCode = 1;
+	} finally {
+		process.removeListener("SIGINT", abort);
+		process.removeListener("SIGTERM", abort);
+	}
 }
 
 export const commands: CommandEntry[] = [
@@ -175,6 +252,7 @@ export const commands: CommandEntry[] = [
 		load: () => import("./commands/models").then(m => m.default),
 		help: commandHelp.modelsHelp,
 	},
+	RESOURCE_COMMANDS.openspec,
 	{
 		name: "openwiki",
 		load: () => import("./commands/openwiki").then(m => m.default),
@@ -264,6 +342,7 @@ export const commands: CommandEntry[] = [
 		aliases: ["skills"],
 		help: commandHelp.skillHelp,
 	},
+	RESOURCE_COMMANDS.superpowers,
 	{
 		name: "ssh",
 		load: () => import("./commands/ssh").then(m => m.default),
@@ -334,12 +413,6 @@ for (const command of commands) {
 /** Commands that accept launch-global flags before their command token. */
 export const LAUNCH_FLAG_COMMANDS: Readonly<Record<string, true>> = { launch: true, acp: true };
 
-/** Commands whose trailing profile flags must be applied before their modules load. */
-export const PROFILE_FLAG_COMMANDS: Readonly<Record<string, true>> = {
-	...LAUNCH_FLAG_COMMANDS,
-	openwiki: true,
-};
-
 /** Whether a token names a registered top-level command or alias. */
 export function isSubcommand(first: string | undefined): boolean {
 	if (!first || first.startsWith("-") || first.startsWith("@")) return false;
@@ -407,7 +480,20 @@ export function reservedTopLevelWordMessage(argv: readonly string[]): string | u
 	return undefined;
 }
 
-export type ResolvedCliArgv = { argv: string[] } | { error: string };
+export type ResolvedCliArgv = { argv: string[]; cwd?: string } | { error: string };
+
+/** Only cwd and bootstrap globals can precede a resource command. */
+function hasResourcePrefix(argv: readonly string[], end: number): boolean {
+	for (let index = 0; index < end; index += 1) {
+		const arg = argv[index];
+		if (arg === "--cwd" || arg === "--profile" || arg === "-P" || arg === "--alias") {
+			index += 1;
+		} else if (!arg.startsWith("--cwd=") && !arg.startsWith("--profile=") && !arg.startsWith("--alias=")) {
+			return false;
+		}
+	}
+	return true;
+}
 
 /**
  * Index of the first argv token that names a registered subcommand, skipping
@@ -416,12 +502,17 @@ export type ResolvedCliArgv = { argv: string[] } | { error: string };
  * scanning hits a non-subcommand positional, an end-of-options `--`, or the end
  * of argv first.
  */
-function leadingSubcommandIndex(argv: string[]): number {
+export function leadingSubcommandIndex(argv: readonly string[]): number {
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (arg === "--") return -1;
-		if (!arg.startsWith("-")) return isSubcommand(arg) ? index : -1;
-		if (flagConsumesValue(arg, argv[index + 1])) index += 1;
+		if (!arg.startsWith("-")) {
+			if (!isSubcommand(arg)) return -1;
+			return isResourceCommand(arg) && !hasResourcePrefix(argv, index) ? -1 : index;
+		}
+		const next = argv[index + 1];
+		if (arg === PROFILE_BOOTSTRAP_BOUNDARY_ARG && next === "openwiki") return index + 1;
+		if (flagConsumesValue(arg, next)) index += 1;
 	}
 	return -1;
 }
@@ -450,6 +541,7 @@ function stripLaunchGlobalFlags(leading: readonly string[]): string[] {
 	const kept: string[] = [];
 	for (let index = 0; index < leading.length; index += 1) {
 		const arg = leading[index];
+		if (arg === PROFILE_BOOTSTRAP_BOUNDARY_ARG) continue;
 		if (isLaunchGlobalFlag(arg)) {
 			if (flagConsumesValue(arg, leading[index + 1])) index += 1;
 			continue;
@@ -486,6 +578,17 @@ export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
 	if (subIndex >= 0) {
 		const sub = argv[subIndex];
 		const leading = argv.slice(0, subIndex);
+		if (isResourceCommand(sub)) {
+			let cwd: string | undefined;
+			for (let index = 0; index < leading.length; index += 1) {
+				const arg = leading[index];
+				if (arg === "--cwd") cwd = leading[++index];
+				else if (arg.startsWith("--cwd=")) cwd = arg.slice("--cwd=".length);
+				else return { error: `Unsupported option before ${sub}: ${arg}` };
+				if (!cwd) return { error: "--cwd requires a directory" };
+			}
+			return { argv: argv.slice(subIndex), cwd: cwd === undefined ? undefined : path.resolve(cwd) };
+		}
 		const trailing = argv.slice(subIndex + 1);
 		const forwardedLeading = LAUNCH_FLAG_COMMANDS[sub] === true ? leading : stripLaunchGlobalFlags(leading);
 		return { argv: [sub, ...forwardedLeading, ...trailing] };

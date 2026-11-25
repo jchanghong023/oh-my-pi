@@ -233,6 +233,7 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[], live 
 			...(live && running ? { startedAtMs: latest.startTime } : {}),
 			...(latest.endTime !== undefined ? { settledAtMs: latest.endTime } : {}),
 			...(exitCode !== undefined ? { exitCode } : {}),
+			...(latest.type === "bash" && latest.latestDetails?.timedOut === true ? { timedOut: true } : {}),
 			...(wallTimeMs !== undefined ? { wallTimeMs, wallTimeNoticeEmitted: true } : {}),
 			...(resolvedModel ? { resolvedModel } : {}),
 			...(resolvedModelIdentity ? { resolvedModelIdentity } : {}),

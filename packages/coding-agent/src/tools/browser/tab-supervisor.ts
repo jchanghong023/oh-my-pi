@@ -212,6 +212,10 @@ export interface AcquireTabOptions {
 	waitUntil?: "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
 	viewport?: Viewport;
 	target?: string;
+	/** Reject an existing tab name rather than reusing or replacing it. */
+	createOnly?: boolean;
+	/** For an owned relay open, require the browser instance named by this target. */
+	nearTargetId?: string;
 	signal?: AbortSignal;
 	timeoutMs: number;
 	/**
@@ -269,6 +273,8 @@ export interface RunInTabOptions {
 	session: ToolSession;
 	/** The call is a direct `tab.waitForDownload()`. */
 	waitsForDownload?: boolean;
+	/** Run only on the captured tab, even if its name is reassigned during recovery. */
+	expectedTab?: TabSession;
 }
 
 export interface ReleaseTabOptions {
@@ -282,7 +288,7 @@ export interface ReleaseTabOptions {
 }
 
 const tabs = new Map<string, TabSession>();
-// Headless targets a worker created before dying during init (page-created).
+// Targets a worker created before dying during init (page-created).
 // A killed worker can't close its own page; the supervisor closes the
 // recorded target instead. A shared browser's other targets must never be
 // touched.
@@ -576,6 +582,10 @@ async function acquireTabImpl(
 	// browser hold nobody is waiting for.
 	if (opts.signal?.aborted) {
 		throw new ToolAbortError("Browser tab open aborted");
+	}
+	if (opts.createOnly && tabs.has(name)) throw new ToolError(`Tab ${JSON.stringify(name)} already exists`);
+	if (opts.nearTargetId !== undefined && (browser.kind.kind !== "relay" || opts.target !== undefined)) {
+		throw new ToolError("A nearby target can only select the browser for an owned relay tab");
 	}
 	killedTabs.delete(name);
 	// Temporary refCount hold so releasing an existing tab on the SAME browser
@@ -1260,6 +1270,7 @@ export async function runInTab(name: string, opts: RunInTabOptions): Promise<Run
 			signal: opts.signal,
 			session: opts.session,
 			waitsForDownload: opts.waitsForDownload,
+			expectedTab: opts.expectedTab,
 		},
 		{
 			cwd: opts.session.cwd,
@@ -1274,7 +1285,7 @@ export async function runInTab(name: string, opts: RunInTabOptions): Promise<Run
 	});
 	// A worker that exited with no run in flight left the reset unreported; this call reports it. Runs an open
 	// makes on the tab leave it for the open to report.
-	const tab = tabs.get(name);
+	const tab = opts.expectedTab ?? tabs.get(name);
 	if (tab?.backend === "worker" && tab.workerExitNotice) {
 		result.displays.unshift({ type: "text", text: tab.workerExitNotice });
 		tab.workerExitNotice = undefined;
@@ -1292,6 +1303,7 @@ interface RunTabOptions {
 	/** This run follows a re-adoption that a detach before the previous attempt caused; it is not retried again. */
 	readopted?: boolean;
 	waitsForDownload?: boolean;
+	expectedTab?: TabSession;
 }
 
 /** A call registered in its tab's `pending`. */
@@ -1310,6 +1322,7 @@ async function runInTabWithSnapshot(
 	opts: RunTabOptions,
 	snapshot: SessionSnapshot,
 ): Promise<RunResultOk> {
+	if (opts.expectedTab && tabs.get(name) !== opts.expectedTab) throw new ToolError(notAliveMessage(name));
 	// Chrome refused this tab's last re-adoption over another extension's frame: re-adopt it first, a reattach this
 	// call and any beside it wait for as for one after a worker exit.
 	readoptHeldOutTab(name, opts.timeoutMs);
@@ -1326,6 +1339,7 @@ async function runInTabWithSnapshot(
 		opts = { ...opts, timeoutMs: Math.max(1, opts.timeoutMs - Math.round(performance.now() - waitStartedAt)) };
 	}
 	const tab = tabs.get(name);
+	if (opts.expectedTab && tab !== opts.expectedTab) throw new ToolError(notAliveMessage(name));
 	if (!tab || tab.state === "dead") {
 		const killed = killedTabs.get(name);
 		throw new ToolError(
@@ -1509,12 +1523,9 @@ async function dispatchRun(
 		}
 		const hungReason = `Browser code execution hung past its ${opts.timeoutMs}ms budget`;
 		try {
-			const result = await raceWithTimeout(
-				promise,
-				opts.timeoutMs + GRACE_MS,
-				hungReason,
-				async reason => await forceKillTab(name, reason),
-			);
+			const result = await raceWithTimeout(promise, opts.timeoutMs + GRACE_MS, hungReason, async reason => {
+				if (tabs.get(name) === tab) await forceKillTab(name, reason);
+			});
 			if (result.recoverTab) {
 				const reattached = await recoverWorkerTab(
 					tab,
@@ -1858,7 +1869,7 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 	return await releaseKnownTab(tab, opts);
 }
 
-async function releaseKnownTab(tab: TabSession, opts: ReleaseTabOptions): Promise<boolean> {
+export async function releaseKnownTab(tab: TabSession, opts: ReleaseTabOptions = {}): Promise<boolean> {
 	const name = tab.name;
 	if (strictTabs.has(tab)) opts.strict = true;
 	if (opts.strict) {
@@ -2195,11 +2206,14 @@ async function releaseTabStrict(
 		);
 	} else {
 		const scope = sharedTargetScopeOf(tab.browser);
-		await strictCleanupStage(tab, "worker", timeoutMs, "tab worker termination", async () => {
-			if (progress.wasAlive && !(tab.worker as ExitTrackedWorker)[kWorkerExited]) {
+		// Give the worker a bounded chance to finalize recording and close, without
+		// consuming the termination budget if it never acknowledges the close.
+		const closeGraceMs = Math.min(GRACE_MS, timeoutMs);
+		await strictCleanupStage(tab, "worker", closeGraceMs + timeoutMs, "tab worker termination", async () => {
+			if (progress.wasAlive && !tab.heldOut && !(tab.worker as ExitTrackedWorker)[kWorkerExited]) {
 				try {
 					tab.worker.send({ type: "close", keepPage: opts.keepPage });
-					await waitForClosed(tab);
+					await waitForClosed(tab, closeGraceMs);
 				} catch {
 					// Target closure below is authoritative, but termination must settle.
 				}
@@ -2227,10 +2241,12 @@ async function releaseTabStrict(
 			} catch (error) {
 				// A page timeout can leave CDP work pending forever. The guarded
 				// health check is independently bounded and proves every page gone
-				// only after the broker confirms the unreachable daemon stopped.
+				// only after the broker confirms exit of this browser generation.
 				if (!stoppedSharedBrowsers.has(tab.browser)) {
 					const generation = tab.browser.daemonLease?.unit.generation;
-					if (!scope || !(await stopSharedBrowserIfUnreachable({ ...scope, generation }))) throw error;
+					if (!scope || !generation || !(await stopSharedBrowserIfUnreachable({ ...scope, generation }))) {
+						throw error;
+					}
 					stoppedSharedBrowsers.add(tab.browser);
 				}
 				progress.done.add("page");
@@ -2716,9 +2732,12 @@ async function buildInitPayload(browser: PuppeteerBrowserHandle, opts: AcquireTa
 	const userDriven = browser.kind.kind === "connected" || browser.kind.kind === "relay";
 	let page: AttachPage;
 	if (browser.kind.kind === "relay" && !opts.target) {
-		// A relay open without a target gets its own background tab, leaving the user's
-		// selected tab alone, in the browser of the tab omp used last on this relay.
-		page = { kind: "create", nearTargetId: lastUsedTargetOn(browser) };
+		// An ordinary relay open picks the browser of the last tab used. A crawl pins
+		// its entry tab's browser and must not fall back to another profile.
+		page =
+			opts.nearTargetId === undefined
+				? { kind: "create", nearTargetId: lastUsedTargetOn(browser) }
+				: { kind: "create", nearTargetId: opts.nearTargetId, requireNearTarget: true };
 	} else if (
 		!opts.target &&
 		(browser.kind.kind === "connected" ||
@@ -3320,13 +3339,13 @@ function closeAbandonedWorkerPage(browser: PuppeteerBrowserHandle, worker: Worke
 		.finally(() => void releaseBrowser(browser, { kill: false }).catch(() => undefined));
 }
 
-async function waitForClosed(tab: WorkerTabSession): Promise<void> {
+async function waitForClosed(tab: WorkerTabSession, timeoutMs = GRACE_MS): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
 	const unsubscribe = tab.worker.onMessage(msg => {
 		if (msg.type === "closed") resolve();
 	});
 	try {
-		await raceWithTimeout(promise, GRACE_MS, "Timed out closing browser tab worker");
+		await raceWithTimeout(promise, timeoutMs, "Timed out closing browser tab worker");
 	} finally {
 		unsubscribe();
 	}
@@ -3618,9 +3637,8 @@ async function initializeTabWorker(
 	};
 	const unlisten = worker.onMessage(msg => {
 		if (msg.type === "page-created") {
-			// Record the headless target before the (potentially slow)
-			// post-creation CDP work: if this init is killed before ready,
-			// the supervisor closes exactly this target.
+			// Record the owned target before any potentially slow post-creation CDP work.
+			// If this init fails or is killed before ready, the supervisor closes exactly this target.
 			workerPageTargets.set(worker, msg.targetId);
 		} else if (msg.type === "setup") {
 			setupDone = true;

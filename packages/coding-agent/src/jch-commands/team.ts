@@ -11,6 +11,7 @@
  * - everything else (config errors, missing session model) is reported by the
  *   controller without running stages.
  */
+import { isRecord } from "@oh-my-pi/pi-utils";
 import type {
 	ParsedSlashCommand,
 	SlashCommandResult,
@@ -39,10 +40,11 @@ function detachSubmittedImages(runtime: TuiSlashCommandRuntime): boolean {
 	return true;
 }
 
-async function handleTeamCommand(
+export async function handleTeamCommand(
 	command: ParsedSlashCommand,
 	runtime: SlashCommandRuntime,
-): Promise<SlashCommandResult> {
+	echoReport = !runtime.runCommandInBackground,
+): Promise<Extract<SlashCommandResult, { consumed: true }>> {
 	const question = command.args.trim();
 	if (question === "configure") {
 		await runtime.output("Team 配置请在 TUI 中运行 /team configure。此命令不发起讨论。");
@@ -55,14 +57,34 @@ async function handleTeamCommand(
 	// Deferred import keeps command registration free of the orchestrator's
 	// module graph (executor -> extensions -> builtin-registry -> here).
 	const { startTeamDiscussion } = await import("../team/controller");
-	await startTeamDiscussion(question, {
+	const jobs = runtime.session.asyncJobManager;
+	const discussion = await startTeamDiscussion(question, {
 		session: runtime.session,
 		settings: runtime.settings,
 		cwd: runtime.cwd,
+		signal: runtime.signal,
+		echoReport,
 		hooks: {
 			output: text => runtime.output(text),
 		},
 	});
+	const job = discussion.jobId ? jobs?.getJob(discussion.jobId) : undefined;
+	if (job && runtime.runCommandInBackground) {
+		// RPC can admit more input while the report runs, but must keep its
+		// command abort signal live until the job finishes delivery.
+		runtime.runCommandInBackground(() => job.promise);
+		return { consumed: true };
+	}
+	await job?.promise;
+	if (job?.status === "failed") {
+		const result = job.structured?.data;
+		return isRecord(result) && result.costCapped === true
+			? { consumed: true, failed: true, costCapped: true }
+			: { consumed: true, failed: true };
+	}
+	if (!discussion.started && !discussion.registrationRefused && !runtime.signal?.aborted) {
+		return { consumed: true, failed: true };
+	}
 	return { consumed: true };
 }
 

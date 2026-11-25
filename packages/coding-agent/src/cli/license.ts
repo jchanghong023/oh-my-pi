@@ -5,12 +5,7 @@ import license from "../../LICENSE" with { type: "text" };
 import cliNotices from "../../THIRD-PARTY-NOTICES.txt" with { type: "text" };
 import { isOpenWikiSourceCheckout } from "../openwiki/resource-dependencies";
 import { openWikiResourceFingerprint } from "../openwiki/resource-fingerprint";
-import {
-	isOpenWikiArchiveStale,
-	loadOpenWikiArchive,
-	type OpenWikiArchive,
-	readOpenWikiLicenseAssets,
-} from "../openwiki/visual-assets";
+import { isOpenWikiArchiveStale, loadOpenWikiArchive, readOpenWikiLicenseAssets } from "../openwiki/visual-assets";
 
 /** Render the embedded license notices in a stable display order. */
 export function renderOpenWikiLicenseSections(licenses: ReadonlyMap<string, string>): string[] {
@@ -27,37 +22,34 @@ export function renderOpenWikiLicenseSections(licenses: ReadonlyMap<string, stri
 
 async function openWikiNotices(): Promise<string[]> {
 	const root = path.resolve(import.meta.dir, "../../../..");
+	const sourceCheckout = !process.env.PI_COMPILED && !process.env.PI_BUNDLED && isOpenWikiSourceCheckout(root);
 	const vendorLicense = path.join(root, "vendor/openwiki/LICENSE");
 	const unavailable = [
 		"OpenWiki resources are unavailable. Initialize the OpenWiki submodule and run bun run gen:openwiki-resources.",
 	];
-	let archive: OpenWikiArchive | undefined;
+	let noticeStatus = "not generated";
 	try {
-		archive = await loadOpenWikiArchive();
+		const archive = await loadOpenWikiArchive();
+		if (sourceCheckout) {
+			if (!existsSync(vendorLicense)) return unavailable;
+			if (isOpenWikiArchiveStale(archive.sourceFingerprint, openWikiResourceFingerprint(root))) {
+				noticeStatus = "stale";
+			}
+		}
+		if (noticeStatus !== "stale")
+			return renderOpenWikiLicenseSections(await readOpenWikiLicenseAssets(archive.files));
+	} catch (error) {
+		if (!sourceCheckout) throw error;
+		// Archive or fingerprint inputs are unavailable; keep the source license when possible.
+	}
+	try {
+		return [
+			`OpenWiki License\n\n${readFileSync(vendorLicense, "utf8")}`,
+			`OpenWiki browser notices are ${noticeStatus}. Run bun run gen:openwiki-resources.`,
+		];
 	} catch {
-		// Missing or placeholder generated resources are reported with the vendor fallback below.
+		return unavailable;
 	}
-	if (!archive) {
-		try {
-			return [
-				`OpenWiki License\n\n${readFileSync(vendorLicense, "utf8")}`,
-				"OpenWiki browser notices are not generated. Run bun run gen:openwiki-resources.",
-			];
-		} catch (licenseError) {
-			if ((licenseError as NodeJS.ErrnoException).code !== "ENOENT") throw licenseError;
-			return unavailable;
-		}
-	}
-	if (!process.env.PI_COMPILED && !process.env.PI_BUNDLED && isOpenWikiSourceCheckout(root)) {
-		if (!existsSync(vendorLicense)) return unavailable;
-		if (isOpenWikiArchiveStale(archive.sourceFingerprint, openWikiResourceFingerprint(root))) {
-			return [
-				`OpenWiki License\n\n${readFileSync(vendorLicense, "utf8")}`,
-				"OpenWiki browser notices are stale. Run bun run gen:openwiki-resources.",
-			];
-		}
-	}
-	return renderOpenWikiLicenseSections(await readOpenWikiLicenseAssets(archive.files));
 }
 
 /** Include OMP, OpenWiki and the notices for bundled native and browser dependencies. */

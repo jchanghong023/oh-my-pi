@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- The default Linux offline cache keeps statistics private without modifying directory permissions during reads.
 - On Windows, stats uses the upstream port-holder lookup order while preserving the PowerShell filter needed to identify the process.
 
 ## [19.1.1] - 2026-11-23

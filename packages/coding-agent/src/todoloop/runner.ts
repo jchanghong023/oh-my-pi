@@ -102,9 +102,8 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 		const event = (type: TodoLoopAttemptEvent["type"], fields: Partial<TodoLoopAttemptEvent> = {}): void => {
 			options.onAttempt?.({ type, id, group: activeGroup, attempt, ...fields });
 		};
-		state("running");
-		event("start");
 		let cancelError: unknown;
+		let announced = false;
 		const cancel = (): void => {
 			state("stopping");
 			try {
@@ -113,12 +112,10 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 				cancelError = error;
 			}
 		};
-		options.signal?.addEventListener("abort", cancel, { once: true });
-		if (options.signal?.aborted) cancel();
 		let result: EvalHandleSnapshot | undefined;
 		let executionError: string | undefined;
 		let fileError: string | undefined;
-		let acceptingProgress = true;
+		let acceptingProgress = false;
 		let progress = Promise.resolve();
 		const onProgress = (details?: AsyncJobDetails): void => {
 			if (!acceptingProgress) return;
@@ -135,16 +132,31 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 					cancel();
 				});
 		};
+		options.signal?.addEventListener("abort", cancel, { once: true });
 		try {
-			try {
-				result = await native.wait(id, options.signal, onProgress);
-				if (result.status === "running") {
-					executionError = "Native wait returned before the agent completed.";
+			// The handle may have registered just before cancellation reached us.
+			// Settle it in either case, but only present attempts that started.
+			if (options.signal?.aborted) {
+				cancel();
+			} else {
+				state("running");
+				if (!options.signal?.aborted) {
+					announced = true;
+					event("start");
+				}
+			}
+			if (announced) {
+				acceptingProgress = true;
+				try {
+					result = await native.wait(id, options.signal, onProgress);
+					if (result.status === "running") {
+						executionError = "Native wait returned before the agent completed.";
+						cancel();
+					}
+				} catch (error) {
+					executionError = errorText(error);
 					cancel();
 				}
-			} catch (error) {
-				executionError = errorText(error);
-				cancel();
 			}
 			await native.settle(id);
 			acceptingProgress = false;
@@ -153,7 +165,11 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 		} catch (error) {
 			acceptingProgress = false;
 			await progress;
-			event("end", { error: errorText(error), details: native.session.asyncJobManager?.getJob(id)?.latestDetails });
+			if (announced)
+				event("end", {
+					error: errorText(error),
+					details: native.session.asyncJobManager?.getJob(id)?.latestDetails,
+				});
 			return state("settlement_failed", errorText(error));
 		} finally {
 			acceptingProgress = false;
@@ -163,7 +179,9 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 		const job = native.job(id);
 		const text = result?.text ?? job.resultText;
 		const error = result?.error ?? executionError ?? job.errorText;
-		event("end", { text: activeGroup ? text : undefined, error, status: job.status, details: job.latestDetails });
+		if (announced) {
+			event("end", { text: activeGroup ? text : undefined, error, status: job.status, details: job.latestDetails });
+		}
 		if (fileError) return state("file_error", fileError);
 		try {
 			await reread(activeGroup?.id);

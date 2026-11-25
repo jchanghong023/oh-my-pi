@@ -4624,7 +4624,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		if (args.headerOnlyAuth) {
 			// The gateway header builder synthesizes a bearer even with no API key.
 			// Keep an explicit header as supplied, including differently cased names.
-			const authorization = requestModelHeaders["cf-aig-authorization"];
+			const authorization = getHeaderCaseInsensitive(requestModelHeaders, "cf-aig-authorization");
 			if (authorization === undefined) delete defaultHeaders["cf-aig-authorization"];
 			else defaultHeaders["cf-aig-authorization"] = authorization;
 		}

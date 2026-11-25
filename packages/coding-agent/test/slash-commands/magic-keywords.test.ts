@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import {
 	buildAvailableSlashCommands,
 	type AvailableCommandsSession,
-	toAcpAvailableCommands,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -19,7 +18,7 @@ describe("magic keyword public slash dispatch", () => {
 				await executeBuiltinSlashCommand(editor, {
 					ctx: {
 						session: { model: undefined },
-						editor: {
+						composer: {
 							setText: (text: string) => {
 								editor = text;
 							},
@@ -34,7 +33,7 @@ describe("magic keyword public slash dispatch", () => {
 });
 
 describe("public command inventory", () => {
-	it("keeps upstream RPC discovery and hides builtin colon-prefix collisions from ACP clients", async () => {
+	it("omits builtin colon-prefix collisions from the shared command inventory", async () => {
 		const session = {
 			customCommands: [
 				{ command: { name: "model:company", description: "Unreachable shared shadow" } },
@@ -48,10 +47,7 @@ describe("public command inventory", () => {
 			{ name: "models:company", description: "Unreachable alias shadow", content: "body", source: "test" },
 			{ name: "review:file", description: "Reachable file command", content: "body", source: "test" },
 		]);
-		const sources = Object.fromEntries(commands.map(command => [command.name, command.source]));
-		expect(sources["model:company"]).toBe("custom");
-		expect(sources["models:company"]).toBe("file");
-		const names = toAcpAvailableCommands(commands).map(command => command.name);
+		const names = commands.map(command => command.name);
 		expect(names).not.toContain("model:company");
 		expect(names).not.toContain("models:company");
 		expect(names).toContain("review:company");
@@ -86,7 +82,7 @@ describe("JCH input method target handoff", () => {
 		const prompt = await executeBuiltinSlashCommand(editorText, {
 			ctx: {
 				session: { model: undefined },
-				editor: {
+				composer: {
 					setText: (text: string) => {
 						editorText = text;
 					},

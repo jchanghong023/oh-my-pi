@@ -1,6 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type WasmGrammarInfo, type WasmGrammarQuery, wasmGrammarFor } from "@oh-my-pi/pi-natives";
+import { __ompSetGrammarDir, type WasmGrammarInfo, type WasmGrammarQuery, wasmGrammarFor } from "@oh-my-pi/pi-natives";
+import {
+	getPrivateNativeCacheUid,
+	prepareLinuxPrivateCacheDirectory,
+	resolveLinuxPrivateCacheRoot,
+} from "@oh-my-pi/pi-natives/offline-root";
 import { getNativeGrammarsDir, logger, offlineFromEnv, withFileLock } from "@oh-my-pi/pi-utils";
 import { withDownload } from "../downloads/activity";
 import { downloadFile } from "./tools-manager";
@@ -108,6 +113,29 @@ export function installGrammar(info: WasmGrammarInfo, dir: string = getNativeGra
 	return install;
 }
 
+async function installDefaultGrammar(info: WasmGrammarInfo): Promise<boolean> {
+	const dir = getNativeGrammarsDir();
+	if (!(await installGrammar(info, dir))) return false;
+	const privateCacheRoot = resolveLinuxPrivateCacheRoot();
+	if (!privateCacheRoot) return true;
+	const uid = getPrivateNativeCacheUid(path.dirname(dir), privateCacheRoot);
+	if (uid === undefined) return true;
+
+	// The addon may have started while the shared-memory cache was unavailable.
+	try {
+		if (!prepareLinuxPrivateCacheDirectory(dir, uid, { create: false })) return false;
+		__ompSetGrammarDir(dir);
+		return true;
+	} catch (error) {
+		logger.warn("grammar: cache unavailable; files in this language are skipped", {
+			language: info.language,
+			file: info.file,
+			error: String(error),
+		});
+		return false;
+	}
+}
+
 /**
  * Make sure the wasm grammar for `query` (a `lang` alias or a file `path`) is
  * installed, downloading it on first use. Returns `true` without network
@@ -118,7 +146,7 @@ export function installGrammar(info: WasmGrammarInfo, dir: string = getNativeGra
 export async function ensureGrammar(query: WasmGrammarQuery): Promise<boolean> {
 	const info = wasmGrammarFor(query);
 	if (!info || info.installed) return true;
-	return installGrammar(info);
+	return installDefaultGrammar(info);
 }
 
 /**
@@ -131,7 +159,7 @@ export async function ensureGrammars(languages: readonly string[]): Promise<bool
 		languages.map(lang => {
 			const info = wasmGrammarFor({ lang });
 			if (!info) return false;
-			return info.installed || installGrammar(info);
+			return info.installed || installDefaultGrammar(info);
 		}),
 	);
 	return installed.includes(true);

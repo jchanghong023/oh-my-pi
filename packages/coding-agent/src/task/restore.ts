@@ -5,7 +5,7 @@
  *
  * Every persisted subagent transcript under the session ({@link collectSubSessions})
  * that its process left mid-turn ({@link hasRestorableTurn}), was not killed (no
- * tombstone) and can be revived (a `session_init` contract, not isolated) runs one
+ * tombstone) and can be cold-revived runs one
  * more monitored turn as a background job of its parent: the lifecycle reviver
  * rebuilds it from its transcript, {@link runSubagentFollowUpTurn} goes on with the
  * cut-off turn and drives it to `yield` (then through the steps a stepped run had not
@@ -24,7 +24,7 @@ import { extractSessionInit } from "../session/session-manager";
 import { collectSubSessions } from "../session/sub-sessions";
 import type { EventBus } from "../utils/event-bus";
 import { runSubagentFollowUpTurn, softRequestBudgetFor } from "./executor";
-import { persistedAgentDefinition, persistedAgentName } from "./persisted-revive";
+import { canColdReviveSubagent, persistedAgentDefinition, persistedAgentName } from "./persisted-revive";
 import { readStepProgress } from "./steps";
 import { formatTaskResultSummary } from "./result-summary";
 import { cfgTaskMaxRuntimeMs } from "./settings";
@@ -78,7 +78,7 @@ async function restoreSubagents(session: AgentSession, options: RestoreOptions):
 		const id = sub.agentId;
 		const ref = registry.get(id);
 		const init = extractSessionInit(sub.entries);
-		if (!ref?.sessionFile || ref.kind !== "sub" || !init || init.isolated) {
+		if (!ref?.sessionFile || ref.kind !== "sub" || ref.history?.executionEnded || !canColdReviveSubagent(init)) {
 			logger.debug("Interrupted subagent cannot be revived; not restored", { id });
 			continue;
 		}

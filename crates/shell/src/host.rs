@@ -605,9 +605,8 @@ impl crate::bash::Host for PiHost {
 		Resolved::NotFound
 	}
 
-	fn accepts_raw_args(&self, name: &BStr, resolved: &Resolved) -> bool {
-		matches!(resolved, Resolved::Tool(_))
-			&& matches!(name.as_bytes(), b"timeout" | b"nohup" | b"time")
+	fn accepts_raw_args(&self, _name: &BStr, resolved: &Resolved) -> bool {
+		matches!(resolved, Resolved::Tool(tool) if crate::tools::accepts_raw_args(*tool))
 	}
 
 	/// On Windows, a utility written in the syntax of the System32 program it
@@ -1009,6 +1008,18 @@ impl ExtProc for Observed {
 		Poll::Ready(status)
 	}
 
+	fn poll_event(&mut self, cx: &mut Context<'_>) -> Poll<crate::bash::ProcEvent> {
+		let event = std::task::ready!(self.child.poll_event(cx));
+		if matches!(event, crate::bash::ProcEvent::Exited(_)) {
+			self.release();
+		}
+		Poll::Ready(event)
+	}
+
+	fn pgid(&self) -> Option<u32> {
+		self.child.pgid()
+	}
+
 	fn signal(&mut self, sig: Signal) -> io::Result<()> {
 		self.child.signal(sig)
 	}
@@ -1023,7 +1034,7 @@ impl ExtProc for Observed {
 		pids: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
-	) -> bool {
+	) -> Option<std::collections::HashSet<i32>> {
 		self.child.signal_wave(sig, pids, extra, groups)
 	}
 

@@ -18,6 +18,7 @@ import { reset as resetCapabilities } from "../capability";
 import { skillCapability } from "../capability/skill";
 import type { EffectiveExtensionRoots, SourceMeta } from "../capability/types";
 import type { Settings } from "../config/settings";
+import { withActiveSettings } from "../config/settings-context";
 import { cfgDisabledExtensions, cfgSkills, type SkillsSettings } from "./settings";
 import {
 	type Skill as CapabilitySkill,
@@ -89,7 +90,10 @@ export interface SkillCatalogEntry extends Skill {
 	_source: SourceMeta;
 	frontmatter?: SkillFrontmatter;
 	content: string;
+	/** Effective disable reason before the dashboard overlays an explicit row disable. */
 	disabledReason?: "item-disabled" | "provider-disabled" | "user-opt-in" | "skill-config";
+	/** Effective disable condition that the dashboard's per-item switch cannot clear. */
+	toggleBlocked?: string;
 }
 
 export interface LoadSkillCatalogResult {
@@ -524,9 +528,9 @@ export async function loadSkillCatalog(
 				if (entry.realPath !== realPath) continue;
 				const existing = skillMap.get(name)!;
 				if (entry.shared || existing._source.provider === CUSTOM_DIR_PROVIDER_ID) return undefined;
-				// Shared can promote this file, but it keeps the original raw name
-				// for filters and cannot replace a plugin's canonical ownership.
-				if (existing.containRoot !== undefined) {
+				// Shared can promote this file without replacing its plugin ownership or
+				// pre-substituted Markdown. Legacy plugins have only the install root.
+				if (existing.containRoot !== undefined || existing.pluginRoot !== undefined) {
 					skill = { ...existing, _source: { ...existing._source, providerName: "Shared" } };
 					body = entry.body;
 					frontmatter = entry.frontmatter;
@@ -701,15 +705,25 @@ export async function loadSkillCatalog(
 	const skills = Array.from(skillMap.values());
 	for (const skill of skills) {
 		const rawName = admitted.get(skill.name)?.rawName ?? skill.name;
-		if (
-			!enabled ||
-			matchesIgnorePatterns(rawName) ||
-			matchesIgnorePatterns(skill.name) ||
-			!matchesIncludePatterns(skill.name)
-		) {
+		const configBlock = !enabled
+			? "skills.enabled is false"
+			: matchesIgnorePatterns(rawName) || matchesIgnorePatterns(skill.name)
+				? "Matches skills.ignoredSkills"
+				: !matchesIncludePatterns(skill.name)
+					? "Does not match skills.includeSkills"
+					: undefined;
+		if (configBlock) {
 			skill.disabledReason = "skill-config";
+			skill.toggleBlocked = configBlock;
+		} else if (skill.disabledReason === "provider-disabled") {
+			skill.toggleBlocked = "Provider disabled";
+		} else if (skill.disabledReason === "user-opt-in") {
+			skill.toggleBlocked = "Skill source not enabled";
 		} else if (disabledSkillNames.has(rawName) || disabledSkillNames.has(skill.name)) {
 			skill.disabledReason = "item-disabled";
+			if (rawName !== skill.name && disabledSkillNames.has(rawName)) {
+				skill.toggleBlocked = `Bare name skill:${rawName} is disabled`;
+			}
 		}
 	}
 	if (manualSkills.length > 0) {
@@ -789,13 +803,17 @@ async function rediscoverHostSkills(host: SkillRediscoveryHost): Promise<readonl
 	clearPluginRootsAndCaches();
 	resetCapabilities();
 	if (host.refreshSkills) return host.refreshSkills();
-	if (!host.settings) return host.skills;
-	const discovered = await loadSkills({
-		...cfgSkills.get(host.settings),
-		cwd: host.cwd,
-		disabledExtensions: cfgDisabledExtensions.get(host.settings),
-		extensionRoots: host.extensionRoots,
-	});
+	const { settings } = host;
+	if (!settings) return host.skills;
+	const discovered = await withActiveSettings(settings, () =>
+		loadSkills({
+			...cfgSkills.get(settings),
+			cwd: host.cwd,
+			agentDir: settings.getAgentDir(),
+			disabledExtensions: cfgDisabledExtensions.get(settings),
+			extensionRoots: host.extensionRoots,
+		}),
+	);
 	const repointed: Skill[] = [];
 	for (const skill of host.skills) {
 		if (!(await isMissingFile(skill.filePath))) {

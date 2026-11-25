@@ -156,6 +156,7 @@ export type StatusTopLook = {
 /** Terminal look facts of a bar (`omp.status`). */
 export type StatusBarLook = {
 	readonly groups: "both" | "left";
+	readonly topChipInset?: number;
 	/** Segments of another bar to draw (the chrome's bars borrow the panel's). */
 	readonly segs?: readonly UiNode[];
 };
@@ -245,7 +246,10 @@ export function createStatusLine(props: StatusLineProps): {
 				}}
 				role="omp.status"
 				transparent={() => props.settings().transparent === true}
-				term={(): StatusBarLook => ({ groups: props.placement().bar === "left" ? "left" : "both" })}
+				term={(): StatusBarLook => {
+					const placement = props.placement();
+					return { groups: placement.bar === "left" ? "left" : "both", topChipInset: placement.topChipInset ?? 0 };
+				}}
 			>
 				<For each={keys}>
 					{key => {
@@ -289,8 +293,13 @@ export function createStatusLine(props: StatusLineProps): {
 }
 
 /** Where the standalone bar goes for a composer `shape` (its top chrome takes the status through `composerStatus`). */
-export function shapePlacement(shape: ComposerShape, autocomplete: boolean): StatusPlacement {
-	return { bar: shape.bottomBar ?? "none", gap: shape.bottomBarGap === true, autocomplete };
+export function shapePlacement(shape: ComposerShape, autocomplete: boolean, paddingX?: number): StatusPlacement {
+	const bar = shape.bottomBar ?? "none";
+	const topChipInset =
+		bar === "left" && shape.statusAttachment === "top-rule-chip" && paddingX !== undefined
+			? 2 * shape.sideWidth(paddingX)
+			: 0;
+	return { bar, gap: shape.bottomBarGap === true, autocomplete, ...(topChipInset ? { topChipInset } : {}) };
 }
 
 export function StatusLine(props: StatusLineProps): JSXNode {

@@ -1,3 +1,4 @@
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import {
 	type ArtifactAllocator,
 	DEFAULT_MAX_BYTES,
@@ -38,6 +39,7 @@ export interface JsExecutorOptions {
 	signal?: AbortSignal;
 	sessionId: string;
 	parentToolCallId?: string;
+	toolContext?: AgentToolContext;
 	/** Logical owner identifier; scopes retained-worker cleanup. */
 	kernelOwnerId?: string;
 	reset?: boolean;
@@ -187,6 +189,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 				signal,
 				onReply: options.onReply,
 				parentToolCallId: options.parentToolCallId,
+				toolContext: options.toolContext,
 				onText: chunk => outputSink.push(chunk),
 				onDisplay: output => {
 					if (output.type === "status") {

@@ -76,6 +76,7 @@ export interface ComposerRowContext extends ComposerChromeContext {
 	readonly last: boolean;
 	/** Cells an end-of-row caret took from the right chrome's padding. */
 	readonly overflow: number;
+	/** Leave the cells after the hardware caret clear for IME preedit text. */
 	readonly imeSafeTail?: boolean;
 }
 
@@ -323,8 +324,10 @@ const field: ComposerShape = {
 	paddingX: 1,
 	sideWidth: paddingX => paddingX + 1,
 	row(cx) {
-		const interior = `${" ".repeat(cx.paddingX)}${cx.gutter}${cx.text}${cx.pad}${" ".repeat(rightCells(cx) - 1)}`;
-		return [cx.accent("▐") + cx.surface(interior) + cx.accent("▌")];
+		const left = cx.accent("▐");
+		const body = " ".repeat(cx.paddingX) + cx.gutter + cx.text;
+		if (cx.imeSafeTail) return [left + cx.surface(body)];
+		return [left + cx.surface(body + cx.pad + " ".repeat(rightCells(cx) - 1)) + cx.accent("▌")];
 	},
 };
 

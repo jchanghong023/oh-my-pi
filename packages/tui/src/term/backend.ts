@@ -306,6 +306,7 @@ export class TermBackend {
 	readonly #hover: Signal<PointerHover | null> = signal<PointerHover | null>(null);
 	readonly #hyperlinks: Signal<boolean>;
 	readonly #textSizing: Signal<boolean>;
+	readonly #viewportHeight = signal(1);
 	readonly #offlineLinux =
 		process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
 	#tick: Timer | undefined;
@@ -372,6 +373,7 @@ export class TermBackend {
 			theme: options.theme,
 			clock: cadence => this.#animationTime(cadence),
 			focus: options.surface.focused,
+			viewportHeight: this.#viewportHeight,
 			reduceMotion: this.#reduceMotion,
 			hover: this.#hover,
 			hyperlinks,
@@ -389,7 +391,10 @@ export class TermBackend {
 		if (this.#committed.size > 0 || this.#emitted.size > 0) this.#requestReplay();
 		this.#unsubscribe.push(
 			this.#driver.onInput(event => this.#routeInput(event, true)),
-			this.#driver.onResize(() => this.requestRender()),
+			this.#driver.onResize((_columns, rows) => {
+				this.#viewportHeight.set(Math.max(1, rows));
+				this.requestRender();
+			}),
 			this.#driver.onCapabilities(capabilities => {
 				this.#hyperlinks.set(capabilities.hyperlinks);
 				this.#textSizing.set(capabilities.textSizing);
@@ -519,6 +524,7 @@ export class TermBackend {
 	 */
 	#composeWatched(): FramePlan {
 		this.#disposeWatch?.();
+		this.#viewportHeight.set(Math.max(1, this.#driver.rows));
 		let plan: FramePlan | undefined;
 		createRoot(dispose => {
 			this.#disposeWatch = dispose;
@@ -691,7 +697,7 @@ export class TermBackend {
 
 	#compose(): FramePlan {
 		const width = Math.max(1, this.#driver.columns);
-		const height = Math.max(1, this.#driver.rows);
+		const height = this.#viewportHeight.peek();
 		const flush = this.#flushing;
 		const hits: { hit: Hit; top: number; left: number }[] = [];
 		let cursor: Cell | null = null;
@@ -1063,6 +1069,7 @@ export class TermBackend {
 	}
 
 	#onInput(event: InputEvent): void {
+		const hover = this.#offlineLinux && event.type === "mouse" ? this.#hover.peek() : null;
 		batch(() => {
 			switch (event.type) {
 				case "key":
@@ -1082,8 +1089,16 @@ export class TermBackend {
 					break;
 			}
 		});
-		// Offline, an actual invalidation during input promotes its frame; no-op reports cannot.
-		if (!this.#offlineLinux) this.requestRender();
+		// After the first invalidation the watcher is disarmed until the queued frame paints.
+		// A key or paste can still promote it; unchanged pointer reports must not.
+		if (
+			!this.#offlineLinux ||
+			(this.#frameRequested &&
+				(event.type === "paste" ||
+					(event.type === "key" && event.key.kind !== "release") ||
+					(event.type === "mouse" && this.#hover.peek() !== hover)))
+		)
+			this.requestRender();
 	}
 
 	#onKey(key: KeyEvent): void {

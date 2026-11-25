@@ -136,7 +136,7 @@ screenSuite("parent-irc", corpusCase => {
 	};
 });
 
-test("displays background process statuses and task diagnostics without duplicating task status receipts", () => {
+test("displays process receipts and task diagnostics without automatic task status rows", () => {
 	const message = {
 		customType: "async-result",
 		content: "results",

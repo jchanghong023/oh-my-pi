@@ -70,6 +70,8 @@ export interface TeamOrchestratorOptions {
 	signal: AbortSignal;
 	/** `task.maxConcurrency`; bounds parallel subagents in every fan-out stage. */
 	maxConcurrency: number;
+	/** Shared permit pool when the caller owns a live session. */
+	semaphore?: Semaphore;
 	onProgress?: (update: TeamProgressUpdate) => void;
 }
 
@@ -159,6 +161,7 @@ function trackReview(record: TeamProposalRecord, review: TeamReviewOutput): Team
 interface TeamCallDiagnosticsOutcome {
 	ok: boolean;
 	error?: string;
+	costCapped?: boolean;
 	data?: unknown;
 	diagnostics: Record<string, unknown>;
 }
@@ -217,6 +220,12 @@ function buildCandidates(state: TeamDiscussionState, runId: string, completed: b
 	});
 }
 
+function artifactFailureNotes(results: TeamRunResult["subagentResults"]): string[] {
+	return (results ?? []).flatMap(({ label, outcome }) =>
+		!outcome.ok && outcome.artifactError !== undefined ? [`${label}：原稿发布失败：${outcome.artifactError}`] : [],
+	);
+}
+
 export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promise<TeamRunResult> {
 	const logContext = logger.getLogContext();
 	const teamRunId =
@@ -228,13 +237,19 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		recommendedProposal: "",
 		recommendationPreconditions: "",
 	};
-	const completeResult = (result: TeamDiscussionOutcome): TeamRunResult => ({
-		...result,
-		runId: teamRunId,
-		inputVersion,
-		candidates: buildCandidates(state, teamRunId, result.status === "completed"),
-		interpretationDifferences: state.interpretationDifferences,
-	});
+	const completeResult = (result: TeamDiscussionOutcome): TeamRunResult => {
+		const artifactFailures = result.status === "failed" ? artifactFailureNotes(result.subagentResults) : [];
+		return {
+			...result,
+			...(artifactFailures.length
+				? { failureReason: [result.failureReason, ...artifactFailures].filter(Boolean).join("\n") }
+				: {}),
+			runId: teamRunId,
+			inputVersion,
+			candidates: buildCandidates(state, teamRunId, result.status === "completed"),
+			interpretationDifferences: state.interpretationDifferences,
+		};
+	};
 	return logger.withLogContext(
 		{ team_run_id: teamRunId, operation_id: logContext.operation_id ?? teamRunId },
 		async () => {
@@ -293,7 +308,7 @@ async function runTeamDiscussionImpl(
 	state: TeamDiscussionState,
 ): Promise<TeamDiscussionOutcome> {
 	const { question, cwd, participants, runner, signal } = options;
-	const semaphore = new Semaphore(options.maxConcurrency);
+	const semaphore = options.semaphore ?? new Semaphore(options.maxConcurrency);
 	const participantStatus = new Map<
 		string,
 		{
@@ -547,9 +562,11 @@ async function runTeamDiscussionImpl(
 
 	const viable = records.filter(record => !record.proposerFailed);
 	if (viable.length === 0) {
+		const costCapped = subagentResults.some(({ outcome }) => !outcome.ok && outcome.costCapped);
 		diagnostics.reason = "all_proposers_failed";
 		return {
 			status: "failed",
+			...(costCapped ? { costCapped } : {}),
 			failureReason: `所有提案子代理均失败，独立调查阶段无法完成（不输出半成品结论）：${records
 				.map(record => `${record.label}：${record.exclusionReason ?? "提案输出不符合结构化要求"}`)
 				.join("；")}`,
@@ -579,6 +596,7 @@ async function runTeamDiscussionImpl(
 		emitProgress("alignment", "阶段二：对齐与比较（对齐子调用失败）");
 		return {
 			status: "failed",
+			...(alignmentOutcome.costCapped ? { costCapped: true } : {}),
 			failureReason: `对齐子调用失败（${alignmentOutcome.error ?? "输出不符合结构化要求"}），流程未完成，不输出半成品结论`,
 		};
 	}
@@ -664,9 +682,13 @@ async function runTeamDiscussionImpl(
 		if (signal.aborted) return { status: "cancelled" };
 
 		if (reviewed.length === 0) {
+			const costCapped = subagentResults.some(
+				({ role, outcome }) => role === "reviewer" && !outcome.ok && outcome.costCapped,
+			);
 			diagnostics.reason = "all_reviewers_failed";
 			return {
 				status: "failed",
+				...(costCapped ? { costCapped } : {}),
 				failureReason: "全部审查子代理失败，无法完成必要审查（不静默改成单模型并宣称团队流程完成）",
 			};
 		}
@@ -910,6 +932,7 @@ async function runTeamDiscussionImpl(
 		emitProgress("synthesis", "阶段五：汇总方案（综合子调用失败）");
 		return {
 			status: "failed",
+			...(synthesisOutcome.costCapped ? { costCapped: true } : {}),
 			failureReason: `综合子调用失败（${synthesisOutcome.error ?? "输出不符合结构化要求"}），流程未完成，不输出半成品结论`,
 		};
 	}
@@ -946,7 +969,7 @@ async function runTeamDiscussionImpl(
 	state.recommendedProposal = synthesis.recommendedProposal.trim();
 	state.recommendationPreconditions = synthesis.recommendationPreconditions;
 
-	const participationNotes: string[] = [];
+	const participationNotes = artifactFailureNotes(subagentResults);
 	for (const record of records) {
 		const issues = [
 			record.proposerFailed ? `方案 ${record.label} 提案子代理失败（${record.participant.modelPattern}）` : "",

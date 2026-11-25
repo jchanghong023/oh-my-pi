@@ -181,6 +181,8 @@ export interface StatusFacts {
  */
 export interface StatusPlacement {
 	readonly bar: "full" | "left" | "none";
+	/** Cells on both sides of the composer's rule chip, excluded from its fit, not the bottom row. */
+	readonly topChipInset?: number;
 	readonly gap: boolean;
 	readonly autocomplete: boolean;
 }

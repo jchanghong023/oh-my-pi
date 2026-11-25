@@ -22,7 +22,7 @@ import { shortenPath } from "../../../utils/render-utils";
 import "../../styles/panels/extensions";
 import { stableKey } from "../pickers/format";
 import type { ExtensionInspectorModel } from "./extension-inspector-model";
-import type { ExtensionListModel } from "./extension-list-model";
+import { type ExtensionListModel, skillToggleBlock } from "./extension-list-model";
 import type { ExtensionDashboardModel, InspectorScrollRequest } from "./extensions-dashboard-model";
 import {
 	CATALOG_ITEMS,
@@ -387,7 +387,12 @@ function status(ext: Extension, glyph: (key: string) => string): TspSpan[] {
 		case "active":
 			return [{ s: "success", t: `${glyph("status.enabled")} ${enablementLabel(ext.state)}` }];
 		case "disabled":
-			return [{ s: "dim", t: `${glyph("status.disabled")} ${enablementLabel(ext.state, ext.disabledReason)}` }];
+			return [
+				{
+					s: "dim",
+					t: `${glyph("status.disabled")} ${enablementLabel(ext.state, ext.disabledReason, undefined, skillToggleBlock(ext))}`,
+				},
+			];
 		case "shadowed":
 			return [
 				{

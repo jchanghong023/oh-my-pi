@@ -8,12 +8,13 @@
  * rules around the header and the footer, the transcript scrolled between
  * them (j/k, g/G, PgUp/PgDn, the wheel) and following its end.
  */
-import { For, type JSXNode, untrack } from "@oh-my-pi/pi-tui";
+import { computed, effect, For, type JSXNode, type UiNode, untrack } from "@oh-my-pi/pi-tui";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { sanitizeErrorLine } from "../../../modes/view-model/chrome/error-block";
 import { formatContextUsage } from "../../status/format";
+import type { FocusHost } from "../../shell/overlays";
 import "../../styles/panels/agent-transcript-viewer";
 import { AssistantMessageBlock } from "../../transcript/messages/assistant-message";
 import { ParentIrcMessage } from "../../transcript/messages/async-cards";
@@ -127,9 +128,15 @@ function Stats(props: { readonly model: AgentTranscriptViewerModel }): JSXNode {
 	);
 }
 
-export function AgentTranscriptViewer(props: { readonly model: AgentTranscriptViewerModel }): JSXNode {
+export function AgentTranscriptViewer(props: {
+	readonly model: AgentTranscriptViewerModel;
+	readonly focus?: Pick<FocusHost, "focused" | "focus">;
+}): JSXNode {
 	const { model } = props;
 	const id = model.deps.agentId;
+	let card: UiNode | undefined;
+	let draft: UiNode | undefined;
+	const sendable = computed(() => (model.rev(), model.sendable));
 	const transcript = (
 		<col key="transcript" grow={1}>
 			<TranscriptBlocks>
@@ -140,6 +147,9 @@ export function AgentTranscriptViewer(props: { readonly model: AgentTranscriptVi
 	const editor = (
 		<editor
 			key="input"
+			ref={node => {
+				draft = node;
+			}}
 			text={() => (model.rev(), model.draft.text)}
 			cursor={() => (model.rev(), model.draft.cursor)}
 			maxLines={4}
@@ -153,6 +163,12 @@ export function AgentTranscriptViewer(props: { readonly model: AgentTranscriptVi
 		/>
 	);
 	const field = <col role="omp.field">{editor}</col>;
+	const focus = props.focus;
+	if (focus)
+		effect(() => {
+			// An ended execution removes the draft, but the card still owns the viewer's keys.
+			if (!sendable() && card && focus.focused() === draft) focus.focus(card);
+		});
 	/** A part of the card rebuilt whenever the model changes. */
 	const part = (build: () => JSXNode) => () => {
 		model.rev();
@@ -161,6 +177,9 @@ export function AgentTranscriptViewer(props: { readonly model: AgentTranscriptVi
 	return (
 		<card
 			role="omp.hub.transcript"
+			ref={node => {
+				card = node;
+			}}
 			head={[
 				{ s: "accent", t: "Agent Hub" },
 				{ s: "dim", t: ` ${SEP} ` },
@@ -213,7 +232,7 @@ export function AgentTranscriptViewer(props: { readonly model: AgentTranscriptVi
 					)
 				);
 			})}
-			{part(() => model.sendable && field)}
+			{() => sendable() && field}
 			{part(() => (
 				<Stats model={model} />
 			))}

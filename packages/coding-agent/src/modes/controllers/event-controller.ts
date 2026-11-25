@@ -394,6 +394,7 @@ export class EventController {
 	 * until the next loop starts or the run ends.
 	 */
 	#showingAsyncWait = false;
+	#unsubscribeAsyncWait?: () => void;
 	/**
 	 * The user ended a wait on outside work ({@link stopAwaitingAsyncWork}): the
 	 * run's next `agent_end` is a user interrupt, though its messages are the
@@ -428,6 +429,7 @@ export class EventController {
 	constructor(
 		private ctx: InteractiveModeContext,
 		private readonly observeCompact?: (event: AgentSessionEvent) => void,
+		private readonly refreshCompact?: () => void,
 	) {
 		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
 		// tiny/smol role with this session's registry and credentials; the
@@ -562,6 +564,7 @@ export class EventController {
 
 	dispose(): void {
 		this.#dispatchGeneration++;
+		this.#clearAsyncWait();
 		this.#detachToolApprovalPreviewWaiter?.();
 		this.#detachToolApprovalPreviewWaiter = undefined;
 		this.#clearApprovalPreviewGates();
@@ -1253,6 +1256,7 @@ export class EventController {
 		this.#pendingMessageUpdate = undefined;
 		this.#pendingMessageRestart = false;
 		this.#dispatchGeneration++;
+		this.#clearAsyncWait();
 		this.#resetReadGroup();
 		this.#lastVisibleBlockCount = 0;
 		this.#renderedCustomMessages.clear();
@@ -1419,7 +1423,7 @@ export class EventController {
 		// Something outside woke the run: the row stops naming the wait and
 		// follows this loop's intents again.
 		if (this.#showingAsyncWait) {
-			this.#showingAsyncWait = false;
+			this.#clearAsyncWait();
 			this.ctx.setWorkingMessage();
 		}
 		this.#readToolCallArgs.clear();
@@ -2568,6 +2572,13 @@ export class EventController {
 		this.#showingAsyncWait = true;
 		this.ctx.ensureWorkingRow();
 		this.ctx.setWorkingMessage(() => formatAsyncWaitLabel(session.wakeSources), false);
+		if (this.refreshCompact) this.#unsubscribeAsyncWait ??= session.subscribeWakeState(this.refreshCompact);
+	}
+
+	#clearAsyncWait(): void {
+		this.#showingAsyncWait = false;
+		this.#unsubscribeAsyncWait?.();
+		this.#unsubscribeAsyncWait = undefined;
 	}
 
 	/** The main run is paused waiting only on outside sources, and the interrupt key would end that wait. */
@@ -2620,7 +2631,7 @@ export class EventController {
 		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
 		options?: { interrupted?: boolean },
 	): Promise<void> {
-		this.#showingAsyncWait = false;
+		this.#clearAsyncWait();
 		this.#setTerminalProgress(false);
 		this.ctx.statusLine.markActivityEnd();
 		this.#lastAgentEndAt = Date.now();

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- SQLite salvage preserves healthy rows after corrupt pages.
+- Log fallback avoids replaying complete records and applies retention only to directories used for logging.
+
 ## [19.2.0] - 2026-11-25
 
 ### Fixed

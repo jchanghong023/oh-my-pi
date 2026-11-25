@@ -16,6 +16,7 @@ import {
 	saveWatchdogConfigFile,
 } from "../../advisor/config";
 import { reset as resetCapabilities } from "../../capability";
+import type { SourceMeta } from "../../capability/types";
 import type { AdvisorConfigScope } from "../../advisor/advisor-config-types";
 import { showGitOverlay } from "../../cli/git-tui";
 import { formatLoginIdentity } from "../../cli/oauth-terminal";
@@ -36,7 +37,7 @@ import {
 import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { formatModelSelectorValue } from "../../config/model-selector";
 import { getRoleInfo } from "../../config/model-roles";
-import { settings } from "../../config/settings";
+import { settings, withActiveSettings } from "../../config/settings";
 import { createSettingsHost } from "../../config/settings-ui";
 import { createPluginSettingsHost } from "../../extensibility/plugins/settings-host";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -47,6 +48,10 @@ import {
 	getPluginsCacheDir,
 	MarketplaceManager,
 } from "../../extensibility/plugins/marketplace";
+import { loadAllMCPConfigs } from "../../mcp/config";
+import { cfgMcpEnableProjectConfig } from "../../mcp/settings";
+import { MCP_CONNECTION_STATUS_EVENT_CHANNEL } from "../../mcp/startup-events";
+import { resolveMCPTransformContext } from "../../mcp/transforms";
 import type {
 	AgentHubOpenOptions,
 	InteractiveModeContext,
@@ -100,11 +105,12 @@ import { createAgentsHubDeps } from "../agents-hub-deps";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { collapseSharedUsageReports } from "../../session/usage-display";
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
-import { createAgentHubRuntime } from "../agent-hub-runtime";
+import { agentTranscriptSource, createAgentHubRuntime } from "../agent-hub-runtime";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
-import { type AgentRef, MAIN_AGENT_ID } from "../../registry/agent-registry";
+import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import { listLiveToolRecords, liveToolRecordFromSession } from "../../extensibility/inventory/live-tool-session";
 import { createExtensionDashboardRuntime } from "../components/extensions/dashboard-runtime";
+import { userOptInProvider } from "../components/extensions/state-manager";
 import { type ModelRoleSelectionScope } from "../view-model/overlays/model-hub";
 import { createModelBrowserSource } from "../model-browser-source";
 import { formatSessionContinuationNotice } from "../persistence-failure";
@@ -118,6 +124,7 @@ import { presentShellInspector } from "../../ui/apps/shell-visualizer";
 import { AdvisorConfigOverlay } from "../../ui/overlays/advisor-config/advisor-config";
 import { AgentTranscriptViewer } from "../../ui/overlays/panels/agent-transcript-viewer";
 import {
+	type AgentTranscriptViewerDeps,
 	AgentTranscriptViewerModel,
 	type ViewerTranscriptActions,
 } from "../../ui/overlays/panels/agent-transcript-viewer-model";
@@ -289,10 +296,10 @@ export class SelectorController {
 		if (this.#openMenus.get(kind) === menu) this.#openMenus.delete(kind);
 	}
 
-	/** Close `kind`'s menu and give the keys back to the editor area. */
-	#closeMenu(menu: OpenMenu): void {
+	/** Close a menu, restoring the active editor slot unless a parent overlay owns the keys. */
+	#closeMenu(menu: OpenMenu, restoreEditor = true): void {
 		menu.handle?.close();
-		this.focusActiveEditorArea();
+		if (restoreEditor) this.focusActiveEditorArea();
 	}
 
 	/**
@@ -611,17 +618,54 @@ export class SelectorController {
 	 * Replaces /status with a unified view of all providers and extensions.
 	 */
 	async showExtensionsDashboard(): Promise<void> {
+		const { eventBus, mcpManager, session } = this.ctx;
+		const cwd = getProjectDir();
+		const matchesProvider = (source: SourceMeta, providerId: string, userSourceOnly: boolean) =>
+			(!userSourceOnly && source.provider === providerId) || userOptInProvider(source) === providerId;
 		const dashboard = await ExtensionDashboardModel.create({
 			runtime: createExtensionDashboardRuntime({
-				cwd: getProjectDir(),
+				cwd,
 				settings: this.ctx.settings,
 				extensionRoots: () => this.ctx.session.effectiveExtensionRoots,
-				mcpManager: this.ctx.mcpManager,
+				mcpManager,
 				eventBus: this.ctx.eventBus,
 				onMcpToolsChanged: tools => this.ctx.session.refreshMCPTools(tools),
-				browserMcpFilterEnabled: () =>
-					this.ctx.session.getEvalPreludes().some(definition => definition.name === "browser"),
+				browserMcpFilterEnabled: () => this.ctx.session.canReplaceBrowserMcp(),
 			}),
+			mcpServersForProvider: (providerId, userSourceOnly) =>
+				mcpManager?.getAllServerNames().filter(name => {
+					const source = mcpManager.getSource(name);
+					return source !== undefined && matchesProvider(source, providerId, userSourceOnly);
+				}) ?? [],
+			connectMcpForProvider: async (providerId, userSourceOnly) => {
+				if (!mcpManager) return;
+				const { configs, sources } = await withActiveSettings(session.settings, () =>
+					loadAllMCPConfigs(cwd, {
+						enableProjectConfig: cfgMcpEnableProjectConfig.get(session.settings),
+						filterExa: true,
+						filterBrowser: session.canReplaceBrowserMcp(),
+						builtinTransforms: resolveMCPTransformContext(session.settings, {
+							evalActive: session.getActiveToolNames().includes("eval"),
+						}),
+						extensionRoots: session.effectiveExtensionRoots,
+					}),
+				);
+				const selectedConfigs: typeof configs = Object.create(null);
+				const selectedSources: typeof sources = Object.create(null);
+				for (const name in configs) {
+					const config = configs[name];
+					const source = sources[name];
+					if (!config || !source || !matchesProvider(source, providerId, userSourceOnly)) continue;
+					if (mcpManager.getConnectionStatus(name) !== "disconnected") continue;
+					selectedConfigs[name] = config;
+					selectedSources[name] = source;
+				}
+				if (Object.keys(selectedConfigs).length === 0) return;
+				await mcpManager.connectServers(selectedConfigs, selectedSources, event =>
+					eventBus?.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, event),
+				);
+				await session.refreshMCPTools(mcpManager.getTools());
+			},
 			terminal: { theme: currentTheme, size: this.ctx.shell.size },
 			toolSource: {
 				getLiveTool: name => liveToolRecordFromSession(this.ctx.session, name),
@@ -832,10 +876,10 @@ export class SelectorController {
 	#showModelPicker(selectOnly?: SelectOnlyModelSelectorOptions): void {
 		const menuKind = selectOnly ? "model-picker-select" : "model-picker";
 		const other = this.#openMenus.get(selectOnly ? "model-picker" : "model-picker-select");
-		if (other) this.#closeMenu(other);
+		if (other) this.#closeMenu(other, selectOnly !== undefined);
 		if (selectOnly) {
 			const previous = this.#openMenus.get(menuKind);
-			if (previous) this.#closeMenu(previous);
+			if (previous) this.#closeMenu(previous, false);
 		} else if (this.#focusOpenMenu(menuKind)) return;
 		const viewed = this.ctx.viewSession;
 		const currentContextTokens = viewed.getContextUsage()?.tokens ?? 0;
@@ -852,7 +896,7 @@ export class SelectorController {
 		const menu = this.#claimMenu(menuKind);
 		const done = () => {
 			if (this.#openMenus.get(menuKind) !== menu) return;
-			this.#closeMenu(menu);
+			this.#closeMenu(menu, !selectOnly);
 		};
 		const isCurrent = () => this.#openMenus.get(menuKind) === menu;
 		// One pick per target: an Enter repeated while that pick applies is dropped, but a
@@ -1716,7 +1760,7 @@ export class SelectorController {
 			TreeSelector({
 				roots: tree,
 				currentLeafId: realLeafId,
-				terminalHeight: untrack(this.ctx.shell.size).rows,
+				terminalHeight: () => this.ctx.shell.size().rows,
 				onSelect: async (entryId, options) => {
 					// Selecting the current leaf is normally a no-op (already there) —
 					// unless it's an `ask` toolResult, in which case the re-answer flow
@@ -2590,6 +2634,57 @@ export class SelectorController {
 		);
 	}
 
+	/** Open a retained execution directly from the tray, without a session to revive or steer. */
+	showAgentTranscript(agentId: string, observers: SessionObserverRegistry): void {
+		this.#openAgentTranscript(agentId, observers, { registry: AgentRegistry.global() });
+	}
+
+	#openAgentTranscript(
+		agentId: string,
+		observers: SessionObserverRegistry,
+		options: Pick<AgentTranscriptViewerDeps, "registry" | "remote" | "lifecycle" | "initialEntryId" | "actions"> & {
+			onClose?: () => void;
+			onHubClose?: () => void;
+		},
+	): OverlayHandle {
+		const { onClose, onHubClose, ...sources } = options;
+		const { shell, keybindings } = this.ctx;
+		const close = (): void => viewer.close();
+		const model = new AgentTranscriptViewerModel({
+			...sources,
+			agentId,
+			observers,
+			transcript: agentTranscriptSource,
+			terminalRows: () => shell.size().rows,
+			expandKeys: keybindings.keysFor("app.tools.expand"),
+			hubKeys: this.#agentHubKeys(),
+			onClose: close,
+			onHubClose: onHubClose ?? close,
+			hideTools: () => this.ctx.hideToolActivity,
+			hideThinking: inspecting => (inspecting ? this.ctx.hideThinkingBlock : this.ctx.effectiveHideThinkingBlock),
+			proseOnlyThinking: () => this.ctx.proseOnlyThinking,
+			hour12: shell.hour12,
+			inspectShell: source => presentShellInspector(shell, source),
+			settings: this.ctx.settings,
+		});
+		const viewer = shell.overlays.show(
+			() => fullscreenMenuView("agent-transcript", AgentTranscriptViewer({ model, focus: shell })),
+			{
+				focus: root => firstOfKind(layerContent(root), "editor"),
+				onClose: () => {
+					model.dispose();
+					onClose?.();
+				},
+			},
+		);
+		return viewer;
+	}
+
+	#agentHubKeys(): string[] {
+		const { keybindings } = this.ctx;
+		return [...keybindings.keysFor("app.agents.hub"), ...keybindings.keysFor("app.session.observe")];
+	}
+
 	showAgentHub(
 		observers: SessionObserverRegistry,
 		options?: AgentHubOpenOptions,
@@ -2602,10 +2697,7 @@ export class SelectorController {
 			return true;
 		};
 		if (reuseOpenHub()) return;
-		const hubKeys = [
-			...this.ctx.keybindings.keysFor("app.agents.hub"),
-			...this.ctx.keybindings.keysFor("app.session.observe"),
-		];
+		const hubKeys = this.#agentHubKeys();
 		const remote = this.ctx.collabGuest?.hubRemote;
 		const sessionFile = this.ctx.sessionManager.getSessionFile() ?? null;
 		const runtime = createAgentHubRuntime({
@@ -2628,44 +2720,23 @@ export class SelectorController {
 			};
 			const openTranscript = (agentId: string, entryId?: string): void => {
 				viewer?.close();
-				const model = new AgentTranscriptViewerModel({
-					agentId,
-					transcript: runtime.transcript,
+				viewer = this.#openAgentTranscript(agentId, observers, {
 					registry: runtime.registry,
 					remote,
-					observers,
 					lifecycle: () => AgentLifecycleManager.global(),
-					terminalRows: () => size().rows,
-					expandKeys: this.ctx.keybindings.keysFor("app.tools.expand"),
-					hubKeys,
-					onClose: () => viewer?.close(),
-					onHubClose: done,
 					initialEntryId: entryId,
 					actions: transcriptActions,
-					hideTools: () => this.ctx.hideToolActivity,
-					hideThinking: inspecting =>
-						inspecting ? this.ctx.hideThinkingBlock : this.ctx.effectiveHideThinkingBlock,
-					proseOnlyThinking: () => this.ctx.proseOnlyThinking,
-					hour12: this.ctx.shell.hour12,
-					inspectShell: source => presentShellInspector(this.ctx.shell, source),
-					settings: this.ctx.settings,
-				});
-				viewer = this.ctx.shell.overlays.show(
-					() => fullscreenMenuView("agent-transcript", AgentTranscriptViewer({ model })),
-					{
-						focus: root => firstOfKind(root, "editor"),
-						onClose: () => {
-							viewer = undefined;
-							model.dispose();
-						},
+					onHubClose: done,
+					onClose: () => {
+						viewer = undefined;
 					},
-				);
+				});
 			};
 			this.#showFullscreenMenu(
 				"agent-hub",
 				menu,
 				() =>
-					AgentHub({
+					AgentHub<AgentRef>({
 						...runtime,
 						observers,
 						hubKeys,

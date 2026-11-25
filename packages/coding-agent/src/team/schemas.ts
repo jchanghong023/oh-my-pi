@@ -280,7 +280,6 @@ export const TEAM_SYNTHESIS_SCHEMA = obj(
 		recommendationPreconditions: str(800, "推荐成立的前提条件；无推荐时留空"),
 		hardConstraintViolations: {
 			type: "array",
-			maxItems: 12,
 			description: "综合新确认的硬约束违例；仅收紧已有方案资格，无违例时为空数组",
 			items: obj(
 				{
@@ -586,7 +585,7 @@ export function parseTeamSynthesis(value: unknown): TeamSynthesisOutput | undefi
 	const recommendedProposal = asString(data.recommendedProposal).trim();
 	const recommendationReason = asString(data.recommendationReason).trim();
 	if (recommendedProposal && !recommendationReason) return undefined;
-	const hardConstraintViolations = asObjectArray(data.hardConstraintViolations, 12).map(item => ({
+	const hardConstraintViolations = (data.hardConstraintViolations as Record<string, unknown>[]).map(item => ({
 		proposalLabel: asString(item.proposalLabel).trim(),
 		issue: asString(item.issue).trim(),
 		evidence: asString(item.evidence).trim(),

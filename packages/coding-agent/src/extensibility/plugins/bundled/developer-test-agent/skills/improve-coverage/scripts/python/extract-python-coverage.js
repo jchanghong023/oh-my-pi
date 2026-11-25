@@ -3,7 +3,7 @@
  * 从 pytest -v 输出中提取测试执行结果，
  * 生成 .codecovcli/cache 格式的 JSON 文件。
  *
- * 用法: node extract-python-coverage.js <类名/模块名> <coverage.json路径> [pytest-v输出路径]
+ * 用法: node extract-python-coverage.js <模块名/源文件路径> <coverage.json路径> [pytest-v输出路径]
  * 示例: node extract-python-coverage.js user_service coverage.json
  *       node extract-python-coverage.js user_service coverage.json pytest-output.txt
  *
@@ -18,13 +18,15 @@ const path = require('path');
 // ========== 参数解析 ==========
 const args = process.argv.slice(2);
 if (args.length < 2) {
-  console.error('用法: node extract-python-coverage.js <类名/模块名> <coverage.json路径> [pytest-v输出路径]');
+  console.error('用法: node extract-python-coverage.js <模块名/源文件路径> <coverage.json路径> [pytest-v输出路径]');
   console.error('示例: node extract-python-coverage.js user_service coverage.json');
   console.error('示例: node extract-python-coverage.js user_service coverage.json pytest-output.txt');
   process.exit(1);
 }
 
-const className = args[0];
+const source = args[0].replace(/\\/g, '/');
+const className = path.posix.basename(source, '.py');
+const sourcePath = source.includes('/') ? fileIdentity(source.endsWith('.py') ? source : `${source}.py`) : null;
 const coverageJsonPath = path.resolve(args[1]);
 const pytestVPath = args[2] ? path.resolve(args[2]) : null;
 
@@ -70,47 +72,39 @@ if (!fs.existsSync(coverageJsonPath)) {
 //     }
 //   },
 //   "totals": { ... }
-let targetFileData = null;
 
 if (coverageData) {
-  const targetFileSuffix = '/' + className + '.py';
-  const files = coverageData.files || {};
+  const matches = Object.entries(coverageData.files || {}).filter(([filePath]) =>
+    sourcePath ? fileIdentity(filePath) === sourcePath : path.posix.basename(filePath.replace(/\\/g, '/')) === `${className}.py`
+  );
 
-  // 在 files 中查找路径以 /{className}.py 结尾的条目
-  for (const [filePath, fileData] of Object.entries(files)) {
-    // 统一路径分隔符后匹配
-    const normalizedPath = filePath.replace(/\\/g, '/');
-    if (normalizedPath.endsWith(targetFileSuffix)) {
-      targetFileData = fileData;
-      targetFilePath = filePath;
-      break;
-    }
-  }
-
-  if (!targetFileData) {
-    errorDetail = errorDetail || `未在 coverage.json 中找到目标文件: ${className}.py`;
+  if (matches.length !== 1) {
+    errorDetail = matches.length === 0
+      ? `未在 coverage.json 中找到目标文件: ${source}`
+      : `coverage.json 中的目标文件不唯一，请指定源文件路径: ${matches.map(([filePath]) => filePath).join(', ')}`;
     console.error(`[ERROR] ${errorDetail}`);
-    console.error(`请在 coverage.json 的 files 中确认文件路径以 /${className}.py 结尾`);
   } else {
-    const summary = targetFileData.summary || {};
-    totalLines = summary.num_statements || 0;
-    coveredLines = summary.covered_lines || 0;
-    missedLines = summary.missing_lines || 0;
-    linePercentage = totalLines > 0
-      ? Math.round((coveredLines / totalLines) * 10000) / 100
-      : 0;
-
-    // 收集行级覆盖详情
-    coveredLineNumbers = (targetFileData.executed_lines || []).slice().sort((a, b) => a - b);
-    missedLineNumbers = (targetFileData.missing_lines || []).slice().sort((a, b) => a - b);
-
-    // ========== 覆盖率数据校验 ==========
-    const validation = validateCoverageData(totalLines, coveredLines);
+    const [[filePath, fileData]] = matches;
+    targetFilePath = filePath;
+    const summary = fileData.summary || {};
+    const total = summary.num_statements || 0;
+    const covered = summary.covered_lines || 0;
+    const validation = validateCoverageData(total, covered);
     if (!validation.valid) {
-      errorDetail = errorDetail || `覆盖率数据校验失败: ${validation.reason}`;
+      errorDetail = `覆盖率数据校验失败: ${validation.reason}`;
       console.error(`\n[ERROR] ${errorDetail}`);
-      console.error(`被测文件: ${className}.py`);
-      console.error(`总行数: ${totalLines}, 覆盖行数: ${coveredLines}`);
+      console.error(`被测文件: ${targetFilePath}`);
+      console.error(`总行数: ${total}, 覆盖行数: ${covered}`);
+    } else {
+      totalLines = total;
+      coveredLines = covered;
+      missedLines = summary.missing_lines || 0;
+      linePercentage = Math.round((coveredLines / totalLines) * 10000) / 100;
+      if (total > 2000 && covered / total < 0.6) {
+        console.warn(`[WARN] ${targetFilePath}：总行数 ${total}，覆盖行 ${covered}，覆盖率 ${linePercentage.toFixed(2)}%（总行数>2000且覆盖率<60%）`);
+      }
+      coveredLineNumbers = (fileData.executed_lines || []).slice().sort((a, b) => a - b);
+      missedLineNumbers = (fileData.missing_lines || []).slice().sort((a, b) => a - b);
     }
   }
 }
@@ -120,70 +114,58 @@ if (coverageData) {
 //   test_file.py::test_function PASSED [ 50%]
 //   test_file.py::test_function FAILED [100%]
 //   test_file.py::test_function ERROR [ 33%]
-// 编译/收集错误时:
-//   ERROR collecting test_file.py
-//   ...
-//   ===== short test summary info =====
-//   ERROR test_file.py
-// 最后一行汇总: X failed, Y passed in Zs
+// pytest-xdist: [gw0] [100%] PASSED test_file.py::test_function
 let totalTests = 0;
 let passedTests = 0;
 let failedTests = 0;
 let compileErrors = 0;
 let testName = '';
+let testFilePath;
+let testFileLines = 0;
 
 if (pytestVPath && fs.existsSync(pytestVPath)) {
-  const testOutput = fs.readFileSync(pytestVPath, 'utf-8');
-  const testLines = testOutput.split('\n');
+  const testBytes = fs.readFileSync(pytestVPath);
+  // Windows PowerShell 5.1 redirects text as UTF-16LE with a BOM.
+  const encoding = testBytes[0] === 0xff && testBytes[1] === 0xfe ? 'utf-16le' : 'utf-8';
+  const testOutput = new TextDecoder(encoding).decode(testBytes);
+  const testResults = new Map();
+  const reportedTestFiles = new Set();
 
-  // 检测收集错误（编译错误等价物）
-  // ERROR collecting 表示测试收集阶段出错
-  const hasCollectionError = /ERROR collecting/i.test(testOutput);
-  // ===== short test summary info ===== 后面跟着 ERROR 行
-  const hasSummaryError = /===== short test summary info =====[\s\S]*?ERROR /i.test(testOutput);
-  if (hasCollectionError || hasSummaryError) {
-    compileErrors = 1;
-  }
-
-  // 统计 PASSED、FAILED、ERROR 数量
-  // pytest -v 每个测试用例一行：test_file.py::test_name RESULT [ progress%]
-  for (const line of testLines) {
-    const trimmed = line.trim();
-
-    // 匹配 pytest -v 结果行：文件路径::测试名 PASSED/FAILED/ERROR [百分比]
-    // 格式: <path>::<test_id> PASSED [ 50%]
-    const resultMatch = /^(.+\.py)::(.+?)\s+(PASSED|FAILED|ERROR)\s*\[/.exec(trimmed);
-    if (resultMatch) {
-      const result = resultMatch[3];
-      totalTests++;
-      if (!testName) {
-        testName = resultMatch[2];
+  for (const line of testOutput.split('\n')) {
+    const trimmed = line.trimEnd();
+    const result = /^(?<filePath>.+?\.py)::(?<testId>.+?)\s+(?<status>PASSED|FAILED|ERROR)(?:\s+\[\s*\d+%\])?$/.exec(trimmed)
+      || /^\[gw\d+\]\s+(?:\[\s*\d+%\]\s+)?(?<status>PASSED|FAILED|ERROR)\s+(?<filePath>.+?\.py)::(?<testId>.+)$/.exec(trimmed);
+    if (result) {
+      const { filePath, testId, status } = result.groups;
+      const nodeId = `${filePath}::${testId}`;
+      // A teardown error overrides a successful test body.
+      if (status !== 'PASSED' || !testResults.has(nodeId)) {
+        testResults.set(nodeId, status);
       }
-      if (result === 'PASSED') {
-        passedTests++;
-      } else if (result === 'FAILED') {
-        failedTests++;
-      }
-      // ERROR 状态的用例不计入 passedTests 也不计入 failedTests，但已计入 totalTests
+      reportedTestFiles.add(filePath);
+      if (!testName) testName = testId;
+      continue;
+    }
+
+    const collection = /^_+\s+ERROR collecting (.+?)\s+_+$/.exec(trimmed);
+    if (collection) {
+      compileErrors++;
+      if (collection[1].endsWith('.py')) reportedTestFiles.add(collection[1]);
     }
   }
 
-  // 如果没有检测到测试结果行，尝试从汇总行解析
-  if (totalTests === 0) {
-    // 汇总行格式: N failed, M passed in Xs 或 N passed in Xs 等
-    const summaryMatch = /(\d+)\s+failed(?:.*?(\d+)\s+passed)?/i.exec(testOutput);
-    const passedOnlyMatch = /(\d+)\s+passed/i.exec(testOutput);
+  totalTests = testResults.size;
+  for (const status of testResults.values()) {
+    if (status === 'PASSED') passedTests++;
+    else failedTests++;
+  }
 
-    if (summaryMatch) {
-      failedTests = parseInt(summaryMatch[1]) || 0;
-      passedTests = summaryMatch[2] ? parseInt(summaryMatch[2]) : 0;
-      totalTests = passedTests + failedTests;
-      if (failedTests > 0 && !testName) {
-        testName = 'pytest_failed';
-      }
-    } else if (passedOnlyMatch) {
-      passedTests = parseInt(passedOnlyMatch[1]);
-      totalTests = passedTests;
+  if (reportedTestFiles.size === 1) {
+    const [filePath] = reportedTestFiles;
+    const candidate = path.resolve(filePath);
+    if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) {
+      testFilePath = candidate;
+      testFileLines = countCodeLines(fs.readFileSync(testFilePath, 'utf-8'));
     }
   }
 
@@ -191,24 +173,6 @@ if (pytestVPath && fs.existsSync(pytestVPath)) {
   if (!testName && compileErrors) {
     testName = 'pytest_collection_error';
   }
-}
-
-// ========== 查找并读取测试文件代码行数 ==========
-// Python 测试文件通常命名为 test_{className}.py 或 {className}_test.py
-let testFileLines = 0;
-let testFilePath = null;
-
-// 优先查找 test_{className}.py
-testFilePath = findTestFile(`test_${className}.py`, process.cwd(), 5);
-
-// 如果没找到，尝试 {className}_test.py
-if (!testFilePath) {
-  testFilePath = findTestFile(`${className}_test.py`, process.cwd(), 5);
-}
-
-if (testFilePath) {
-  const testContent = fs.readFileSync(testFilePath, 'utf-8');
-  testFileLines = countCodeLines(testContent);
 }
 
 // ========== 控制台输出 ==========
@@ -258,7 +222,8 @@ const result = {
     compileErrors: compileErrors,
   },
   metrics: {
-    compiled_testcase_num: Math.max(0, totalTests - compileErrors),
+    // Collection errors are not test cases and were never included in totalTests.
+    compiled_testcase_num: totalTests,
     passed_testcase_num: passedTests,
     covered_line_num: coveredLines,
     total_compile_error_num: compileErrors,
@@ -301,9 +266,14 @@ console.log(`覆盖率文件已生成: ${outputPath}`);
 
 // ========== 辅助函数 ==========
 
+function fileIdentity(filePath) {
+  const absolute = path.resolve(filePath.replace(/\\/g, '/'));
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+}
+
 /**
  * 覆盖率数据校验
- * 防御性检查：总数为0或负数、覆盖行大于总行数、异常低覆盖率
+ * 检查总数是否为0或负数、覆盖行是否大于总行数
  * @param {number} total - 总行数
  * @param {number} covered - 已覆盖行数
  * @returns {{valid: boolean, reason?: string}}
@@ -319,57 +289,7 @@ function validateCoverageData(total, covered) {
     return { valid: false, reason: `覆盖行(${covered})大于总行数(${total})，数据不一致` };
   }
 
-  // 异常判定：总行数>2000 且覆盖率<60%
-  if (total > 2000) {
-    const rate = covered / total;
-    if (rate < 0.6) {
-      return {
-        valid: false,
-        reason: `异常数据：总行数 ${total}，覆盖行 ${covered}，覆盖率 ${(rate * 100).toFixed(2)}%（总行数>2000且覆盖率<60%）`,
-      };
-    }
-  }
-
   return { valid: true };
-}
-
-/**
- * 递归查找测试文件
- * @param {string} fileName - 测试文件名（如 test_user_service.py）
- * @param {string} dir - 搜索起始目录
- * @param {number} maxDepth - 最大递归深度
- * @returns {string|null} 找到的文件完整路径，未找到返回 null
- */
-function findTestFile(fileName, dir, maxDepth) {
-  if (maxDepth < 0) return null;
-
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-
-  // 先检查当前目录
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name === fileName) {
-      return path.join(dir, fileName);
-    }
-  }
-
-  // 递归子目录
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      // 跳过无关目录
-      if (['venv', '.venv', '.git', 'node_modules', '.codecovcli', '__pycache__', '.pytest_cache', 'env'].includes(entry.name)) {
-        continue;
-      }
-      const found = findTestFile(fileName, path.join(dir, entry.name), maxDepth - 1);
-      if (found) return found;
-    }
-  }
-
-  return null;
 }
 
 /**

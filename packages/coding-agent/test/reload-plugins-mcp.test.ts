@@ -50,7 +50,7 @@ function createFakeCtx(cwd: string, settingsValues: Record<string, unknown> = {}
 	const session = {
 		settings,
 		effectiveExtensionRoots: TEST_EXTENSION_ROOTS,
-		getEvalPreludes: () => [],
+		canReplaceBrowserMcp: () => false,
 		getActiveToolNames: () => [],
 		refreshMCPTools: vi.fn(async (_tools: unknown) => {}),
 		setMCPPromptCommands: vi.fn((_commands: unknown) => {}),

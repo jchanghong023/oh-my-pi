@@ -700,7 +700,15 @@ const completeCompaction: typeof instrumentedCompleteSimple = async (model, cont
 			};
 			logger.info("Compaction summary request started", { ...fields, result: "started" });
 			try {
-				const response = await instrumentedCompleteSimple(model, context, options, telemetryOptions);
+				// CodeAgent's transport may replay only after a credential change.
+				const response = await instrumentedCompleteSimple(
+					model,
+					context,
+					options,
+					model.provider === "codeagent" && telemetryOptions.retry
+						? { ...telemetryOptions, retry: undefined }
+						: telemetryOptions,
+				);
 				const cancelled = options.signal?.aborted || response.stopReason === "aborted";
 				const failed = response.stopReason === "error";
 				(cancelled ? logger.info : failed ? logger.warn : logger.info)("Compaction summary request ended", {

@@ -44,6 +44,8 @@ interface InvokeSkillCommandOptions {
 	 * does not leave the submission invisible (issue #8895).
 	 */
 	optimistic?: boolean;
+	/** After the session accepts the skill, with the outcome of forwarding it to the agent. */
+	onPromptAdmitted?: (pending: Promise<boolean>) => void;
 	/** With `queueOnly`: called with the messages the skill prompt pushed onto a queue (see `PromptOptions.onPromptQueued`). */
 	onPromptQueued?: (queued: readonly AgentMessage[]) => void;
 	/**
@@ -132,7 +134,19 @@ export async function invokeSkillCommandFromText(
 			);
 		}
 		reachedSession = true;
-		await ctx.session.promptCustomMessage(built.message, promptOptions);
+		const onPromptAdmitted = options?.onPromptAdmitted;
+		if (onPromptAdmitted) {
+			// Admission can fire synchronously; publish the settlement promise first.
+			const pending: Promise<boolean> = Promise.resolve().then(() =>
+				ctx.session.promptCustomMessage(built.message, {
+					...promptOptions,
+					onPromptAdmitted: () => onPromptAdmitted(pending),
+				}),
+			);
+			await pending;
+		} else {
+			await ctx.session.promptCustomMessage(built.message, promptOptions);
+		}
 		return true;
 	} catch (err) {
 		if (optimistic) ctx.clearOptimisticSkillMessage();

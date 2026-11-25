@@ -37,6 +37,9 @@ const TILES_SHOWN = 9;
 
 const STATUS_ORDER: Record<JobSnapshot["status"], number> = { running: 0, failed: 1, cancelled: 2, completed: 3 };
 
+const BASH_TIMEOUT_NOTICE =
+	/^(\[Command timed out(?: after \d+(?:\.\d+)? seconds(?:; the shell backend did not respond, so any output above may be incomplete)?)?\])(?:\r?\n|$)/u;
+
 /** What the terminal draws a wait from. */
 export type WaitTerm =
 	| { readonly kind: "empty"; readonly text: string; readonly meta?: CoordinationDetails["meta"] }
@@ -49,23 +52,26 @@ export type WaitTerm =
 			readonly settledBashJobs?: ReadonlyMap<string, string>;
 	  };
 
-/** A displayed Bash card already owns the same outcome, unless this receipt contains diagnostics. */
+/** A displayed Bash card already owns this job's output; Wait still draws its own diagnostics. */
 export function duplicatesBashOutcome(job: JobSnapshot, settled: ReadonlyMap<string, string> | undefined): boolean {
 	return (
 		job.type === "bash" &&
 		settled?.get(job.id) === job.status &&
-		!job.meta?.artifactError &&
-		!job.artifactError &&
 		(job.structured === undefined || job.structured.status === "valid")
 	);
 }
 
-/** A failed Bash job's recent output, after removing only its generated notices. */
-export function waitFailurePreview(job: JobSnapshot): { lines: string[]; artifact?: string } {
+/** A failed job's visible output and diagnostics, without the generated output footers. */
+export function waitFailurePreview(
+	job: JobSnapshot,
+	expanded: boolean,
+	settled: ReadonlyMap<string, string> | undefined,
+): { lines: string[]; reason?: string; artifact?: string } {
 	if (job.status !== "failed") return { lines: [] };
+	const error = job.errorText ?? "";
 	const raw = stripOutputNotice(
-		job.type === "bash" ? job.errorText?.trim() || job.resultText?.trim() || "" : (job.errorText ?? ""),
-		job.meta,
+		job.type === "bash" && !error.trim() ? (job.resultText ?? "") : error,
+		job.meta ?? (job.artifactError ? { artifactError: job.artifactError } : undefined),
 	);
 	if (job.type !== "bash") {
 		const reason = raw
@@ -74,27 +80,47 @@ export function waitFailurePreview(job: JobSnapshot): { lines: string[]; artifac
 			?.trim();
 		return { lines: reason ? [plainText(reason)] : [] };
 	}
+	// The local sink prefixes its reason, while bridge and shaped output can carry it as a footer.
+	let trailingReason: string | undefined;
+	const withoutRaw = stripRawOutputNotice(raw).text;
+	const withoutTimeout =
+		job.timedOut === true
+			? stripTrailingNotice(withoutRaw, line => {
+					trailingReason = BASH_TIMEOUT_NOTICE.exec(line)?.[1];
+					return trailingReason !== undefined;
+				})
+			: withoutRaw;
 	const wallNotice =
 		job.wallTimeNoticeEmitted === true && job.wallTimeMs !== undefined
 			? formatWallTimeNotice(job.wallTimeMs)
 			: undefined;
-	const withoutWall = wallNotice === undefined ? raw : stripTrailingNotice(raw, wallNotice);
+	const withoutWall = wallNotice === undefined ? withoutTimeout : stripTrailingNotice(withoutTimeout, wallNotice);
 	const withoutExit = stripTrailingNotice(withoutWall, line => /^Command exited with code -?\d+$/u.test(line));
 	const output = stripRawOutputNotice(
-		wallNotice !== undefined && withoutWall === raw && withoutExit !== raw
+		wallNotice !== undefined && withoutWall === withoutTimeout && withoutExit !== withoutTimeout
 			? stripTrailingNotice(withoutExit, wallNotice)
 			: withoutExit,
 	).text;
+	const timeout = job.timedOut === true ? BASH_TIMEOUT_NOTICE.exec(output) : undefined;
+	const reason = timeout?.[1] ?? trailingReason;
+	if (!expanded && duplicatesBashOutcome(job, settled)) return { lines: [], reason };
+	const outputStart = timeout?.[0].length ?? 0;
 	const lines: string[] = [];
-	for (let end = output.length; end > 0 && lines.length < 2;) {
-		const start = output.lastIndexOf("\n", end - 1);
-		const line = plainText(output.slice(start + 1, end)).trimEnd();
-		if (line.trim()) lines.unshift(line);
-		end = start;
+	if (expanded) {
+		const body = output.slice(outputStart).trimEnd();
+		if (body) for (const line of body.split(/\r?\n/)) lines.push(plainText(line));
+	} else {
+		for (let end = output.length; end > outputStart && lines.length < 2;) {
+			const start = output.lastIndexOf("\n", end - 1);
+			const line = plainText(output.slice(start + 1, end)).trimEnd();
+			if (line.trim()) lines.unshift(line);
+			end = start;
+		}
 	}
 	const truncation = job.meta?.truncation;
 	return {
 		lines,
+		reason,
 		artifact: truncation?.artifactId
 			? `${truncation.artifactElidedBytes ? "Sample only · " : ""}${formatFullOutputReference(truncation.artifactId, truncation.artifactElidedBytes)}`
 			: undefined,
@@ -230,11 +256,25 @@ function resultView(result: ToolResult<CoordinationDetails>, state: ToolViewStat
 				<JobTiles nodeKey="tiles" tiles={sorted.slice(0, TILES_SHOWN).map(job => jobTile(job, state.isPartial))} />
 			) : undefined,
 			...sorted.slice(0, TILES_SHOWN).flatMap(job => {
-				if (duplicatesBashOutcome(job, settledBashJobs)) return [];
-				const { lines, artifact } = waitFailurePreview(job);
+				const { lines, reason, artifact } = waitFailurePreview(job, state.expanded, settledBashJobs);
 				const body: JSXNode[] = [];
+				if (reason)
+					body.push(
+						<text
+							spans={[{ s: "error", t: `${plainText(job.id)} · ${reason}` }]}
+							wrap={state.expanded ? "word" : undefined}
+							truncate={state.expanded ? undefined : "end"}
+						/>,
+					);
 				if (job.type === "bash" && lines.length > 0)
-					body.push(<text spans={[{ s: "muted", t: `${plainText(job.id)} · Output tail:` }]} truncate="end" />);
+					body.push(
+						<text
+							spans={[
+								{ s: "muted", t: `${plainText(job.id)} · ${state.expanded ? "Output:" : "Output tail:"}` },
+							]}
+							truncate="end"
+						/>,
+					);
 				for (const line of lines)
 					body.push(
 						<text

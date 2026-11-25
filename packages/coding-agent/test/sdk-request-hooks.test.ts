@@ -19,7 +19,7 @@ it("dispatches with explicit SDK authorization and observes the same request's r
 		const model = createMockModel({
 			handler: { content: ["Provider reply"], responseHeaders: { "x-request-id": "request-1" } },
 		});
-		auth.keys.setRuntime(model.provider, "stored-key");
+		let authResolutions = 0;
 		const metadata: Array<{ id: string | undefined; signal: AbortSignal | undefined }> = [];
 		const settings = Settings.isolated({ "compaction.enabled": false, "todo.enabled": false });
 		({ session } = await createAgentSession({
@@ -29,8 +29,10 @@ it("dispatches with explicit SDK authorization and observes the same request's r
 			modelRegistry: new ModelRegistry(auth, root.join("models.yml"), { settings }),
 			sessionManager: SessionManager.inMemory(root.path()),
 			settings,
-			getApiKey: () => "stored-key",
-			resolveRequestAuth: async () => ({ apiKey: "request-key", headers: { "x-request-auth": "ephemeral" } }),
+			resolveRequestAuth: async () => {
+				authResolutions++;
+				return { apiKey: "request-key", headers: { "x-request-auth": "ephemeral" } };
+			},
 			onResponse: (response, _model, signal) => {
 				metadata.push({ id: response.headers["x-request-id"], signal });
 			},
@@ -47,6 +49,7 @@ it("dispatches with explicit SDK authorization and observes the same request's r
 		await session.prompt("Reply once");
 
 		expect(model.calls).toHaveLength(1);
+		expect(authResolutions).toBe(1);
 		const options = model.calls[0]?.options;
 		expect(options).toMatchObject({ apiKey: "request-key", headers: { "x-request-auth": "ephemeral" } });
 		expect(options?.signal).toBeInstanceOf(AbortSignal);

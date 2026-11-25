@@ -263,7 +263,7 @@ export function getAllOAuthProviders(): OAuthProviderInfo[] {
 export function getStoredOAuthProviders(credentials: Pick<CredentialsApi, "list">): OAuthProviderInfo[] {
 	const known = new Map(getAllOAuthProviders().map(provider => [provider.id, provider]));
 	const stored = new Map<string, OAuthProviderInfo>();
-	for (const { provider } of credentials.list()) {
+	for (const { provider } of credentials.list(undefined, { includePaused: true })) {
 		if (stored.has(provider) || provider !== getOAuthCredentialProvider(provider)) continue;
 		const entry = known.get(provider);
 		stored.set(provider, entry?.available ? entry : { id: provider, name: entry?.name ?? provider, available: true });

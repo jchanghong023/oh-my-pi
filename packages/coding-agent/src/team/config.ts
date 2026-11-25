@@ -1,12 +1,12 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getActiveProfile } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { filterAvailableModelsByEnabledPatterns, resolveProviderModelReference } from "../config/model-resolver";
+import { filterAvailableModelsByEnabledPatterns } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";
 import type { Settings, SettingProvenance } from "../config/settings";
 import { UserSettingError, type UserSettingSaveResult } from "../config/user-settings";
 import { parseConfiguredThinkingLevel } from "../thinking/levels";
-import { expandTeamRoster, teamModelCapabilityIssue } from "./members";
+import { expandTeamRoster, resolveTeamMemberReference, teamModelCapabilityIssue } from "./members";
 import type {
 	TeamConfigErrorCode,
 	TeamConfigErrorData,
@@ -37,6 +37,7 @@ export class TeamConfigError extends Error {
 export interface TeamConfigServiceDependencies {
 	getSettings: () => Settings;
 	getModelRegistry: () => ModelRegistry;
+	persistentSettings?: Settings;
 	emit?: (frame: object) => void;
 	isCurrent?: () => boolean;
 }
@@ -44,9 +45,8 @@ export interface TeamConfigServiceDependencies {
 function ref(model: Model): TeamModelRef {
 	return { provider: model.provider, modelId: model.id };
 }
-function key(model: Model): string {
-	return `${model.provider}/${model.id}`;
-}
+type TeamCatalog = { all: Model[]; available: Model[]; enabled: Model[] };
+
 function strings(value: unknown): value is string[] {
 	if (!Array.isArray(value)) return false;
 	for (const entry of value) if (typeof entry !== "string") return false;
@@ -61,6 +61,15 @@ function noWrites(): UserSettingSaveResult {
 function invalid(message: string): never {
 	throw new TeamConfigError("invalid_params", message, noWrites());
 }
+function concreteIdentity(provider: string, modelId: string): boolean {
+	if (!provider || provider.includes("/") || provider.includes("@") || !modelId) return false;
+	for (const field of [provider, modelId]) {
+		if (/\s|[*?[\]]/u.test(field) || field.toLowerCase() === "auto") return false;
+	}
+	const colon = modelId.lastIndexOf(":");
+	return colon < 0 || parseConfiguredThinkingLevel(modelId.slice(colon + 1)) === undefined;
+}
+
 function concrete(value: unknown): value is TeamModelRef {
 	if (
 		typeof value !== "object" ||
@@ -73,20 +82,10 @@ function concrete(value: unknown): value is TeamModelRef {
 		!("modelId" in value)
 	)
 		return false;
-	for (const field of [value.provider, value.modelId]) {
-		if (
-			typeof field !== "string" ||
-			!field ||
-			field.trim() !== field ||
-			/\s|[*?[\]@]/u.test(field) ||
-			field.toLowerCase() === "auto"
-		)
-			return false;
-	}
-	const suffix = String(value.modelId).split(":").at(-1);
 	return (
-		!String(value.provider).includes("/") &&
-		!(String(value.modelId).includes(":") && parseConfiguredThinkingLevel(suffix) !== undefined)
+		typeof value.provider === "string" &&
+		typeof value.modelId === "string" &&
+		concreteIdentity(value.provider, value.modelId)
 	);
 }
 function selectors(value: unknown, allowRaw: boolean): string[] | undefined {
@@ -122,10 +121,12 @@ function label(index: number): string {
 /** Explicit configuration IO only; constructing or searching this service never refreshes a provider. */
 export class TeamConfigService {
 	readonly #settings: Settings;
+	readonly #persistentSettings: Settings;
 	readonly #registry: ModelRegistry;
 	readonly #profile: string | null;
 	constructor(readonly deps: TeamConfigServiceDependencies) {
 		this.#settings = deps.getSettings();
+		this.#persistentSettings = deps.persistentSettings ?? this.#settings;
 		this.#registry = deps.getModelRegistry();
 		this.#profile = getActiveProfile() ?? null;
 	}
@@ -134,6 +135,7 @@ export class TeamConfigService {
 		if (
 			this.deps.isCurrent?.() === false ||
 			this.deps.getSettings() !== this.#settings ||
+			(getActiveProfile() ?? null) !== this.#profile ||
 			this.deps.getModelRegistry() !== this.#registry
 		) {
 			throw new TeamConfigError(
@@ -144,7 +146,7 @@ export class TeamConfigService {
 		}
 	}
 
-	#catalog(): { all: Model[]; available: Model[]; eligible: Model[] } {
+	#catalog(): TeamCatalog {
 		const all = this.#registry.getAll();
 		const available = this.#registry.getAvailable();
 		const enabled = filterAvailableModelsByEnabledPatterns(
@@ -152,25 +154,30 @@ export class TeamConfigService {
 			cfgEnabledModels.get(this.#settings),
 			this.#settings,
 		);
-		return { all, available, eligible: enabled.filter(model => !teamModelCapabilityIssue(model)) };
+		return { all, available, enabled };
 	}
 
-	#eligibility(
-		model: Model,
-		available: readonly Model[],
-		eligible: readonly Model[],
-	): { code: string; message: string } | undefined {
+	#eligibility(model: Model, catalog: TeamCatalog): { code: string; message: string } | undefined {
 		const capability = teamModelCapabilityIssue(model);
 		if (capability) return capability;
-		if (eligible.some(candidate => key(candidate) === key(model))) return undefined;
+		if (catalog.enabled.some(candidate => candidate.provider === model.provider && candidate.id === model.id))
+			return undefined;
 		if (!this.#registry.hasConfiguredAuth(model))
 			return { code: "unauthenticated", message: "Provider authentication is not configured" };
 		return {
 			code: "disabled",
-			message: available.some(candidate => key(candidate) === key(model))
+			message: catalog.available.some(
+				candidate => candidate.provider === model.provider && candidate.id === model.id,
+			)
 				? "Model is outside enabledModels"
 				: "Provider or model is disabled or unavailable in this context",
 		};
+	}
+
+	#candidateIssue(model: Model, catalog: TeamCatalog): { code: string; message: string } | undefined {
+		if (!concreteIdentity(model.provider, model.id))
+			return { code: "invalid_model", message: "Model does not have a concrete Team configuration identity" };
+		return this.#eligibility(model, catalog);
 	}
 
 	getModels(query?: string): TeamConfigModelsResult {
@@ -196,7 +203,7 @@ export class TeamConfigService {
 					return terms.every(term => text.includes(term));
 				})
 				.map(model => {
-					const issue = this.#eligibility(model, catalog.available, catalog.eligible);
+					const issue = this.#candidateIssue(model, catalog);
 					return {
 						model: ref(model),
 						name: model.name,
@@ -211,18 +218,20 @@ export class TeamConfigService {
 		value: readonly string[],
 		list: NonNullable<TeamConfigIssue["list"]>,
 		issues: TeamConfigIssue[],
-		catalog: { all: Model[]; available: Model[]; eligible: Model[] },
+		catalog: TeamCatalog,
 		provenance?: SettingProvenance,
+		isLiteral?: (index: number) => boolean,
 	): TeamMemberSlot[] {
 		return value.map((rawSelector, index) => {
-			const selector = rawSelector.trim();
-			const separator = selector.indexOf("/");
-			const model =
-				separator > 0
-					? resolveProviderModelReference(selector.slice(0, separator), selector.slice(separator + 1), catalog.all)
-					: undefined;
+			const literal = isLiteral?.(index);
+			const model = literal
+				? resolveTeamMemberReference(rawSelector, catalog.all, true)
+				: (resolveTeamMemberReference(rawSelector, catalog.enabled) ??
+					resolveTeamMemberReference(rawSelector, catalog.all));
 			const issue = model
-				? this.#eligibility(model, catalog.available, catalog.eligible)
+				? literal
+					? this.#candidateIssue(model, catalog)
+					: this.#eligibility(model, catalog)
 				: { code: "unresolved_model", message: `Cannot resolve exact model selector: ${rawSelector}` };
 			if (issue)
 				issues.push({
@@ -249,7 +258,7 @@ export class TeamConfigService {
 		value: unknown,
 		provenance: SettingProvenance,
 		issues: TeamConfigIssue[],
-		catalog: { all: Model[]; available: Model[]; eligible: Model[] },
+		catalog: TeamCatalog,
 		preview: boolean,
 	): {
 		effectiveMembers: TeamMemberSlot[] | null;
@@ -299,7 +308,7 @@ export class TeamConfigService {
 				invalid("preview requires a nonempty clientRevision and members");
 			draft = selectors(preview.members, true);
 		}
-		const stored = await this.#settings.readUserSetting("team.members");
+		const stored = await this.#persistentSettings.readUserSetting("team.members");
 		if (!acceptedSave) this.#assertCurrent();
 		const catalog = this.#catalog();
 		const issues: TeamConfigIssue[] = stored.issues.map(issue => ({
@@ -308,7 +317,7 @@ export class TeamConfigService {
 			target: "storage",
 			...(issue.source ? { source: issue.source } : {}),
 		}));
-		let readState = stored.readState;
+		let readState = stored.readState === "present" && stored.value === null ? "missing" : stored.readState;
 		let userMembers: TeamMemberSlot[] | null | undefined;
 		if (readState === "missing") userMembers = null;
 		else if (readState === "present") {
@@ -348,11 +357,24 @@ export class TeamConfigService {
 			const projection = this.#settings.projectUserSetting("team.members", draft);
 			const draftPreview: TeamConfigPreview = {
 				clientRevision: preview.clientRevision,
-				userMembers: draft === undefined ? null : this.#slots(draft, "preview.userMembers", previewIssues, catalog),
+				userMembers:
+					draft === undefined
+						? null
+						: this.#slots(
+								draft,
+								"preview.userMembers",
+								previewIssues,
+								catalog,
+								undefined,
+								index => !("rawSelector" in preview.members![index]!),
+							),
 				...this.#projection(projection.value, projection.source, previewIssues, catalog, true),
 				issues: previewIssues,
 			};
-			if (previewIssues.some(issue => issue.target === "member" && issue.list === "preview.effectiveMembers"))
+			if (
+				previewIssues.some(issue => issue.target === "member" && issue.list === "preview.effectiveMembers") ||
+				(draftPreview.source === "global" && draftPreview.userMembers?.some(slot => slot.status !== "available"))
+			)
 				draftPreview.participants = [];
 			config.preview = draftPreview;
 		}
@@ -378,22 +400,32 @@ export class TeamConfigService {
 			throw new TeamConfigError("scope_not_allowed", "Only user scope is writable", noWrites());
 		if (typeof input.expectedRevision !== "string" || !input.expectedRevision.trim())
 			invalid("expectedRevision is required");
-		const requested = selectors(input.members, false);
+		return this.#save(selectors(input.members, false), input.expectedRevision);
+	}
+
+	/** Save the ordered provider/model IDs used by the setting's text interfaces. */
+	async saveTeamConfig(members: unknown, expectedRevision: string): Promise<TeamConfigSaveResult> {
+		this.#assertCurrent();
+		if (typeof expectedRevision !== "string" || !expectedRevision.trim()) invalid("expectedRevision is required");
+		if (!strings(members)) invalid("team.members must be an ordered string array");
+		return this.#save(members, expectedRevision);
+	}
+
+	async #save(requested: readonly string[] | undefined, expectedRevision: string): Promise<TeamConfigSaveResult> {
 		const catalog = this.#catalog();
 		const issues: TeamConfigIssue[] = [];
-		if (requested) this.#slots(requested, "userMembers", issues, catalog);
+		if (requested?.length) this.#slots(requested, "userMembers", issues, catalog, undefined, () => true);
 		if (issues.length)
-			throw new TeamConfigError("invalid_params", "One or more members are unavailable", { ...noWrites(), issues });
-		// Save only literal catalog identities: query aliases are not write identities.
-		for (const member of input.members ?? []) {
-			if (!catalog.all.some(model => model.provider === member.provider && model.id === member.modelId))
-				invalid(`Unknown concrete model: ${member.provider}/${member.modelId}`);
-		}
+			throw new TeamConfigError(
+				"invalid_params",
+				`One or more members are unavailable: ${issues.map(issue => `${issue.selector}: ${issue.message}`).join("; ")}`,
+				{ ...noWrites(), issues },
+			);
 		let receipt: UserSettingSaveResult;
 		let failure: { code: TeamConfigErrorCode; message: string } | undefined;
 		let storageIssues: TeamConfigIssue[] | undefined;
 		try {
-			receipt = await this.#settings.saveUserSetting("team.members", requested, input.expectedRevision);
+			receipt = await this.#persistentSettings.saveUserSetting("team.members", requested, expectedRevision);
 		} catch (error) {
 			if (error instanceof UserSettingError) {
 				receipt = error.data;
@@ -435,15 +467,24 @@ export class TeamConfigService {
 				},
 			);
 		}
-		const expectedSlots = requested ?? null;
-		const actualSlots = config.userMembers?.map(slot => slot.rawSelector) ?? null;
+		const userSlots = config.userMembers;
 		const userMatches =
-			config.userMembers !== undefined && JSON.stringify(expectedSlots) === JSON.stringify(actualSlots);
+			requested === undefined
+				? userSlots === null
+				: userSlots != null &&
+					userSlots.length === requested.length &&
+					userSlots.every((slot, index) => slot.rawSelector === requested[index]);
 		const effectiveMatchesRequested =
 			userMatches &&
-			(config.source === "global" || config.source === "default") &&
 			config.effectiveMembers !== null &&
-			config.effectiveMembers.every(slot => slot.status === "available");
+			config.effectiveMembers.length === (requested?.length ?? 0) &&
+			config.effectiveMembers.every(
+				(slot, index) =>
+					slot.status === "available" &&
+					slot.model !== null &&
+					`${slot.model.provider}/${slot.model.modelId}` === requested?.[index],
+			);
+		const userMismatch = "The fresh user value differs from this request's confirmed writes";
 		const result: TeamConfigSaveResult = {
 			...receipt,
 			config,
@@ -451,7 +492,7 @@ export class TeamConfigService {
 			...(!effectiveMatchesRequested
 				? {
 						effectiveNote: !userMatches
-							? "The fresh user value differs from this request's confirmed writes"
+							? userMismatch
 							: "A higher-priority layer overrides the request or the effective roster is unavailable",
 					}
 				: {}),
@@ -462,6 +503,8 @@ export class TeamConfigService {
 				failure?.message ?? "Configuration save was not complete",
 				{ ...result, ...(storageIssues ? { issues: storageIssues } : {}) },
 			);
+		// A committed write can be superseded before readback. Do not let callers adopt the other writer's version.
+		if (!userMatches) throw new TeamConfigError("revision_conflict", userMismatch, result);
 		return result;
 	}
 }

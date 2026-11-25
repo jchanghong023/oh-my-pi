@@ -356,11 +356,11 @@ describe("compact action dock", () => {
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		const cases: Array<{ name: string; args: Record<string, unknown>; running: string; done: string }> = [
+		const cases = [
 			{ name: "bash", args: { command: "echo hi" }, running: "正在执行", done: "执行完成" },
 			{ name: "edit", args: { path: "a.ts", input: "*** Begin Patch" }, running: "正在写入", done: "写入完成" },
 			{ name: "mystery_tool", args: { query: "target" }, running: "正在调用", done: "调用完成" },
-		];
+		] as const;
 		for (const [index, c] of cases.entries()) {
 			const id = `cat-${index}`;
 			await live.emit({ type: "tool_execution_start", toolCallId: id, toolName: c.name, args: c.args });

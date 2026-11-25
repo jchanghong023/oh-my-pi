@@ -136,6 +136,8 @@ export interface ModelBrowserItem {
 	id: string;
 	model: Model;
 	selector: string;
+	/** Base model selector for perf measurements when the row ID includes an upstream pin. */
+	perfSelector?: string;
 	/** Theme color of the row label (quick-role rows take their ctrl+p segment's). */
 	labelColor?: string;
 }
@@ -1142,13 +1144,14 @@ export function measuredPerf(
 	tiers?: TieredPerf,
 ): { perf: ModelBrowserPerf; tier?: string } | undefined {
 	if (perf.size === 0) return undefined;
+	const selector = item.perfSelector ?? item.selector;
 	if (serviceTier) {
-		const tiered = perf.get(`${item.selector}@${serviceTier}`);
+		const tiered = perf.get(`${selector}@${serviceTier}`);
 		if (tiered) return { perf: tiered, tier: serviceTier };
 	}
-	const standard = perf.get(item.selector);
+	const standard = perf.get(selector);
 	if (standard) return { perf: standard };
-	const best = (tiers ?? tieredPerf(perf)).get(item.selector);
+	const best = (tiers ?? tieredPerf(perf)).get(selector);
 	return best && { perf: best.perf, tier: best.tier };
 }
 

@@ -30,6 +30,7 @@ import {
 	searchPathTier,
 } from "./path-utils";
 import { searchApprovalCacheTargets } from "./search-approval-targets";
+import { createTeamSearchTargetCheck } from "./team-read-isolation";
 import { toPathList } from "../utils/render-utils";
 import { isRawSelector } from "./read-selector";
 import { capParseErrors, formatCodeFrameLine, formatParseErrors } from "../utils/render-utils";
@@ -229,6 +230,7 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				cwd: this.session.cwd,
 				internalUrlAction: "search",
 				filesystem: urlFilesystem,
+				assertTarget: await createTeamSearchTargetCheck(this.session, resolveContext),
 				resolveExternalUrl: async rawPath => {
 					const target = parseReadUrlTarget(rawPath);
 					if (!target) return undefined;

@@ -26,6 +26,7 @@ import {
 	type ExtensionListModel,
 	type ListRow,
 	scrollToShow,
+	skillToggleBlock,
 } from "../../overlays/panels/extension-list-model";
 import type { ExtensionInspectorModel } from "../../overlays/panels/extension-inspector-model";
 import {
@@ -242,15 +243,21 @@ function section(theme: Theme, title: string, body: string[], width: number): st
 	];
 }
 
-function statusBadge(theme: Theme, state: ExtensionState, reason?: string, shadowedBy?: string): string {
+function statusBadge(theme: Theme, ext: Extension): string {
 	const status = (key: string) => theme.symbols.symbol(`status.${key}`);
-	switch (state) {
+	switch (ext.state) {
 		case "active":
-			return theme.fg("success", `${status("enabled")} ${enablementLabel(state)}`);
+			return theme.fg("success", `${status("enabled")} ${enablementLabel(ext.state)}`);
 		case "disabled":
-			return theme.fg("dim", `${status("disabled")} ${enablementLabel(state, reason)}`);
+			return theme.fg(
+				"dim",
+				`${status("disabled")} ${enablementLabel(ext.state, ext.disabledReason, undefined, skillToggleBlock(ext))}`,
+			);
 		case "shadowed":
-			return theme.fg("warning", `${status("shadowed")} ${enablementLabel(state, reason, shadowedBy)}`);
+			return theme.fg(
+				"warning",
+				`${status("shadowed")} ${enablementLabel(ext.state, ext.disabledReason, ext.shadowedBy)}`,
+			);
 	}
 }
 
@@ -547,8 +554,8 @@ export function inspectorRows(
 	lines.push("");
 	if (kind.runtimeLine) {
 		lines.push(kind.runtimeLine, ...(kind.runtimeExtra ?? []));
-		if (ext.state !== "active") lines.push(`  ${statusBadge(theme, ext.state, ext.disabledReason, ext.shadowedBy)}`);
-	} else lines.push(statusBadge(theme, ext.state, ext.disabledReason, ext.shadowedBy), ...(kind.runtimeExtra ?? []));
+		if (ext.state !== "active") lines.push(`  ${statusBadge(theme, ext)}`);
+	} else lines.push(statusBadge(theme, ext), ...(kind.runtimeExtra ?? []));
 	lines.push("");
 	for (const value of [kind.description, kind.guidance]) {
 		const text = sanitizeDisplayField(value);

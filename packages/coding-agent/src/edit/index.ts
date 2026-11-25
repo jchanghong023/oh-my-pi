@@ -620,14 +620,10 @@ export class EditTool implements AgentTool<TInput> {
 			outcome = await editSession.apply(
 				{ lspBatchId: batch?.id, lspFlush: batch?.flush ?? false },
 				async (_error, request) => {
-					if (rawSnapshot !== undefined && (await Bun.file(request.path).text()) !== rawSnapshot) {
-						throw new ToolError("The file changed while the edit was being prepared; re-read and retry.", {
-							path: request.path,
-						});
-					}
-					uncertainPaths = [request.displayPath];
-					if (request.moveTo) uncertainPaths.push(path.relative(this.session.cwd, request.moveTo));
-					const response = await this.#write(request, signal);
+					const response = await this.#write(request, signal, rawSnapshot, () => {
+						uncertainPaths = [request.displayPath];
+						if (request.moveTo) uncertainPaths.push(path.relative(this.session.cwd, request.moveTo));
+					});
 					committedPaths.push(...uncertainPaths);
 					uncertainPaths = [];
 					return response;
@@ -822,17 +818,41 @@ export class EditTool implements AgentTool<TInput> {
 		return { written: request.content };
 	}
 
-	async #write(request: EditWriteRequest, signal?: AbortSignal): Promise<EditWriteResponse> {
+	async #write(
+		request: EditWriteRequest,
+		signal: AbortSignal | undefined,
+		rawSnapshot: string | undefined,
+		markUncertain: () => void,
+	): Promise<EditWriteResponse> {
 		return withWritethroughMutationLocks(
 			request.moveTo ? [request.path, request.moveTo] : [request.path],
 			request.flushLsp ? request.lspBatchId : undefined,
-			() => this.#writeLocked(request, signal),
+			() => this.#writeLocked(request, signal, rawSnapshot, markUncertain),
 		);
 	}
 
-	async #writeLocked(request: EditWriteRequest, signal?: AbortSignal): Promise<EditWriteResponse> {
+	async #writeLocked(
+		request: EditWriteRequest,
+		signal: AbortSignal | undefined,
+		rawSnapshot: string | undefined,
+		markUncertain: () => void,
+	): Promise<EditWriteResponse> {
+		signal?.throwIfAborted();
+		const file = Bun.file(request.path);
+		if (rawSnapshot !== undefined && (await file.text()) !== rawSnapshot) {
+			throw new ToolError("The file changed while the edit was being prepared; re-read and retry.", {
+				path: request.path,
+			});
+		}
+		const beginMutation = () => {
+			signal?.throwIfAborted();
+			markUncertain();
+		};
 		const remote = remoteMirrorUrl(request.path);
-		if (remote !== undefined) return this.#writeRemote(remote, request, signal);
+		if (remote !== undefined) {
+			beginMutation();
+			return this.#writeRemote(remote, request, signal);
+		}
 		const journaled = this.session.recordFileChange !== undefined;
 		const before = journaled ? await readSnapshot(request.path) : undefined;
 		const journal = (file: string, after: string | null, snapshot: FileSnapshot | undefined = before) => {
@@ -845,7 +865,8 @@ export class EditTool implements AgentTool<TInput> {
 			});
 		};
 		if (request.op === "delete") {
-			await deleteFileWithFallback(request.path, Bun.file(request.path));
+			beginMutation();
+			await deleteFileWithFallback(request.path, file);
 			journal(request.path, null);
 			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
 				await notifyWorkspaceWatchedFiles(
@@ -873,12 +894,24 @@ export class EditTool implements AgentTool<TInput> {
 			if (!request.moveTo) {
 				throw new ToolError("Native edit move request omitted destination", { path: request.path });
 			}
+			if (this.mode === "patch" || this.mode === "apply_patch") {
+				const existing = await fs.stat(request.moveTo).catch(error => {
+					if (!isEnoent(error)) throw error;
+					return undefined;
+				});
+				if (existing) {
+					throw new ToolError(`Cannot rename ${request.displayPath}: destination already exists.`, {
+						path: request.moveTo,
+					});
+				}
+			}
 			const mode = await movedFileMode(request.path);
 			const destination = journaled ? await readSnapshot(request.moveTo) : undefined;
+			beginMutation();
 			await mkdirAllowingFallback(path.dirname(request.moveTo));
 			await writeFileWithFallback(request.moveTo, request.content);
 			if (mode !== undefined) await chmodMovedFile(request.moveTo, mode);
-			await deleteFileWithFallback(request.path, Bun.file(request.path));
+			await deleteFileWithFallback(request.path, file);
 			journal(request.path, null);
 			journal(request.moveTo, request.content, destination);
 			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
@@ -903,6 +936,7 @@ export class EditTool implements AgentTool<TInput> {
 			};
 		}
 
+		beginMutation();
 		const bridge = await routeWriteThroughBridge(
 			this.session,
 			request.displayPath,
@@ -915,16 +949,17 @@ export class EditTool implements AgentTool<TInput> {
 			return { written: bridge.text };
 		}
 
-		// The pre-image is the only way to tell "the write never landed" from
-		// "something else rewrote the file"; a stat cannot (coarse mtimes).
+		// The pre-image distinguishes an update that never landed from a formatter
+		// restoring the old bytes. Read what is on disk now, not what staging predicted.
 		let preWriteBytes: Uint8Array | undefined;
 		if (request.op === "update") {
 			try {
-				preWriteBytes = await Bun.file(request.path).bytes();
+				preWriteBytes = await file.bytes();
 			} catch (error) {
 				if (!isEnoent(error)) throw error;
 			}
 		} else if (request.op === "create") {
+			signal?.throwIfAborted();
 			await mkdirAllowingFallback(path.dirname(request.path));
 		}
 
@@ -935,7 +970,7 @@ export class EditTool implements AgentTool<TInput> {
 			request.path,
 			request.content,
 			signal,
-			Bun.file(request.path),
+			file,
 			request.lspBatchId ? { id: request.lspBatchId, flush: request.flushLsp } : undefined,
 			destination => {
 				if (destination !== request.path) return undefined;

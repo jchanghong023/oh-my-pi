@@ -108,8 +108,7 @@ async function readStartupConfig(): Promise<CompanySnapshot> {
 			!["http:", "https:"].includes(endpoint.protocol) ||
 			endpoint.username ||
 			endpoint.password ||
-			endpoint.search ||
-			endpoint.hash
+			/[?#]/.test(endpoint.href)
 		) {
 			throw new Error("Invalid endpoint");
 		}

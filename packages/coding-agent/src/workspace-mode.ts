@@ -53,13 +53,17 @@ export async function resolveWorkspaceModeScope(
 ): Promise<WorkspaceModeScope> {
 	const projectRoot = inheritedScope ? inheritedScope.projectRoot : (vcs.gitInfo(cwd)?.repoRoot ?? null);
 	const canonicalProjectRoot =
-		projectRoot === null ? null : resolveEquivalentPath(projectRoot, { throughMissing: true });
+		inheritedScope || projectRoot === null
+			? projectRoot
+			: resolveEquivalentPath(projectRoot, { throughMissing: true });
 	const roots = inheritedScope ? inheritedScope.allowedRoots : canonicalProjectRoot ? [canonicalProjectRoot] : [];
+	// A child's inherited roots are a snapshot. Resolve only the child's new roots.
 	const allowedRoots: string[] = [];
 	const seen = new Set<string>();
-	for (const root of [...roots, os.tmpdir(), resolveLocalRoot(localOptions)]) {
-		// local:// need not exist yet; canonicalize its existing ancestors as well.
-		const canonical = resolveEquivalentPath(root, { throughMissing: true });
+	const localRoots = [os.tmpdir(), resolveLocalRoot(localOptions)].map(root =>
+		resolveEquivalentPath(root, { throughMissing: true }),
+	);
+	for (const canonical of [...roots, ...localRoots]) {
 		const key = process.platform === "win32" ? canonical.toLowerCase() : canonical;
 		if (seen.has(key)) continue;
 		seen.add(key);

@@ -594,10 +594,8 @@ export class CollabHost {
 				const bounded = serializeReplicatedEntry(entry);
 				const shrunk = bounded.value;
 				if (shrunk.type === "custom_message" && shrunk.customType === COLLAB_ENTRY_OMITTED_CUSTOM_TYPE) {
-					// The live path also emits a guest-visible notice: guests only
-					// apply `message` entries to their agent context, so without
-					// this the substitution would be silently invisible there
-					// (PR #11999 review). Notices never enter agent state.
+					// The replacement is not added to the guest's active context.
+					// Emit a separate visible notice without changing agent state.
 					this.#send({ t: "event", event: oversizedEntryNotice(entry.type) });
 				}
 				this.#socket?.send(encodeEntryFrame(bounded.json));
@@ -685,7 +683,6 @@ export class CollabHost {
 		const socket = this.#socket;
 		if (this.numberedRoom) {
 			this.#registration?.abort();
-			socket?.discardPendingSends();
 			socket?.close();
 		} else if (socket) {
 			// Revocation drops queued application data; only the goodbye may drain.

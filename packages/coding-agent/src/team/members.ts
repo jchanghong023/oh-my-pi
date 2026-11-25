@@ -9,6 +9,7 @@
  *   explicit roster and must remain available even when absent from it.
  */
 import type { Model } from "@oh-my-pi/pi-ai";
+import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import {
 	formatModelStringWithRouting,
 	resolveModelFromString,
@@ -68,6 +69,26 @@ export function expandTeamRoster<T, U>(roster: readonly T[], project: (member: T
 	);
 }
 
+/** Resolve exact references against the allowed models, including their aliases. */
+export function resolveTeamMemberReference(
+	selector: string,
+	models: readonly Model[],
+	literalOnly = false,
+): Model | undefined {
+	const separator = selector.indexOf("/");
+	if (separator <= 0) return undefined;
+	const provider = literalOnly ? selector.slice(0, separator) : selector.slice(0, separator).trim();
+	const modelId = literalOnly ? selector.slice(separator + 1) : selector.slice(separator + 1).trim();
+	// Several allowed upstream pins can share this literal ID. The first exact row is in scope.
+	const exact = models.find(model => model.provider === provider && model.id === modelId);
+	if (exact || literalOnly) return exact;
+	const model = resolveProviderModelReference(provider, modelId, models);
+	if (!model) return undefined;
+	// Native resolution can synthesize these exact IDs from a row in the allowed pool.
+	if ((model.provider === "amazon-bedrock" || model.provider === "openrouter") && model.id === modelId) return model;
+	return models.some(candidate => routedModelsAreEqual(candidate, model)) ? model : undefined;
+}
+
 /** Resolve ordered independent proposer slots. Pure: no I/O, all inputs injected. */
 export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersResult {
 	const sessionModel = input.sessionModel;
@@ -94,11 +115,7 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 	const availableModels = [...input.availableModels];
 	const resolvedMembers: Model[] = [];
 	for (const entry of entries) {
-		const separator = entry.indexOf("/");
-		const model =
-			separator > 0
-				? resolveProviderModelReference(entry.slice(0, separator), entry.slice(separator + 1), availableModels)
-				: undefined;
+		const model = resolveTeamMemberReference(entry, availableModels);
 		if (!model) {
 			return {
 				ok: false,

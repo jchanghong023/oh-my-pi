@@ -851,7 +851,7 @@ impl Process {
 	/// as a false descendant; `TerminateProcess`-ing it drops the whole session
 	/// with no cleanup and no `session_exit` record (#7452, related #4605).
 	fn signal_tree_excluding(&self, signal: i32, protected: &HashSet<i32>) -> u32 {
-		signal_trees(std::slice::from_ref(self), &[], signal, protected)
+		signal_trees(std::slice::from_ref(self), Vec::new(), &[], signal, protected, |_| {})
 	}
 
 	/// Live descendants with every protected subtree pruned, not just the exact
@@ -892,7 +892,7 @@ impl Process {
 		} else {
 			HashSet::new()
 		};
-		let _ = signal_snapshot(processes, groups, &seen, protected, signal);
+		let _ = signal_snapshot(processes, groups, &seen, protected, signal, |_| {});
 	}
 
 	async fn terminate_tree_impl(
@@ -1168,7 +1168,14 @@ impl TerminationTargets {
 	/// targets routinely exit between collection and signalling, and
 	/// the caller's policy is "best effort".
 	pub fn signal(&self, signal: i32) {
-		let _ = signal_trees(&self.processes, &self.pgids, signal, &host_protected_pids());
+		let _ = signal_trees(
+			&self.processes,
+			Vec::new(),
+			&self.pgids,
+			signal,
+			&host_protected_pids(),
+			|_| {},
+		);
 	}
 
 	/// Signal only the recorded processes, without their groups or descendants.
@@ -1181,11 +1188,36 @@ impl TerminationTargets {
 			}
 		}
 	}
+
+	/// Signal a mixed wave and report missed PIDs for callers that can safely
+	/// retry delivery through their owned child handles.
+	#[cfg(unix)]
+	pub(crate) fn signal_wave(&self, single: Vec<Process>, signal: i32) -> HashSet<i32> {
+		let mut failed = HashSet::new();
+		let _ = signal_trees(
+			&self.processes,
+			single,
+			&self.pgids,
+			signal,
+			&host_protected_pids(),
+			|pid| {
+				failed.insert(pid);
+			},
+		);
+		failed
+	}
 }
 
 /// Snapshot a complete wave before delivering anything: a TERM handler may
 /// immediately spawn cleanup children, which must not receive that same TERM.
-fn signal_trees(roots: &[Process], pgids: &[i32], signal: i32, protected: &HashSet<i32>) -> u32 {
+fn signal_trees(
+	roots: &[Process],
+	mut single: Vec<Process>,
+	pgids: &[i32],
+	signal: i32,
+	protected: &HashSet<i32>,
+	on_failure: impl FnMut(i32),
+) -> u32 {
 	let mut groups: HashSet<i32> = pgids.iter().copied().collect();
 	let mut seen = HashSet::new();
 	let mut processes = Vec::new();
@@ -1209,7 +1241,8 @@ fn signal_trees(roots: &[Process], pgids: &[i32], signal: i32, protected: &HashS
 		}
 	}
 
-	signal_snapshot(&processes, groups, &seen, protected, signal)
+	single.retain(|p| !protected.contains(&p.pid()) && seen.insert(p.pid()));
+	signal_snapshot(processes.iter().chain(&single), groups, &seen, protected, signal, on_failure)
 }
 
 /// Snapshot group-only members separately from known tree members. Deliver
@@ -1220,6 +1253,7 @@ fn signal_snapshot<'a>(
 	seen: &HashSet<i32>,
 	protected: &HashSet<i32>,
 	signal: i32,
+	mut on_failure: impl FnMut(i32),
 ) -> u32 {
 	#[cfg(unix)]
 	signal_group_only_members(groups, seen, protected, signal);
@@ -1229,6 +1263,8 @@ fn signal_snapshot<'a>(
 	for process in processes {
 		if process.inner.kill(signal) {
 			signaled += 1;
+		} else {
+			on_failure(process.pid());
 		}
 	}
 	signaled

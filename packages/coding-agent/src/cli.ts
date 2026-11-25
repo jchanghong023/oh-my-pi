@@ -45,6 +45,7 @@ import {
 	SUBAGENT_WORKER_ARG,
 	TRANSCRIPT_INDEX_WORKER_ARG,
 } from "./cli/worker-selectors";
+import { commands, isResourceCommand, resolveCliArgv, runResourceCommand } from "./cli-commands";
 import { DAEMON_WORKER_ARG } from "./daemon/protocol";
 import { MNEMOPI_EMBED_WORKER_ARG } from "./mnemopi/embed-protocol";
 import type * as JsProcessEntry from "./eval/js/process-entry";
@@ -549,58 +550,6 @@ export async function runCli(argv: string[]): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
-	// Bootstrap exception: static resource imports snapshot the default agent .env before profile selection.
-	if (resolvedArgv[0] === "openspec") {
-		const controller = new AbortController();
-		const abort = () => controller.abort();
-		process.once("SIGINT", abort);
-		process.once("SIGTERM", abort);
-		try {
-			const { runOpenSpec } = await import("./spec-driven/resources");
-			const io = process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY ? "terminal" : "capture";
-			const result = await runOpenSpec(resolvedArgv.slice(1), process.cwd(), controller.signal, io);
-			process.stdout.write(result.stdout);
-			process.stderr.write(result.stderr);
-			process.exitCode = result.exitCode;
-		} finally {
-			process.removeListener("SIGINT", abort);
-			process.removeListener("SIGTERM", abort);
-		}
-		return;
-	}
-	if (resolvedArgv[0] === "superpowers") {
-		const usage =
-			"Usage: omp superpowers <relative-skill-script> [args...]\n\nExamples:\n  omp superpowers skills/writing-skills/render-graphs.js <skill-directory>\n  omp superpowers skills/subagent-driven-development/scripts/review-package [-C DIR] <plan-file> <base> <head> [output-file]\n\nRuns only trusted bundled Superpowers skill scripts. Run SDD helpers from the working tree being executed; sdd-workspace, task-brief and review-package also accept -C DIR. JavaScript uses OMP's embedded Bun; shell scripts require Bash and POSIX utilities (Git Bash on Windows). Graph rendering also requires Graphviz (dot).\n";
-		const script = resolvedArgv[1];
-		if (!script || script === "--help" || script === "-h") {
-			if (script) {
-				process.stdout.write(usage);
-				process.exitCode = 0;
-			} else {
-				process.stderr.write(usage);
-				process.exitCode = 2;
-			}
-			return;
-		}
-		const controller = new AbortController();
-		const abort = () => controller.abort();
-		process.once("SIGINT", abort);
-		process.once("SIGTERM", abort);
-		try {
-			const { runSuperpowersScript } = await import("./spec-driven/resources");
-			const result = await runSuperpowersScript(script, resolvedArgv.slice(2), process.cwd(), controller.signal);
-			process.stdout.write(result.stdout);
-			process.stderr.write(result.stderr);
-			process.exitCode = result.exitCode;
-		} catch (error) {
-			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-			process.exitCode = 1;
-		} finally {
-			process.removeListener("SIGINT", abort);
-			process.removeListener("SIGTERM", abort);
-		}
-		return;
-	}
 
 	const workerSelector = resolvedArgv[0];
 	const isWorker = isWorkerHostSelector(workerSelector);
@@ -614,6 +563,9 @@ export async function runCli(argv: string[]): Promise<void> {
 	// worker's parked initial messages as soon as the entry module's
 	// top-level evaluation finishes.
 	if (isWorker) {
+		// Load the selected profile's environment without yielding before the
+		// worker's synchronous inbox setup or loading its implementation.
+		require("@oh-my-pi/pi-utils/env.js");
 		// Invoke dispatch first so its inbox is installed before asynchronous
 		// process-name setup yields; neither dependency belongs in prepaint.
 		const [dispatched] = await Promise.all([runWorkerEntrypoint(workerSelector), setFullProcessName()]);
@@ -638,17 +590,34 @@ export async function runCli(argv: string[]): Promise<void> {
 		process.stdout.write(await formatLicenseOutput());
 		return;
 	}
+	const resolved = resolveCliArgv(resolvedArgv);
+	if ("error" in resolved) {
+		process.stderr.write(`error: ${resolved.error}\n`);
+		process.exitCode = 1;
+		return;
+	}
+	const command = resolved.argv[0];
+	runningCommand = command;
+
 	const helpOrVersion =
 		resolvedArgv[0] === "--help" ||
 		resolvedArgv[0] === "-h" ||
 		resolvedArgv[0] === "--version" ||
 		resolvedArgv[0] === "-v" ||
 		resolvedArgv[0] === "help";
+	// Dotenv runs synchronously after profile selection and before the first
+	// addon use. The lock shim must see the selected profile's cache override.
+	if (!helpOrVersion) require("@oh-my-pi/pi-utils/env.js");
+	if (isResourceCommand(command)) {
+		await runResourceCommand(command, resolved.argv.slice(1), resolved.cwd);
+		return;
+	}
+
 	// Before any store opens (the prepaint composer's cache included): SQLite's POSIX
 	// locks would be released by any other close of the same file in this process
 	// (issue #15586); OFD locks are not. Help and version open no store and load no addon.
 	// A failed install is reported once the launch has a warning sink (`main.ts`,
-	// `ensureSqliteLockShim`); this module stays free of pi-utils' env snapshot.
+	// `ensureSqliteLockShim`).
 	if (isProcessEntry && !helpOrVersion) installSqliteLockShim();
 	let stopStartupComposer: (() => void) | undefined;
 	if (
@@ -665,19 +634,11 @@ export async function runCli(argv: string[]): Promise<void> {
 		stopStartupComposer = stopPendingStartupComposer;
 	}
 
-	// The speculative composer owns stdin before either loader yields, so input
-	// typed during initialization stays buffered. Neither graph is needed to
-	// produce that frame.
-	if (!helpOrVersion) {
-		// Static import cannot work: it would load the default profile's dotenv
-		// before setProfile. Explicit dotenv values must also precede fork network
-		// defaults and diagnostic directory resolution.
-		await import("@oh-my-pi/pi-utils/env");
-		if (isProcessEntry) {
-			// Latency boundary: help/version and SDK imports must not load diagnostic initialization.
-			const { initializeDiagnosticLogging } = await import("@oh-my-pi/pi-utils/logger");
-			initializeDiagnosticLogging("cli");
-		}
+	// Once the speculative composer owns stdin, diagnostic and network setup
+	// can yield without dropping input typed during initialization.
+	if (!helpOrVersion && isProcessEntry) {
+		const { initializeDiagnosticLogging } = await import("@oh-my-pi/pi-utils/logger");
+		initializeDiagnosticLogging("cli");
 	}
 	await Promise.all([setFullProcessName(), helpOrVersion ? Promise.resolve() : installNetworkBootstrap()]);
 
@@ -687,19 +648,7 @@ export async function runCli(argv: string[]): Promise<void> {
 	}
 
 	try {
-		const [{ run }, { commands, resolveCliArgv }] = await Promise.all([
-			import("@oh-my-pi/pi-utils/cli"),
-			import("./cli-commands"),
-		]);
-		// --help and --version are handled by run() directly; --license returned above.
-		// Everything else that isn't a known subcommand routes to "launch".
-		const resolved = resolveCliArgv(resolvedArgv);
-		if ("error" in resolved) {
-			process.stderr.write(`error: ${resolved.error}\n`);
-			process.exitCode = 1;
-			return;
-		}
-		runningCommand = resolved.argv[0];
+		const { run } = await import("@oh-my-pi/pi-utils/cli");
 		await run({ bin: APP_NAME, version: VERSION, argv: resolved.argv, commands, metadataHelp: showHelp });
 	} finally {
 		stopStartupComposer?.();

@@ -122,7 +122,7 @@ const GENERIC_LIMIT_OVERFLOW_PATTERN = /exceeds the limit of \d+/i;
 const OVERFLOW_PATTERNS = [...CONTEXT_OVERFLOW_EVIDENCE_PATTERNS, GENERIC_LIMIT_OVERFLOW_PATTERN];
 
 /** Token-context evidence only — excludes GENERIC_LIMIT_OVERFLOW_PATTERN which media budgets also match (#9235). */
-function hasTokenContextOverflowEvidence(text: string): boolean {
+export function hasTokenContextOverflowEvidence(text: string): boolean {
 	return CONTEXT_OVERFLOW_EVIDENCE_PATTERNS.some(p => p.test(text));
 }
 
@@ -785,12 +785,16 @@ export function classify(error: unknown, api?: Api): number {
 	// cause.
 	let governingTerminalStatus: number | undefined;
 	while (link !== undefined && link !== null) {
+		let priorTokenOverflowEvidence = causeTokenEvidence;
 		if (typeof link === "object") {
 			if (seen.has(link)) break;
 			seen.add(link);
 
-			if ("errorId" in link && typeof (link as { errorId: unknown }).errorId === "number") {
-				kinds |= (link as { errorId: number }).errorId & KIND_MASK;
+			if ("errorId" in link && typeof link.errorId === "number") {
+				const id = link.errorId;
+				kinds |= id & KIND_MASK;
+				// A structured overflow may have had its original diagnostic redacted.
+				priorTokenOverflowEvidence ||= is(id, Flag.ContextOverflow) && !is(id, Flag.PayloadRejected);
 			}
 			if ("code" in link && typeof link.code === "string") {
 				if (ACCOUNT_POLICY_PATTERN.test(link.code)) {
@@ -871,7 +875,7 @@ export function classify(error: unknown, api?: Api): number {
 		}
 
 		const linkStatus = status(link);
-		const textId = classifyText(linkMessage, linkStatus ?? governingTerminalStatus, causeTokenEvidence, api);
+		const textId = classifyText(linkMessage, linkStatus ?? governingTerminalStatus, priorTokenOverflowEvidence, api);
 		kinds |= textId & KIND_MASK;
 		if (isTerminalClientErrorStatus(linkStatus)) governingTerminalStatus = linkStatus;
 

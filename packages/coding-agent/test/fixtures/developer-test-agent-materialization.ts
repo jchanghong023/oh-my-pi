@@ -4,20 +4,16 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gzipSync } from "node:zlib";
 import type { LoadContext } from "../../src/capability/types";
-import { loadDeveloperTestCommands, loadDeveloperTestSkills } from "../../src/discovery/developer-test-agent";
 import archiveMetadata from "../../src/extensibility/plugins/developer-test-agent-archive";
 import { getDeveloperTestAgentRoot } from "../../src/extensibility/plugins/developer-test-agent-resources";
 import type { Skill } from "../../src/extensibility/skills";
-import { expandSlashCommand } from "../../src/extensibility/slash-commands";
-import { parseInternalUrl } from "../../src/internal-urls/parse";
-import { SkillProtocolHandler } from "../../src/internal-urls/skill-protocol";
 import { metadata } from "./developer-test-agent-materialization-preload";
 
 const [scenario, directory, sourceRoot] = process.argv.slice(2);
 assert.ok(scenario && directory && sourceRoot, "scenario, temporary directory and source tree are required");
 const archivePath = path.join(directory, "resources.json.gz");
 // The child preload supplies an object export, never a callable metadata spy.
-// Static imports have finished, so no loader hook is needed by the scenarios.
+// The resource loader and its metadata are already loaded; the scenarios need no further hook.
 Bun.plugin.clearAll();
 assert.equal(archiveMetadata, metadata, "the archive export retains the metadata object identity");
 
@@ -60,8 +56,9 @@ async function tree(root: string, prefix = ""): Promise<string[]> {
 	const names: string[] = [];
 	for (const entry of await fs.readdir(path.join(root, prefix), { withFileTypes: true })) {
 		const name = prefix ? `${prefix}/${entry.name}` : entry.name;
-		names.push(name);
-		if (entry.isDirectory()) names.push(...(await tree(root, name)));
+		// Directory suffixes let the tree comparison check entry kinds without stat calls.
+		if (entry.isDirectory()) names.push(`${name}/`, ...(await tree(root, name)));
+		else names.push(name);
 	}
 	return names.sort();
 }
@@ -70,26 +67,27 @@ const profile = path.join(directory, "profile-a");
 if (scenario === "consumers") {
 	await setArchive();
 	const root = await getDeveloperTestAgentRoot(profile);
-	assert.equal(root, path.join(cacheParent(profile), metadata.digest, "developer-test-agent"));
+	assert.equal(root, await fs.realpath(path.join(cacheParent(profile), metadata.digest, "developer-test-agent")));
 	assert.notEqual(root, sourceRoot, "the archive branch, not the source fallback, must execute");
 	const sourceEntries = await tree(sourceRoot);
 	assert.deepEqual(
 		await tree(root),
 		[
 			...sourceEntries,
-			"materialization-fixture",
-			"materialization-fixture/empty",
+			"materialization-fixture/",
+			"materialization-fixture/empty/",
 			"materialization-fixture/binary",
 		].sort(),
 	);
 	for (const name of sourceEntries) {
-		const source = path.join(sourceRoot, ...name.split("/"));
-		const target = path.join(root, ...name.split("/"));
-		const info = await fs.stat(source);
-		if (info.isDirectory()) assert.equal((await fs.stat(target)).isDirectory(), true, name);
-		else {
-			assert.deepEqual(await fs.readFile(target), await fs.readFile(source), name);
-			if (process.platform !== "win32") assert.equal((await fs.stat(target)).mode & 0o777, info.mode & 0o777, name);
+		if (name.endsWith("/")) continue;
+		const source = path.join(sourceRoot, name);
+		const target = path.join(root, name);
+		const [actual, expected] = await Promise.all([fs.readFile(target), fs.readFile(source)]);
+		assert.deepEqual(actual, expected, name);
+		if (process.platform !== "win32") {
+			const [actual, expected] = await Promise.all([fs.stat(target), fs.stat(source)]);
+			assert.equal(actual.mode & 0o777, expected.mode & 0o777, name);
 		}
 	}
 	assert.deepEqual(await fs.readdir(path.join(root, "materialization-fixture", "empty")), []);
@@ -100,6 +98,17 @@ if (scenario === "consumers") {
 	if (process.platform !== "win32")
 		assert.equal((await fs.stat(path.join(root, "materialization-fixture", "binary"))).mode & 0o777, 0o640);
 
+	const [
+		{ loadDeveloperTestCommands, loadDeveloperTestSkills },
+		{ expandSlashCommand },
+		{ parseInternalUrl },
+		{ SkillProtocolHandler },
+	] = await Promise.all([
+		import("../../src/discovery/developer-test-agent"),
+		import("../../src/extensibility/slash-commands"),
+		import("../../src/internal-urls/parse"),
+		import("../../src/internal-urls/skill-protocol"),
+	]);
 	const ctx: LoadContext = { cwd: process.cwd(), home: directory, repoRoot: null, agentDir: profile };
 	const commands = await loadDeveloperTestCommands(ctx);
 	assert.deepEqual(commands.items.map(command => command.name).sort(), [

@@ -46,7 +46,7 @@ import { cfgGoalEnabled } from "../goals/settings";
 import { cfgPlanEnabled } from "../plan-mode/settings";
 import { formatKeyHint } from "../ui/keys/hints";
 import { readTodoLoop } from "../todoloop/parser";
-import { TodoLoopPresentation, todoLoopStatusView } from "../todoloop/presentation";
+import { presentTodoLoopCheck, TodoLoopPresentation } from "../todoloop/presentation";
 import type { TodoLoopState } from "../todoloop/runner";
 import { parseCommandArgs } from "../utils/command-args";
 
@@ -329,11 +329,12 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const ownerId = session.sessionId;
 			const generation = session.sessionGeneration;
 			const isOwner = () =>
+				!ctx.isShuttingDown &&
 				ctx.session === session &&
 				session.sessionId === ownerId &&
 				session.sessionGeneration === generation &&
 				!session.isDisposed;
-			const args = parseCommandArgs(command.args);
+			const args = parseCommandArgs(command.args, { preserveEmpty: true });
 			const check = args.at(-1) === "--check";
 			const paths = check ? args.slice(0, -1) : args;
 			clearSubmittedText(runtime);
@@ -369,7 +370,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						totalGroups: snapshot.groups.length,
 						attempt: 0,
 					};
-					ctx.present(() => todoLoopStatusView(() => state, snapshot));
+					presentTodoLoopCheck(ctx, state, snapshot);
 				} catch (error) {
 					if (!isOwner()) return;
 					const state: TodoLoopState = {
@@ -382,7 +383,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						attempt: 0,
 						reason: errorMessage(error),
 					};
-					ctx.present(() => todoLoopStatusView(() => state));
+					presentTodoLoopCheck(ctx, state);
 				}
 				return;
 			}

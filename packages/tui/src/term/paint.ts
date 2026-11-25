@@ -103,6 +103,8 @@ export interface PaintContext {
 	readonly width: number;
 	/** Rows allocated when the parent fixes a height (fullscreen layers, flex columns); undefined: natural height. */
 	readonly height: number | undefined;
+	/** Terminal screen rows, when painting for a live terminal rather than at an isolated size. */
+	readonly viewportHeight: number | undefined;
 	/** The active theme (reading it subscribes to theme changes). */
 	readonly theme: Theme;
 	/** Paint `node` at a size, cached; the child's reads are its own. */
@@ -216,6 +218,7 @@ export interface PaintEnvironment {
 	/** Animation clock in ms (ticked by the backend while painters read it). */
 	readonly clock: (cadence?: PaintCadence) => number;
 	readonly focus: Accessor<UiNode | null>;
+	readonly viewportHeight?: Accessor<number>;
 	readonly reduceMotion: Accessor<boolean>;
 	readonly hyperlinks: Accessor<boolean>;
 	/** Whether painters may draw OSC 66 sized text; absent: never. */
@@ -302,6 +305,9 @@ function createContext(env: PaintEnvironment, width: number, height: number | un
 	return {
 		width,
 		height,
+		get viewportHeight() {
+			return env.viewportHeight?.();
+		},
 		get theme() {
 			return env.theme();
 		},

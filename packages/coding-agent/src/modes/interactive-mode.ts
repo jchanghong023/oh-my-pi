@@ -256,7 +256,12 @@ import { sanitizeStatusText } from "./view-model/chrome/shared";
 import { CompactFileDiff } from "./compact-file-diff";
 import { CompactThinkingPreview } from "./compact-thinking-preview";
 import { CompactToolOutputPreview } from "./compact-tool-output-preview";
-import { setTodoLoopCardsExpanded } from "../todoloop/presentation";
+import {
+	isLiveTodoLoopCard,
+	restoreTodoLoopView,
+	setTodoLoopCardsExpanded,
+	suspendTodoLoopView,
+} from "../todoloop/presentation";
 import type { LocalAgentSessionEvent } from "../session/agent-session-events";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "./skill-command";
 import { parseCommandArgs } from "../utils/command-args";
@@ -1365,6 +1370,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	clearTransientSessionUi(options?: { viewOnly?: boolean }): void {
+		if (options?.viewOnly) suspendTodoLoopView(this);
 		this.#hideSessionInfo();
 		this.#working.clear();
 		this.compactThinkingPreview.clear();
@@ -1600,6 +1606,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						this.showError(error instanceof Error ? error.message : String(error)),
 					);
 				},
+				openTranscript: id => this.#selectorController.showAgentTranscript(id, this.#observerRegistry),
 				showJobsSheet: selected => this.showJobsSheet(selected),
 				stopAgent: id => this.#stopTrayAgent(id),
 				cancelJob: id => {
@@ -1672,7 +1679,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#omfgController = new OmfgController(this);
 		this.#cleanseController = new CleanseCommandController(this);
 		this.#extensionUiController = new ExtensionUiController(this);
-		this.#eventController = new EventController(this, event => this.#observeCompactPresentation(event));
+		this.#eventController = new EventController(
+			this,
+			event => this.#observeCompactPresentation(event),
+			() => this.#refreshCompact(),
+		);
 		this.compactFileDiff = new CompactFileDiff(
 			this,
 			() => Math.min(Math.floor(this.shell.size().rows / 3), this.#compactRows()),
@@ -1820,7 +1831,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		const hyperlinks = cfgTuiHyperlinks.get(this.settings);
 		this.#frame.hyperlinks.set(hyperlinks === "off" ? false : hyperlinks === "always" ? true : undefined);
 		this.#frame.textSizing.set(cfgTuiTextSizing.get(this.settings));
-		this.composer.setImeSafeCursor(cfgTuiImeSafeCursor.get(this.settings));
 	}
 
 	/** Follow the started host: terminal appearance, mouse, link routing, the tray, frame settings. */
@@ -2181,7 +2191,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Load initial todos
 		await logger.time("InteractiveMode.init:todos", () => this.#loadTodoList());
 
-		// A prepaint frame may already own the terminal.
+		// A prepaint frame may already own the terminal, but it did not receive the resolved IME setting.
+		this.composer.setImeSafeCursor(cfgTuiImeSafeCursor.get(this.settings));
 		if (!this.#ownsStartedUi) {
 			await this.#startShell(options.clearInitialTerminalHistory === true);
 			this.#ownsStartedUi = true;
@@ -2532,6 +2543,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			? [...preloaded]
 			: await loadSlashCommands({
 					cwd: basePath,
+					agentDir: this.settings.getAgentDir(),
 					extensionRoots: this.session.effectiveExtensionRoots,
 				});
 		this.session.setSlashCommands(fileCommands);
@@ -4189,6 +4201,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		// goes, the replay lands above them, and `pendingTools` keeps routing into them.
 		const transcript = this.shell.transcript;
 		const live = new Set<TranscriptBlock>();
+		for (const block of transcript.blocks()) {
+			if (isLiveTodoLoopCard(block)) live.add(block);
+		}
 		const livePendingTools = new Map<string, PendingTool>();
 		if (this.viewSession?.isStreaming) {
 			if (this.streaming) live.add(this.streaming.block);
@@ -6565,6 +6580,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		const goalAutoOrchestrateInitialId = state?.autoOrchestrate === true ? state.goal.id : undefined;
 		const streamingBehavior = options?.streamingBehavior ?? "steer";
 		if (this.session.isStreaming || this.session.isCompacting || !this.onInputCallback) {
+			if (isKnownSkillCommand(this, text)) {
+				return invokeSkillCommandFromText(this, text, streamingBehavior, {
+					images: input?.images,
+					imageLinks: input?.imageLinks,
+					goalAutoOrchestrateInitialId,
+					optimistic: true,
+					propagateErrors: true,
+				});
+			}
 			await this.withLocalSubmission(
 				text,
 				() => this.session.prompt(text, { images: input?.images, streamingBehavior, goalAutoOrchestrateInitialId }),
@@ -7305,15 +7329,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			),
 		];
 		if (activeProfile) cmd.push("--profile", activeProfile);
+		const { isStrictGitSslEnabled } = await import("@oh-my-pi/pi-ai/utils/proxy");
 		await postmortem.cleanup();
 		await postmortem.drainStdout();
+		const env: Record<string, string> = {};
+		for (const key in process.env) {
+			const value = process.env[key];
+			if (value !== undefined) env[key] = value;
+		}
+		// Only the replacement CLI gets the opt-in; its bootstrap removes it before spawning Git.
+		if (isStrictGitSslEnabled()) env.GIT_SSL_NO_VERIFY ??= "false";
 		if (process.platform !== "win32") {
 			try {
-				const env: Record<string, string> = {};
-				for (const key in process.env) {
-					const value = process.env[key];
-					if (value !== undefined) env[key] = value;
-				}
 				execReplace(cmd[0], cmd, env, []); // never returns on success
 			} catch (err) {
 				process.stderr.write(`${chalk.red(`Restart exec failed: ${err instanceof Error ? err.message : err}`)}\n`);
@@ -7321,6 +7348,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		try {
 			const child = Bun.spawn(cmd, {
+				env,
 				stdin: "inherit",
 				stdout: "inherit",
 				stderr: "inherit",
@@ -8065,7 +8093,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#applyTranscriptPresenters();
 		const owner = this.viewSession;
 		const id = this.sessionManager.getSessionId();
-		await this.#uiHelpers.renderInitialMessages(options);
+		await this.#uiHelpers.renderInitialMessages({
+			...options,
+			onCommit: context => {
+				if (this.viewSession === owner && this.sessionManager.getSessionId() === id) restoreTodoLoopView(this);
+				options?.onCommit?.(context);
+			},
+		});
 		if (this.viewSession !== owner || this.sessionManager.getSessionId() !== id) return;
 		this.refreshCompactPresentation();
 		void this.#btwController.placeNotes();
@@ -8236,7 +8270,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async handleWorktreeCommand(branch?: string): Promise<void> {
 		if (this.#vibeSessionTransitionBlocked()) return;
 		const worktree = await this.#commandController.handleWorktreeCommand(branch);
-		if (!worktree) return;
+		if (!worktree?.created) return;
 		this.#ownedWorktrees.push(worktree);
 		this.#worktreesInHook.add(worktree);
 		try {
@@ -8621,8 +8655,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#inputController.handleImagePaste();
 	}
 
-	handleImagePathPaste(path: string, isCurrent?: () => boolean): Promise<void> {
-		return this.#inputController.handleImagePathPaste(path, isCurrent);
+	handleImagePathPaste(path: string, isCurrent: () => boolean): Promise<boolean | void>;
+	handleImagePathPaste(path: string): Promise<void>;
+	handleImagePathPaste(path: string, isCurrent?: () => boolean): Promise<boolean | void> {
+		return isCurrent
+			? this.#inputController.handleImagePathPaste(path, isCurrent)
+			: this.#inputController.handleImagePathPaste(path);
 	}
 
 	/** Queue slash-command input behind the active turn. */

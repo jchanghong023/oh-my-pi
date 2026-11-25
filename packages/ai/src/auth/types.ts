@@ -938,9 +938,10 @@ export interface CredentialsApi {
 	 */
 	all(): AuthStorageData;
 	/**
-	 * List stored credential rows, optionally filtered by provider.
+	 * List stored credential rows, optionally filtered by provider. Paused
+	 * providers are excluded unless explicitly included for administration.
 	 */
-	list(provider?: string): StoredAuthCredential[];
+	list(provider?: string, options?: { includePaused?: boolean }): StoredAuthCredential[];
 	/**
 	 * Check if credentials exist for a provider in storage.
 	 */
@@ -975,7 +976,7 @@ export interface CredentialsApi {
 	 */
 	remove(provider: string): Promise<void>;
 	/**
-	 * Remove one stored credential for a provider.
+	 * Remove one stored credential belonging to the named provider, even if it is paused.
 	 */
 	removeById(provider: string, credentialId: number): Promise<boolean>;
 	/**

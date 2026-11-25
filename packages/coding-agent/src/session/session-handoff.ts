@@ -39,6 +39,8 @@ export interface HandoffGenerationOptions {
 	signal: AbortSignal;
 	messages?: readonly AgentMessage[];
 	autoTriggered?: boolean;
+	/** Runs when the prepared request reaches the transport, before any response. */
+	onDispatch?: () => void;
 	/** Sees every provider attempt's response, billed or failed, beside the spend journal. */
 	onAttempt?: (message: AssistantMessage) => void;
 }
@@ -81,7 +83,7 @@ export class SessionHandoff {
 	 */
 	async generateDocument(
 		customInstructions: string | undefined,
-		{ model, signal, messages, autoTriggered, onAttempt }: HandoffGenerationOptions,
+		{ model, signal, messages, autoTriggered, onDispatch, onAttempt }: HandoffGenerationOptions,
 	): Promise<string | undefined> {
 		try {
 			throwIfHandoffAborted(signal);
@@ -146,6 +148,7 @@ export class SessionHandoff {
 				{
 					streamOptions: handoffStreamOptions,
 					completeImpl: async (requestModel, requestContext, requestOptions) => {
+						onDispatch?.();
 						const stream = await this.#host.sideStreamFn(requestModel, requestContext, requestOptions);
 						const message = await stream.result();
 						// One call per provider attempt, so a retried or failed one is billed too.

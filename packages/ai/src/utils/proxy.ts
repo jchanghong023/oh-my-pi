@@ -1,5 +1,6 @@
 import * as net from "node:net";
 import * as tls from "node:tls";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { AbortError } from "../error/abort";
 import { StreamTimeoutError, ValidationError } from "../error/validation";
@@ -154,11 +155,15 @@ export function getProxyForProvider(provider: string): string | undefined {
 /** Resolves provider-specific and standard proxy variables for a target URL, honoring NO_PROXY. */
 export function getProxyForUrl(provider: string, url: URL): string | undefined {
 	if (shouldBypassProxy(url)) return undefined;
+	return getProxyForProvider(provider) || standardProxyForProtocol(url.protocol);
+}
+
+function standardProxyForProtocol(protocol: string): string | undefined {
 	const protocolProxy =
-		url.protocol === "https:" || url.protocol === "wss:"
+		protocol === "https:" || protocol === "wss:"
 			? Bun.env.HTTPS_PROXY || Bun.env.https_proxy
 			: Bun.env.HTTP_PROXY || Bun.env.http_proxy;
-	return getProxyForProvider(provider) || protocolProxy || Bun.env.ALL_PROXY || Bun.env.all_proxy || undefined;
+	return protocolProxy || Bun.env.ALL_PROXY || Bun.env.all_proxy || undefined;
 }
 
 /**
@@ -449,21 +454,21 @@ export function matchesForkSystemProxyBypass(hostname: string): boolean {
 	return false;
 }
 
-/**
- * System-proxy candidate for one URL, or `undefined` to leave the request on
- * its default route. Explicit env proxies always win: Bun's fetch applies
- * `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` natively, so injecting the system
- * proxy over them would silently override the user's explicit choice.
- * `NO_PROXY`, loopback/private targets, and the fork intranet bypass list
- * bypass exactly as they do for `PI_PROXY`.
- */
-function systemProxyForUrl(urlObj: URL, systemProxy: WindowsSystemProxy): string | undefined {
-	if (shouldBypassProxy(urlObj)) return undefined;
-	if (matchesForkSystemProxyBypass(urlObj.hostname)) return undefined;
-	const secure = urlObj.protocol === "https:" || urlObj.protocol === "wss:";
-	const envProxy = secure ? Bun.env.HTTPS_PROXY || Bun.env.https_proxy : Bun.env.HTTP_PROXY || Bun.env.http_proxy;
-	if (envProxy || Bun.env.ALL_PROXY || Bun.env.all_proxy) return undefined;
-	return secure ? systemProxy.https : systemProxy.http;
+/** Env proxies outrank the static system proxy; only the static tier observes the fork intranet list. */
+function systemProxyForUrl(url: URL, systemProxy: WindowsSystemProxy, includeEnvProxy = false): string | undefined {
+	if (shouldBypassProxy(url)) return undefined;
+	const envProxy = standardProxyForProtocol(url.protocol);
+	if (envProxy) return includeEnvProxy ? envProxy : undefined;
+	if (matchesForkSystemProxyBypass(url.hostname)) return undefined;
+	return url.protocol === "https:" || url.protocol === "wss:" ? systemProxy.https : systemProxy.http;
+}
+
+let installedWindowsSystemProxy: WindowsSystemProxy | undefined;
+
+/** Resolve the installed Windows proxy policy for transports that cannot apply env proxies themselves. */
+export function getInstalledWindowsProxyForUrl(url: URL): string | undefined {
+	const systemProxy = installedWindowsSystemProxy;
+	return systemProxy && systemProxyForUrl(url, systemProxy, true);
 }
 
 /** Wraps `fetchImpl` so requests without an explicit proxy or env proxy tunnel through the Windows system proxy. */
@@ -487,6 +492,55 @@ let globalProxyFetchInstalled = false;
 /** Test seam: re-arms {@link installGlobalProxyFetch}. */
 export function __resetGlobalProxyFetch(): void {
 	globalProxyFetchInstalled = false;
+	installedWindowsSystemProxy = undefined;
+}
+
+// Git checks only for the variable's presence, and native Git spawns inherit
+// the OS environment, not Bun's JavaScript environment map.
+function removeNativeGitSslNoVerify(): void {
+	if (process.platform === "win32") {
+		const kernel32 = dlopen("kernel32.dll", {
+			GetEnvironmentVariableW: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32], returns: FFIType.u32 },
+			SetEnvironmentVariableW: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+		});
+		try {
+			const name = Buffer.from("GIT_SSL_NO_VERIFY\0", "utf16le");
+			if (
+				kernel32.symbols.GetEnvironmentVariableW(ptr(name), null, 0) &&
+				!kernel32.symbols.SetEnvironmentVariableW(ptr(name), null)
+			) {
+				throw new Error("Failed to remove GIT_SSL_NO_VERIFY from the native environment");
+			}
+		} finally {
+			kernel32.close();
+		}
+		return;
+	}
+
+	const openLibc = (soname: string) => dlopen(soname, { unsetenv: { args: [FFIType.ptr], returns: FFIType.i32 } });
+	let libc: ReturnType<typeof openLibc>;
+	try {
+		libc = openLibc(process.platform === "darwin" ? "libSystem.B.dylib" : "libc.so.6");
+	} catch (error) {
+		if (process.platform !== "linux") throw error;
+		libc = openLibc("libc.so");
+	}
+	try {
+		if (libc.symbols.unsetenv(ptr(Buffer.from("GIT_SSL_NO_VERIFY\0"))) !== 0) {
+			throw new Error("Failed to remove GIT_SSL_NO_VERIFY from the native environment");
+		}
+	} finally {
+		libc.close();
+	}
+}
+
+// Remember the opt-in after removing the sentinel, so another initialization
+// does not mistake the normalized environment for an unconfigured launch.
+let strictGitSsl = false;
+
+/** The current CLI consumed a strict Git TLS opt-in during network bootstrap. */
+export function isStrictGitSslEnabled(): boolean {
+	return strictGitSsl;
 }
 
 /**
@@ -496,18 +550,22 @@ export function __resetGlobalProxyFetch(): void {
  * interception proxies and private gateways with unknown root CAs work without
  * per-machine environment setup.
  *
- * An explicitly set variable always wins — exporting
- * `NODE_TLS_REJECT_UNAUTHORIZED=1` (or `GIT_SSL_NO_VERIFY=false`) restores
- * strict verification. Applying the default mutates both `Bun.env` and
- * `process.env` so the runtime's lazy per-request read and child-process
- * inheritance see it. Fork behavior: this is a deliberate security-posture
- * default for a personal fork, not an upstream mechanism.
+ * Explicit `NODE_TLS_REJECT_UNAUTHORIZED=1` and `GIT_SSL_NO_VERIFY=false`
+ * opt into strict verification. The Git opt-in is removed rather than passed
+ * on as a string, since Git disables verification whenever the variable exists.
+ * Fork behavior: a deliberate security-posture default, not an upstream mechanism.
  */
 export function applyForkNetworkDefaults(): void {
 	if (Bun.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
 		Bun.env.NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 	}
-	if (Bun.env.GIT_SSL_NO_VERIFY === undefined && process.env.GIT_SSL_NO_VERIFY === undefined) {
+	const gitSslNoVerify = Bun.env.GIT_SSL_NO_VERIFY ?? process.env.GIT_SSL_NO_VERIFY;
+	if (gitSslNoVerify === "false") {
+		removeNativeGitSslNoVerify();
+		delete Bun.env.GIT_SSL_NO_VERIFY;
+		delete process.env.GIT_SSL_NO_VERIFY;
+		strictGitSsl = true;
+	} else if (gitSslNoVerify === undefined && !strictGitSsl) {
 		Bun.env.GIT_SSL_NO_VERIFY = process.env.GIT_SSL_NO_VERIFY = "true";
 	}
 }
@@ -556,6 +614,7 @@ export function installGlobalProxyFetch(): void {
 	if (!proxyUrl) {
 		const systemProxy = readWindowsSystemProxy();
 		if (systemProxy?.http || systemProxy?.https) {
+			installedWindowsSystemProxy = systemProxy;
 			globalProxyFetchInstalled = true;
 			globalThis.fetch = wrapFetchWithSystemProxy(globalThis.fetch, systemProxy) as typeof globalThis.fetch;
 			logger.debug("global system proxy fetch installed", {

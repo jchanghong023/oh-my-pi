@@ -19,11 +19,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	DEFAULT_CONFIG_DIR_NAME,
+	isPrivateCacheDirectory,
 	normalizeProfileName,
+	prepareLinuxPrivateCacheDirectory,
 	resolveAbsoluteDir,
 	resolveCacheRoot,
+	resolveLinuxPrivateCacheRoot,
+	resolveNativesDirOverride,
 	resolvePersistentRoot,
 	resolveXdgRoot,
+	UnsafeLinuxCacheError,
 } from "@oh-my-pi/pi-natives/offline-root";
 import { expandWindowsLongPath } from "@oh-my-pi/pi-natives/path";
 import { engines, version } from "../package.json" with { type: "json" };
@@ -89,8 +94,8 @@ function readProfileFromEnvSafe(): string | undefined {
 /**
  * Profile-independent config root (~/.omp), shared by every omp profile.
  * `OMP_CONFIG_ROOT` relocates the whole root off the home directory: it must be
- * absolute (`~` expanded; relative values are ignored so a stray export cannot
- * silently re-anchor every path onto cwd).
+ * fully qualified (`~` expanded; relative and Windows drive-implicit values
+ * are ignored so a stray export cannot silently re-anchor paths onto cwd).
  */
 export function getBaseConfigRoot(): string {
 	return resolvePersistentRoot();
@@ -209,32 +214,31 @@ export function relativePathWithinRoot(root: string, candidate: string): string 
 	return relativePathWithinNormalizedRoot(normalizedRoot, normalizedCandidate) || null;
 }
 
+let projectCwd: string | undefined;
 let projectDir: string | undefined;
+
+/** Cache an accessible cwd without loading native path normalization during dotenv bootstrap. */
+export function getProjectCwd(): string {
+	if (projectCwd !== undefined) return projectCwd;
+	try {
+		return (projectCwd = process.cwd());
+	} catch {
+		const candidates = [process.env.PWD, os.homedir(), os.tmpdir()];
+		for (const candidate of candidates) {
+			if (!candidate || !path.isAbsolute(candidate)) continue;
+			try {
+				process.chdir(candidate);
+				return (projectCwd = candidate);
+			} catch {}
+		}
+		throw new Error("Unable to determine an accessible working directory");
+	}
+}
 
 /** Get the project directory. */
 export function getProjectDir(): string {
-	if (projectDir === undefined) {
-		let cwd: string | undefined;
-		try {
-			cwd = process.cwd();
-		} catch {
-			const candidates = [process.env.PWD, os.homedir(), os.tmpdir()];
-			for (const candidate of candidates) {
-				if (!candidate || !path.isAbsolute(candidate)) continue;
-				try {
-					process.chdir(candidate);
-					cwd = candidate;
-					break;
-				} catch {}
-			}
-			if (cwd === undefined) {
-				throw new Error("Unable to determine an accessible working directory");
-			}
-		}
-		// Normalize outside the fallback: a native-addon failure is not an inaccessible cwd,
-		// and must surface as itself instead of relocating the process.
-		projectDir = standardizeProjectPath(cwd);
-	}
+	// A native-addon failure is not an inaccessible cwd and must not relocate it.
+	projectDir ??= standardizeProjectPath(getProjectCwd());
 	return projectDir;
 }
 
@@ -242,11 +246,13 @@ export function getProjectDir(): string {
 export function setProjectDir(dir: string): void {
 	const resolved = standardizeProjectPath(path.resolve(dir));
 	process.chdir(resolved);
+	projectCwd = resolved;
 	projectDir = resolved;
 }
 
 /** Reset the cached project directory (test seam). */
 export function __resetProjectDirCacheForTests(): void {
+	projectCwd = undefined;
 	projectDir = undefined;
 }
 
@@ -506,8 +512,8 @@ const RESOLVER_HOME = os.homedir();
  * `process.env` *after* this module froze the resolver at import time, so
  * `env.ts` calls this once after applying its `.env` files. The agent `.env`
  * location derives from the profile name + home before this runs, so the
- * rebuild re-reads only the directory vars, never the profile selection. The
- * `preProfileAgentDirEnv` snapshot is intentionally left untouched.
+ * rebuild re-reads only the directory vars, never the profile selection.
+ * The pre-profile agent-dir snapshot is intentionally left untouched.
  */
 export function refreshDirsFromEnv(): void {
 	dirs = new DirResolver({
@@ -935,12 +941,48 @@ export function getNativeGrammarsDir(): string {
 
 /** Get the natives directory. PI_NATIVES_DIR overrides the usual cache root; relative values are ignored. */
 export function getNativesDir(): string {
-	return resolveAbsoluteDir(process.env.PI_NATIVES_DIR) ?? dirs.rootSubdir("natives", "cache");
+	return resolveNativesDirOverride() ?? dirs.rootSubdir("natives", "cache");
 }
 
 /** Get the stats database path (~/.omp/stats.db). */
 export function getStatsDbPath(): string {
 	return dirs.cacheRoot ? path.join(dirs.cacheRoot, "stats.db") : dirs.rootSubdir("stats.db", "data");
+}
+
+/**
+ * Create or verify a private directory in the implicit Linux offline cache.
+ * Explicit cache roots use the caller's normal filesystem path.
+ */
+export function preparePerformanceCacheDirectory(directory: string, create = true): boolean {
+	const root = dirs.cacheRoot;
+	const privateRoot = resolveLinuxPrivateCacheRoot();
+	if (!privateRoot || !root || path.resolve(directory) !== root) return false;
+
+	const userRoot = activeProfile ? path.dirname(path.dirname(root)) : root;
+	if (userRoot !== privateRoot) return false;
+
+	const uid = process.geteuid!();
+	const kind = "performance";
+	const stat = prepareLinuxPrivateCacheDirectory(root, uid, { create, kind });
+	if (!stat) throw new Error(`Linux performance cache directory not found: ${root}`);
+	if (create && (stat.mode & 0o077) !== 0) {
+		// Older creators may have made this directory readable by others. Tighten
+		// only the verified leaf, using its open handle rather than chmod by path.
+		const fd = fs.openSync(root, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+		try {
+			if (!isPrivateCacheDirectory(fs.fstatSync(fd), uid)) {
+				throw new UnsafeLinuxCacheError(
+					root,
+					`a real directory owned by uid ${uid} without group/other write access`,
+					kind,
+				);
+			}
+			fs.fchmodSync(fd, 0o700);
+		} finally {
+			fs.closeSync(fd);
+		}
+	}
+	return true;
 }
 
 /** Get the autoresearch state directory (~/.omp/autoresearch). */

@@ -17,8 +17,8 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { runPrintMode } from "@oh-my-pi/pi-coding-agent/modes/print-mode";
 import type {
 	AgentSession,
-	LocalAgentSessionEvent,
-	LocalAgentSessionEventListener,
+	AgentSessionEvent,
+	AgentSessionEventListener,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { postmortem } from "@oh-my-pi/pi-utils";
 
@@ -26,14 +26,14 @@ interface FlushHarness {
 	session: AgentSession;
 	promptStarted: Promise<void>;
 	resolvePrompt: () => void;
-	emit: LocalAgentSessionEventListener;
+	emit: AgentSessionEventListener;
 	disposed: () => boolean;
 }
 
 function createFlushHarness(dispose: () => Promise<void> = async () => {}): FlushHarness {
 	const { promise: promptStarted, resolve: markPromptStarted } = Promise.withResolvers<void>();
 	const { promise: promptReleased, resolve: resolvePrompt } = Promise.withResolvers<void>();
-	let subscriber: LocalAgentSessionEventListener | undefined;
+	let subscriber: AgentSessionEventListener | undefined;
 	let disposed = false;
 	let advisorDrainPrepared = false;
 
@@ -48,7 +48,7 @@ function createFlushHarness(dispose: () => Promise<void> = async () => {}): Flus
 		settings: Settings.isolated(),
 		getLastAssistantMessage: () => undefined,
 		extensionRunner: undefined,
-		subscribeLocal: (listener: LocalAgentSessionEventListener) => {
+		subscribe: (listener: AgentSessionEventListener) => {
 			subscriber = listener;
 			return () => {};
 		},
@@ -80,19 +80,30 @@ function createFlushHarness(dispose: () => Promise<void> = async () => {}): Flus
 	};
 }
 
-function makeLargeAgentEnd(payload: string): LocalAgentSessionEvent {
+function makeLargeAgentEnd(payload: string): AgentSessionEvent {
 	return {
 		type: "agent_end",
 		messages: [
 			{
 				role: "assistant",
 				content: [{ type: "text", text: payload }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
 				stopReason: "aborted",
 				errorMessage: "Deadline exceeded",
 				timestamp: Date.now(),
 			},
 		],
-	} as unknown as LocalAgentSessionEvent;
+	};
 }
 
 interface HeldAgentEndWrite {

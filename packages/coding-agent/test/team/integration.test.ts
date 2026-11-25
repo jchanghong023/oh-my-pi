@@ -15,6 +15,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { resolveLocalRoot } from "@oh-my-pi/pi-coding-agent/internal-urls/local-root";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -207,6 +208,9 @@ describe("team in-process integration", () => {
 				model,
 				extensionRunner: undefined,
 				sessionManager: { appendSessionInit: () => {} },
+				get localRoot() {
+					return resolveLocalRoot(inputOptions?.localProtocolOptions ?? {});
+				},
 				getActiveToolNames: () => ["yield"],
 				getEnabledToolNames: () => ["yield"],
 				getToolByName: (name: string) => (name === "yield" ? yieldTool : undefined),
@@ -731,9 +735,10 @@ describe("team in-process integration", () => {
 				const local = options.localProtocolOptions;
 				const own = local?.getArtifactsDir?.();
 				if (!own || !local) throw new Error("Runner did not bind the child artifact identity");
-				await fs.mkdir(path.join(own, "local"), { recursive: true });
+				const ownLocal = resolveLocalRoot(local);
+				await fs.mkdir(ownLocal, { recursive: true });
 				await fs.writeFile(`${own}.md`, `PRIVATE_DRAFT_${leases.length}\n`);
-				await fs.writeFile(path.join(own, "local", "own.md"), "OWN_CHILD_NOTES\n");
+				await fs.writeFile(path.join(ownLocal, "own.md"), "OWN_CHILD_NOTES\n");
 				leases.push(own);
 				if (leases.length === 2) ready.resolve();
 				await ready.promise;

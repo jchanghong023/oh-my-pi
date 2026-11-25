@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getHistoryDbPath, getStatsDbPath } from "@oh-my-pi/pi-utils/dirs";
+import { getHistoryDbPath, getStatsDbPath, preparePerformanceCacheDirectory } from "@oh-my-pi/pi-utils/dirs";
 import { isBunTestRuntime } from "@oh-my-pi/pi-utils/env";
 import { readSessionHeaderIdSync, sessionIdFromContent } from "./session-header-id";
 /**
@@ -183,7 +183,8 @@ export function purgeDeletedSessionRows(sessionPath: string, options?: PurgeDele
 	try {
 		const statsDbPath = options?.statsDbPath ?? getStatsDbPath();
 		if (fs.existsSync(statsDbPath)) {
-			const db = new Database(statsDbPath);
+			preparePerformanceCacheDirectory(path.dirname(statsDbPath), false);
+			const db = new Database(statsDbPath, { readwrite: true, create: false });
 			try {
 				db.run("PRAGMA busy_timeout = 5000");
 				deleteStatsRowsForSession(db, sessionPath);

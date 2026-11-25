@@ -116,6 +116,10 @@
           "type": "boolean",
           "description": "Whether OMP should try to connect this server."
         },
+        "alwaysLoad": {
+          "type": "boolean",
+          "description": "Set true to keep this server's tools top-level or false to make them discoverable. Omit to use normal tool routing."
+        },
         "timeout": {
           "type": "number",
           "minimum": 0,
@@ -150,6 +154,7 @@
           "required": ["command"],
           "properties": {
             "enabled": {},
+            "alwaysLoad": {},
             "timeout": {},
             "requestIdFormat": {},
             "instructions": {},
@@ -198,6 +203,7 @@
           "required": ["type", "url"],
           "properties": {
             "enabled": {},
+            "alwaysLoad": {},
             "timeout": {},
             "requestIdFormat": {},
             "instructions": {},
@@ -235,6 +241,7 @@
           "required": ["type", "url"],
           "properties": {
             "enabled": {},
+            "alwaysLoad": {},
             "timeout": {},
             "requestIdFormat": {},
             "instructions": {},

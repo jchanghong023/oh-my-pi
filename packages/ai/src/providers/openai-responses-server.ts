@@ -770,6 +770,38 @@ export function wireCallId(id: string): string {
 	return sep >= 0 ? id.slice(0, sep) : id;
 }
 
+function sameMessageSignature(a: MessageSignature | undefined, b: MessageSignature | undefined): boolean {
+	return a?.id === b?.id && a?.phase === b?.phase;
+}
+
+/** Match a parsed history block against a whole Responses text output item. */
+export function matchesOutputText(message: AssistantMessage, text: TextContent): boolean {
+	const wireSignature = parseTextSignature(text.textSignature);
+	let groupText: string | undefined;
+	let groupSignature: MessageSignature | undefined;
+	// Unsigned blocks receive generated IDs when encoded.
+	const matchesGroup = () =>
+		groupText === text.text && (!groupSignature || sameMessageSignature(groupSignature, wireSignature));
+
+	for (const part of message.content) {
+		if (part.type === "text") {
+			const signature = parseTextSignature(part.textSignature);
+			if (sameMessageSignature(groupSignature, signature)) {
+				groupText = (groupText ?? "") + part.text;
+			} else {
+				if (matchesGroup()) return true;
+				groupText = part.text;
+				groupSignature = signature;
+			}
+		} else if (part.type === "thinking" || part.type === "toolCall") {
+			if (matchesGroup()) return true;
+			groupText = undefined;
+			groupSignature = undefined;
+		}
+	}
+	return matchesGroup();
+}
+
 /**
  * Walk the assistant content array and group consecutive TextContent into a
  * single message item; each ThinkingContent / ToolCall is its own item.
@@ -789,10 +821,7 @@ function buildOutputItems(message: AssistantMessage): OutputItem[] {
 	for (const part of message.content) {
 		if (part.type === "text") {
 			const signature = parseTextSignature(part.textSignature);
-			const sameSignature =
-				!pendingMessage ||
-				(pendingMessageSignature?.id === signature?.id && pendingMessageSignature?.phase === signature?.phase);
-			if (!sameSignature) flushMessage();
+			if (pendingMessage && !sameMessageSignature(pendingMessageSignature, signature)) flushMessage();
 			if (!pendingMessage) {
 				pendingMessage = {
 					type: "message",

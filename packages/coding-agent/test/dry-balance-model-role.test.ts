@@ -30,7 +30,6 @@ test("dry-balance resolves configured bare role names", async () => {
 		},
 		getAll: () => [model],
 		getAvailable: () => [model],
-		getApiKey: async () => "test-token",
 	};
 	const settings = Settings.isolated({ modelRoles: { task: "acme/balance-model" } });
 
@@ -69,7 +68,6 @@ test.each([
 		},
 		getAll: () => models,
 		getAvailable: () => models,
-		getApiKey: async () => "test-token",
 	};
 	const settings = Settings.isolated({
 		enabledModels: enabled.length ? ["acme/balance-model", ...enabled] : [],
@@ -106,7 +104,6 @@ test("dry-balance samples leave no session pins in the credential store", async 
 			authStorage,
 			getAll: () => [model],
 			getAvailable: () => [model],
-			getApiKey: async () => undefined,
 		};
 		const sessionIds = ["sample-1", "sample-2", "sample-3"];
 		let next = 0;
@@ -169,7 +166,6 @@ test("dry-balance --bench retries a 401 with the same account's refreshed API ke
 		},
 		getAll: () => [model],
 		getAvailable: () => [model],
-		getApiKey: async () => undefined,
 	};
 	const bearers: Array<string | undefined> = [];
 	const fetch: FetchImpl = async (_url, init) => {

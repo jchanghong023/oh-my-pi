@@ -110,7 +110,7 @@ import type { ModelRoleLookup } from "./modes/view-model/overlays/model-browser"
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
 import { buildServiceTierByFamily } from "./config/service-tier";
 import { bindEffects, combine } from "./config/registry";
-import { Settings } from "./config/settings";
+import { Settings, withActiveSettings } from "./config/settings";
 import type { CursorMcpResourceAdapter } from "./cursor";
 import type * as CursorBridgeTools from "./cursor-bridge-tools";
 import { daemonMutex } from "./daemon/modules/mutex";
@@ -226,6 +226,7 @@ import {
 import {
 	AgentSession,
 	type InitialRetryFallbackState,
+	isBrowserEvalBackendAvailable,
 	MCP_DISCOVERY_TURN_WAIT_MS,
 	type PlanYolo,
 	type Prewalk,
@@ -1517,12 +1518,13 @@ export async function resolvePrewalkTarget(
  */
 export async function discoverSkills(
 	cwd?: string,
-	_agentDir?: string,
+	agentDir?: string,
 	settings?: SkillsSettings & Pick<LoadSkillsOptions, "disabledExtensions">,
 ): Promise<{ skills: Skill[]; warnings: SkillWarning[] }> {
 	return await loadSkillsInternal({
 		...settings,
 		cwd: cwd ?? getProjectDir(),
+		agentDir: agentDir ?? getAgentDir(),
 	});
 }
 
@@ -1554,8 +1556,8 @@ export async function discoverPromptTemplates(cwd?: string, agentDir?: string): 
 /**
  * Discover file-based slash commands from commands/ directories.
  */
-export async function discoverSlashCommands(cwd?: string): Promise<FileSlashCommand[]> {
-	return loadSlashCommandsInternal({ cwd: cwd ?? getProjectDir() });
+export async function discoverSlashCommands(cwd?: string, agentDir?: string): Promise<FileSlashCommand[]> {
+	return loadSlashCommandsInternal({ cwd: cwd ?? getProjectDir(), agentDir: agentDir ?? getAgentDir() });
 }
 
 /**
@@ -2109,31 +2111,23 @@ export function createAutoLearnCaptureRunner(
 
 let tinyTitleClientOwners = 0;
 
-function retainTinyTitleClient(): (options?: { strict?: boolean }) => Promise<void> {
+function retainTinyTitleClient(): () => Promise<void> {
 	tinyTitleClientOwners++;
 	let released = false;
-	let strictCall: Promise<void> | undefined;
-	let strictOwnershipReleased = false;
-	return async options => {
-		if (options?.strict) {
-			if (released) return;
-			strictCall ??= (async () => {
-				if (!strictOwnershipReleased) {
+	let release: Promise<void> | undefined;
+	return () =>
+		(release ??= Promise.resolve()
+			.then(() => {
+				if (!released) {
+					released = true;
 					tinyTitleClientOwners--;
-					strictOwnershipReleased = true;
 				}
-				if (tinyTitleClientOwners === 0) await shutdownTinyTitleClient();
-				released = true;
-			})().catch(error => {
-				strictCall = undefined;
+				if (tinyTitleClientOwners === 0) return shutdownTinyTitleClient();
+			})
+			.catch(error => {
+				release = undefined;
 				throw error;
-			});
-			return strictCall;
-		}
-		if (released) return;
-		released = true;
-		if (--tinyTitleClientOwners === 0) await shutdownTinyTitleClient();
-	};
+			}));
 }
 
 /** Reuse the CLI singleton for its workspace; load other SDK workspaces independently. */
@@ -2400,9 +2394,11 @@ async function createAgentSessionScoped(
 		: options.noContextFiles
 			? []
 			: undefined;
+	const discoverSessionContextFiles = (projectCwd: string, disabledExtensions?: string[]) =>
+		withActiveSettings(settings, () => discoverContextFiles(projectCwd, agentDir, disabledExtensions));
 	const contextFilesPromise = pinnedContextFiles
 		? Promise.resolve(pinnedContextFiles)
-		: logger.time("discoverContextFiles", discoverContextFiles, cwd, agentDir).then(contextFileFilter);
+		: logger.time("discoverContextFiles", discoverSessionContextFiles, cwd).then(contextFileFilter);
 	contextFilesPromise.catch(() => {});
 	const resolveRepoContext = async (repoCwd: string) => {
 		try {
@@ -2424,7 +2420,7 @@ async function createAgentSessionScoped(
 	promptTemplatesPromise.catch(() => {});
 	const slashCommandsPromise = options.slashCommands
 		? Promise.resolve(options.slashCommands)
-		: logger.time("discoverSlashCommands", discoverSlashCommands, cwd);
+		: withActiveSettings(settings, () => logger.time("discoverSlashCommands", discoverSlashCommands, cwd, agentDir));
 	slashCommandsPromise.catch(() => {});
 	const customCommandsPromise =
 		options.restrictToolNames === true
@@ -2439,10 +2435,12 @@ async function createAgentSessionScoped(
 	const disabledExtensionIds = cfgDisabledExtensions.get(settings);
 	const discoveredSkillsPromise =
 		options.skills === undefined
-			? logger.time("discoverSkills", discoverSkills, cwd, agentDir, {
-					...skillsSettings,
-					disabledExtensions: disabledExtensionIds,
-				})
+			? withActiveSettings(settings, () =>
+					logger.time("discoverSkills", discoverSkills, cwd, agentDir, {
+						...skillsSettings,
+						disabledExtensions: disabledExtensionIds,
+					}),
+				)
 			: undefined;
 	discoveredSkillsPromise?.catch(() => {});
 
@@ -2460,11 +2458,13 @@ async function createAgentSessionScoped(
 					warnings: undefined,
 				})
 			: logger.time("discoverTtsrRules", () =>
-					loadCapability<Rule>(ruleCapability.id, {
-						cwd,
-						agentDir,
-						disabledExtensions: [...disabledExtensionIds],
-					}),
+					withActiveSettings(settings, () =>
+						loadCapability<Rule>(ruleCapability.id, {
+							cwd,
+							agentDir,
+							disabledExtensions: [...disabledExtensionIds],
+						}),
+					),
 				);
 	rawRulesPromise.catch(() => {});
 	const customToolPathsPromise =
@@ -3255,12 +3255,13 @@ async function createAgentSessionScoped(
 
 		// Create built-in tools (already wrapped with meta notice formatting)
 		await logger.time("createAllTools", createTools, toolSession, options.toolNames);
-		const initialBrowserPreludeAvailable = shouldFilterBrowserMCPForPrelude({
-			restrictToolNames,
-			browserEnabled: cfgBrowserEnabled.get(settings),
-			evalRegistered: toolRegistry.has("eval"),
-			evalActive: activeToolNames.has("eval"),
-		});
+		const canReplaceBrowserMcp = (browserEnabled = cfgBrowserEnabled.get(settings)): boolean =>
+			shouldFilterBrowserMCPForPrelude({
+				restrictToolNames,
+				browserEnabled,
+				evalRegistered: toolRegistry.has("eval"),
+				evalActive: activeToolNames.has("eval") && isBrowserEvalBackendAvailable(settings, toolSession.cwd),
+			});
 
 		const nativeChildMcpTools = options.mcpTools;
 		// Restricted sessions cannot inherit or discover MCP capabilities.
@@ -3308,7 +3309,7 @@ async function createAgentSessionScoped(
 			// Always filter Exa - we have native integration
 			filterExa: true,
 			// Filter browser MCP only when Eval can expose the built-in browser prelude.
-			filterBrowser: initialBrowserPreludeAvailable,
+			filterBrowser: canReplaceBrowserMcp(),
 			builtinTransforms: resolveMCPTransformContext(settings, {
 				evalActive: toolRegistry.has("eval") && activeToolNames.has("eval"),
 			}),
@@ -3332,6 +3333,7 @@ async function createAgentSessionScoped(
 								deferredMCPManager.discoverAndConnect({
 									...mcpDiscoverOptions,
 									enableProjectConfig: cfgMcpEnableProjectConfig.get(settings),
+									filterBrowser: canReplaceBrowserMcp(),
 								}),
 							);
 							// The session can be torn down while servers are still connecting.
@@ -4138,21 +4140,20 @@ async function createAgentSessionScoped(
 
 			await tryResolveDefaultRole();
 
-			if (!model) {
-				const companyError =
-					!hasExplicitModel && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)
-						? getCompanyConfigError()
-						: undefined;
-				const defaultSelector = settings.getModelRole("default");
-				if (
-					companyError &&
-					(!defaultSelector ||
-						resolveConfiguredModelPatterns(defaultSelector, settings).some(pattern =>
-							pattern.startsWith("company/"),
-						))
-				) {
-					throw new Error(companyError);
-				}
+			const companyError =
+				!hasExplicitModel && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)
+					? getCompanyConfigError()
+					: undefined;
+			const defaultSelector = settings.getModelRole("default");
+			const unavailableCompanyDefault =
+				companyError &&
+				(!defaultSelector ||
+					resolveConfiguredModelPatterns(defaultSelector, settings).some(pattern =>
+						pattern.startsWith("company/"),
+					));
+			// Hosts may still dispatch local commands without a model. Preserve the
+			// diagnostic without selecting an unrelated account in place of company.
+			if (!model && !unavailableCompanyDefault) {
 				let fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
 				let pick = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth), provider =>
 					modelRegistry.hasConcreteAuth(provider),
@@ -4214,8 +4215,9 @@ async function createAgentSessionScoped(
 				}
 			} else {
 				const patterns = cfgEnabledModels.get(settings);
-				modelFallbackMessage =
-					patterns && patterns.length > 0
+				modelFallbackMessage = unavailableCompanyDefault
+					? companyError
+					: patterns && patterns.length > 0
 						? `No model available matching enabledModels (${patterns.join(", ")}) with usable credentials. Configure auth for an allowed provider or adjust enabledModels.`
 						: "No default model selected. Use /login, set an API key environment variable, or select a local model with /model or --model.";
 			}
@@ -4445,7 +4447,7 @@ async function createAgentSessionScoped(
 		// reconcile can add and remove exactly the entries it owns and never a
 		// same-named extension tool, which keeps precedence over them.
 		const settingsGatedCustomEntries = new Map<string, Tool>();
-		const reconcileSettingsGatedCustomTools = async (): Promise<{ added: Tool[]; removed: string[] }> => {
+		const reconcileSettingsGatedCustomTools = (): { added: Tool[]; removed: string[] } => {
 			const added: Tool[] = [];
 			const removed: string[] = [];
 			if (restrictToolNames) return { added, removed };
@@ -4482,7 +4484,7 @@ async function createAgentSessionScoped(
 			}
 			return { added, removed };
 		};
-		await reconcileSettingsGatedCustomTools();
+		reconcileSettingsGatedCustomTools();
 		// Hashline `edit` stays in the registry so Cursor can call it as MCP.
 		// Native StrReplace arrives as `editToolCall` and materializes through
 		// exec `readArgs`/`writeArgs`; `pi_edit` still needs a `replace`-mode
@@ -4553,13 +4555,13 @@ async function createAgentSessionScoped(
 			const explicitToolNames = options.toolNames ? new Set(normalizeToolNames(options.toolNames)) : undefined;
 			const added: { name: string; builtIn: boolean; activate: boolean }[] = [];
 			const removed: string[] = [];
+			const nativeChanges = new Map<string, Tool | undefined>();
+			const registrations = new Map<string, Tool>();
 			for (const name of SETTINGS_GATED_BUILTIN_TOOL_NAMES) {
 				const registered = toolRegistry.has(name);
 				if (!plan.isAllowed(name)) {
-					nativeToolsByName.delete(name);
+					if (nativeToolsByName.has(name)) nativeChanges.set(name, undefined);
 					if (!registered || !isBuiltIn(name)) continue;
-					toolRegistry.delete(name);
-					builtInRegistryToolNames.delete(name);
 					removed.push(name);
 					continue;
 				}
@@ -4567,10 +4569,9 @@ async function createAgentSessionScoped(
 				const tool = await logger.time(`createTools:${name}:settings`, BUILTIN_TOOLS[name], toolSession);
 				if (!tool) continue;
 				const native = wrapToolWithMetaNotice(tool);
-				nativeToolsByName.set(name, native);
+				nativeChanges.set(name, native);
 				if (registered) continue;
-				toolRegistry.set(name, new ExtensionToolWrapper(native, extensionRunner) as Tool);
-				builtInRegistryToolNames.add(name);
+				registrations.set(name, new ExtensionToolWrapper(native, extensionRunner) as Tool);
 				// As at construction: explicit lists activate requested names, session-managed
 				// force-includes and the checkpoint/rewind pair; other auto-includes stay inactive.
 				const activate = explicitToolNames
@@ -4581,13 +4582,71 @@ async function createAgentSessionScoped(
 					: native.hidden !== true;
 				added.push({ name, builtIn: true, activate });
 			}
-			const custom = await reconcileSettingsGatedCustomTools();
-			removed.push(...custom.removed);
-			for (const entry of custom.added) {
-				added.push({ name: entry.name, builtIn: false, activate: entry.hidden !== true });
-			}
-			syncToolCommandState();
-			return { added, removed, toolCommands: toolSession.toolCommands };
+			return {
+				added,
+				removed,
+				get toolCommands() {
+					return toolSession.toolCommands;
+				},
+				commit: () => {
+					const previousRegistry = [...removed, ...registrations.keys(), imageGenTool.name, ttsTool.name].map(
+						name => ({
+							name,
+							tool: toolRegistry.get(name),
+							builtIn: builtInRegistryToolNames.has(name),
+						}),
+					);
+					const previousNative = [...nativeChanges.keys()].map(
+						name => [name, nativeToolsByName.get(name)] as const,
+					);
+					const previousCustom = [...settingsGatedCustomEntries];
+					const previousCommands = toolSession.toolCommands;
+					const previousMounted = previousCommands ? [...previousCommands.mountedNames] : undefined;
+					const rollback = () => {
+						for (const { name, tool, builtIn } of previousRegistry) {
+							if (tool) toolRegistry.set(name, tool);
+							else toolRegistry.delete(name);
+							if (builtIn) builtInRegistryToolNames.add(name);
+							else builtInRegistryToolNames.delete(name);
+						}
+						for (const [name, tool] of previousNative) {
+							if (tool) nativeToolsByName.set(name, tool);
+							else nativeToolsByName.delete(name);
+						}
+						settingsGatedCustomEntries.clear();
+						for (const [name, tool] of previousCustom) settingsGatedCustomEntries.set(name, tool);
+						toolSession.toolCommands = previousCommands;
+						if (previousCommands && previousMounted) {
+							previousCommands.mountedNames.clear();
+							for (const name of previousMounted) previousCommands.mountedNames.add(name);
+						}
+					};
+					try {
+						for (const [name, tool] of nativeChanges) {
+							if (tool) nativeToolsByName.set(name, tool);
+							else nativeToolsByName.delete(name);
+						}
+						for (const name of removed) {
+							toolRegistry.delete(name);
+							builtInRegistryToolNames.delete(name);
+						}
+						for (const [name, tool] of registrations) {
+							toolRegistry.set(name, tool);
+							builtInRegistryToolNames.add(name);
+						}
+						const custom = reconcileSettingsGatedCustomTools();
+						removed.push(...custom.removed);
+						for (const entry of custom.added) {
+							added.push({ name: entry.name, builtIn: false, activate: entry.hidden !== true });
+						}
+						syncToolCommandState();
+						return rollback;
+					} catch (error) {
+						rollback();
+						throw error;
+					}
+				},
+			};
 		};
 
 		// oxlint-disable-next-line prefer-const -- captured by tool command closures before assignment
@@ -4718,6 +4777,8 @@ async function createAgentSessionScoped(
 			path.resolve(agentDir) === path.resolve(getAgentDir())
 				? undefined
 				: openSessionSkillDescriptionStore(agentDir);
+		const closeOwnedPromptCache = ownedSkillDescriptionStore ? () => ownedSkillDescriptionStore.close() : undefined;
+		if (closeOwnedPromptCache) disposeCallbacks.add(closeOwnedPromptCache);
 		const hintCompressorOptions = {
 			getCwd: () => sessionManager.getCwd(),
 			getCostGate: currentCostGate,
@@ -4784,19 +4845,21 @@ async function createAgentSessionScoped(
 				const [repoContext, refreshedContextFiles, ruleItems] = await Promise.all([
 					logger.time("resolveActiveRepoContext", resolveRepoContext, promptCwd),
 					pinnedContextFiles === undefined
-						? logger.time("discoverContextFiles", discoverContextFiles, promptCwd, agentDir, disabledExtensions)
+						? logger.time("discoverContextFiles", discoverSessionContextFiles, promptCwd, disabledExtensions)
 						: undefined,
 					options.rules ??
 						logger
 							.time("rediscoverRules", () =>
 								// Rebuilds run outside the creation-time invocation scope; pass the
 								// session's effective roots so overlay/runtime `extensions:` survive.
-								loadCapability<Rule>(ruleCapability.id, {
-									cwd: promptCwd,
-									agentDir,
-									disabledExtensions,
-									extensionRoots: buildSessionExtensionRoots(),
-								}),
+								withActiveSettings(settings, () =>
+									loadCapability<Rule>(ruleCapability.id, {
+										cwd: promptCwd,
+										agentDir,
+										disabledExtensions,
+										extensionRoots: buildSessionExtensionRoots(),
+									}),
+								),
 							)
 							.then(result => result.items),
 				]);
@@ -4962,7 +5025,7 @@ async function createAgentSessionScoped(
 					? { mode: "compact", toolNames: [...toolNames, ...mountedPromptToolNames] }
 					: { mode: "full" },
 			);
-			const defaultPrompt = await buildSystemPromptInternal({
+			const promptOptions: Parameters<typeof buildSystemPromptInternal>[0] = {
 				cwd: promptCwd,
 				additionalWorkspaceRoots: sessionManager.getAdditionalDirectories(),
 				noContextFiles: options.noContextFiles,
@@ -5018,7 +5081,8 @@ async function createAgentSessionScoped(
 				reactions: agentKind === "main" && options.hasUI === true && cfgTuiReactions.get(settings),
 				encourageEdits: cfgEncourageEdits.get(settings),
 				activeRepoContext,
-			});
+			};
+			const defaultPrompt = await withActiveSettings(settings, () => buildSystemPromptInternal(promptOptions));
 
 			if (typeof options.systemPrompt !== "function") {
 				return defaultPrompt;
@@ -5416,8 +5480,12 @@ async function createAgentSessionScoped(
 		const dispatchHookedRequest = async (
 			streamModel: Model,
 			context: Context,
-			streamOptions?: SimpleStreamOptions,
+			streamOptions: SimpleStreamOptions | undefined,
+			mainRequest: boolean,
 		) => {
+			if (cfgDisabledProviders.get(settings).includes(streamModel.provider)) {
+				throw new Error(`Provider "${streamModel.provider}" is disabled.`);
+			}
 			const requestSignal = streamOptions?.signal;
 			// Bind observers to this dispatch's signal even if the provider omits or replaces it.
 			const observePayload = streamOptions?.onPayload;
@@ -5433,9 +5501,13 @@ async function createAgentSessionScoped(
 							observeResponse(response, model ?? streamModel, requestSignal)
 					: undefined,
 			};
-			const auth = await options.resolveRequestAuth?.(streamModel, requestSignal, {
-				thinkingLevel: (session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off",
-			});
+			// Prompt setup can change effort after preflight; don't reuse auth for a different level.
+			const admission = mainRequest ? session?.getAdmittedRequestAuth(streamModel, true) : undefined;
+			const auth = admission
+				? admission.auth
+				: await options.resolveRequestAuth?.(streamModel, requestSignal, {
+						thinkingLevel: (session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off",
+					});
 			const effectiveOptions =
 				auth !== undefined
 					? {
@@ -5468,7 +5540,7 @@ async function createAgentSessionScoped(
 			}
 			if (mainRequest) mainRequestProvider = streamModel.provider;
 			if (options.resolveRequestAuth) {
-				return dispatchHookedRequest(streamModel, context, streamOptions);
+				return dispatchHookedRequest(streamModel, context, streamOptions, mainRequest);
 			}
 			return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
 				settingsBoundStreamFn(streamModel, context, {
@@ -5587,6 +5659,8 @@ async function createAgentSessionScoped(
 				// The loop resolves its seeded credential before invoking streamFn.
 				assertOfflineDispatchModel(requestModel);
 				options.assertDispatchModel?.(requestModel);
+				const admission = session?.getAdmittedRequestAuth(requestModel);
+				if (admission?.auth !== undefined) return admission.auth.apiKey;
 				return effectiveGetApiKey(requestModel);
 			},
 			streamFn: (streamModel, context, streamOptions) => {
@@ -5910,7 +5984,7 @@ async function createAgentSessionScoped(
 						const result = await reconnectMCPServers(owningMcpManager, session, {
 							...mcpDiscoverOptions,
 							enableProjectConfig: cfgMcpEnableProjectConfig.get(settings),
-							filterBrowser: session.getEvalPreludes().some(definition => definition.name === "browser"),
+							filterBrowser: canReplaceBrowserMcp(),
 							builtinTransforms: resolveMCPTransformContext(settings, {
 								evalActive: session.getActiveToolNames().includes("eval"),
 							}),
@@ -5992,7 +6066,9 @@ async function createAgentSessionScoped(
 			toolRegistry,
 			reconcileBrowserMcpFilter: mcpManager
 				? async enabled => {
-						await mcpManager.reconcileBrowserFilter(enabled);
+						if (initialMcpDiscovery) await initialMcpDiscovery;
+						if (session.isDisposed) return [];
+						await mcpManager.reconcileBrowserFilter(canReplaceBrowserMcp(enabled));
 						return mcpManager.getTools();
 					}
 				: undefined,
@@ -6084,15 +6160,6 @@ async function createAgentSessionScoped(
 		session.registerSessionChangeCallback(() => {
 			toolSession.state = new ToolConversationState();
 		});
-		if (ownedSkillDescriptionStore) {
-			// Let in-flight compressions land before releasing the file.
-			session.addDisposer(
-				() =>
-					void Promise.all([skillDescriptions.waitForPending(), mcpNamespaces.waitForPending()]).finally(() =>
-						ownedSkillDescriptionStore.close(),
-					),
-			);
-		}
 		// A caller-supplied store belongs to the caller (the CLI keeps it in sync itself).
 		if (ownsAuthStorage) createAuthStorageSettingsSync(session, authStorage, modelRegistry);
 		// One coalesced prompt rebuild for every prompt input (rule bucketing, the
@@ -6144,6 +6211,7 @@ async function createAgentSessionScoped(
 			// `find.enabled: auto` follows the judge role; a role change only touches
 			// the prompt when it actually adds or removes `find`.
 			cfgModelRoles.listen(session, () => reconcileGatedTools({ refreshPrompt: false }));
+			cfgEnabledModels.listen(session, () => reconcileGatedTools({ refreshPrompt: false }));
 			// A judge rejecting the account withdraws `find` (and its hints) once no native judge is left.
 			session.addDisposer(onJudgeRejection(modelRegistry, () => void reconcileGatedTools({ refreshPrompt: false })));
 		}
@@ -6564,6 +6632,7 @@ async function createAgentSessionScoped(
 
 		{
 			const originalDispose = session.dispose.bind(session);
+			session.deferDisposeNotification();
 			const throwOwnedCleanupFailures = (failures: unknown[]): void => {
 				if (failures.length === 1) throw failures[0];
 				if (failures.length) throw new AggregateError(failures, "Session owned cleanup failed");
@@ -6610,7 +6679,8 @@ async function createAgentSessionScoped(
 							}
 							strictCallbacks ??= new Set([
 								() => releaseDsmReferences(toolSession),
-								...(releaseTinyTitleClient ? [() => releaseTinyTitleClient({ strict: true })] : []),
+								...(releaseTinyTitleClient ? [releaseTinyTitleClient] : []),
+								...(closeOwnedPromptCache ? [closeOwnedPromptCache] : []),
 								unsubscribeCredentialDisabled,
 								...(unbindSessionEffects ? [unbindSessionEffects] : []),
 								...(restoreProviderToggles ? [restoreProviderToggles] : []),
@@ -6630,6 +6700,7 @@ async function createAgentSessionScoped(
 							unsubscribeMcpNotifications = undefined;
 							unregisterMcpPostmortem = undefined;
 							unregisterUnlessParked();
+							session.notifyDisposed();
 						})().catch(error => {
 							strictDisposeCall = undefined;
 							throw error;
@@ -6661,8 +6732,8 @@ async function createAgentSessionScoped(
 								await lifecycle.releaseDescendants(
 									registeredAgentRef,
 									undefined,
-									disposeOptions?.reason === postmortem.Reason.EXIT
-										? { dispose: { reason: postmortem.Reason.EXIT } }
+									disposeOptions?.reason !== undefined
+										? { dispose: { reason: disposeOptions.reason } }
 										: undefined,
 								);
 								// A just-registered main root is still initializing until its session attaches.
@@ -6720,6 +6791,7 @@ async function createAgentSessionScoped(
 					// Owned cleanup failures take precedence over the earlier disposal result.
 					throwOwnedCleanupFailures(failures);
 				}
+				if (!strictDisposalRequested) session.notifyDisposed();
 			};
 		}
 		// The SDK dispose wrapper now owns the startup holds and tool callbacks.

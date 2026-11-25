@@ -12,9 +12,6 @@
  *   targetBranch - 目标分支
  *   gitPath      - 代码仓地址（如 https://codehub-g.huawei.com/xxx/yyy.git）
  *
- * 环境变量：
- *   CODEAGENT3_PLUGIN_ROOT - 插件安装目录（可选，不传时基于 __dirname 推算）
- *
  * 输出（JSON 到 stdout）：
  *   成功时：
  *     {"ok":true,"currentBranch":"feat/xxx","baseBranch":"feat/xxx","targetBranch":"master","branchMatched":true,"remoteTracking":"origin/master"}
@@ -32,20 +29,12 @@
  *     {"ok":false,"reason":"INVALID_ARGS","message":"用法：node local-gitbranch.js <baseBranch> <targetBranch> <gitPath>"}
  */
 
-const { execSync } = require("child_process")
-const path = require("path")
-
-// ─── 插件根目录 ─────────────────────────────────────────────────────
-const PLUGIN_ROOT = process.env.CODEAGENT3_PLUGIN_ROOT || path.dirname(path.dirname(__filename))
+const { spawnSync } = require("child_process")
 
 // ─── 工具函数 ────────────────────────────────────────────────────────
 
 function execGit(args) {
-  try {
-    return execSync(`git ${args}`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim()
-  } catch (_) {
-    return null
-  }
+  return spawnSync("git", args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })
 }
 
 function normalizeGitUrl(url) {
@@ -70,17 +59,17 @@ function extractProjectPath(url) {
 // ─── 主流程 ────────────────────────────────────────────────────────
 
 function main() {
-  const args = process.argv.slice(2)
-
-  if (args.length < 3) {
+  const [baseBranch, targetBranch, gitPath] = process.argv.slice(2)
+  const hasArgs = baseBranch?.trim() && targetBranch?.trim() && gitPath?.trim()
+  const refStatus = hasArgs ? execGit(["check-ref-format", `refs/heads/${targetBranch}`]).status : 1
+  if (refStatus === 1) {
     console.log(JSON.stringify({ ok: false, reason: "INVALID_ARGS", message: "用法：node local-gitbranch.js <baseBranch> <targetBranch> <gitPath>" }))
     return
   }
 
-  const [baseBranch, targetBranch, gitPath] = args
-
   // 1. 获取当前本地分支
-  const currentBranch = execGit("rev-parse --abbrev-ref HEAD")
+  const head = refStatus === 0 ? execGit(["rev-parse", "--abbrev-ref", "HEAD"]) : null
+  const currentBranch = head?.status === 0 ? head.stdout.trim() : null
   if (!currentBranch) {
     console.log(JSON.stringify({ ok: false, reason: "GIT_ERROR", message: "无法获取当前分支，请确认是否在 Git 仓库中执行。" }))
     return
@@ -100,36 +89,30 @@ function main() {
   }
 
   // 3. 获取远端列表，找到与 gitPath 对应的 remote name
-  const remoteLines = execGit("remote -v")
-  if (!remoteLines) {
-    console.log(JSON.stringify({
-      ok: false,
-      reason: "NO_REMOTE",
-      message: `未找到代码仓地址对应的远端配置，请先添加远端：git remote add <name> ${gitPath}`,
-      currentBranch,
-      baseBranch,
-      targetBranch,
-    }))
-    return
-  }
+  const remotes = execGit(["remote", "-v"])
 
   const normalizedGitPath = normalizeGitUrl(gitPath)
   const projectPathFromGitPath = extractProjectPath(gitPath)
-  let remoteName = null
-
-  for (const line of remoteLines.split("\n")) {
-    // 格式：origin	https://codehub-g.huawei.com/xxx/yyy.git (fetch)
-    const match = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)$/)
-    if (match) {
-      const name = match[1]
-      const url = match[2]
-      // 优先全量匹配，再按项目路径匹配（忽略域名差异）
-      if (normalizeGitUrl(url) === normalizedGitPath || extractProjectPath(url) === projectPathFromGitPath) {
-        remoteName = name
+  let fullMatch
+  let pathMatch
+  if (remotes.status === 0) {
+    for (const line of remotes.stdout.split(/\r?\n/)) {
+      // 格式：origin	https://codehub-g.huawei.com/xxx/yyy.git (fetch)
+      const match = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)$/)
+      if (!match) continue
+      const [, name, url] = match
+      if (url === gitPath) {
+        fullMatch = name
         break
+      }
+      if (normalizeGitUrl(url) === normalizedGitPath) {
+        fullMatch ??= name
+      } else if (!pathMatch && extractProjectPath(url) === projectPathFromGitPath) {
+        pathMatch = name
       }
     }
   }
+  const remoteName = fullMatch ?? pathMatch
 
   if (!remoteName) {
     console.log(JSON.stringify({
@@ -147,12 +130,15 @@ function main() {
   const remoteTracking = `${remoteName}/${targetBranch}`
 
   // 5. 检查远端分支是否存在
-  const remoteBranchExists = execGit(`branch --list -r "${remoteTracking}"`)
-  if (!remoteBranchExists) {
+  const { status } = execGit(["show-ref", "--verify", "--quiet", `refs/remotes/${remoteTracking}`])
+  if (status !== 0) {
+    const missing = status === 1
     console.log(JSON.stringify({
       ok: false,
-      reason: "NO_REMOTE_BRANCH",
-      message: `远端分支 ${remoteTracking} 不存在，请先执行 git fetch ${remoteName} 拉取远端分支。`,
+      reason: missing ? "NO_REMOTE_BRANCH" : "GIT_ERROR",
+      message: missing
+        ? `远端分支 ${remoteTracking} 不存在，请先执行 git fetch ${remoteName} 拉取远端分支。`
+        : `无法检查远端分支 ${remoteTracking}，请确认当前 Git 仓库状态。`,
       currentBranch,
       baseBranch,
       targetBranch,

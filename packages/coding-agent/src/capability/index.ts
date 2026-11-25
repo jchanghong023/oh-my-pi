@@ -124,7 +124,7 @@ export function boundSettings(): Settings | undefined {
 	return settingsHolds.at(-1)?.settings ?? inheritedBoundSettings;
 }
 
-/** Async session identity wins; explicit discovery scope precedes the ordinary TUI binding. */
+/** SDK/session callers bind exact identity; path lookup is only for unbound discovery. */
 function scopedSettings(ctx?: LoadContext): Settings | undefined {
 	return getActiveSettings() ?? (ctx ? findSettingsContext(ctx.cwd, ctx.agentDir) : undefined) ?? boundSettings();
 }

@@ -1,4 +1,5 @@
 import type { SlashCommandRuntime } from "../../slash-commands/types";
+import type { CrawlBrowserRoute, CrawlBrowserTab } from "../browser";
 import { TOOL_TIMEOUTS } from "../tool-timeouts";
 import { crawlBrowserRequest, writeCrawlMarkdown } from "./crawl-access";
 
@@ -52,7 +53,18 @@ function normalizedUrl(value: string, base?: string): string | undefined {
 }
 
 function errorText(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+	return redactCrawlUrls(error instanceof Error ? error.message : String(error));
+}
+
+const URL_USERINFO = /^(https?:\/\/)[^/?#\s]*@/i;
+
+/** A displayed or archived source keeps the URL's query and route verbatim. */
+function redactCrawlUrl(url: string): string {
+	return url.replace(URL_USERINFO, "$1");
+}
+
+function redactCrawlUrls(text: string): string {
+	return text.replace(/https?:\/\/[^\s<>"`]+/gi, redactCrawlUrl);
 }
 
 function basename(url: string): string {
@@ -74,6 +86,7 @@ function basename(url: string): string {
 
 /** Use browser-native navigation and reject document downloads before Chrome handles them. */
 function navigationCode(url: string, waitSeconds: number, scroll: boolean): string {
+	const attribute = `data-omp-crawl-${crypto.randomUUID()}`;
 	return `const client = await page.createCDPSession();
 let mainFrameId;
 let attachment = false;
@@ -119,10 +132,10 @@ const onPaused = event => {
   if (responseStage) {
     const headers = event.responseHeaders || [];
     const disposition = headers.find(h => h.name.toLowerCase() === "content-disposition")?.value || "";
-    const contentType = headers.find(h => h.name.toLowerCase() === "content-type")?.value || "";
+    const contentType = headers.find(h => h.name.toLowerCase() === "content-type")?.value.trim() || "";
     const redirect = event.responseStatusCode >= 300 && event.responseStatusCode < 400;
     const isFile = !redirect && (/(?:^|;)\\s*attachment(?:\\s*;|\\s*$)/i.test(disposition) ||
-      (isMain && event.responseStatusCode !== undefined && !/^(?:text\\/html|application\\/xhtml\\+xml)(?:\\s*;|\\s*$)/i.test(contentType)));
+      (isMain && contentType !== "" && !/^(?:text\\/html|application\\/xhtml\\+xml)(?:\\s*;|\\s*$)/i.test(contentType)));
     if (isFile && isMain) attachment = true;
     blocked ||= !!isFile;
   }
@@ -141,6 +154,9 @@ try {
   await client.send("Fetch.enable", { patterns: [
     { urlPattern: "*", resourceType: "Document", requestStage: "Response" }
   ] });
+  const minimumWait = ${JSON.stringify(waitSeconds * 1000)};
+  const readinessTimeout = ${(TOOL_TIMEOUTS.browser.max - 45) * 1000};
+  const deadline = Date.now() + readinessTimeout;
   const navigate = async destination => {
     let response;
     try { response = await page.goto(destination, { waitUntil: "domcontentloaded" }); }
@@ -151,14 +167,11 @@ try {
     if (attachment) throw new Error("Navigation returned an attachment or non-HTML document");
     return response;
   };
+  const attribute = ${JSON.stringify(attribute)};
   const response = await navigate(${JSON.stringify(url)});
   let status = response?.status() ?? null;
-  let contentType = response?.headers()["content-type"] ?? "";
+  let contentType = response?.headers()["content-type"]?.trim() ?? "";
   if (!status || status >= 400) return { url: page.url(), status, contentType, attachment };
-  const started = Date.now();
-  const minimumWait = ${JSON.stringify(waitSeconds * 1000)};
-  const readinessTimeout = ${scroll ? (TOOL_TIMEOUTS.browser.max - 45) * 1000 : "Math.max(60000, minimumWait + 15000)"};
-  const deadline = started + readinessTimeout;
   const timeoutError = () => new Error(
     ${JSON.stringify(scroll ? "Page did not finish loading or reach a stable scroll end" : "Page did not finish loading")} +
     " within " + readinessTimeout + "ms; content was not saved"
@@ -173,6 +186,7 @@ try {
       rejectErrorRoute(page.url());
       const snapshot = await page.evaluate(${JSON.stringify(READINESS_SNAPSHOT)});
       const now = Date.now();
+      if (now >= deadline) throw timeoutError();
       const state = JSON.stringify([snapshot.url, snapshot.text]);
       if (state !== previous) {
         previous = state;
@@ -181,12 +195,10 @@ try {
       if (snapshot.readyState === "complete" && snapshot.text.trim() && pending.size === 0 &&
           now - waitStarted >= minimum && now - unchangedSince >= 1500 &&
           now - lastNetworkActivity >= 1500) return snapshot;
-      if (now >= deadline) throw timeoutError();
       await wait(250);
     }
   };
   let ready = await waitForReady(minimumWait);
-  const attribute = ${JSON.stringify(`data-omp-crawl-${crypto.randomUUID()}`)};
   let bottomState;
   let scrollState;
   let followReadingLinks = true;
@@ -200,14 +212,18 @@ try {
         const nextResponse = await navigate(reading.url);
         if (nextResponse) {
           status = nextResponse.status();
-          contentType = nextResponse.headers()["content-type"] ?? "";
+          contentType = nextResponse.headers()["content-type"]?.trim() ?? "";
         }
       } else {
         await tab.click(reading.selector);
       }
       ready = await waitForReady(minimumWait);
-      if (ready.url === before.url && ready.text === before.text) {
-        throw new Error("The full-article control did not reveal content; preview was not saved");
+      if (ready.text === before.text) {
+        // An ordinary fragment change is not a page or hash-route navigation.
+        const [documentUrl, fragment] = ready.url.split("#", 2);
+        if (ready.url === before.url || (documentUrl === before.url.split("#", 1)[0] && !fragment?.startsWith("/"))) {
+          throw new Error("The full-article control did not reveal content; preview was not saved");
+        }
       }
       followReadingLinks = false;
       bottomState = undefined;
@@ -277,26 +293,30 @@ const FULL_ARTICLE_TARGET = `(attribute, followLinks) => {
         !control.getClientRects().length || control.getAttribute("aria-hidden") === "true") continue;
     if (!/^(?:A|BUTTON|SUMMARY)$/.test(control.tagName) && control.getAttribute("role") !== "button" &&
         !control.hasAttribute("onclick") && style.cursor !== "pointer") continue;
+    if (control.tagName === "SUMMARY" && control.parentElement?.open) continue;
+    const link = control.closest("a[href]");
+    const href = link?.getAttribute("href")?.trim() ?? "";
+    const target = link ? new URL(href, link.baseURI) : undefined;
+    const frame = link
+      ? (link.getAttribute("target") || document.querySelector("base[target]")?.getAttribute("target") || "_self").toLowerCase()
+      : "_self";
+    const placeholder = /^javascript:\\s*(?:void\\s*\\(\\s*0\\s*\\)|;)\\s*;?$/i.test(href);
+    const sameDocument = target && target.href.split("#")[0] === location.href.split("#")[0];
+    const expandsFragment = sameDocument && (!href || target.href.includes("#"));
+    const navigates = link && !(frame === "_self" && (placeholder || expandsFragment));
+    if (!followLinks && (navigates || (sameDocument && target.hash.startsWith("#/")))) continue;
     if (control.disabled || control.getAttribute("aria-disabled") === "true") {
       return { error: "The full-article control is disabled; preview was not saved" };
     }
     if (control.form && control.type === "submit") {
       return { error: "Refusing to submit a form to open the full article" };
     }
-    if (control.tagName === "SUMMARY" && control.parentElement?.open) continue;
-    const link = control.closest("a[href]");
     if (link?.hasAttribute("download")) return { error: "The full-article link is a download, not a webpage" };
-    const href = link?.getAttribute("href")?.trim();
-    if (href && !href.startsWith("#") && !/^javascript:\\s*(?:void\\s*\\(\\s*0\\s*\\)|;)\\s*;?$/i.test(href)) {
-      const target = new URL(href, location.href);
-      if (target.protocol !== "http:" && target.protocol !== "https:") {
-        return { error: "The full-article link is not an HTTP or HTTPS webpage" };
-      }
-      if (!followLinks) continue;
-      navigation ??= { control, url: target.href };
-      continue;
+    if (!navigates) return select(control);
+    if (target.protocol !== "http:" && target.protocol !== "https:") {
+      return { error: "The full-article link is not an HTTP or HTTPS webpage" };
     }
-    return select(control);
+    navigation ??= { control, url: target.href };
   }
   return navigation ? select(navigation.control, navigation.url) : {};
 }`;
@@ -331,7 +351,7 @@ const SCROLL_TARGET = `attribute => {
   };
 }`;
 
-// Resolve attributes in the disposable crawl tab before browser.extract serializes the DOM.
+// Resolve and redact link targets before Markdown conversion, without rewriting link labels.
 // The browser's URL resolution honors <base>, fragments, and escaped characters.
 const PAGE_INFO = `(() => {
   const links = Array.from(document.querySelectorAll("a[href], area[href]"))
@@ -344,7 +364,7 @@ const PAGE_INFO = `(() => {
   for (const element of document.querySelectorAll("a[href], area[href], img[src]")) {
     const attr = element.hasAttribute("href") ? "href" : "src";
     const value = element[attr];
-    if (typeof value === "string" && /^https?:/i.test(value)) element.setAttribute(attr, value);
+    if (typeof value === "string" && /^https?:/i.test(value)) element.setAttribute(attr, value.replace(${URL_USERINFO}, "$1"));
   }
   return { url: location.href, contentType: document.contentType, login, links };
 })()`;
@@ -359,40 +379,68 @@ export async function runCrawl(
 	if (!entry) throw new Error("Crawl requires an HTTP or HTTPS URL");
 	let origin = new URL(entry).origin;
 	const seen = new Set([entry]);
-	const completed = new Set<string>();
+	const writes = new Map<string, Promise<string>>();
 	const failures: Array<{ url: string; reason: string }> = [];
 	let saved = 0;
 	let attempted = 0;
 	let current: CrawlPage[] = [{ url: entry, depth: 0 }];
 	const maxPages = options.maxPages ?? Number.POSITIVE_INFINITY;
 	const concurrency = Math.max(1, Math.floor(options.concurrency));
+	let route: CrawlBrowserRoute | undefined;
+	let tabReleaseFailed = false;
+
+	const release = async (tab: CrawlBrowserTab, url: string): Promise<void> => {
+		try {
+			await tab.release();
+		} catch (error) {
+			// Do not open more tabs if one may still occupy its concurrency slot.
+			tabReleaseFailed = true;
+			const reason = `Could not release crawl tab: ${errorText(error)}`;
+			failures.push({ url, reason });
+			await runtime.output(`Failed ${url}: ${reason}`);
+		}
+	};
 
 	const processPage = async (item: CrawlPage, next: CrawlPage[]): Promise<void> => {
-		const name = `crawl-${crypto.randomUUID()}`;
-		let opened = false;
-		let closed = false;
+		const displayUrl = redactCrawlUrl(item.url);
+		let owned: CrawlBrowserTab | undefined;
 		try {
-			await runtime.output(`Crawling ${item.url}`);
+			await runtime.output(`Crawling ${displayUrl}`);
 			signal.throwIfAborted();
-			await crawlBrowserRequest(runtime.session, { action: "open", name, url: "about:blank", app: "relay" }, signal);
-			opened = true;
-			const navResult = await crawlBrowserRequest(
+			if (tabReleaseFailed) return;
+			await crawlBrowserRequest(
+				runtime.session,
+				{ action: "open", name: `crawl-${crypto.randomUUID()}`, app: "relay" },
+				signal,
+				{
+					kind: "open",
+					route,
+					onOpen: tab => {
+						owned = tab;
+						if (item.depth === 0) route = tab.route;
+					},
+				},
+			);
+			const tab = owned;
+			if (!tab) throw new Error("Browser did not create an owned crawl tab");
+			const result = await crawlBrowserRequest(
 				runtime.session,
 				{
 					action: "run",
-					name,
+					name: tab.name,
 					code: navigationCode(item.url, options.wait ?? 5, options.scroll ?? true),
 					timeout: TOOL_TIMEOUTS.browser.max,
 				},
 				signal,
+				{ kind: "run", tab },
 			);
-			await crawlBrowserRequest(runtime.session, { action: "close", name });
-			closed = true;
-			const navigation = (navResult.details as { value?: NavigationResult } | undefined)?.value;
+			owned = undefined;
+			await release(tab, displayUrl);
+			const navigation = (result.details as { value?: NavigationResult } | undefined)?.value;
 			if (!navigation || typeof navigation.url !== "string")
 				throw new Error("Browser returned no navigation result");
 			const finalUrl = normalizedUrl(navigation.url);
-			if (!finalUrl) throw new Error(`Navigation did not end on an HTTP or HTTPS webpage: ${navigation.url}`);
+			if (!finalUrl) throw new Error("Navigation did not end on an HTTP or HTTPS webpage");
 			if (item.depth === 0) origin = new URL(finalUrl).origin;
 			if (navigation.attachment) throw new Error("Navigation returned an attachment, not a web page");
 			if (typeof navigation.status !== "number" || navigation.status === 0)
@@ -404,8 +452,6 @@ export async function runCrawl(
 			) {
 				throw new Error(`Not an HTML page: ${navigation.contentType}`);
 			}
-			if (completed.has(finalUrl)) return;
-			completed.add(finalUrl);
 			seen.add(finalUrl);
 			const info = navigation.info;
 			if (!info || normalizedUrl(info.url) !== finalUrl) throw new Error("Page navigated while being inspected");
@@ -426,49 +472,64 @@ export async function runCrawl(
 			if (typeof markdown !== "string" || !markdown.trim()) throw new Error("Page extraction returned no Markdown");
 			if (normalizedUrl(navigation.endUrl ?? "") !== finalUrl)
 				throw new Error("Page navigated while extracting content");
-			signal.throwIfAborted();
-			const path = await writeCrawlMarkdown(
-				runtime.session,
-				options.output,
-				basename(finalUrl),
-				`Source: ${finalUrl}\n\n${markdown.trim()}\n`,
-				signal,
-			);
-			saved++;
-			await runtime.output(`Saved ${finalUrl} → ${path}`);
+			const sourceUrl = redactCrawlUrl(finalUrl);
+			for (;;) {
+				signal.throwIfAborted();
+				const pending = writes.get(sourceUrl);
+				if (pending) {
+					if (
+						await pending.then(
+							() => true,
+							() => false,
+						)
+					)
+						return;
+					continue; // A failed writer did not reserve this URL.
+				}
+				const write = writeCrawlMarkdown(
+					runtime.session,
+					options.output,
+					basename(sourceUrl),
+					`Source: ${sourceUrl}\n\n${markdown.trim()}\n`,
+					signal,
+				).catch(error => {
+					writes.delete(sourceUrl);
+					throw error;
+				});
+				writes.set(sourceUrl, write);
+				const path = await write;
+				saved++;
+				await runtime.output(`Saved ${sourceUrl} → ${path}`);
+				return;
+			}
 		} catch (error) {
 			if (!signal.aborted) {
 				const reason = errorText(error);
-				failures.push({ url: item.url, reason });
-				await runtime.output(`Failed ${item.url}: ${reason}`);
+				failures.push({ url: displayUrl, reason });
+				await runtime.output(`Failed ${displayUrl}: ${reason}`);
 			}
 		} finally {
-			// Close with a fresh signal even when the task was cancelled. A failed open
-			// can have published its tab before failing, so release its unique name too.
-			try {
-				if (!closed) await crawlBrowserRequest(runtime.session, { action: "close", name });
-			} catch (error) {
-				if (opened) {
-					const reason = `Could not release crawl tab: ${errorText(error)}`;
-					failures.push({ url: item.url, reason });
-					await runtime.output(`Failed ${item.url}: ${reason}`);
-				}
-			}
+			if (owned) await release(owned, displayUrl);
 		}
 	};
 
-	while (current.length && !signal.aborted && attempted < maxPages) {
+	while (current.length && !signal.aborted && !tabReleaseFailed && attempted < maxPages) {
 		const next: CrawlPage[] = [];
 		let index = 0;
 		const worker = async (): Promise<void> => {
-			while (!signal.aborted && index < current.length && attempted < maxPages) {
+			while (!signal.aborted && !tabReleaseFailed && index < current.length && attempted < maxPages) {
 				const item = current[index++];
 				if (!item) return;
 				attempted++;
 				await processPage(item, next);
 			}
 		};
-		await Promise.all(Array.from({ length: Math.min(concurrency, current.length) }, () => worker()));
+		const results = await Promise.allSettled(
+			Array.from({ length: Math.min(concurrency, current.length) }, () => worker()),
+		);
+		for (const result of results) {
+			if (result.status === "rejected") throw result.reason;
+		}
 		current = next;
 	}
 	await runtime.output(

@@ -255,10 +255,11 @@ import {
 	waitForMainFrameDocument,
 } from "./navigation";
 
-import { type HiddenFrame, isHiddenFrame } from "./relay/protocol";
+import { type HiddenFrame, isHiddenFrame, parseTargetId } from "./relay/protocol";
 import { cloneSafe, RunOutput } from "./run-output";
 import { type UploadRoute, UploadStaging } from "./upload-files";
 import {
+	type AttachPage,
 	type Observation,
 	type ObservationEntry,
 	isMissingPageGlobal,
@@ -1610,20 +1611,32 @@ async function targetIdForPage(page: Page): Promise<string> {
 
 async function createTrackedPage(
 	browser: Browser,
-	attach: { nearTargetId?: string } | undefined,
+	attach: Extract<AttachPage, { kind: "create" }> | undefined,
 	reportTarget: (targetId: string) => void,
 ): Promise<Page> {
 	let targetId: string;
 	if (attach) {
+		const near = attach.requireNearTarget ? parseTargetId(attach.nearTargetId ?? "") : null;
+		if (attach.requireNearTarget && !near) throw new ToolError("The required nearby target is not an omp relay tab");
 		// Attached browsers may have no page or browser target yet. Create through
 		// the root CDP connection; the relay also uses nearTargetId to choose Chrome.
-		const params: Protocol.Target.CreateTargetRequest & { nearTargetId?: string } = {
+		const params: Protocol.Target.CreateTargetRequest & { nearTargetId?: string; requireNearTarget?: boolean } = {
 			url: "about:blank",
 			background: true,
 			nearTargetId: attach.nearTargetId,
+			requireNearTarget: attach.requireNearTarget,
 		};
 		({ targetId } = await browserConnection(browser).send("Target.createTarget", params));
 		reportTarget(targetId);
+		// Older relays may ignore requireNearTarget and fall back to another profile.
+		// Report the blank page above so a failed init still closes exactly what we created.
+		if (near) {
+			const created = parseTargetId(targetId);
+			const instance = near.key.slice(0, near.key.lastIndexOf(":"));
+			if (created?.key.slice(0, created.key.lastIndexOf(":")) !== instance) {
+				throw new ToolError("The omp browser relay did not create the new tab in the required browser profile");
+			}
+		}
 	} else {
 		const session = await browser.target().createCDPSession();
 		try {
@@ -2218,16 +2231,13 @@ export class WorkerCore {
 				// Create the target directly so its id is reportable before
 				// Puppeteer waits for target/page initialization. If that wait
 				// wedges, the supervisor can still close the created target.
-				const attach =
-					payload.mode === "attach" && payload.page.kind === "create"
-						? { nearTargetId: payload.page.nearTargetId }
-						: undefined;
+				const attach = payload.mode === "attach" && payload.page.kind === "create" ? payload.page : undefined;
 				try {
 					this.#page = await createTrackedPage(this.#browser, attach, targetId => {
 						this.#transport.send({ type: "page-created", targetId });
 					});
 				} catch (error) {
-					if (!attach) throw error;
+					if (!attach || attach.requireNearTarget) throw error;
 					throw new ToolError(
 						`Could not create a managed tab in the attached browser profile: ${error instanceof Error ? error.message : String(error)}. To drive one of its existing pages instead, pass target (browser.targets() lists them).`,
 					);
@@ -4416,6 +4426,7 @@ export class WorkerCore {
 		if (!this.#stop()) return;
 		this.#clearElementCache();
 		const page = this.#page;
+		// The supervisor gives this close a bounded grace period before terminating the worker.
 		await this.#recording.close().catch(error => {
 			this.#log("warn", "Failed to finalize active browser recording during tab close", {
 				error: error instanceof Error ? error.message : String(error),

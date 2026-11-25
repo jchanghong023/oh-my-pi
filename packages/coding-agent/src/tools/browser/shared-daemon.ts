@@ -371,7 +371,7 @@ const reachabilityChecks = new Map<string, Promise<boolean>>();
  * that failed them, so a browser another session replaced meanwhile is never
  * stopped under its name. A unit that has not become ready is left to the
  * acquire path, which owns that race. Concurrent failed closes share one check.
- * Best-effort: never throws, and returns true only when the daemon confirmed the stop.
+ * Best-effort: never throws, and returns true only for broker-confirmed exit.
  */
 export function stopSharedBrowserIfUnreachable(
 	scope: SharedBrowserHealthScope,
@@ -396,7 +396,7 @@ export function stopSharedBrowserIfUnreachable(
 	return run;
 }
 
-/** One reachability round. Resolves false for every non-destructive outcome; never rejects. */
+/** One reachability round. Only a confirmed exit returns true; never rejects. */
 async function checkSharedBrowserReachable(
 	scope: SharedBrowserHealthScope,
 	deps: SharedBrowserHealthDeps,
@@ -407,8 +407,8 @@ async function checkSharedBrowserReachable(
 		const client = deps.client ?? (await daemonClient());
 		const identity: UnitIdentity = { kind: "proc", scope: projectScope(scope.projectDir), key: scope.daemonName };
 		const existing = await describeUnit(client, identity, signal);
-		if (!existing || !isLiveUnit(existing)) return false;
-		if (scope.generation !== undefined && scope.generation !== existing.generation) return false;
+		if (!existing || (scope.generation !== undefined && scope.generation !== existing.generation)) return false;
+		if (!isLiveUnit(existing)) return scope.generation !== undefined;
 		const wsEndpoint = wsEndpointOf(existing);
 		// No endpoint stamped yet: still starting (or never became ready). The
 		// acquire path owns that state; stopping here would race a cross-process

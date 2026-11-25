@@ -162,9 +162,11 @@ function normalizeOllamaHostEnv(value: string | undefined): string | undefined {
 	}
 }
 
-export function getImplicitOllamaBaseUrl(): string {
+export function getImplicitOllamaEndpoint(): { baseUrl: string; env?: string } {
 	const baseUrl = Bun.env.OLLAMA_BASE_URL?.trim();
-	return baseUrl || normalizeOllamaHostEnv(Bun.env.OLLAMA_HOST) || DEFAULT_OLLAMA_BASE_URL;
+	if (baseUrl) return { baseUrl, env: "OLLAMA_BASE_URL" };
+	const host = normalizeOllamaHostEnv(Bun.env.OLLAMA_HOST);
+	return host ? { baseUrl: host, env: "OLLAMA_HOST" } : { baseUrl: DEFAULT_OLLAMA_BASE_URL };
 }
 
 export function getOllamaContextLengthOverride(): number | undefined {
@@ -493,6 +495,32 @@ function extractLlamaCppInputCapabilities(payload: Record<string, unknown>): ("t
 		return undefined;
 	}
 	return modalities.vision === true ? ["text", "image"] : ["text"];
+}
+
+function isHttpDiscoveryBaseUrl(baseUrl: string | undefined): boolean {
+	if (!baseUrl?.trim()) return false;
+	try {
+		const url = new URL(baseUrl);
+		return url.protocol === "http:" || url.protocol === "https:";
+	} catch {
+		return false;
+	}
+}
+
+/** Whether this protocol reads a roster from its explicitly configured HTTP root. */
+export function hasConfiguredDiscoveryEndpoint(providerConfig: DiscoveryProviderConfig): boolean {
+	switch (providerConfig.discovery.type) {
+		case "openrouter": // Its public roster ignores the provider's inference URL.
+		case "apple-foundation-models": // Uses the in-process bridge, not an endpoint.
+			return false;
+		case "ollama":
+		case "llama.cpp":
+		case "lm-studio":
+		case "openai-models-list":
+		case "proxy":
+		case "litellm":
+			return isHttpDiscoveryBaseUrl(providerConfig.baseUrl);
+	}
 }
 
 export function discoverModelsByProviderType(

@@ -213,7 +213,7 @@ export interface SettingsOptions {
 function getByPath(obj: RawSettings, segments: readonly string[]): unknown {
 	let current: unknown = obj;
 	for (const segment of segments) {
-		if (current === null || current === undefined || typeof current !== "object") {
+		if (current === null || typeof current !== "object" || !Object.hasOwn(current, segment)) {
 			return undefined;
 		}
 		current = (current as Record<string, unknown>)[segment];
@@ -229,10 +229,10 @@ function setByPath(obj: RawSettings, segments: readonly string[], value: unknown
 	let current = obj;
 	for (let i = 0; i < segments.length - 1; i++) {
 		const segment = segments[i];
-		if (!isRecord(current[segment])) current[segment] = {};
+		if (!Object.hasOwn(current, segment) || !isRecord(current[segment])) setOwn(current, segment, {});
 		current = current[segment] as RawSettings;
 	}
-	current[segments[segments.length - 1]] = value;
+	setOwn(current, segments[segments.length - 1], value);
 }
 
 /**
@@ -255,6 +255,7 @@ function setOwn(obj: RawSettings, key: string, value: unknown): void {
 function deleteByPath(obj: RawSettings, segments: readonly string[]): void {
 	const containers: RawSettings[] = [obj];
 	for (let i = 0; i < segments.length - 1; i++) {
+		if (!Object.hasOwn(containers[i], segments[i])) return;
 		const next = containers[i][segments[i]];
 		if (!isRecord(next)) return;
 		containers.push(next);
@@ -263,7 +264,7 @@ function deleteByPath(obj: RawSettings, segments: readonly string[]): void {
 	let replacement: RawSettings | undefined;
 	for (let i = containers.length - 1; i >= 0; i--) {
 		const container = i === 0 ? obj : { ...containers[i] };
-		if (replacement) container[segments[i]] = replacement;
+		if (replacement) setOwn(container, segments[i], replacement);
 		else delete container[segments[i]];
 		replacement = Object.keys(container).length > 0 ? container : undefined;
 	}
@@ -593,7 +594,7 @@ function modelRoleValueFromUnknown(value: unknown): string | undefined {
 	return entries.length === value.length ? entries.join(",") : undefined;
 }
 
-/** Receives the setting whose effective value changed (see {@link Settings.onEffectiveChange}). */
+/** Receives an effective or user-layer change (see {@link Settings.onEffectiveChange}). */
 type SettingChangeListener = (setting: AnySetting, userChange?: boolean) => void;
 
 /** Calls each listener with `setting`; a throwing listener is logged and never blocks the rest. */
@@ -1584,13 +1585,20 @@ export class Settings {
 
 	/**
 	 * Notifies change listeners for every setting whose effective value differs from
-	 * `previous` (disk reload, save-time merge, project re-scope).
+	 * `previous`. A disk reload also reports user-layer changes to opted-in observers.
 	 */
-	#fireChangesSince(previous: readonly unknown[]): void {
+	#fireChangesSince(previous: readonly unknown[], previousGlobal?: RawSettings): void {
 		const settings = allSettings();
+		const global = this.#global;
 		for (let i = 0; i < previous.length; i++) {
 			const setting = settings[i];
 			if (!settingValuesEqual(this.settingChangeValue(setting), previous[i])) this.#notifyChange(setting);
+			if (
+				previousGlobal &&
+				previousGlobal !== global &&
+				!settingValuesEqual(getByPath(global, setting.segments), getByPath(previousGlobal, setting.segments))
+			)
+				this.#notifyChange(setting, true);
 		}
 	}
 
@@ -1938,6 +1946,7 @@ export class Settings {
 			if (!keepLastGood) this.#validateAll(this.#mergeOverParent(this.#mergeOwnLayers(layers)), this.#cwd);
 
 			const previous = this.#snapshot();
+			const previousGlobal = this.#global;
 			this.#persistedMutationGeneration++;
 			for (const refresh of adopted) refresh.commit();
 			this.#global = layers.global;
@@ -1946,7 +1955,7 @@ export class Settings {
 			this.#overrides = layers.overrides;
 			for (const setting of settled) this.#softPins.delete(setting);
 			this.#rebuildMerged();
-			this.#fireChangesSince(previous);
+			this.#fireChangesSince(previous, previousGlobal);
 			return;
 		}
 	}
@@ -3365,6 +3374,16 @@ export class Settings {
 				const slot = isLightTheme(oldTheme) ? "light" : "dark";
 				raw.theme = { [slot]: oldTheme };
 			}
+		}
+
+		// The old toggle distinguishes detailed tool cards from a hidden transcript.
+		// Only a layer with no explicit display mode should inherit that preference.
+		const display = isRecord(raw.display) ? raw.display : undefined;
+		if (display && Object.hasOwn(display, "hideToolActivity")) {
+			if (!Object.hasOwn(display, "mode") && typeof display.hideToolActivity === "boolean") {
+				display.mode = display.hideToolActivity ? "clean" : "detailed";
+			}
+			delete display.hideToolActivity;
 		}
 
 		// Remove the retired image-tool mode settings and preserve its request

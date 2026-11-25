@@ -3,7 +3,6 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { ChatOpenAI } from "@langchain/openai";
 import { type AuthGatewayRouter, createAuthGatewayRouter } from "@oh-my-pi/pi-ai/auth-gateway";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { getCompanyConfigError } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import {
@@ -14,9 +13,11 @@ import {
 	resolveCliModel,
 	resolveModelRoleValue,
 } from "../config/model-resolver";
+import { bindEffects } from "../config/registry";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage, initializeOfflineModelCommand, loadCliExtensionProviders } from "../sdk";
 import type { AuthStorage } from "../session/auth-storage";
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import {
 	concreteThinkingLevel,
 	resolveThinkingLevelForModel,
@@ -25,33 +26,38 @@ import {
 } from "../thinking/levels";
 import type { ConfiguredThinkingLevel } from "../utils/render-utils";
 
-export interface OpenWikiModelPreview {
+type OpenWikiModelRole = "default" | "plan";
+type OpenWikiModelScope = { cwd: string; agentDir: string };
+
+interface OpenWikiModelPreview {
 	/** Origin of the selector, or automatic runtime selection when none is configured. */
-	source: "selector" | "default-role" | "automatic";
-	/** The requested selector or configured default role, not a verified model ID. */
+	source: "selector" | "default-role" | "plan-role" | "automatic";
+	/** The requested selector or configured role value, not a verified model ID. */
 	selector?: string;
-	/** A concrete model ID, only when it can be resolved without runtime discovery or credentials. */
-	modelId?: string;
 	/** Why the runtime model cannot be determined by this read-only preview. */
 	reason: string;
 }
 
-/** Keep explicit selectors; otherwise use the plan role only when configured. */
-export async function resolveOpenWikiPlannerSelector(
-	selector?: string,
-	settings?: Settings,
-): Promise<string | undefined> {
-	if (selector !== undefined) return selector;
-	settings ??= await Settings.loadReadOnly({ cwd: getProjectDir() });
-	return settings.getModelRole("plan") !== undefined ? "@plan" : undefined;
+/** Preview both roles using runtime's offline defaults without registry or auth-storage discovery. */
+export async function previewOpenWikiModels(
+	scope: OpenWikiModelScope,
+	pageSelector?: string,
+	plannerSelector = pageSelector,
+): Promise<{ page: OpenWikiModelPreview; planner: OpenWikiModelPreview }> {
+	const settings = await Settings.loadReadOnly(scope);
+	await initializeOfflineModelCommand(settings);
+	const page = previewModelSelection(pageSelector, "default", settings.getModelRole("default"));
+	const plan = plannerSelector === undefined ? settings.getModelRole("plan") : undefined;
+	const planner =
+		plannerSelector !== pageSelector || plan ? previewModelSelection(plannerSelector, "plan", plan) : page;
+	return { page, planner };
 }
 
-/**
- * Preview the model selection without initializing the model registry or credentials.
- * Runtime discovery, availability and selector aliases can change the actual model,
- * so even a provider-qualified selector is reported as unverified rather than a model ID.
- */
-export async function previewOpenWikiModel(selector?: string): Promise<OpenWikiModelPreview> {
+function previewModelSelection(
+	selector: string | undefined,
+	role: OpenWikiModelRole,
+	roleValue: string | undefined,
+): OpenWikiModelPreview {
 	if (selector !== undefined) {
 		if (!selector.trim()) throw new Error("OpenWiki model selector cannot be empty");
 		return {
@@ -61,13 +67,11 @@ export async function previewOpenWikiModel(selector?: string): Promise<OpenWikiM
 		};
 	}
 
-	const settings = await Settings.loadReadOnly({ cwd: getProjectDir() });
-	const defaultRole = settings.getModelRole("default");
-	if (defaultRole) {
+	if (roleValue) {
 		return {
-			source: "default-role",
-			selector: defaultRole,
-			reason: "Unverified default role; the model is resolved at runtime using the model registry and availability.",
+			source: `${role}-role`,
+			selector: roleValue,
+			reason: `Unverified ${role} role; the model is resolved at runtime using the model registry and availability.`,
 		};
 	}
 
@@ -93,19 +97,28 @@ interface OpenWikiModelRuntime {
 }
 
 /** Create an OMP-backed OpenWiki model with its own request lifetime. */
-export async function createOpenWikiModel(selector?: string): Promise<OpenWikiModel> {
-	const cwd = getProjectDir();
-	const settings = await Settings.init({ cwd });
-	const offline = await initializeOfflineModelCommand(settings);
-	const storage = await discoverAuthStorage(settings.getAgentDir(), { settings, offline });
+export async function createOpenWikiModel(scope: OpenWikiModelScope, selector?: string): Promise<OpenWikiModel> {
+	const settings = await Settings.loadIsolated(scope);
+	const agentDir = settings.getAgentDir();
+	const releaseEffects = bindEffects(settings);
+	let storage: AuthStorage | undefined;
+	const disposeRuntime = () => {
+		try {
+			storage?.close();
+		} finally {
+			releaseEffects();
+		}
+	};
 	try {
-		const registry = new ModelRegistry(storage, path.join(settings.getAgentDir(), "models.yml"), { settings });
+		const offline = await initializeOfflineModelCommand(settings);
+		storage = await discoverAuthStorage(agentDir, { settings, offline });
+		const registry = new ModelRegistry(storage, path.join(agentDir, "models.yml"), { settings });
 		await registry.hydrateCredentialScopedModelCaches();
-		await loadCliExtensionProviders(registry, settings, cwd, { offline });
+		await loadCliExtensionProviders(registry, settings, scope.cwd, { offline });
 		await registry.refresh(offline ? "offline" : "online-if-uncached");
-		return await createRuntimeModel(selector, { settings, storage, registry }, true);
+		return await createRuntimeModel(selector, { settings, storage, registry }, disposeRuntime);
 	} catch (error) {
-		storage.close();
+		disposeRuntime();
 		throw error;
 	}
 }
@@ -113,13 +126,12 @@ export async function createOpenWikiModel(selector?: string): Promise<OpenWikiMo
 async function createRuntimeModel(
 	selector: string | undefined,
 	runtime: OpenWikiModelRuntime,
-	ownsStorage = false,
+	disposeRuntime?: () => void,
 ): Promise<OpenWikiModel> {
 	const { settings, storage, registry } = runtime;
 	let router: AuthGatewayRouter | undefined;
 	const lifetime = new AbortController();
 	try {
-		const defaultRole = settings.getModelRole("default");
 		let selected: Model<Api> | undefined;
 		let thinkingLevel: ConfiguredThinkingLevel | undefined;
 		if (selector !== undefined) {
@@ -130,14 +142,12 @@ async function createRuntimeModel(
 			thinkingLevel = resolved.thinkingLevel;
 		} else {
 			const allowed = await resolveAllowedModels(registry, settings, getModelMatchPreferences(settings));
+			const defaultRole = settings.getModelRole("default");
 			if (defaultRole) {
 				const resolved = resolveModelRoleValue(defaultRole, allowed, { settings });
+				if (!resolved.model) throw new Error(`Default model ${defaultRole} is unavailable`);
 				selected = resolved.model;
 				thinkingLevel = resolved.thinkingLevel;
-				if (!selected) {
-					const resolved = resolveCliModel({ cliModel: "@default", modelRegistry: registry, settings });
-					throw new Error(resolved.error ?? `Default model ${defaultRole} is unavailable`);
-				}
 			} else {
 				selected = pickDefaultAvailableModel(allowed, provider => registry.hasConcreteAuth(provider));
 				if (!selected)
@@ -148,7 +158,6 @@ async function createRuntimeModel(
 			}
 		}
 
-		if (!selected) throw new Error("No default model available");
 		const selectedModel = selected;
 		const modelId = formatModelStringWithRouting(selectedModel);
 		if (selectedModel.supportsTools === false) throw new Error(`Model ${modelId} does not support tool calling`);
@@ -169,6 +178,7 @@ async function createRuntimeModel(
 				resolver: (model, sessionId, initialKey) =>
 					registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl, modelId: model.id, initialKey }),
 			},
+			thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 			preserveAssistantToolTurns: true,
 		});
 		const activeRouter = router;
@@ -193,8 +203,9 @@ async function createRuntimeModel(
 		return {
 			model,
 			modelId,
-			async createPlannerModel(plannerSelector?: string) {
-				const effectiveSelector = await resolveOpenWikiPlannerSelector(plannerSelector, settings);
+			async createPlannerModel(plannerSelector = selector) {
+				const effectiveSelector =
+					plannerSelector ?? (settings.getModelRole("plan") !== undefined ? "@plan" : undefined);
 				if (effectiveSelector === undefined || effectiveSelector === selector) return this;
 				return createRuntimeModel(effectiveSelector, runtime);
 			},
@@ -203,7 +214,7 @@ async function createRuntimeModel(
 				disposed = true;
 				lifetime.abort();
 				activeRouter.close();
-				if (ownsStorage) storage.close();
+				disposeRuntime?.();
 			},
 		};
 	} catch (error) {

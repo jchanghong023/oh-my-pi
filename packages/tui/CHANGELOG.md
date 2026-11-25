@@ -51,6 +51,7 @@
 
 ### Fixed
 
+- ANSI completion never accepts an invisible selection, and real input takes priority over queued offline redraws.
 - Plain right-padding no longer causes terminal reflow to leave duplicate live transcript rows after a pane resize.
 - Detailed `wait` cards keep their job snapshots, and hiding tool activity no longer hides extension-owned async results.
 - Consumed input that does not request a repaint no longer accelerates background frames in offline Linux sessions.

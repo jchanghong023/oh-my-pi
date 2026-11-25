@@ -52,7 +52,7 @@ export type TreeLookTerm = PickerTerm & {
 	/** The open label editor's line. */
 	readonly label?: { readonly text: string; readonly cursor: number };
 	readonly details?: string;
-	readonly detailScroll: number;
+	readonly clampDetailScroll: (max: number) => number;
 	/** The filter's tag (` [user]`), empty for the default filter. */
 	readonly filterLabel: string;
 	/** Entries before filtering. */
@@ -170,7 +170,7 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 			body.push(bar ? `${padTo(line, rowWidth)}${bar[i - start]}` : line);
 			if (selected && term.details) {
 				const detailRows = wrap(term.details, Math.max(1, rowWidth - 2));
-				const offset = Math.min(term.detailScroll, Math.max(0, detailRows.length - detailHeight));
+				const offset = term.clampDetailScroll(Math.max(0, detailRows.length - detailHeight));
 				for (const detail of detailRows.slice(offset, offset + detailHeight)) body.push(`  ${detail}`);
 			}
 		}

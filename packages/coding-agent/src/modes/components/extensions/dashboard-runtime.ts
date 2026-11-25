@@ -1,5 +1,6 @@
 import type { ExtensionDashboardRuntime } from "../../../extensibility/inventory/extension-dashboard";
 import { getMCPConfigPath } from "@oh-my-pi/pi-utils";
+import { reset as resetCapabilities } from "../../../capability";
 import { parseRuleAgents, parseRuleConditionAndScope } from "../../../capability/rule";
 import type { EffectiveExtensionRoots } from "../../../capability/types";
 import { type Settings, withActiveSettings } from "../../../config/settings";
@@ -37,8 +38,9 @@ export function createExtensionDashboardRuntime(options: {
 				userSourceEnabled: isUserSourceEnabled(provider.id),
 				foreignUserSource: isForeignUserProvider(provider.id),
 			})),
-		loadExtensions: disabledIds =>
-			withActiveSettings(settings, () =>
+		loadExtensions: disabledIds => {
+			resetCapabilities();
+			return withActiveSettings(settings, () =>
 				loadAllExtensions(
 					cwd,
 					disabledIds,
@@ -46,7 +48,8 @@ export function createExtensionDashboardRuntime(options: {
 					mcpManager?.getBuiltinDrops(),
 					cfgSkills.get(settings),
 				),
-			),
+			);
+		},
 		toggleProvider,
 		toggleUserSource,
 		async persistMcpToggle(name, enabled, sourcePath) {

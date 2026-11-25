@@ -30,10 +30,11 @@ const TEXT_BREAK_PATTERN = /^(?:\s*$|\s*#{1,6}(?:\s|$)|\s*>|\s*<[!?]|\s*(?:=+|-+
 
 interface LocatedTask {
 	task: TodoLoopTask;
-	/** Exclusive end of the immutable first paragraph, zero-based. */
-	bodyEnd: number;
 	/** Section identity includes empty sections, unlike dispatched group ids. */
 	section: number;
+	contentIndent: number;
+	/** First subsequent list item outside this task. */
+	nextListLine?: number;
 }
 
 interface ParsedDocument {
@@ -80,7 +81,7 @@ function parseDocument(content: string): ParsedDocument {
 	];
 	const headings: ParsedDocument["headings"] = [];
 	const ids = new Set<string>();
-	const lists: { indent: number; contentIndent: number }[] = [];
+	const lists: number[] = [];
 	let current: LocatedTask | undefined;
 	let fence: { char: string; length: number; base: number; line: number } | undefined;
 	let commentLine: number | undefined;
@@ -114,14 +115,13 @@ function parseDocument(content: string): ParsedDocument {
 			paragraph = undefined;
 			continue;
 		}
-		while (lists.length && indent < lists[lists.length - 1].contentIndent) lists.pop();
-		const base = lists.at(-1)?.contentIndent ?? 0;
+		while (lists.length && indent < lists[lists.length - 1]) lists.pop();
+		const base = lists.at(-1) ?? 0;
 		// Four spaces relative to the containing list denote code, not a child list.
 		if (indent >= base + 4) {
 			// An indented continuation of an open paragraph is still task prose.
 			if (current) {
 				current.task.text += `\n${raw.trimStart()}`;
-				current.bodyEnd = index + 1;
 			}
 			continue;
 		}
@@ -139,6 +139,24 @@ function parseDocument(content: string): ParsedDocument {
 			continue;
 		}
 		let list = line.match(LIST_PATTERN);
+		let contentIndent = indent;
+		if (list) {
+			const previousTask = located.at(-1);
+			if (previousTask && previousTask.nextListLine === undefined && indent < previousTask.contentIndent) {
+				previousTask.nextListLine = index + 1;
+			}
+			const markerEnd = indent + list[2].length;
+			contentIndent = markerEnd;
+			for (const char of list[3]) contentIndent += char === "\t" ? 4 - (contentIndent % 4) : 1;
+			// Five or more columns after the marker mean one column of list
+			// padding followed by indented code, not a checkbox or a fence.
+			if (contentIndent > markerEnd + 4) {
+				lists.push(markerEnd + 1);
+				current = undefined;
+				paragraph = undefined;
+				continue;
+			}
+		}
 		const listFence = list?.[4].match(/^(`{3,}|~{3,})(.*)$/);
 		const startsListFence = listFence && !(listFence[1][0] === "`" && listFence[2].includes("`"));
 		if (!startsListFence) {
@@ -170,14 +188,12 @@ function parseDocument(content: string): ParsedDocument {
 		if (list) {
 			current = undefined;
 			paragraph = undefined;
-			let contentIndent = indent + list[2].length;
-			for (const char of list[3]) contentIndent += char === "\t" ? 4 - (contentIndent % 4) : 1;
-			lists.push({ indent, contentIndent });
+			lists.push(contentIndent);
 			if (startsListFence) {
 				fence = {
 					char: listFence[1][0],
 					length: listFence[1].length,
-					base: lists[lists.length - 1].contentIndent,
+					base: contentIndent,
 					line: index + 1,
 				};
 				continue;
@@ -235,13 +251,12 @@ function parseDocument(content: string): ParsedDocument {
 					line: index + 1,
 				};
 			}
-			current = { task, bodyEnd: index + 1, section: sections.length - 1 };
+			current = { task, section: sections.length - 1, contentIndent };
 			section.tasks.push(task);
 			located.push(current);
 		} else if (current && !TEXT_BREAK_PATTERN.test(line)) {
 			// Preserve hard breaks and all continuation prose, unlike a first-line-only parser.
 			current.task.text += `\n${raw.trimStart()}`;
-			current.bodyEnd = index + 1;
 		} else {
 			current = undefined;
 			if (!lists.length && !TEXT_BREAK_PATTERN.test(line)) {
@@ -315,7 +330,7 @@ export function validateTodoLoopChange(
 
 	// Checking task.text alone would let an inserted blank line hide a changed
 	// continuation as a new note. Preserve every old line, including old notes,
-	// and admit only insertions after current-group immutable first paragraphs.
+	// and admit only insertions after the last existing record in each task's region.
 	const oldLines = previous.lines;
 	const newLines = next.lines;
 	for (let index = 0; index < previous.located.length; index++) {
@@ -330,7 +345,12 @@ export function validateTodoLoopChange(
 		const nextTaskLine = previous.located[index + 1]?.task.line ?? oldLines.length + 1;
 		const nextHeadingLine =
 			previous.headings.find(heading => heading.line > located.task.line)?.line ?? oldLines.length + 1;
-		return [{ start: located.bodyEnd, end: Math.min(nextTaskLine, nextHeadingLine) - 1 }];
+		const end = Math.min(nextTaskLine, nextHeadingLine, located.nextListLine ?? oldLines.length + 1) - 1;
+		let start = end;
+		// A new record can precede the trailing blank separators, but never
+		// precede or interrupt any previously accepted Markdown content.
+		while (start >= located.task.line && !oldLines[start - 1].trim()) start--;
+		return [{ start, end }];
 	});
 	let cursor = 0;
 	for (let index = 0; index <= oldLines.length; index++) {

@@ -2449,9 +2449,11 @@ def _install_builtins(ns: dict) -> None:
     ns["__omp_magic_async"] = __omp_magic_async
     ns["__omp_magic_cell"] = __omp_magic_cell
     ns["__omp_shell"] = __omp_shell
-    # Plain threads (ThreadPoolExecutor) do not inherit the ContextVar: fall back
-    # to the request currently executing, the same target fd-1 capture uses.
-    ns["__omp_current_run_id__"] = lambda: _CURRENT_RID.get() or _STATE.capture_rid
+    # Plain threads don't inherit the ContextVar. Keep the capture fallback for
+    # ordinary helpers, but never use it to authorize a prelude.
+    ns["__omp_current_run_id__"] = lambda require_context: _CURRENT_RID.get() or (
+        None if require_context else _STATE.capture_rid
+    )
 
 
 _install_builtins(_STATE.user_ns)

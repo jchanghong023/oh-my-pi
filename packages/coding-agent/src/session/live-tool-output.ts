@@ -125,6 +125,16 @@ export class LiveToolOutputState {
 	}
 
 	observe(event: LocalAgentSessionEvent, receivedAt: number, dispatchOrder?: number): void {
+		if (event.type === "agent_start") {
+			for (const id of event.resumedToolCallIds ?? []) {
+				const call = this.#calls.get(id);
+				if (!call) continue;
+				this.#calls.delete(id);
+				const index = this.#previews.findIndex(preview => preview.call === call);
+				if (index !== -1) this.#previews.splice(index, 1);
+			}
+			return;
+		}
 		if (event.type === "tool_execution_start") {
 			const order = dispatchOrder ?? this.#dispatchOrder + 1;
 			if (this.#calls.has(event.toolCallId) || order < this.#floor) return;

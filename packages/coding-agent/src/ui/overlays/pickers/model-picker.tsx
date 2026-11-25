@@ -13,6 +13,7 @@
  * in the background when stale; a refresh error shows in the head.
  */
 import type { Model } from "@oh-my-pi/pi-ai";
+import { getUpstreamPin } from "@oh-my-pi/pi-catalog/models";
 import { batch, computed, effect, type JSXNode, type KeyEvent, signal } from "@oh-my-pi/pi-tui";
 import { keyCaps } from "@oh-my-pi/pi-tui/term/painters/picker";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
@@ -111,6 +112,23 @@ function pickerBrowser(
 	return browser;
 }
 
+/** Session rows address scoped upstream pins individually; an unpinned row keeps its base id. */
+const routedPickerScopes = new WeakMap<ModelBrowserItem[], ModelBrowserItem[]>();
+function routedPickerItems(items: ModelBrowserItem[]): ModelBrowserItem[] {
+	const cached = routedPickerScopes.get(items);
+	if (cached) return cached;
+	let routed = items;
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i]!;
+		const pin = getUpstreamPin(item.model);
+		if (!pin) continue;
+		if (routed === items) routed = items.slice();
+		routed[i] = { ...item, selector: `${item.selector}@${pin}`, perfSelector: item.selector };
+	}
+	routedPickerScopes.set(items, routed);
+	return routed;
+}
+
 /** What {@link prewarmModelPicker} builds from: the inputs the picker will be opened with. */
 export interface ModelPickerPrewarm {
 	readonly source: ModelBrowserSource;
@@ -147,7 +165,7 @@ export async function prewarmModelPicker(prewarm: ModelPickerPrewarm): Promise<v
 	const browser = pickerBrowser(source, { currentContextTokens: prewarm.currentContextTokens });
 	browser.setRoles(scope.roles);
 	browser.setPerfStats(source.modelPerf);
-	await runSlicedWork(untilAborted(browser.pickerItemsWork(scope.items), signal));
+	await runSlicedWork(untilAborted(browser.pickerItemsWork(routedPickerItems(scope.items)), signal));
 }
 
 /**
@@ -228,6 +246,9 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 
 	const mode = (): Mode => (taskMode() ? "task" : roleMode() ? "role" : "session");
 
+	const current = (): string | undefined =>
+		roleMode() ? currentQuickRole : taskMode() ? options.taskSelector : options.currentSelector;
+
 	/** The highlighted model's slider; session mode only. */
 	const slider = (): ThinkingSlider | undefined => {
 		const levelFor = options.thinkingLevelFor;
@@ -281,14 +302,10 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 			browser.setShowProvider(!wantRoles);
 			browser.setMarkOverContext(!selectOnly && !wantRoles && !taskMode.peek());
 			browser.setPreserveQueryOrder(wantRoles);
-			const current = wantRoles
-				? currentQuickRole
-				: taskMode.peek()
-					? options.taskSelector
-					: options.currentSelector;
-			browser.setCurrentSelector(current);
+			const target = current();
+			browser.setCurrentSelector(target);
 			browser.setItems(wantRoles ? quickRoleItems : scopedItems());
-			if (changed && current) browser.selectSelector(current);
+			if (changed && target) browser.selectSelector(target);
 		});
 	};
 
@@ -305,7 +322,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		);
 		batch(() => {
 			configError.set(scoped.error);
-			modelItems.set(scoped.items);
+			modelItems.set(selectOnly ? scoped.items : routedPickerItems(scoped.items));
 			if (!selectOnly) {
 				browser.setRoles(scoped.roles);
 				browser.setMruOrder(scoped.mruOrder);
@@ -324,7 +341,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		batch(() => {
 			scope.set(id);
 			syncItems(browser.query, true);
-			const target = taskMode.peek() ? options.taskSelector : options.currentSelector;
+			const target = current();
 			if (browser.pickerSelected !== before && target) browser.selectSelector(target);
 		});
 	};
@@ -354,7 +371,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		batch(() => {
 			taskMode.set(!taskMode.peek());
 			syncItems(browser.query, true);
-			const target = taskMode.peek() ? options.taskSelector : options.currentSelector;
+			const target = current();
 			if (target) browser.selectSelector(target);
 		});
 	};
@@ -379,8 +396,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 	};
 	browser.onCancel = () => {
 		const selected = browser.selected();
-		const kept =
-			selected && selected.selector === options.currentSelector ? pendingThinking(selected.model) : undefined;
+		const kept = selected && selected.selector === current() ? pendingThinking(selected.model) : undefined;
 		if (kept !== undefined) callbacks.onKeepThinking?.(kept);
 		callbacks.onCancel();
 	};
@@ -388,7 +404,8 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 
 	// Read the catalog as it is now, so the first Enter acts on cached models.
 	syncFromRegistry();
-	if (options.currentSelector) browser.selectSelector(options.currentSelector);
+	const initial = current();
+	if (initial) browser.selectSelector(initial);
 	// Re-read only when the catalog moved (discovery landing, a models.yml edit).
 	if (!selectOnly)
 		registry
@@ -452,9 +469,6 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 			...(shown.disabled ? { disabled: shown.disabled } : {}),
 		};
 	};
-
-	const current = (): string | undefined =>
-		mode() === "role" ? currentQuickRole : mode() === "task" ? options.taskSelector : options.currentSelector;
 
 	// One computation per change: `pickerItems` tracks which rows went out whole.
 	const rows = computed(() => {

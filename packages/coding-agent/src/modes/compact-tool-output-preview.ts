@@ -10,7 +10,7 @@ import {
 } from "@oh-my-pi/pi-tui/text/width";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { LocalAgentSessionEvent } from "../session/agent-session-events";
 import type { LiveToolOutputPreview, LiveToolOutputSnapshot } from "../session/agent-session-handle";
 import { isToolOutputRow, mayBeCoveredByFileDiff, toolOutputSource } from "../session/live-tool-output-text";
@@ -23,9 +23,7 @@ import { cfgDisplayMode } from "./settings";
 import type { InteractiveModeContext } from "./types";
 
 function singleLine(value: string): string {
-	return stripEscapes(value)
-		.replace(/[\r\n]+/g, " ")
-		.trim();
+	return replaceTabs(sanitizeText(stripEscapes(value).replace(/[\r\n]+/g, " "))).trim();
 }
 
 // Match explicit diagnostics in actual failed output, never infer a cause from tool metadata.
@@ -146,6 +144,7 @@ export class CompactToolOutputPreview {
 	/** Synchronize even without a visible paint; close only after tool completion and activity stop. */
 	observe(event: LocalAgentSessionEvent): void {
 		if (
+			(event.type === "agent_start" && event.resumedToolCallIds?.length) ||
 			event.type === "tool_execution_start" ||
 			event.type === "tool_execution_update" ||
 			event.type === "tool_execution_end"

@@ -7,9 +7,10 @@ const CRAWL_USAGE =
 	"Usage: /crawl <URL> [--recursive] [--no-scroll] [--output <directory>] [--concurrency <number>] [--max-pages <number>] [--max-depth <depth>] [--wait <seconds>] | /crawl stop";
 
 function parseCrawlOptions(args: string): CrawlOptions | "stop" {
-	// Windows paths commonly contain literal backslashes rather than shell escapes.
-	const input = process.platform === "win32" ? args.replace(/\\(?=[^\\\s"'$`]|$)/g, "\\\\") : args;
-	const tokens = parseCommandArgs(input, { strict: true });
+	const tokens = parseCommandArgs(args, {
+		strict: true,
+		literalBackslashesAfter: process.platform === "win32" ? "--output" : undefined,
+	});
 	if (tokens.length === 1 && tokens[0] === "stop") return "stop";
 	const url = tokens[0];
 	if (!url || url.startsWith("-")) throw new Error(CRAWL_USAGE);

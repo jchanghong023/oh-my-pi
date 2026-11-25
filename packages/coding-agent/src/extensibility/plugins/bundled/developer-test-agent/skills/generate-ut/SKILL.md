@@ -110,6 +110,8 @@ disable-model-invocation: true
 - 输入/输出参数的类型定义
 - 被测函数的头文件/声明
 
+C/C++ MUST 优先用已定位源文件提取上下文；按[依赖分析](references/cpp/dependency-analysis.md)补取 Mock 所需的传递依赖，不导出整棵调用树。
+
 **上下文隔离**：步骤3完成后，后续步骤禁止直接读取被测源文件，只读取提炼后的上下文文档。
 
 **必须输出**：测试文件路径、依赖分类汇总（内部依赖列表 + 外部依赖/Mock目标列表）、上下文文件列表
@@ -224,7 +226,7 @@ disable-model-invocation: true
 - `scripts/java/binary-detector.js`：二方件源码查询脚本。步骤3上下文获取时使用。
 - `scripts/java/decompile.js`：二方件反编译脚本。步骤3上下文获取时使用。
 - `scripts/cpp/extract-function-callees.py`：基于libclang的C/C++函数调用链提取脚本。步骤3依赖识别时使用。
-- `scripts/cpp/ut_code_analysis.js`：C/C++上下文提取脚本。步骤3上下文获取时使用。（打包文件，不要读取分析）
+- `scripts/cpp/ut_code_analysis.js`：通过同目录的 libclang 脚本提取限定范围内的源码上下文。步骤3上下文获取时使用。
 - `scripts/go/check-test-quality.py`：Go测试质量验证脚本（Mock注入、callCount、var _检查等）。Phase 2建议性检查。
 - `scripts/python/parse_coverage.py`：Python函数级覆盖率解析脚本。覆盖率检查时使用。
 

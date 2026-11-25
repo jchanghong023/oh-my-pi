@@ -2233,7 +2233,7 @@ async function streamAssistantResponse(
 	const userOnResponse = config.onResponse;
 	const captureOnResponse: AgentLoopConfig["onResponse"] = (response, modelInfo, signal) => {
 		capturedHeaders = response.headers;
-		return userOnResponse?.(response, modelInfo, signal);
+		return userOnResponse?.(response, modelInfo, signal ?? finalRequestSignal);
 	};
 
 	// Cursor executes its tools server-side during the stream and hands each

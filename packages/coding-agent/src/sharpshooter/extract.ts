@@ -256,11 +256,14 @@ async function runSharpshooterExtraction(
 	envelope: SharpshooterEnvelope,
 ): Promise<void> {
 	const { session, settings, modelRegistry, agentDir } = options;
+	// Closing stops admission, not this run. Keep its original queue destination.
+	const { sessionId, sessionManager } = session;
+	const cwd = sessionManager.getCwd();
 	const model = await resolveSharpshooterModel(settings, modelRegistry, session.model?.provider);
-	if (!model || session.isDisposed || (cfgOffline.get(settings) && session.model?.provider !== model.provider)) return;
+	if (!model || (cfgOffline.get(settings) && session.model?.provider !== model.provider)) return;
 
 	const input = prompt.render(extractInputTemplate, { ...envelope });
-	const journal = journalCompletion(session.sessionManager, { purpose: "sharpshooter:extract" });
+	const journal = journalCompletion(sessionManager, { purpose: "sharpshooter:extract" });
 	const response = await retryTransientCompletion(
 		() => {
 			if (cfgOffline.get(settings) && session.model?.provider !== model.provider) {
@@ -274,8 +277,8 @@ async function runSharpshooterExtraction(
 					tools: [recordDeltasTool],
 				},
 				{
-					apiKey: modelRegistry.resolver(model, session.sessionId),
-					sessionId: session.sessionId,
+					apiKey: modelRegistry.resolver(model, sessionId),
+					sessionId,
 					maxTokens: 2048,
 					reasoning: clampThinkingLevelForModel(model, Effort.Low),
 					thinkingProbe: cfgProvidersThinkingProbe.get(settings),
@@ -298,10 +301,9 @@ async function runSharpshooterExtraction(
 			continue;
 		}
 		for (const candidate of args.deltas) {
-			const delta = admitDelta(candidate, envelope.prompt, session.sessionId);
+			const delta = admitDelta(candidate, envelope.prompt, sessionId);
 			if (!delta) continue;
-			if (session.isDisposed) return;
-			await appendSharpshooterDelta(agentDir, session.sessionManager.getCwd(), delta);
+			await appendSharpshooterDelta(agentDir, cwd, delta);
 		}
 	}
 }

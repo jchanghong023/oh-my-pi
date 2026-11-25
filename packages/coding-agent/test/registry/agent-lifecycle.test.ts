@@ -1184,6 +1184,7 @@ describe("AgentLifecycleManager", () => {
 
 	it("a cold revive whose factory resolves after dispose rejects without adopting or arming a TTL", async () => {
 		vi.useFakeTimers();
+		const factoryStarted = deferred();
 		const gate = deferred();
 		const revived = makeSessionStub();
 		let reviverRuns = 0;
@@ -1198,6 +1199,7 @@ describe("AgentLifecycleManager", () => {
 		});
 		lifecycle.setPersistedSubagentReviverFactory(
 			async () => {
+				factoryStarted.resolve();
 				await gate.promise;
 				return async () => {
 					reviverRuns++;
@@ -1208,7 +1210,7 @@ describe("AgentLifecycleManager", () => {
 		);
 
 		const revival = lifecycle.ensureLive("Cold-DisposeRace");
-		await flushAsync(); // reach the factory await
+		await factoryStarted.promise;
 		await lifecycle.dispose(Date.now()); // teardown while the factory is in flight
 		gate.resolve(); // factory completes for a superseded owner
 
@@ -1226,6 +1228,7 @@ describe("AgentLifecycleManager", () => {
 	});
 
 	it("a cold revive whose session resolves after dispose disposes that session and rejects", async () => {
+		const reviverStarted = deferred();
 		const gate = deferred();
 		const revived = makeSessionStub();
 		registry.register({
@@ -1240,6 +1243,7 @@ describe("AgentLifecycleManager", () => {
 		// the live session — is held open across dispose().
 		lifecycle.setPersistedSubagentReviverFactory(
 			async () => async () => {
+				reviverStarted.resolve();
 				await gate.promise;
 				return revived.session;
 			},
@@ -1247,7 +1251,7 @@ describe("AgentLifecycleManager", () => {
 		);
 
 		const revival = lifecycle.ensureLive("Cold-SessionRace");
-		await flushAsync(); // reach the reviver await
+		await reviverStarted.promise;
 		await lifecycle.dispose(Date.now()); // teardown while the reviver is in flight
 		gate.resolve(); // reviver hands back a live session for a disposed owner
 

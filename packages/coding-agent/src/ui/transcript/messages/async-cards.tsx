@@ -3,10 +3,10 @@
  * Background activity the session reports into the transcript, each a status
  * block hidden with tool activity, plus the IRC coordination cards:
  *
- * - `AsyncResult` (`async-result`): one `✔ Background job completed [type] id
- *   (duration)` row per finished job, its artifact-error and minimizer rows
- *   beneath. A registered extension renderer owns the card (#14131); the
- *   built-in rows stand in while it declines or when it throws.
+ * - `AsyncResult` (`async-result`): one `✔ Background job completed id
+ *   (duration)` row per finished non-task job not already shown by its tool card.
+ *   Artifact-error, schema and minimizer rows remain independent. A registered
+ *   extension renderer owns the card (#14131), with built-in rows as fallback.
  * - `LaunchCompletion` (`launch-completion`): one `Supervised process
  *   completed|failed name (exit N) (duration)` row per exited service.
  * - `AsyncNotify` (`async-notify`): one `Background job output` /
@@ -105,7 +105,7 @@ export function asyncResultRows(
 		if (
 			job.type !== "task" &&
 			(status === "completed" || status === "failed" || status === "cancelled" || status === "finished") &&
-			!represented?.has(`${job.type}:${job.jobId}:${status}`)
+			(!job.jobId || !represented?.has(`${job.type}:${job.jobId}:${status}`))
 		) {
 			const title = `Background job ${status}`;
 			const tone =

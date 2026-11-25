@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { GoalAutopilotRequest } from "@oh-my-pi/pi-coding-agent/goals/request-context";
 import {
 	GoalRuntime,
 	type GoalRuntimeHost,
@@ -96,6 +97,18 @@ function createHarness(initial: { state?: LocalGoalModeState; usage?: GoalTokenU
 	};
 }
 
+async function completeAutopilot(runtime: GoalRuntime, goalId: string): Promise<void> {
+	const run = { goalId, sessionGeneration: 0 };
+	const request = () =>
+		new GoalAutopilotRequest(
+			run,
+			() => true,
+			() => runtime.flushUsage("allowed"),
+		);
+	await runtime.completeGoalFromTool(request());
+	await runtime.completeGoalFromTool(request());
+}
+
 describe("goal runtime", () => {
 	it("sets orchestration only for successful explicit creation or replacement and ordinary replacements clear it", async () => {
 		const harness = createHarness();
@@ -119,8 +132,8 @@ describe("goal runtime", () => {
 
 	it("does not carry a completed or dropped goal's orchestration into ordinary creation", async () => {
 		const harness = createHarness();
-		await harness.runtime.createGoal({ objective: "First", autoOrchestrate: true });
-		await harness.runtime.completeGoalFromTool();
+		const original = await harness.runtime.createGoal({ objective: "First", autoOrchestrate: true });
+		await completeAutopilot(harness.runtime, original.goal.id);
 		const ordinary = await harness.runtime.createGoal({ objective: "Second" });
 		expect(ordinary.autoOrchestrate).toBeUndefined();
 		expect(ordinary.goal.objective).toBe("Second");
@@ -249,7 +262,7 @@ describe("goal runtime", () => {
 		await harness.runtime.resumeGoal();
 		expect(harness.getState()?.enabled).toBe(true);
 		expect(harness.getState()?.autoOrchestrate).toBe(true);
-		await harness.runtime.completeGoalFromTool();
+		await completeAutopilot(harness.runtime, original.goal.id);
 		expect(harness.getState()).toMatchObject({
 			enabled: false,
 			mode: "exiting",

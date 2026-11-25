@@ -142,12 +142,12 @@ function gauge(look: StatusTopLook, width: number, embedded: boolean, cx: PaintC
 	return `${out}\x1b[39m`;
 }
 
-/** Fit the right status group to a composer rule with room for the edge glyphs. */
-export function fitRuleChip(cx: PaintContext, segs: readonly UiNode[]): StatusFit {
+/** Fit the right status group to a composer rule, after its side insets and edge glyphs. */
+export function fitRuleChip(cx: PaintContext, segs: readonly UiNode[], inset = 0): StatusFit {
 	return fitStatus(cx, segs, {
 		separatorWidth: 1,
 		groups: "right",
-		maxWidth: Math.max(0, cx.width - TOP_RULE_CHIP_RESERVE),
+		maxWidth: Math.max(0, cx.width - inset - TOP_RULE_CHIP_RESERVE),
 	});
 }
 

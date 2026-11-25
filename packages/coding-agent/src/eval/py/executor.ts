@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { getProjectDir, isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ArtifactAllocator, OutputArtifactError } from "../../tools/streaming-output";
 import type { ToolSession } from "../../tools";
@@ -118,6 +119,7 @@ export interface PythonExecutorOptions {
 	 */
 	toolSession?: ToolSession;
 	parentToolCallId?: string;
+	toolContext?: AgentToolContext;
 	/** Callback for status events emitted by tool bridge invocations. */
 	emitStatus?: (event: JsStatusEvent) => void;
 	/**

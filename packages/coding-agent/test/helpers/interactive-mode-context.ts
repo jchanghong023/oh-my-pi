@@ -170,6 +170,7 @@ export function createSessionStub(
 				collapseCompactedHistory: options?.collapseCompactedHistory,
 			}),
 		getEvalPreludes: () => [],
+		canReplaceBrowserMcp: () => false,
 		getActiveToolNames: () => [],
 		getEnabledToolNames: () => [],
 		getContextUsage: () => undefined,

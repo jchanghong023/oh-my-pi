@@ -9,6 +9,7 @@ import { readSessionHeaderId, visitEntriesFromFileStream } from "../session/sess
 import { loadBundledAgents } from "../task/agents";
 import { isReadOnlyAgent } from "../task/read-only-policy";
 import { persistedVibeChildIds } from "../vibe/lifecycle";
+import { hasPersistedAgentMarker, isExecutionEndPending } from "./agent-lifecycle";
 import {
 	type AgentHistorySummary,
 	type AgentMetricsSummary,
@@ -159,15 +160,12 @@ function isFilesystemError(error: unknown): boolean {
 	return typeof code === "string" && code !== "ENOENT";
 }
 
-async function hasPersistedAgentMarker(markerPath: string): Promise<boolean> {
-	try {
-		await fs.promises.access(markerPath);
-		return true;
-	} catch (error) {
-		// Only an absent marker is normal. Let the next scan retry transient faults.
-		if (isFilesystemError(error)) throw error;
-		return false;
-	}
+async function isExecutionEnded(registry: AgentRegistryApi, sessionFile: string): Promise<boolean> {
+	return (
+		isExecutionEndPending(registry, sessionFile) ||
+		(await hasPersistedAgentMarker(getAgentExecutionEndedPath(sessionFile))) ||
+		isExecutionEndPending(registry, sessionFile)
+	);
 }
 
 async function readPersistedAgentHistory(
@@ -616,6 +614,23 @@ async function registerPersistedSubagentsFromDir(
 				}
 			}
 			if (existing.sessionFile === sessionFile) {
+				if (
+					existing.kind === "sub" &&
+					!existing.session &&
+					(existing.status === "parked" || existing.status === "aborted") &&
+					!existing.history?.executionEnded
+				) {
+					const executionEnded = await isExecutionEnded(registry, sessionFile);
+					if (!shouldContinue()) return;
+					if (
+						executionEnded &&
+						registry.get(id) === existing &&
+						!existing.session &&
+						existing.sessionFile === sessionFile
+					) {
+						registry.setHistory(id, { executionEnded: true }, sessionFile);
+					}
+				}
 				owned?.set(id, sessionFile);
 				transcripts.push({
 					id,
@@ -629,7 +644,7 @@ async function registerPersistedSubagentsFromDir(
 			const metadata = await readPersistedAgentMetadata(sessionFile, nestedPatchFilesFor(dir, entry.name, entries));
 			const [tombstoned, executionEnded] = await Promise.all([
 				hasPersistedAgentMarker(getAgentTombstonePath(sessionFile)),
-				hasPersistedAgentMarker(getAgentExecutionEndedPath(sessionFile)),
+				isExecutionEnded(registry, sessionFile),
 			]);
 			if (!shouldContinue()) return;
 			// Disk reads yield. A spawn may claim the id while this scan is

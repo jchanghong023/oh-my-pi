@@ -19,6 +19,7 @@ import {
 	logger,
 	openSqliteDatabase,
 	postmortem,
+	preparePerformanceCacheDirectory,
 } from "@oh-my-pi/pi-utils";
 import type { RawSettings as Settings } from "../config/settings";
 
@@ -764,6 +765,7 @@ FROM model_usage_legacy
 	 * @throws When the stats db cannot be opened or queried
 	 */
 	async backfillModelPerfFromStats(statsDbPath: string): Promise<number> {
+		preparePerformanceCacheDirectory(path.dirname(statsDbPath), false);
 		const statsDb = new Database(statsDbPath, { readonly: true });
 		try {
 			statsDb.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);

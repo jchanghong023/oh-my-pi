@@ -154,6 +154,13 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				enabled = undefined;
 			}
 
+			const alwaysLoad = typeof serverConfig.alwaysLoad === "boolean" ? serverConfig.alwaysLoad : undefined;
+			if (alwaysLoad === undefined && serverConfig.alwaysLoad != null) {
+				logger.warn(
+					`MCP server "${serverName}": invalid alwaysLoad ${JSON.stringify(serverConfig.alwaysLoad)}, ignoring`,
+				);
+			}
+
 			// Validate timeout: coerce numeric strings, warn on invalid
 			let timeout: number | undefined;
 			if (serverConfig.timeout === undefined || serverConfig.timeout === null) {
@@ -196,6 +203,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			result.push({
 				name: serverName,
 				enabled,
+				alwaysLoad,
 				timeout,
 				requestIdFormat,
 				instructions,

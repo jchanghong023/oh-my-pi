@@ -8,7 +8,7 @@ import type { EffectiveExtensionRoots } from "../capability/types";
 import { shouldInlineToolDescriptors } from "../config/inline-tool-descriptors-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString } from "../config/model-resolver";
-import type { Settings } from "../config/settings";
+import { type Settings, withActiveSettings } from "../config/settings";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { clearPluginRootsAndCaches } from "../discovery/helpers";
 import { CustomToolAdapter } from "../extensibility/custom-tools/wrapper";
@@ -110,6 +110,7 @@ export interface SessionToolsHost {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	agentDir?: string;
 	/** Session-local extension roots (explicit + mode + configured) for post-startup reloads. */
 	effectiveExtensionRoots(): EffectiveExtensionRoots;
 	modelRegistry: ModelRegistry;
@@ -175,6 +176,8 @@ export interface SettingsGatedToolDelta {
 	readonly removed: readonly string[];
 	/** Tool command state after following `tools.commands`; undefined while mounting is off. */
 	readonly toolCommands: ToolCommandState | undefined;
+	/** Apply the prepared registry changes, returning their rollback. */
+	readonly commit?: () => () => void;
 }
 
 /**
@@ -206,8 +209,8 @@ interface SessionToolsOptions {
 	/** Registers the hidden `goal` tool when goal mode is enabled at runtime. */
 	ensureGoalRegistered?: () => Promise<boolean>;
 	/**
-	 * Re-resolves settings-gated tools against live settings, mutating the shared
-	 * registry; `isBuiltIn` reports this session's built-in provenance.
+	 * Prepares settings-gated tools against live settings; `isBuiltIn` reports
+	 * this session's built-in provenance.
 	 */
 	reconcileSettingsGatedTools?: (isBuiltIn: (name: string) => boolean) => Promise<SettingsGatedToolDelta>;
 	rebuildSystemPrompt?: SystemPromptRebuilder;
@@ -792,12 +795,15 @@ export class SessionTools {
 	/** A fresh discovery of this session's skills, with the skills settings it ran under. */
 	async #discoverSkills(): Promise<{ discovered: LoadSkillsResult; skillsSettings: SkillsSettings }> {
 		const skillsSettings = cfgSkills.get(this.#host.settings);
-		const discovered = await loadSkills({
-			...skillsSettings,
-			cwd: this.#host.sessionManager.getCwd(),
-			disabledExtensions: cfgDisabledExtensions.get(this.#host.settings),
-			extensionRoots: this.#host.effectiveExtensionRoots(),
-		});
+		const discovered = await withActiveSettings(this.#host.settings, () =>
+			loadSkills({
+				...skillsSettings,
+				cwd: this.#host.sessionManager.getCwd(),
+				agentDir: this.#host.agentDir ?? this.#host.settings.getAgentDir(),
+				disabledExtensions: cfgDisabledExtensions.get(this.#host.settings),
+				extensionRoots: this.#host.effectiveExtensionRoots(),
+			}),
+		);
 		return { discovered, skillsSettings };
 	}
 
@@ -2616,22 +2622,43 @@ export class SessionTools {
 			// tool command state the reconcile may release.
 			const enabled = new Set(this.getEnabledToolNames());
 			const delta = await reconcile(name => this.#isCurrentBuiltInTool(name));
-			for (const name of delta.removed) {
-				enabled.delete(name);
-				this.#forgetBuiltInTool(name);
-			}
-			for (const { name, builtIn, activate } of delta.added) {
-				this.setToolBuiltIn(name, builtIn);
-				if (activate) enabled.add(name);
-			}
 			this.#assertCurrentToolMutation();
-			const toolCommandChanged = delta.toolCommands !== this.#toolCommands;
-			if (toolCommandChanged) {
-				this.#toolCommands = delta.toolCommands;
-				if (delta.toolCommands) delta.toolCommands.decorateExecution = tool => this.#wrapToolForAcpPermission(tool);
+			if (this.#host.isDisposed()) return;
+			const rollbackRegistry = delta.commit?.();
+			const previousCommands = this.#toolCommands;
+			const previousBuiltIns = [...delta.removed, ...delta.added.map(entry => entry.name)].map(
+				name => [name, this.#builtInToolInstances.get(name)] as const,
+			);
+			const rollback = () => {
+				rollbackRegistry?.();
+				this.#toolCommands = previousCommands;
+				for (const [name, tool] of previousBuiltIns) {
+					if (tool) this.#builtInToolInstances.set(name, tool);
+					else this.#forgetBuiltInTool(name);
+				}
+			};
+			try {
+				for (const name of delta.removed) {
+					enabled.delete(name);
+					this.#forgetBuiltInTool(name);
+				}
+				for (const { name, builtIn, activate } of delta.added) {
+					this.setToolBuiltIn(name, builtIn);
+					if (activate) enabled.add(name);
+				}
+				const toolCommands = delta.toolCommands;
+				const toolCommandChanged = toolCommands !== previousCommands;
+				if (toolCommandChanged) {
+					this.#toolCommands = toolCommands;
+					if (toolCommands) toolCommands.decorateExecution = tool => this.#wrapToolForAcpPermission(tool);
+				}
+				if (!refreshPrompt && !toolCommandChanged && delta.added.length === 0 && delta.removed.length === 0) return;
+				await this.#applyActiveToolsByName([...enabled], refreshPrompt);
+				if (this.#host.isDisposed()) rollback();
+			} catch (error) {
+				rollback();
+				throw error;
 			}
-			if (!refreshPrompt && !toolCommandChanged && delta.added.length === 0 && delta.removed.length === 0) return;
-			await this.#applyActiveToolsByName([...enabled], refreshPrompt);
 		});
 	}
 

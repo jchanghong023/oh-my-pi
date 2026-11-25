@@ -4,7 +4,8 @@ import { isOpenRouterEmbeddingUrl } from "@oh-my-pi/pi-mnemopi/config";
 import { envTruthy } from "@oh-my-pi/pi-mnemopi/util/env";
 import { logger } from "@oh-my-pi/pi-utils";
 import { COMPANY_RETRIEVAL_MODELS } from "../config/company-models";
-import { getCompanyConfig, isCompanyLaneActive } from "../config/company-provider";
+import { COMPANY_PROVIDER_ID, getCompanyConfig, isCompanyLaneActive } from "../config/company-provider";
+import { cfgDisabledProviders } from "../config/model-settings";
 import type { Settings } from "../config/settings";
 import {
 	cfgMnemopiEmbeddingApiKey,
@@ -29,6 +30,8 @@ export function getCompanyEmbeddingDefaults(settings: Settings): Partial<Mnemopi
 		});
 		return undefined;
 	};
+	const companyAllowed = () => !cfgDisabledProviders.get(settings).includes(COMPANY_PROVIDER_ID);
+	if (!companyAllowed()) return skipped("provider_disabled");
 	const config = getCompanyConfig();
 	if (!config) return skipped(isCompanyLaneActive() ? "company_unavailable" : "company_lane_inactive");
 	// Explicit vector configuration remains authoritative; never send company credentials to its URL.
@@ -71,5 +74,11 @@ export function getCompanyEmbeddingDefaults(settings: Settings): Partial<Mnemopi
 		embeddingModel: COMPANY_RETRIEVAL_MODELS[0].id,
 		embeddingApiUrl: config.embeddingBaseUrl,
 		embeddingApiKey: cachedCompanyToken,
+		embeddings: {
+			allowRemote: companyAllowed,
+			// The automatic company lane must not leave its configured gateway.
+			requestRedirect: () => "error",
+			requestMaxAttempts: 4,
+		},
 	};
 }

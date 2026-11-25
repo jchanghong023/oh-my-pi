@@ -10,7 +10,7 @@ export interface LocalProtocolOptions {
 	getSessionId?: () => string | null;
 	/** False isolates peer agent/history URLs and filesystem read/search scopes. */
 	allowCrossAgentReads?: boolean;
-	/** Output trees belonging to isolated peer calls, including temporary leases. */
+	/** Live protected artifact directories and exact files, such as the initiating session's transcript. */
 	getReadIsolationRoots?: () => readonly string[];
 }
 

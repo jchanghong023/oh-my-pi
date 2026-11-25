@@ -17,7 +17,18 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { getPluginCacheRoot, getPluginsDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import {
+	expandTilde,
+	getConfigRootDir,
+	getPluginCacheRoot,
+	getPluginsDir,
+	isEnoent,
+	isEnotdir,
+	isFullyQualifiedPath,
+	logger,
+	pathIsWithin,
+	tryParseJson,
+} from "@oh-my-pi/pi-utils";
 
 export { getMarketplacesRegistryPath } from "@oh-my-pi/pi-utils";
 
@@ -27,7 +38,7 @@ import type {
 	MarketplaceRegistryEntry,
 	MarketplacesRegistry,
 } from "./types";
-import { nameSegmentCollisionKey } from "./types";
+import { isValidNameSegment, nameSegmentCollisionKey } from "./types";
 
 export function getInstalledPluginsRegistryPath(): string {
 	return path.join(getPluginsDir(), "installed_plugins.json");
@@ -35,6 +46,57 @@ export function getInstalledPluginsRegistryPath(): string {
 
 export function getMarketplacesCacheDir(): string {
 	return path.join(getPluginCacheRoot(), "marketplaces");
+}
+
+/** Remove the registered checkout only if it is in an OMP-managed cache. */
+export async function removeRegisteredMarketplaceCache(
+	entry: MarketplaceRegistryEntry,
+	activeCacheDir: string,
+): Promise<void> {
+	if (typeof entry.name !== "string" || !isValidNameSegment(entry.name) || typeof entry.catalogPath !== "string") {
+		return;
+	}
+	const expanded = expandTilde(entry.catalogPath);
+	if (!isFullyQualifiedPath(expanded)) return;
+	const catalogPath = path.resolve(expanded);
+	const checkout = path.dirname(catalogPath);
+	if (path.basename(catalogPath) !== "marketplace.json" || path.basename(checkout) !== entry.name) return;
+
+	const pluginsDir = getPluginsDir();
+	const configRoot = getConfigRootDir();
+	const active = path.resolve(expandTilde(activeCacheDir));
+	// A cache override leaves the old default under the data directory. Also
+	// recognize the config-root default for registries adopted by XDG.
+	const roots = [
+		{ base: path.dirname(pluginsDir), cache: path.join(pluginsDir, "cache", "marketplaces") },
+		{ base: configRoot, cache: path.join(configRoot, "plugins", "cache", "marketplaces") },
+		{ base: path.dirname(path.dirname(active)), cache: active },
+	];
+	const root = roots.find(({ cache }) => path.relative(cache, path.dirname(checkout)) === "");
+	if (!root) return;
+
+	try {
+		// A matching path is not enough if a cache component is a symlink or junction.
+		let dir = root.base;
+		if (!(await fs.lstat(dir)).isDirectory()) return;
+		for (const component of path.relative(dir, checkout).split(path.sep)) {
+			dir = path.join(dir, component);
+			if (!(await fs.lstat(dir)).isDirectory()) return;
+		}
+		if (!(await fs.lstat(catalogPath)).isFile()) return;
+		if (
+			entry.sourceType === "local" &&
+			typeof entry.sourceUri === "string" &&
+			pathIsWithin(checkout, expandTilde(entry.sourceUri))
+		) {
+			return;
+		}
+		const catalog = tryParseJson<{ name: string }>(await fs.readFile(catalogPath, "utf8"));
+		if (catalog?.name !== entry.name) return;
+		await fs.rm(checkout, { recursive: true, force: true });
+	} catch (err) {
+		if (!isEnoent(err) && !isEnotdir(err)) throw err;
+	}
 }
 
 export function getPluginsCacheDir(): string {

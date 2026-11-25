@@ -357,10 +357,9 @@ export async function listOmpExtensionRoots(ctx: LoadContext): Promise<OmpExtens
  * `.mcp.json` are wired into discovery — mirrors how `listPackageExtensionModules`
  * already feeds plugin entries to the extension factory loader.
  *
- * Marketplace installs also create runtime symlinks for enable-state persistence,
- * but their resources are discovered through the `claude-plugins` provider.
- * Filtering them here prevents `/status` from showing the same plugin under both
- * "Claude Code Marketplace" and "OMP Extension Packages".
+ * Active marketplace roots own their resources, even when an installation
+ * also has a runtime symlink. A Claude root included only for inventory must
+ * not hide an enabled OMP link.
  */
 async function realpathOrResolved(p: string): Promise<string> {
 	try {
@@ -375,7 +374,12 @@ async function listInstalledPluginRoots(ctx: LoadContext): Promise<InjectedRoot[
 	try {
 		const [plugins, marketplaceRoots] = await Promise.all([
 			getEnabledPlugins(ctx.cwd, { home: ctx.home }),
-			listClaudePluginRoots(ctx.home, ctx.cwd, { includeClaude: isUserSourceEnabled("claude-plugins", ctx) }),
+			listClaudePluginRoots(ctx.home, ctx.cwd, {
+				includeClaude: isUserSourceEnabled(
+					"claude-plugins",
+					ctx.includeOptOutUserSources ? { ...ctx, includeOptOutUserSources: false } : ctx,
+				),
+			}),
 		]);
 		const marketplaceRealpaths = new Set(
 			await Promise.all(marketplaceRoots.roots.map(root => realpathOrResolved(root.path))),

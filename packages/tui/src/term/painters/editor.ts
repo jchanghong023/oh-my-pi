@@ -238,6 +238,34 @@ export function lastLayout(node: UiNode): EditorRow[] {
 	return layoutText(text, lastWrapWidth(node) ?? Number.MAX_SAFE_INTEGER);
 }
 
+const kCompletionLayout = Symbol("pi-tui.editor.completion-layout");
+
+interface CompletionLayoutHolder {
+	[kCompletionLayout]?: { cx: Pick<PaintContext, "viewportHeight">; rowsFromCaret: number };
+}
+
+/** Record the rows from the caret through the composer chrome, before its completion popup. */
+export function setTerminalCompletionLayout(
+	node: UiNode,
+	cx: Pick<PaintContext, "viewportHeight">,
+	rowsFromCaret: number,
+): void {
+	const holder = node as CompletionLayoutHolder;
+	const layout = holder[kCompletionLayout];
+	if (layout) {
+		layout.cx = cx;
+		layout.rowsFromCaret = rowsFromCaret;
+	} else holder[kCompletionLayout] = { cx, rowsFromCaret };
+}
+
+/** Whether the terminal can display a completion row without hiding the caret. */
+export function hasTerminalCompletionRoom(node: UiNode): boolean {
+	const layout = (node as CompletionLayoutHolder)[kCompletionLayout];
+	if (!layout) return true;
+	const height = layout.cx.viewportHeight;
+	return height === undefined || height > layout.rowsFromCaret;
+}
+
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 /** A terminal-only styled range of an editor's text. */

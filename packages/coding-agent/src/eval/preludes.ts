@@ -9,6 +9,7 @@ import {
 	resolveApproval,
 	resolveApprovalFromContext,
 } from "../tools/approval";
+import type { CrawlBrowserOperation } from "../tools/browser";
 
 /** Host context supplied when an eval prelude calls back out of its language VM. */
 export interface EvalPreludeContext {
@@ -27,6 +28,8 @@ export interface EvalPreludeContext {
 	context?: AgentToolContext;
 	/** Progress receiver shared with the active eval call. */
 	onUpdate?: AgentToolUpdateCallback<unknown>;
+	/** Native slash-command authority; never populated from eval arguments. */
+	crawlBrowser?: CrawlBrowserOperation;
 }
 
 /**

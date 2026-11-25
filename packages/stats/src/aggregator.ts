@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getAgentDbPath, getStatsDbPath, isRecord, workerHostEntry } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDbPath,
+	getStatsDbPath,
+	isRecord,
+	preparePerformanceCacheDirectory,
+	workerHostEntry,
+} from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import {
 	applySessionParseResults,
@@ -76,7 +82,8 @@ const SYNC_INLINE_READS = 8;
  * owner is released automatically and a live owner is never displaced.
  */
 export async function withStatsSyncLock<T>(dbPath: string, fn: () => Promise<T>): Promise<T> {
-	await fs.promises.mkdir(path.dirname(dbPath), { recursive: true });
+	const directory = path.dirname(dbPath);
+	if (!preparePerformanceCacheDirectory(directory)) await fs.promises.mkdir(directory, { recursive: true });
 	return await withFileLock(`${dbPath}.sync`, fn, {
 		retryDelayMs: STATS_SYNC_LOCK_RETRY_MS,
 		retries: Math.ceil(STATS_SYNC_LOCK_WAIT_MS / STATS_SYNC_LOCK_RETRY_MS),

@@ -149,12 +149,13 @@ export type WritethroughCallback = (
 export async function writethroughNoop(
 	dst: string,
 	content: string,
-	_signal?: AbortSignal,
+	signal?: AbortSignal,
 	file?: BunFile,
 	_batch?: LspWritethroughBatchRequest,
 	_getDeferred?: (dst: string) => WritethroughDeferredHandle | undefined,
 	onCommitted?: WritethroughCommitHook,
 ): Promise<WritethroughResult> {
+	signal?.throwIfAborted();
 	await writeFileWithFallback(dst, content, file);
 	await onCommitted?.(content);
 	return { finalContent: content };
@@ -202,21 +203,22 @@ const mutationScope = new AsyncLocalStorage<WritethroughMutationScope>();
 const mutations = new Map<string, Promise<void>>();
 
 function mutationKey(file: string): string {
-	let absolute = path.resolve(file);
+	let candidate = file;
 	const suffix: string[] = [];
 	for (;;) {
 		try {
-			absolute = path.join(fs.realpathSync.native(absolute), ...suffix.reverse());
-			break;
+			// Resolve the actual filesystem path before normalizing any missing tail:
+			// ".." after a symlink is relative to the symlink's physical target.
+			const absolute = path.join(fs.realpathSync.native(candidate), ...suffix.reverse());
+			return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
-			const parent = path.dirname(absolute);
-			if (parent === absolute) throw error;
-			suffix.push(path.basename(absolute));
-			absolute = parent;
+			const parent = path.dirname(candidate);
+			if (parent === candidate) throw error;
+			suffix.push(path.basename(candidate));
+			candidate = parent;
 		}
 	}
-	return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
 /** Serialize overlapping edits, writes, and formatter commits across sessions. */
@@ -908,7 +910,6 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		// File commits are never deferred: the batch owns only LSP post-processing,
 		// so a later flush cannot replay an obsolete whole-file snapshot.
 		try {
-			signal?.throwIfAborted();
 			await writethroughNoop(dst, content, signal, file);
 		} catch (error) {
 			if (batch.flush) {

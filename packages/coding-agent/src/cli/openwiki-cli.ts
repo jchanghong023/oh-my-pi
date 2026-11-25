@@ -1,12 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir } from "@oh-my-pi/pi-utils";
-import { updateOpenWikiAgentInstructions } from "../openwiki/agents-instructions";
+import { getAgentDir, postmortem } from "@oh-my-pi/pi-utils";
 import { configureOpenWikiHome, getOpenWikiConfigDirectory } from "../openwiki/home";
-import { createOpenWikiModel, previewOpenWikiModel, resolveOpenWikiPlannerSelector } from "../openwiki/model";
-import { materializeOpenWikiSkills } from "../openwiki/resources";
-import { getOpenWikiVisualAssets } from "../openwiki/visual-assets";
 import { loadOpenWikiVendor } from "../openwiki/vendor-loader";
 
 const HELP = `Usage: omp openwiki <command> [options]
@@ -109,6 +105,11 @@ async function writeDisabledTelemetry(file: string): Promise<void> {
 
 /** Run the in-process repository-only OpenWiki CLI. */
 export async function runOpenWikiCommand(argv: string[]): Promise<number> {
+	if (argv.length === 0) {
+		process.stdout.write(HELP);
+		return 0;
+	}
+
 	const controller = new AbortController();
 	let interrupted = false;
 	const abort = () => {
@@ -117,9 +118,20 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 	};
 	process.once("SIGINT", abort);
 	process.once("SIGTERM", abort);
+	const completed = Promise.withResolvers<void>();
+	let drainOnExit = false;
+	const unregisterCleanup = postmortem.register(
+		"openwiki",
+		() => {
+			abort();
+			if (drainOnExit) return completed.promise;
+		},
+		{ exitOnly: true },
+	);
 	let debug = false;
 	try {
-		await configureOpenWikiHome();
+		const agentDir = getAgentDir();
+		await configureOpenWikiHome(agentDir);
 		const {
 			parseCommand,
 			runLinkCommand,
@@ -131,10 +143,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			exportStaticVisualizer,
 			runNativeRepositoryGeneration,
 		} = await loadOpenWikiVendor();
-		if (argv.length === 0) {
-			process.stdout.write(HELP);
-			return 0;
-		}
+		if (controller.signal.aborted) return 130;
 		if (UNSUPPORTED.has(argv[0])) throw new Error(`OpenWiki ${argv[0]} is not supported by OMP.`);
 		const management = argv[0] === "link" || argv[0] === "workspace" || argv[0] === "visualize";
 		if (management && argv.includes("--dry-run")) throw new Error("--dry-run requires --init or --update.");
@@ -152,13 +161,16 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			throw new Error("--dry-run requires --init or --update.");
 		}
 		if (command.kind === "link" || command.kind === "workspace") {
-			const options = { configDirectory: getOpenWikiConfigDirectory() };
+			const options = { configDirectory: getOpenWikiConfigDirectory(agentDir) };
 			if (command.kind === "link") await runLinkCommand(command, options);
 			else await runWorkspaceCommand(command, options);
 			return Number(process.exitCode ?? 0);
 		}
 		if (command.kind === "visualize") {
+			drainOnExit = !command.exportDir;
+			const { getOpenWikiVisualAssets } = await import("../openwiki/visual-assets");
 			const assets = await getOpenWikiVisualAssets();
+			if (controller.signal.aborted) return 130;
 			const wikiRoot = path.resolve(command.wikiDir);
 			if (command.exportDir) {
 				const result = await exportStaticVisualizer({
@@ -199,25 +211,23 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			}
 			throw new Error("OpenWiki chat is not supported by OMP; specify --init or --update.");
 		}
+		drainOnExit = !parsed.dryRun;
+		const scope = { cwd: process.cwd(), agentDir };
+		const { createOpenWikiModel, previewOpenWikiModels } = await import("../openwiki/model");
 		if (parsed.dryRun) {
-			const plannerSelector = await resolveOpenWikiPlannerSelector(parsed.plannerModel ?? parsed.model);
-			const root = await resolveRepositoryRoot(process.cwd());
-			const [model, files] = await Promise.all([
-				previewOpenWikiModel(parsed.model),
+			const root = await resolveRepositoryRoot(scope.cwd);
+			const [{ page, planner }, files] = await Promise.all([
+				previewOpenWikiModels(scope, parsed.model, parsed.plannerModel),
 				previewRepositoryFiles(root, command.command),
 			]);
-			const planner =
-				plannerSelector !== undefined && plannerSelector !== parsed.model
-					? await previewOpenWikiModel(plannerSelector)
-					: model;
 			const printPaths = (paths: string[]) => {
 				for (const item of paths) process.stdout.write(`  ${JSON.stringify(item)}\n`);
 				if (paths.length === 0) process.stdout.write("  (none)\n");
 			};
 			process.stdout.write(`OpenWiki dry run: ${command.command}\nRepository: ${root}\n`);
 			process.stdout.write(
-				`Page model selection (${model.source}): ${model.modelId ?? model.selector ?? "(automatic)"}\n${model.reason}\n` +
-					`Planner model selection (${planner.source}): ${planner.modelId ?? planner.selector ?? "(automatic)"}\n${planner.reason}\n`,
+				`Page model selection (${page.source}): ${page.selector ?? "(automatic)"}\n${page.reason}\n` +
+					`Planner model selection (${planner.source}): ${planner.selector ?? "(automatic)"}\n${planner.reason}\n`,
 			);
 			process.stdout.write(`Source snapshot candidates (${files.sourcePaths.length}):\n`);
 			printPaths(files.sourcePaths);
@@ -250,15 +260,19 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			);
 			return 0;
 		}
+		if (controller.signal.aborted) return 130;
 		if (command.telemetryFile) await writeDisabledTelemetry(command.telemetryFile);
 		const pageConcurrency = resolvePageConcurrency();
-		const root = await resolveRepositoryRoot(process.cwd());
-		const skillsDir = await materializeOpenWikiSkills(getAgentDir());
-		const selected = await createOpenWikiModel(parsed.model);
+		const root = await resolveRepositoryRoot(scope.cwd);
+		const { materializeOpenWikiSkills } = await import("../openwiki/resources");
+		const skillsDir = await materializeOpenWikiSkills(agentDir);
+		if (controller.signal.aborted) return 130;
+		const selected = await createOpenWikiModel(scope, parsed.model);
 		let planner = selected;
 		try {
 			if (controller.signal.aborted) return 130;
-			planner = await selected.createPlannerModel(parsed.plannerModel ?? parsed.model);
+			planner = await selected.createPlannerModel(parsed.plannerModel);
+			const { updateOpenWikiAgentInstructions } = await import("../openwiki/agents-instructions");
 			if (controller.signal.aborted) return 130;
 			await updateOpenWikiAgentInstructions(root);
 			const wikiDir = path.join(root, "openwiki");
@@ -338,5 +352,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 	} finally {
 		process.off("SIGINT", abort);
 		process.off("SIGTERM", abort);
+		unregisterCleanup();
+		completed.resolve();
 	}
 }

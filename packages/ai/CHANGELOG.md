@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Thinking probes honor explicit request credentials and the gateway host setting; gateways preserve Anthropic context exhaustion and independent Responses history.
+- Windows Anthropic requests honor the system proxy, and explicit strict Git TLS settings restore certificate verification.
 - Codex requests no longer send a service tier to an account whose own plan does not offer it.
 ### Fixed
 

@@ -30,7 +30,8 @@
  *   `message_update`/`tool_execution_update` do not even refresh state, since
  *   main derives `streamMessage` and running tool updates from forwarded
  *   events;
- * - `closed` when the session begins disposing.
+ * - `closed` only after disposal succeeds. Failed main-initiated disposal
+ *   rejects the command, leaving its owner to abandon the mirror or retry.
  *
  * The publisher is exported to main as the session's command host (kind
  * `"agent-session-host"`), so main's mirror keeps it, and through it the
@@ -56,6 +57,7 @@ import { deobfuscateAssistantContent } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { AgentSession } from "../session/agent-session";
 import type { LocalAgentSessionEvent } from "../session/agent-session-events";
+import type { AgentSessionDisposeOptions } from "../session/agent-session-types";
 import type { AgentViewToolSchema } from "../session/agent-session-handle";
 import type { TurnToolDiff } from "../session/latest-turn-tool-diffs";
 import {
@@ -221,7 +223,8 @@ export class SessionPublisher {
 	#entries: SessionEntry[] = [];
 	#entriesRevision = 0;
 	#scheduled = false;
-	#closed = false;
+	#stopped = false;
+	#closeOnMain = false;
 	readonly #gate: QueuedMessageGate;
 	readonly #unsubscribe: () => void;
 	readonly #unsubscribeRunState: () => void;
@@ -258,13 +261,22 @@ export class SessionPublisher {
 		this.#unsubscribeRunState = session.subscribeRunState((state, at) => this.#onRunState(state, at));
 		// `ircWakesPending` gates main's idle parking and, like `hasPendingWake`, changes without an event.
 		this.#unsubscribeWakeState = session.subscribeWakeState(() => this.schedule());
-		session.addDisposer(() => this.close());
+		session.addDisposer(() => this.#stopPublishing());
+		// A lifecycle-owned soft RPC leaves closure to main, which may upgrade it to strict.
+		session.addDisposeListener(reason => {
+			if (!this.#closeOnMain) this.#bridge.remote.notify("closed", this.#key, reason);
+		});
+	}
+
+	dispose(options?: AgentSessionDisposeOptions, closeOnMain = false): Promise<void> {
+		this.#closeOnMain ||= closeOnMain;
+		return this.session.dispose(options);
 	}
 
 	/** Post any state change now instead of at the end of the microtask. */
 	flush(): void {
 		this.#scheduled = false;
-		if (this.#closed) return;
+		if (this.#stopped) return;
 		try {
 			this.#publishMessages();
 			if (this.#watched && this.#view) this.#publishEntries();
@@ -296,21 +308,20 @@ export class SessionPublisher {
 		this.#viewSources = undefined;
 	}
 
-	/** Post `closed` and stop observing the session. Idempotent. */
-	close(): void {
-		if (this.#closed) return;
+	/** Freeze the last mirror snapshot without closing its control route. */
+	#stopPublishing(): void {
+		if (this.#stopped) return;
 		this.flush();
-		this.#closed = true;
+		this.#stopped = true;
 		if (this.session.agent.queuedMessageGate === this.#gate) this.session.agent.queuedMessageGate = undefined;
 		this.#unsubscribe();
 		this.#unsubscribeRunState();
 		this.#unsubscribeWakeState();
-		this.#bridge.remote.notify("closed", this.#key);
 	}
 
 	/** Coalesce a publish into the end of the current microtask. */
 	schedule(): void {
-		if (this.#scheduled || this.#closed) return;
+		if (this.#scheduled || this.#stopped) return;
 		this.#scheduled = true;
 		queueMicrotask(() => {
 			if (this.#scheduled) this.flush();
@@ -318,7 +329,7 @@ export class SessionPublisher {
 	}
 
 	#onEvent(event: LocalAgentSessionEvent): void {
-		if (this.#closed) return;
+		if (this.#stopped) return;
 		// Streaming ticks only move the cursor; main derives `streamMessage` from forwarded updates.
 		const tick = event.type === "message_update" || event.type === "tool_execution_update";
 		if (!this.#watched) {
@@ -336,7 +347,7 @@ export class SessionPublisher {
 				"event",
 				this.#key,
 				toWireData(event),
-				toolEvent
+				toolEvent || (event.type === "agent_start" && event.resumedToolCallIds?.length)
 					? { receivedAt: output?.terminalAt ?? Date.now(), dispatchOrder: output?.dispatchOrder }
 					: undefined,
 			);
@@ -357,7 +368,7 @@ export class SessionPublisher {
 	 * are marked claimed.
 	 */
 	#claimQueued(candidates: readonly AgentMessage[]): AgentMessage[] {
-		if (this.#closed) return [];
+		if (this.#stopped) return [];
 		const ids: string[] = [];
 		for (const message of candidates) {
 			const id = publishedQueuedMessageId(message);
@@ -377,7 +388,7 @@ export class SessionPublisher {
 	}
 
 	#onRunState(state: SessionRunState, at: number): void {
-		if (this.#closed) return;
+		if (this.#stopped) return;
 		this.flush();
 		this.#bridge.remote.notify("runState", this.#key, state, at);
 	}
@@ -585,7 +596,7 @@ export const SESSION_HOST_SERVE: RpcServe<SessionPublisher, SessionHostProtocol>
 	prompt: async (publisher, text, options) => settle(publisher, publisher.session.prompt(text, options)),
 	steer: async (publisher, text, images, options) => settle(publisher, publisher.session.steer(text, images, options)),
 	abort: async (publisher, options) => settle(publisher, publisher.session.abort(options)),
-	dispose: async (publisher, options) => settle(publisher, publisher.session.dispose(options)),
+	dispose: async (publisher, options, closeOnMain) => settle(publisher, publisher.dispose(options, closeOnMain)),
 	deliverIrcMessage: async (publisher, msg) => settle(publisher, publisher.session.deliverIrcMessage(msg)),
 	waitForIrcReplies: async publisher => settle(publisher, publisher.session.waitForIrcReplies()),
 	applyAgentModelChange: (publisher, change) => settle(publisher, publisher.session.applyAgentModelChange(change)),

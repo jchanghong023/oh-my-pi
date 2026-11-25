@@ -3,8 +3,8 @@
  * message`; nothing to show as `⚠ Wait` over the reason.
  *
  * A job snapshot while collapsed is a short completion log: one row per
- * settled job (`✘ id failed · exit 2 · 900ms  label`, a failure's first
- * error line under it), then the running jobs whose live widget draws its
+ * settled job (`✘ id failed · exit 2 · 900ms  label`, a failed command's
+ * output tail under it), then the running jobs whose live widget draws its
  * tile, then `N still running`; with nothing settled yet the head line
  * `ⓘ waiting on 5 jobs` leads. Expanded it is the head line over a tree of
  * every job (status, exit, `⟦type⟧`, id, label, duration, output preview;
@@ -15,7 +15,7 @@ import type { UiNode } from "@oh-my-pi/pi-tui";
 import type { Block, PaintContext } from "@oh-my-pi/pi-tui/term/paint";
 import { shimmerTiers } from "@oh-my-pi/pi-tui/term/painters/shimmer";
 import { shimmerText } from "@oh-my-pi/pi-tui/text/shimmer";
-import { replaceTabs, truncate, visibleWidth } from "@oh-my-pi/pi-tui/text/width";
+import { replaceTabs, truncate, visibleWidth, wrap } from "@oh-my-pi/pi-tui/text/width";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import { jobDisplayLabel } from "../../../async/job-label";
@@ -137,6 +137,26 @@ function previewRows(paint: WaitPaint, job: JobSnapshot, rootMeta: WaitTermJobs[
 
 type WaitTermJobs = Extract<WaitTerm, { kind: "jobs" }>;
 
+/** Bash failure rows share the same output and diagnostics as the native receipt. */
+function failureRows(paint: WaitPaint, job: JobSnapshot, term: WaitTermJobs, indent: string, width: number): string[] {
+	const { theme, expanded } = paint;
+	const { lines, reason, artifact } = waitFailurePreview(job, expanded, term.settledBashJobs);
+	const rows: string[] = [];
+	const budget = Math.max(1, width - indent.length);
+	const push = (text: string, color: string) => {
+		if (expanded && text) {
+			for (const line of wrap(text, budget)) rows.push(`${indent}${theme.fg(color, line)}`);
+		} else {
+			rows.push(`${indent}${theme.fg(color, truncate(text, budget))}`);
+		}
+	};
+	if (reason) push(reason, "error");
+	if (job.type === "bash" && lines.length > 0) push(expanded ? "Output:" : "Output tail:", "muted");
+	for (const line of lines) push(line, "error");
+	if (artifact) push(artifact, "warning");
+	return rows;
+}
+
 /** A job's tree item (rows without the branch). */
 function jobItem(paint: WaitPaint, job: JobSnapshot, term: WaitTermJobs, rowWidth: number): string[] {
 	const { theme, expanded } = paint;
@@ -199,10 +219,10 @@ function jobItem(paint: WaitPaint, job: JobSnapshot, term: WaitTermJobs, rowWidt
 	}
 	const artifactError = job.meta?.artifactError ?? job.artifactError;
 	if (artifactError) rows.push(theme.fg("warning", truncate(formatArtifactErrorNotice(artifactError), rowWidth)));
-	if (!duplicatesBashOutcome(job, term.settledBashJobs)) {
+	if (job.type === "bash" && job.status === "failed") {
+		rows.push(...failureRows(paint, job, term, "  ", rowWidth));
+	} else if (!duplicatesBashOutcome(job, term.settledBashJobs)) {
 		rows.push(...previewRows(paint, job, term.meta, continuation));
-		const artifact = waitFailurePreview(job).artifact;
-		if (artifact) rows.push(theme.fg("warning", truncate(artifact, rowWidth)));
 	}
 	return rows;
 }
@@ -267,14 +287,7 @@ function compactRows(paint: WaitPaint, term: WaitTermJobs, sorted: readonly JobS
 		const budget = width - visibleWidth(row) - 2;
 		if (label && label !== job.id && budget >= 8) row += `  ${theme.fg("muted", truncate(label, budget))}`;
 		rows.push(row);
-		if (!duplicatesBashOutcome(job, term.settledBashJobs)) {
-			const { lines, artifact } = waitFailurePreview(job);
-			if (job.type === "bash" && lines.length > 0) rows.push(`${indent}${theme.fg("muted", "Output tail:")}`);
-			for (const line of lines)
-				rows.push(`${indent}${theme.fg("error", truncate(line, Math.max(1, width - indent.length)))}`);
-			if (artifact)
-				rows.push(`${indent}${theme.fg("warning", truncate(artifact, Math.max(1, width - indent.length)))}`);
-		}
+		rows.push(...failureRows(paint, job, term, indent, width));
 		const artifactError = job.meta?.artifactError ?? job.artifactError;
 		if (artifactError) rows.push(theme.fg("warning", truncate(formatArtifactErrorNotice(artifactError), width)));
 	}

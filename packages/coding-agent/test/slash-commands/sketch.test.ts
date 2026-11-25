@@ -24,12 +24,45 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
 
 const PNG = encodeRawPng(Uint8Array.of(0, 0, 0, 255), 1, 1, 4);
 
-function service() {
+function sketchCanvas(deliver: Parameters<typeof sketch.startSketchServer>[0]) {
 	const result = Promise.withResolvers<Buffer | null>();
-	const close = vi.fn(() => result.resolve(null));
+	let settled = false;
+	const isOpen = () => !settled;
+	function settle(value: Buffer | null) {
+		if (settled) return;
+		settled = true;
+		result.resolve(value);
+	}
+	const cancel = () => settle(null);
+	const close = vi.fn(cancel);
 	const server: sketch.SketchServer = { url: "http://127.0.0.1:12345/private-canvas/", result: result.promise, close };
-	const start = spyOn(sketch, "startSketchServer").mockReturnValue(server);
-	return { ...result, close, start, server };
+	return {
+		server,
+		cancel,
+		close,
+		async submit(png: Buffer) {
+			if (!isOpen()) return "stale";
+			const outcome = await deliver(png, isOpen);
+			if (!isOpen()) return "stale";
+			settle(outcome === "attached" ? png : null);
+			return outcome;
+		},
+	};
+}
+
+function service() {
+	let canvas: ReturnType<typeof sketchCanvas> | undefined;
+	const start = spyOn(sketch, "startSketchServer").mockImplementation(deliver => {
+		canvas = sketchCanvas(deliver);
+		return canvas.server;
+	});
+	return {
+		start,
+		get canvas() {
+			if (!canvas) throw new Error("Sketch server has not started");
+			return canvas;
+		},
+	};
 }
 
 function harness(artifactsDir: string, streaming = false) {
@@ -157,16 +190,17 @@ describe("native /sketch", () => {
 		const s = service();
 		h.composer.setText("offline draft");
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
+		const canvas = s.canvas;
 		expect(open.openPath).not.toHaveBeenCalled();
-		expect(clipboard.requestOfflineBrowserUrlCopy).toHaveBeenCalledWith(s.server.url);
-		expect(h.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining(s.server.url));
-		s.resolve(PNG);
+		expect(clipboard.requestOfflineBrowserUrlCopy).toHaveBeenCalledWith(canvas.server.url);
+		expect(h.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining(canvas.server.url));
+		expect(await canvas.submit(PNG)).toBe("attached");
 		await run;
 		expect(h.ctx.showError).not.toHaveBeenCalled();
 		expect(h.composer.expandedText()).toStartWith("offline draft");
 		expect(h.composer.pendingImages).toHaveLength(1);
 		expect(h.prompt).not.toHaveBeenCalled();
-		expect(s.close).toHaveBeenCalled();
+		expect(canvas.close).toHaveBeenCalled();
 	});
 
 	it("refuses TUI arguments without starting a sketch or changing the draft", async () => {
@@ -194,9 +228,10 @@ describe("native /sketch", () => {
 		h.composer.pendingImageLinks.push("file:///existing.png");
 		h.composer.setCollapsedText("keep [Image #1] and this text ");
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
+		const canvas = s.canvas;
 		h.composer.insertText("newer typing ");
 		const before = h.composer.expandedText();
-		s.resolve(PNG);
+		expect(await canvas.submit(PNG)).toBe("attached");
 		await run;
 
 		expect(h.ctx.showError).not.toHaveBeenCalled();
@@ -222,8 +257,8 @@ describe("native /sketch", () => {
 		expect(Buffer.from(await Bun.file(saved!).arrayBuffer()).equals(PNG)).toBe(true);
 		expect(h.composer.pendingImageLinks[0]).toBe("file:///existing.png");
 		expect(h.prompt).not.toHaveBeenCalled();
-		expect(open.openPath).toHaveBeenCalledWith(s.server.url);
-		expect(h.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining(s.server.url));
+		expect(open.openPath).toHaveBeenCalledWith(canvas.server.url);
+		expect(h.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining(canvas.server.url));
 		expect(h.listeners.size).toBe(0);
 		expect(h.changes.size).toBe(0);
 		expect(h.statuses.size).toBe(0);
@@ -249,7 +284,7 @@ describe("native /sketch", () => {
 			draftDetached: true,
 			input: { images: [submitted], imageLinks: ["file:///submitted.png"] },
 		});
-		s.resolve(null);
+		s.canvas.cancel();
 		await run;
 		expect(h.composer.expandedText()).toBe("[Image #2]\n\nnewer draft [Image #1]");
 		expect(h.composer.pendingImages).toEqual([newer, submitted]);
@@ -274,7 +309,7 @@ describe("native /sketch", () => {
 			remove();
 		}
 		await run;
-		expect(s.close).toHaveBeenCalled();
+		expect(s.canvas.close).toHaveBeenCalled();
 		expect(h.abort).not.toHaveBeenCalled();
 		expect(h.composer.expandedText()).toBe("unchanged [Image #1]");
 		expect(h.composer.pendingImages).toEqual([existing]);
@@ -287,7 +322,7 @@ describe("native /sketch", () => {
 		const s = service();
 		h.composer.setText("/sketch");
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
-		s.resolve(null);
+		s.canvas.cancel();
 		await run;
 		expect(h.composer.text()).toBe("");
 		s.start.mockImplementationOnce(() => {
@@ -302,16 +337,18 @@ describe("native /sketch", () => {
 		expect(h.statuses.size).toBe(0);
 	});
 
-	it("closes on session replacement even when a submitted PNG already resolved", async () => {
+	it("closes on session replacement while PNG delivery is in flight", async () => {
 		const h = createHarness();
 		const s = service();
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
-		s.resolve(PNG);
+		const canvas = s.canvas;
+		const submission = canvas.submit(PNG);
 		h.switchSession();
 		h.composer.clearDraft();
 		h.composer.setText("replacement draft");
+		expect(await submission).toBe("stale");
 		await run;
-		expect(s.close).toHaveBeenCalled();
+		expect(canvas.close).toHaveBeenCalled();
 		expect(h.composer.text()).toBe("replacement draft");
 		expect(h.composer.pendingImages).toEqual([]);
 		expect(h.listeners.size).toBe(0);
@@ -326,7 +363,8 @@ describe("native /sketch", () => {
 			const s = service();
 			h.composer.setText("owner draft");
 			const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
-			s.resolve(PNG);
+			const canvas = s.canvas;
+			const submission = canvas.submit(PNG);
 			if (change === "view") h.focusAgent("OtherAgent");
 			if (change === "prompt") h.ctx.shell.overlays.show(() => jsx("col", {}));
 			if (change === "draft") {
@@ -334,6 +372,7 @@ describe("native /sketch", () => {
 				h.composer.setText("next draft");
 			}
 			if (change === "dispose") h.dispose();
+			expect(await submission).toBe("stale");
 			await run;
 			expect(h.composer.pendingImages).toEqual([]);
 			expect(h.prompt).not.toHaveBeenCalled();
@@ -350,9 +389,11 @@ describe("native /sketch", () => {
 		await executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
 		expect(s.start).toHaveBeenCalledTimes(1);
 		expect(h.ctx.showWarning).toHaveBeenCalled();
-		s.resolve(null);
+		s.canvas.cancel();
 		await first;
-		await executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
+		const second = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
+		s.canvas.cancel();
+		await second;
 		expect(s.start).toHaveBeenCalledTimes(2);
 		expect(h.disposers).toHaveLength(1);
 		expect(h.listeners.size).toBe(0);
@@ -369,7 +410,7 @@ describe("native /sketch", () => {
 		h.composer.pendingImageLinks.push("file:///existing.png");
 		h.composer.setCollapsedText("keep [Image #1]");
 		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
-		s.resolve(PNG);
+		expect(await s.canvas.submit(PNG)).toBe("failed");
 		await run;
 		expect(h.ctx.showError).toHaveBeenCalledWith(expect.stringContaining("Sketch failed:"));
 		expect(h.composer.expandedText()).toBe("keep [Image #1]");

@@ -2,6 +2,15 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+export const specDrivenOpenSpecInputs = {
+	sourceDirectory: "src",
+	packageManifest: "package.json",
+	dependencyLock: "pnpm-lock.yaml",
+	runtimeEntries: ["bin", "schemas", "skills", "LICENSE"],
+} as const;
+
+export const specDrivenPassthroughDirectories = ["superpowers", "jch", "omp-runtime"] as const;
+
 /** Hash build inputs, never generated dist files or installed dependency trees. */
 export async function specDrivenSourceFingerprint(
 	packageRoot: string = path.resolve(import.meta.dir, "../.."),
@@ -21,11 +30,13 @@ export async function specDrivenSourceFingerprint(
 			throw new Error(`Unsupported spec-driven build input: ${relative}`);
 		}
 	}
-	for (const entry of ["src", "bin", "schemas", "skills", "LICENSE", "package.json", "pnpm-lock.yaml"]) {
-		await visit(`src/spec-driven/vendor/resources/openspec/${entry}`);
+	const resources = "src/spec-driven/vendor/resources";
+	const { sourceDirectory, packageManifest, dependencyLock, runtimeEntries } = specDrivenOpenSpecInputs;
+	for (const entry of [sourceDirectory, packageManifest, dependencyLock, ...runtimeEntries]) {
+		await visit(`${resources}/openspec/${entry}`);
 	}
+	for (const directory of specDrivenPassthroughDirectories) await visit(`${resources}/${directory}`);
 	for (const entry of [
-		"src/spec-driven/vendor/resources/jch/skills",
 		"scripts/spec-driven-resources.ts",
 		"src/spec-driven/vendor/inventory.json",
 		"src/spec-driven/resource-fingerprint.ts",

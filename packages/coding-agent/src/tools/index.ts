@@ -91,7 +91,6 @@ import { isMountableAsToolCommand, resolveToolCommand, type ToolCommandState } f
 import { YieldTool } from "./yield";
 import { PROPOSE_COMMAND_NAME, REJECT_COMMAND_NAME, RESOLVE_COMMAND_NAME } from "./details/resolve";
 import { REPORT_ISSUE_COMMAND_NAME } from "./report-issue-command";
-import { isolateTeamReads } from "./team-read-isolation";
 import {
 	cfgAskEnabled,
 	cfgAstEditEnabled,
@@ -913,7 +912,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		baseEntries.map(async ([name, factory]) => {
 			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, session);
 			if (!tool) return null;
-			return wrapToolWithMetaNotice(isolateTeamReads(tool, session));
+			return wrapToolWithMetaNotice(tool);
 		}),
 	);
 	let tools = baseResults.filter((r): r is Tool => r !== null);

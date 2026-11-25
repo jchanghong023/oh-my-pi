@@ -317,23 +317,22 @@ async fn run_raw(cwd: &Path, args: &[String], options: &RunOptions) -> Result<Ca
 
 	let timeout = options.timeout.unwrap_or(COMMAND_TIMEOUT);
 	let cancel = options.cancel.clone().unwrap_or_default();
-	let exit = tokio::select! {
-		status = tokio::time::timeout(timeout, child.wait()) => match status {
-			Ok(status) => status.map_err(Error::Io)?,
-			Err(_elapsed) => {
-				terminate(&mut child, &process_tree).await;
-				stdout_task.abort();
-				stderr_task.abort();
-				let _ = tokio::join!(stdout_task, stderr_task);
-				return Err(Error::CliTimeout { command: format!("git {}", argv.join(" ")) });
-			},
+	let status = tokio::select! {
+		// Prefer Git's actual result when exit and cancellation are both ready.
+		biased;
+		status = tokio::time::timeout(timeout, child.wait()) => {
+			status.map_err(|_| Error::CliTimeout { command: format!("git {}", argv.join(" ")) })
 		},
-		() = cancel.cancelled() => {
+		() = cancel.cancelled() => Err(Error::Canceled),
+	};
+	let exit = match status {
+		Ok(status) => status?,
+		Err(reason) => {
 			terminate(&mut child, &process_tree).await;
 			stdout_task.abort();
 			stderr_task.abort();
 			let _ = tokio::join!(stdout_task, stderr_task);
-			return Err(Error::Canceled);
+			return Err(reason);
 		},
 	};
 
@@ -746,11 +745,9 @@ async fn read_capped(
 	Ok(())
 }
 
-/// Settle this invocation's process tree before returning cancellation.
-///
-/// Windows pins every discovered descendant through the shared native process
-/// primitives: killing Git alone leaves upload-pack/SSH handles alive. Readers
-/// are also joined by the caller, so no pipe handle outlives the operation.
+/// Settle this invocation's process tree before returning cancellation or
+/// timeout. Windows pins every discovered descendant: killing Git alone
+/// leaves upload-pack/SSH handles alive. The caller also joins the readers.
 async fn terminate(child: &mut tokio::process::Child, process_tree: &ProcessTree) {
 	#[cfg(windows)]
 	process_tree.terminate().await;
@@ -828,8 +825,7 @@ mod windows_process {
 		}
 
 		pub(super) async fn terminate(&self) {
-			let mut owned = vec![&self.root];
-			let mut descendants = Vec::new();
+			let mut descendants: Vec<Process> = Vec::new();
 			let mut seen = HashSet::from([self.root.pid, std::process::id()]);
 			let mut terminated = false;
 			loop {
@@ -842,8 +838,8 @@ mod windows_process {
 					children.entry(entry.ppid).or_default().push(entry.pid);
 				}
 				let mut fresh = Vec::new();
-				let mut parents: Vec<_> = owned
-					.iter()
+				let mut parents: Vec<_> = std::iter::once(&self.root)
+					.chain(&descendants)
 					.map(|process| (process.pid, process.created))
 					.collect();
 				while let Some((parent_pid, parent_created)) = parents.pop() {
@@ -869,17 +865,16 @@ mod windows_process {
 				}
 				// Stop parents before children can fork again; all handles remain
 				// pinned until a final snapshot finds no surviving new descendants.
-				for process in owned.iter().copied().chain(fresh.iter()) {
+				let owned = std::iter::once(&self.root)
+					.chain(&descendants)
+					.chain(&fresh);
+				for process in owned.clone() {
 					let _ = sys::terminate(&process.handle);
 				}
-				for process in owned.iter().copied().chain(fresh.iter()) {
+				for process in owned {
 					process.exited().await;
 				}
-				drop(owned);
 				descendants.extend(fresh);
-				owned = std::iter::once(&self.root)
-					.chain(descendants.iter())
-					.collect();
 				terminated = true;
 			}
 		}
@@ -1076,11 +1071,11 @@ pub async fn clone(
 			..RunOptions::default()
 		})
 		.await;
-		if checkout.is_err() {
+		if let Err(err) = checkout {
 			let _ = tokio::fs::remove_dir_all(&absolute).await;
 			return Err(Error::backend(
 				"git clone",
-				format!("failed to checkout SHA {sha} in cloned repository {url}"),
+				format!("failed to checkout SHA {sha} in cloned repository {url}: {err}"),
 			));
 		}
 	}

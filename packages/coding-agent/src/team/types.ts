@@ -172,6 +172,9 @@ export type TeamSubagentOutcome =
 	| {
 			ok: false;
 			error: string;
+			costCapped?: boolean;
+			/** Persistent child output could not be published; the raw yield may still be present. */
+			artifactError?: string;
 			/** Received yield retained for audit only, never accepted as success. */
 			data?: unknown;
 	  };
@@ -271,6 +274,8 @@ export interface TeamRunResult {
 	/** Final assembled markdown (completed runs only). */
 	reportMarkdown?: string;
 	failureReason?: string;
+	/** The cost gate refused a child request needed to complete the discussion. */
+	costCapped?: boolean;
 	/** Set when a recommendation was mechanically dropped by structured tracking. */
 	droppedRecommendation?: boolean;
 	/** Original child yields and failures, retained independently of temporary transcripts. */

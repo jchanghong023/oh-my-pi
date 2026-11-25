@@ -471,28 +471,35 @@ function readSalvageSeparator(page: Buffer, offset: number): bigint | undefined 
 	return undefined;
 }
 
-/** Follows only the branch containing the next key, retaining its closest inclusive upper bound. */
+/** Returns the first key beyond the damaged branch selected by the seek key, when bounded. */
 function findSalvageBoundary(
 	readPage: (page: number) => Buffer | undefined,
 	page: number,
-	after: number,
+	rowid: number,
 ): number | undefined {
-	const next = BigInt(after + 1);
+	const target = BigInt(rowid);
 	let upper: bigint | undefined;
 	// Bound the descent even when damaged child pointers form a cycle.
-	for (let depth = 0; depth < 32 && page > 0; depth++) {
+	for (let depth = 0; page > 0; depth++) {
+		if (depth === 32) return undefined;
 		const bytes = readPage(page);
 		const header = page === 1 ? 100 : 0;
-		if (!bytes || bytes[header] !== 0x05 || header + 12 > bytes.length) break;
+		if (!bytes || bytes[header] !== 0x05) {
+			// A damaged leaf can retain its type byte. The separator comes from
+			// the parent and still bounds the branch selected by the seek.
+			break;
+		}
+		if (header + 12 > bytes.length) return undefined;
 		const cells = bytes.readUInt16BE(header + 3);
 		const contentStart = header + 12 + cells * 2;
-		if (contentStart > bytes.length) break;
+		if (contentStart > bytes.length) return undefined;
 		page = bytes.readUInt32BE(header + 8);
 		for (let index = 0; index < cells; index++) {
 			const cell = bytes.readUInt16BE(header + 12 + index * 2);
-			if (cell < contentStart || cell + 5 > bytes.length) continue;
+			if (cell < contentStart || cell + 5 > bytes.length) return undefined;
 			const key = readSalvageSeparator(bytes, cell + 4);
-			if (key !== undefined && key >= next) {
+			if (key === undefined) return undefined;
+			if (key >= target) {
 				if (upper === undefined || key < upper) upper = key;
 				page = bytes.readUInt32BE(cell);
 				break;
@@ -502,7 +509,7 @@ function findSalvageBoundary(
 	return upper !== undefined && upper < BigInt(Number.MAX_SAFE_INTEGER) ? Number(upper) + 1 : undefined;
 }
 
-function readSalvageBoundary(db: Database, table: string, after: number): number | undefined {
+function readSalvageBoundary(db: Database, table: string, rowid: number): number | undefined {
 	try {
 		const root = db
 			.query<{ rootpage: number }, [string]>("SELECT rootpage FROM main.sqlite_schema WHERE name = ?")
@@ -520,7 +527,7 @@ function readSalvageBoundary(db: Database, table: string, after: number): number
 					return data && Buffer.from(data.buffer, data.byteOffset, data.byteLength);
 				},
 				root.rootpage,
-				after,
+				rowid,
 			);
 		} catch (error) {
 			if (!(error instanceof Error && error.message === "no such table: sqlite_dbpage")) throw error;
@@ -546,7 +553,7 @@ function readSalvageBoundary(db: Database, table: string, after: number): number
 				return findSalvageBoundary(
 					page => (fs.readSync(fd, bytes, 0, pageSize, (page - 1) * pageSize) === pageSize ? bytes : undefined),
 					root.rootpage,
-					after,
+					rowid,
 				);
 			} finally {
 				fs.closeSync(fd);
@@ -601,6 +608,7 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 		rows.push(values as unknown as T);
 	};
 	let after = Number.MIN_SAFE_INTEGER;
+	let afterIsReadable = false;
 	let damaged = 0;
 	let rowidSeek: Statement<{ salvage_rowid: number }, [number]> | undefined;
 	while (after < Number.MAX_SAFE_INTEGER) {
@@ -609,6 +617,7 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 		if (row) {
 			keep(row);
 			after = row.salvage_rowid;
+			afterIsReadable = true;
 			continue;
 		}
 		if (++damaged > SALVAGE_MAX_DAMAGED_REGIONS) break;
@@ -616,9 +625,15 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 		const unreadable = probe(rowidSeek, after);
 		if (unreadable) {
 			after = unreadable.salvage_rowid;
+			afterIsReadable = false;
 			continue;
 		}
-		const nextBoundary = readSalvageBoundary(db, table, after);
+		let nextBoundary = readSalvageBoundary(db, table, after);
+		// SeekGT positions at `after` first. At a readable leaf's last key,
+		// damage is in the next branch, so look up its boundary in this iteration.
+		if (afterIsReadable && nextBoundary === after + 1) {
+			nextBoundary = readSalvageBoundary(db, table, nextBoundary);
+		}
 		let clear = nextBoundary ?? Number.MAX_SAFE_INTEGER;
 		if (nextBoundary === undefined) {
 			// End-of-table counts as clear: readable rows may still lie below it.
@@ -637,6 +652,7 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 		// A strict-greater-than seek from clear would otherwise skip clear itself.
 		const boundary = probe(exact, after, clear);
 		if (boundary) keep(boundary);
+		afterIsReadable = Boolean(boundary);
 		after = clear;
 	}
 	return rows;

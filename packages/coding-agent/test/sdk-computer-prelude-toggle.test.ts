@@ -229,8 +229,7 @@ describe("AgentSession eval preludes", () => {
 			sources: {},
 			exaApiKeys: [],
 		}));
-		const reconcile = vi.spyOn(manager, "reconcileBrowserFilter");
-		const settings = Settings.isolated({ "browser.enabled": false });
+		const settings = Settings.isolated({ "browser.enabled": false, "eval.js": false });
 		const { session } = await createAgentSession({
 			cwd: registryDir,
 			agentDir: registryDir,
@@ -247,11 +246,13 @@ describe("AgentSession eval preludes", () => {
 			enableLsp: false,
 		});
 		sessions.push(session);
+		const reconcile = vi.spyOn(manager, "reconcileBrowserFilter");
 
 		cfgBrowserEnabled.override(settings, true);
 		await Promise.resolve();
-		expect(reconcile).toHaveBeenLastCalledWith(true);
-		const enableReconcile = reconcile.mock.results.at(-1);
+		// An unprobed Python backend cannot replace browser MCP, even with the prelude enabled.
+		expect(reconcile).toHaveBeenNthCalledWith(1, false);
+		const enableReconcile = reconcile.mock.results[0];
 		if (!enableReconcile || enableReconcile.type !== "return") throw new Error("Expected browser MCP reconcile");
 		await enableReconcile.value;
 		await session.runToolRegistryMutation(async () => undefined);
@@ -259,8 +260,8 @@ describe("AgentSession eval preludes", () => {
 
 		cfgBrowserEnabled.override(settings, false);
 		await Promise.resolve();
-		expect(reconcile).toHaveBeenLastCalledWith(false);
-		const disableReconcile = reconcile.mock.results.at(-1);
+		expect(reconcile).toHaveBeenNthCalledWith(2, false);
+		const disableReconcile = reconcile.mock.results[1];
 		if (!disableReconcile || disableReconcile.type !== "return") throw new Error("Expected browser MCP reconcile");
 		await disableReconcile.value;
 		await session.runToolRegistryMutation(async () => undefined);

@@ -30,23 +30,20 @@ function createBinaryDetector(depsDir) {
   function findClass(index, className) {
     const results = [];
     const targetName = className.trim();
-    const simpleName = targetName.substring(targetName.lastIndexOf('.') + 1);
     
     // 1. 精确匹配
-    if (index[targetName]) {
+    if (Object.hasOwn(index, targetName)) {
       results.push({className: targetName, sourceFile: index[targetName], matchType: 'exact'});
       return results;
     }
     
-    // 2. 只比较类名（忽略包名）
-    const allKeys = Object.keys(index);
-    for (const key of allKeys) {
-      const idx = key.lastIndexOf('.');
-      if (idx !== -1) {
-        const keySimpleName = key.substring(idx + 1);
-        if (keySimpleName === simpleName) {
-          results.push({className: key, sourceFile: index[key], matchType: 'simpleName'});
-        }
+    // 2. 只有简单类名允许忽略包名
+    if (targetName.includes('.')) return results;
+
+    const suffix = `.${targetName}`;
+    for (const key of Object.keys(index)) {
+      if (key.endsWith(suffix)) {
+        results.push({className: key, sourceFile: index[key], matchType: 'simpleName'});
       }
     }
     

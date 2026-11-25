@@ -178,10 +178,20 @@ pub(super) fn list(
 				},
 				_ => {
 					// The name is NUL-terminated in place.
-					let Some((file_type, size, mtime)) = stat_entry(dir, raw.as_ptr().cast()) else {
-						continue;
-					};
-					out.push(name, file_type, size, Some(mtime), 0);
+					match stat_entry(dir, raw.as_ptr().cast()) {
+						Ok(Some((file_type, size, mtime))) => {
+							out.push(name, file_type, size, Some(mtime), 0);
+						},
+						Err(err)
+							if listed == Some(FileType::Dir)
+								&& err.kind() == io::ErrorKind::PermissionDenied =>
+						{
+							// A readable but non-searchable parent can list this name.
+							// Let the walker report the failed open of the child.
+							out.push(name, FileType::Dir, None, None, 0);
+						},
+						_ => {},
+					}
 				},
 			}
 		}
@@ -250,18 +260,20 @@ fn fstatat(dir: RawFd, path: *const c_char, flags: c_int) -> io::Result<libc::st
 }
 
 /// Type, regular-file size, and mtime of `name` in `dir`, not following
-/// symlinks; `None` for special files and entries that vanished.
-fn stat_entry(dir: RawFd, name: *const c_char) -> Option<(FileType, Option<u64>, i64)> {
+/// symlinks; `Ok(None)` for special files.
+fn stat_entry(dir: RawFd, name: *const c_char) -> io::Result<Option<(FileType, Option<u64>, i64)>> {
 	if let Some(result) = statx(dir, name, ENTRY_FLAGS, ENTRY_MASK) {
-		let stx = result.ok()?;
-		let file_type = type_of_mode(libc::mode_t::from(stx.mode))?;
-		let size = (file_type == FileType::File).then_some(stx.size);
-		return Some((file_type, size, nanos(stx.mtime.sec, i64::from(stx.mtime.nsec))));
+		let stx = result?;
+		return Ok(type_of_mode(libc::mode_t::from(stx.mode)).map(|file_type| {
+			let size = (file_type == FileType::File).then_some(stx.size);
+			(file_type, size, nanos(stx.mtime.sec, i64::from(stx.mtime.nsec)))
+		}));
 	}
-	let st = fstatat(dir, name, libc::AT_SYMLINK_NOFOLLOW).ok()?;
-	let file_type = type_of_mode(st.st_mode)?;
-	let size = (file_type == FileType::File).then_some(st.st_size as u64);
-	Some((file_type, size, nanos(st.st_mtime, st.st_mtime_nsec)))
+	let st = fstatat(dir, name, libc::AT_SYMLINK_NOFOLLOW)?;
+	Ok(type_of_mode(st.st_mode).map(|file_type| {
+		let size = (file_type == FileType::File).then_some(st.st_size as u64);
+		(file_type, size, nanos(st.st_mtime, st.st_mtime_nsec))
+	}))
 }
 
 pub(super) fn stat_path(path: *const c_char, follow: bool) -> io::Result<FileInfo> {

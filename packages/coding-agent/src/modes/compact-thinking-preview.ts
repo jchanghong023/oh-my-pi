@@ -355,7 +355,10 @@ export class CompactThinkingPreview {
 		this.#syncSession();
 		const memory = this.#memory!;
 		const calls = memory.calls;
-		if (event.type === "tool_execution_start") {
+		if (event.type === "agent_start" && event.resumedToolCallIds?.length) {
+			const resumed = event.resumedToolCallIds;
+			memory.calls = calls.filter(call => !resumed.includes(call.id));
+		} else if (event.type === "tool_execution_start") {
 			const call = calls.find(item => item.id === event.toolCallId);
 			if (call) {
 				call.name = event.toolName;

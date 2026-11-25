@@ -107,10 +107,16 @@ interface PythonKernelExecuteOptions extends KernelExecuteOptions {
 	expectedShadowDigest?: string;
 }
 
-// Retain definitive results for synchronous capability advertisement. Execution
-// reuses only successes: failed probes are retried on an explicit invocation, so
-// installing Python mid-session remains discoverable without restarting.
+// Only working interpreters are cached. Installing or repairing Python can
+// make a previously failed probe succeed on the next cell in the same session.
 const availabilityCache = new Map<string, PythonKernelAvailability>();
+const availabilityListeners = new Set<(cwd: string, interpreter: string | undefined) => void>();
+
+/** Observe the first successful probe for an interpreter in a working directory. */
+export function onPythonKernelAvailable(listener: (cwd: string, interpreter: string | undefined) => void): () => void {
+	availabilityListeners.add(listener);
+	return () => availabilityListeners.delete(listener);
+}
 
 function availabilityKey(cwd: string, interpreter?: string): string {
 	return [
@@ -126,7 +132,7 @@ function availabilityKey(cwd: string, interpreter?: string): string {
 	].join("\0");
 }
 
-/** Read the last definitive probe without spawning or awaiting interpreter discovery. */
+/** Read a previously successful probe without spawning or awaiting interpreter discovery. */
 export function getCachedPythonKernelAvailability(
 	cwd: string,
 	interpreter?: string,
@@ -178,7 +184,17 @@ export async function checkPythonKernelAvailability(
 	// Probe controls belong to one caller. Do not share an in-flight promise:
 	// aborting one eval must not cancel a concurrent session's availability check.
 	const result = await probePythonKernelAvailability(resolvedCwd, interpreter, options);
-	if (!result.transient && !options?.signal?.aborted) availabilityCache.set(key, result);
+	if (!result.transient && !options?.signal?.aborted) {
+		if (result.ok) {
+			const newlyAvailable = !availabilityCache.has(key);
+			availabilityCache.set(key, result);
+			if (newlyAvailable) {
+				for (const listener of availabilityListeners) listener(resolvedCwd, interpreter);
+			}
+		} else {
+			availabilityCache.delete(key);
+		}
+	}
 	return result;
 }
 

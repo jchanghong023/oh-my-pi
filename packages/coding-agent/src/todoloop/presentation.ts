@@ -74,7 +74,7 @@ function cardDetails(event: TodoLoopAttemptEvent): TaskToolDetails {
 	};
 }
 
-function statusLines(state: TodoLoopState, snapshot?: TodoLoopSnapshot): string[] {
+function statusLines(state: TodoLoopState): string[] {
 	const lines = [
 		`TodoLoop ${state.phase}`,
 		`${state.completed}/${state.total} tasks · ${state.completedGroups}/${state.totalGroups} groups complete`,
@@ -86,11 +86,23 @@ function statusLines(state: TodoLoopState, snapshot?: TodoLoopSnapshot): string[
 		lines.push(`Task ${state.current.label ?? state.current.id}: ${state.current.text.replace(/\s+/g, " ")}`);
 	// Keep the live dock within six lines; execution bodies stay in native cards.
 	if (state.reason) lines.push(`Reason: ${state.reason.replace(/\s+/g, " ")}`);
+	return lines;
+}
+
+export function todoLoopStatusView(state: () => TodoLoopState): JSXNode {
+	return jsx("col", {
+		children: () =>
+			statusLines(state()).map(line => jsx("text", { text: clean(line), wrap: "none", truncate: "end" })),
+	});
+}
+
+function todoLoopCheckLines(state: TodoLoopState, snapshot?: TodoLoopSnapshot): string[] {
+	const lines = statusLines(state);
 	if (snapshot) {
 		for (const group of snapshot.groups) {
-			lines.push(`Group ${group.id}: ${group.title.replace(/\s+/g, " ")}`);
+			lines.push(`Group ${group.id}: ${group.title}`);
 			for (const task of group.tasks)
-				lines.push(`  [${task.done ? "x" : " "}] ${task.label ?? task.id} ${task.text.replace(/\s+/g, " ")}`);
+				lines.push(`  [${task.done ? "x" : " "}] ${task.label ?? task.id} ${task.text}`);
 		}
 		const group = snapshot.groups.find(group => group.tasks.some(task => !task.done));
 		const task = group?.tasks.find(task => !task.done);
@@ -99,16 +111,114 @@ function statusLines(state: TodoLoopState, snapshot?: TodoLoopSnapshot): string[
 	return lines;
 }
 
-export function todoLoopStatusView(state: () => TodoLoopState, snapshot?: TodoLoopSnapshot): JSXNode {
-	return jsx("col", {
-		children: () =>
-			statusLines(state(), snapshot).map(line => jsx("text", { text: clean(line), wrap: "none", truncate: "end" })),
-	});
+function wrappedStatusView(lines: string[]): JSXNode {
+	return jsx("col", { children: lines.map(line => jsx("text", { text: clean(line), wrap: "word" })) });
 }
 
 // Explicit command cards are not part of the model's tool activity. Index each native
 // block without retaining it after transcript replacement.
 const attemptsByBlock = new WeakMap<TranscriptBlock, ToolCall>();
+
+export function isLiveTodoLoopCard(block: TranscriptBlock): boolean {
+	const card = attemptsByBlock.get(block);
+	return card !== undefined && card.facts.settledAt() === undefined;
+}
+
+interface TodoLoopViewRecord {
+	draw: () => JSXNode;
+	card?: ToolCall;
+	live?: boolean;
+	block?: TranscriptBlock;
+}
+
+interface TodoLoopViewRecords {
+	session: InteractiveModeContext["session"];
+	id: string;
+	generation: number;
+	pending: TodoLoopViewRecord[];
+	widget?: { key: string; draw: () => JSXNode; visible: boolean };
+}
+
+const recordsByContext = new WeakMap<InteractiveModeContext, TodoLoopViewRecords>();
+const suspendedViews = new WeakSet<InteractiveModeContext>();
+
+function ownsSession(ctx: InteractiveModeContext, records: TodoLoopViewRecords): boolean {
+	return (
+		!ctx.isShuttingDown &&
+		ctx.session === records.session &&
+		ctx.session.sessionId === records.id &&
+		ctx.session.sessionGeneration === records.generation &&
+		!ctx.session.isDisposed
+	);
+}
+
+function canPresent(ctx: InteractiveModeContext, records: TodoLoopViewRecords): boolean {
+	return !ctx.collabGuest && !suspendedViews.has(ctx) && ctx.viewSession === records.session;
+}
+
+function syncWidget(ctx: InteractiveModeContext, records: TodoLoopViewRecords): void {
+	const widget = records.widget;
+	if (!widget) return;
+	const visible = ownsSession(ctx, records) && canPresent(ctx, records);
+	if (visible === widget.visible) return;
+	widget.visible = visible;
+	ctx.hud.widgets.set(widget.key, visible ? widget.draw : undefined);
+}
+
+function getViewRecords(ctx: InteractiveModeContext): TodoLoopViewRecords {
+	const previous = recordsByContext.get(ctx);
+	if (previous && ownsSession(ctx, previous)) return previous;
+	if (previous) syncWidget(ctx, previous);
+	const records: TodoLoopViewRecords = {
+		session: ctx.session,
+		id: ctx.session.sessionId,
+		generation: ctx.session.sessionGeneration,
+		pending: [],
+	};
+	recordsByContext.set(ctx, records);
+	return records;
+}
+
+function mountRecord(ctx: InteractiveModeContext, record: TodoLoopViewRecord): void {
+	record.block = ctx.present(record.draw, { live: record.live });
+	if (record.card) attemptsByBlock.set(record.block, record.card);
+}
+
+function appendRecord(ctx: InteractiveModeContext, records: TodoLoopViewRecords, record: TodoLoopViewRecord): void {
+	if (canPresent(ctx, records)) mountRecord(ctx, record);
+	else records.pending.push(record);
+}
+
+export function presentTodoLoopCheck(
+	ctx: InteractiveModeContext,
+	state: TodoLoopState,
+	snapshot?: TodoLoopSnapshot,
+): void {
+	const lines = todoLoopCheckLines(state, snapshot);
+	appendRecord(ctx, getViewRecords(ctx), { draw: () => wrappedStatusView(lines) });
+}
+
+/** Focus changed but the shared transcript still owns the previous view until replay commits. */
+export function suspendTodoLoopView(ctx: InteractiveModeContext): void {
+	suspendedViews.add(ctx);
+	const records = recordsByContext.get(ctx);
+	if (records) syncWidget(ctx, records);
+}
+
+/** Resume the dock and deliver output that never reached the transcript. */
+export function restoreTodoLoopView(ctx: InteractiveModeContext): void {
+	suspendedViews.delete(ctx);
+	const records = recordsByContext.get(ctx);
+	if (!records) return;
+	syncWidget(ctx, records);
+	if (!ownsSession(ctx, records)) {
+		recordsByContext.delete(ctx);
+		return;
+	}
+	if (!canPresent(ctx, records)) return;
+	for (const entry of records.pending) mountRecord(ctx, entry);
+	records.pending.length = 0;
+}
 
 export function setTodoLoopCardsExpanded(ctx: InteractiveModeContext, expanded: boolean): boolean {
 	let found = false;
@@ -127,34 +237,28 @@ export function setTodoLoopCardsExpanded(ctx: InteractiveModeContext, expanded: 
 /** One mutable native status block; each real execution gets its own native task card. */
 export class TodoLoopPresentation {
 	readonly #state;
-	readonly #attempts = new Map<string, { block: TranscriptBlock; card: ToolCall }>();
+	readonly #attempts = new Map<string, TodoLoopViewRecord & { card: ToolCall }>();
 	readonly #ctx: InteractiveModeContext;
 	readonly #widgetKey = `todoloop:${crypto.randomUUID()}`;
 	#lastCard?: ToolCall;
 	readonly #liveDetails = new Map<string, NonNullable<TodoLoopAttemptEvent["details"]>>();
-	readonly #owner: InteractiveModeContext["session"];
-	readonly #generation: number;
-	readonly #sessionId: string;
+	readonly #records: TodoLoopViewRecords;
 	#closed = false;
 
 	constructor(ctx: InteractiveModeContext, state: TodoLoopState) {
 		this.#ctx = ctx;
-		this.#owner = ctx.session;
-		this.#generation = ctx.session.sessionGeneration;
-		this.#sessionId = ctx.session.sessionId;
+		this.#records = getViewRecords(ctx);
 		this.#state = signal(state);
-		ctx.hud.widgets.set(this.#widgetKey, () => todoLoopStatusView(this.#state));
+		this.#records.widget = {
+			key: this.#widgetKey,
+			draw: () => todoLoopStatusView(this.#state),
+			visible: false,
+		};
+		syncWidget(ctx, this.#records);
 	}
 
 	#ownsSession(): boolean {
-		return (
-			!this.#closed &&
-			!this.#ctx.isShuttingDown &&
-			this.#ctx.session === this.#owner &&
-			this.#owner.sessionGeneration === this.#generation &&
-			this.#owner.sessionId === this.#sessionId &&
-			!this.#owner.isDisposed
-		);
+		return !this.#closed && ownsSession(this.#ctx, this.#records);
 	}
 
 	/** Remove the live status and leave one final snapshot behind the execution cards. */
@@ -163,16 +267,18 @@ export class TodoLoopPresentation {
 			this.dispose();
 			return;
 		}
-		const state = this.#state.peek();
+		const lines = statusLines(this.#state.peek());
 		this.dispose();
-		this.#ctx.present(() => todoLoopStatusView(() => state));
+		appendRecord(this.#ctx, this.#records, { draw: () => wrappedStatusView(lines) });
 	}
 
 	/** Only detach our own dock; other commands and native loaders own their rows. */
 	dispose(): void {
 		if (this.#closed) return;
 		this.#closed = true;
-		this.#ctx.hud.widgets.set(this.#widgetKey, undefined);
+		if (this.#records.widget?.key !== this.#widgetKey) return;
+		if (this.#records.widget.visible) this.#ctx.hud.widgets.set(this.#widgetKey, undefined);
+		this.#records.widget = undefined;
 	}
 
 	onState(state: TodoLoopState): void {
@@ -181,6 +287,7 @@ export class TodoLoopPresentation {
 			return;
 		}
 		this.#state.set(state);
+		syncWidget(this.#ctx, this.#records);
 	}
 
 	onAttempt(event: TodoLoopAttemptEvent): void {
@@ -188,6 +295,7 @@ export class TodoLoopPresentation {
 			this.dispose();
 			return;
 		}
+		syncWidget(this.#ctx, this.#records);
 		let attempt = this.#attempts.get(event.id);
 		if (event.type === "start" && !attempt) {
 			const agent = event.group ? "task" : "scout";
@@ -199,15 +307,18 @@ export class TodoLoopPresentation {
 				presenter: createTaskRecordPresenter(label),
 			});
 			card.setArgsComplete();
-			let globalExpanded = this.#ctx.toolOutputExpanded;
-			card.setExpanded(this.#lastCard?.state().expanded ?? (!this.#ctx.hideToolActivity && globalExpanded));
+			const ctx = this.#ctx;
+			let globalExpanded = ctx.toolOutputExpanded;
+			card.setExpanded(this.#lastCard?.state().expanded ?? (!ctx.hideToolActivity && globalExpanded));
 			this.#lastCard = card;
 			card.setExecutionStarted();
-			const block = this.#ctx.present(
-				() => {
+			attempt = {
+				card,
+				live: true,
+				draw: () => {
 					effect(() => {
-						const expanded = this.#ctx.toolOutputExpanded;
-						if (!this.#ctx.hideToolActivity && expanded !== globalExpanded) card.setExpanded(expanded);
+						const expanded = ctx.toolOutputExpanded;
+						if (!ctx.hideToolActivity && expanded !== globalExpanded) card.setExpanded(expanded);
 						globalExpanded = expanded;
 					});
 					const revise = settledRevision();
@@ -220,11 +331,9 @@ export class TodoLoopPresentation {
 					});
 					return ToolBlock({ call: card });
 				},
-				{ live: true },
-			);
-			attempt = { card, block };
+			};
+			appendRecord(this.#ctx, this.#records, attempt);
 			this.#attempts.set(event.id, attempt);
-			attemptsByBlock.set(block, card);
 		}
 		if (!attempt) return;
 		const { card, block } = attempt;
@@ -243,7 +352,8 @@ export class TodoLoopPresentation {
 		);
 		if (event.type === "end") {
 			card.seal();
-			this.#ctx.shell.transcript.settle(block);
+			attempt.live = false;
+			if (block && canPresent(this.#ctx, this.#records)) this.#ctx.shell.transcript.settle(block);
 			this.#liveDetails.delete(event.id);
 		}
 	}

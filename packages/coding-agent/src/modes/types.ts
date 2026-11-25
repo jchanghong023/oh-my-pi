@@ -1064,8 +1064,10 @@ export interface InteractiveModeContext {
 	resetDisplayAfterAppearanceRefresh(): void;
 	handleDequeue(): void;
 	handleImagePaste(): Promise<boolean>;
+	/** With an ownership guard, returns whether the requested image actually attached. */
+	handleImagePathPaste(path: string, isCurrent: () => boolean): Promise<boolean | void>;
 	/** Attach a pasted image path to the main editor or an image-accepting prompt; other prompts refuse. */
-	handleImagePathPaste(path: string, isCurrent?: () => boolean): Promise<void>;
+	handleImagePathPaste(path: string): Promise<void>;
 	/**
 	 * Queue a message for delivery only after the active agent turn would stop.
 	 * `detached` is a submission whose draft already left the editor: its attachments

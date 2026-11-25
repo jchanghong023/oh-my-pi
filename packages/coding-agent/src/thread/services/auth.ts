@@ -203,7 +203,7 @@ function serveAuthStorage(state: PeerAuthState): RpcServe<AuthStorage, AuthStora
 		"credentials.revalidate": storage => storage.credentials.revalidate(),
 		"credentials.get": (storage, provider) => storage.credentials.get(provider),
 		"credentials.all": storage => storage.credentials.all(),
-		"credentials.list": (storage, provider) => storage.credentials.list(provider),
+		"credentials.list": (storage, provider, options) => storage.credentials.list(provider, options),
 		"credentials.has": (storage, provider) => storage.credentials.has(provider),
 		"credentials.hasOAuth": (storage, provider) => storage.credentials.hasOAuth(provider),
 		"credentials.hasSubscription": (storage, provider) => storage.credentials.hasSubscription(provider),

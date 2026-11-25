@@ -164,8 +164,13 @@ function makeWedgeTab(scope: SharedTargetScope, options: WedgeOptions = {}): Wor
 }
 
 /** The worker shuts down normally; only its shared browser's CDP cleanup is wedged. */
-function makeStrictWedgeTab(scope: SharedTargetScope, options: WedgeOptions = {}): WorkerTabSession {
+function makeStrictWedgeTab(
+	scope: SharedTargetScope,
+	unit: UnitSnapshot,
+	options: WedgeOptions = {},
+): WorkerTabSession {
 	const tab = makeWedgeTab(scope, options);
+	Object.assign(tab.browser, { daemonLease: { unit, release: async () => undefined } });
 	tab.uploadDir = path.join(getDaemonRuntimeDir(scope.projectDir), "uploads");
 	tab.worker.onMessage = handler => {
 		handler({ type: "closed" });
@@ -550,9 +555,10 @@ describe("strict shared browser owner cleanup", () => {
 		const stopAllowed = Promise.withResolvers<void>();
 		const stops: string[] = [];
 		const probes: string[] = [];
+		const snapshot = makeSnapshot(READY_MATCH);
 		const broker = makeBroker(
 			{
-				snapshot: makeSnapshot(READY_MATCH),
+				snapshot,
 				beforeStop: async () => {
 					stopEntered.resolve();
 					await stopAllowed.promise;
@@ -572,8 +578,8 @@ describe("strict shared browser owner cleanup", () => {
 		);
 		let terminations = 0;
 		let siblingTerminations = 0;
-		const tab = makeStrictWedgeTab(scope, { onTerminate: () => terminations++ });
-		const sibling = makeStrictWedgeTab(scope, { onTerminate: () => siblingTerminations++ });
+		const tab = makeStrictWedgeTab(scope, snapshot, { onTerminate: () => terminations++ });
+		const sibling = makeStrictWedgeTab(scope, snapshot, { onTerminate: () => siblingTerminations++ });
 		sibling.name = "sibling-tab";
 		sibling.targetId = "sibling-target";
 		sibling.ownerSessionId = "sibling-owner";
@@ -590,7 +596,7 @@ describe("strict shared browser owner cleanup", () => {
 			settled = true;
 		});
 		try {
-			await stopEntered.promise;
+			await Promise.race([stopEntered.promise, cleanup]);
 			expect(settled).toBe(false);
 			expect(getTabsMapForTest().get(tab.name)).toBe(tab);
 			expect(tab.browser.refCount).toBe(2);
@@ -640,7 +646,7 @@ describe("strict shared browser owner cleanup", () => {
 				check(scope, { client: broker, probe: async () => false }),
 			);
 			let terminations = 0;
-			const tab = makeStrictWedgeTab(scope, { onTerminate: () => terminations++ });
+			const tab = makeStrictWedgeTab(scope, options.snapshot, { onTerminate: () => terminations++ });
 			getTabsMapForTest().set(tab.name, tab);
 			await recordSharedTarget(scope, TARGET_ID);
 			try {
@@ -688,7 +694,7 @@ describe("strict shared browser owner cleanup", () => {
 					},
 				}),
 			);
-			const tab = makeStrictWedgeTab(scope, { close: "fail" });
+			const tab = makeStrictWedgeTab(scope, options.snapshot, { close: "fail" });
 			getTabsMapForTest().set(tab.name, tab);
 			await recordSharedTarget(scope, TARGET_ID);
 			try {
@@ -713,7 +719,8 @@ describe("strict shared browser owner cleanup", () => {
 		const gate = Promise.withResolvers<void>();
 		const healthCheck = spyOn(sharedDaemon, "stopSharedBrowserIfUnreachable").mockResolvedValue(true);
 		let terminations = 0;
-		const tab = makeStrictWedgeTab(scope, {
+		const snapshot = makeSnapshot(READY_MATCH);
+		const tab = makeStrictWedgeTab(scope, snapshot, {
 			close: "gate",
 			gate: gate.promise,
 			entered: () => entered.resolve(),

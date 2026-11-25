@@ -13,6 +13,7 @@ import {
 	resolveRoleSelection,
 } from "../config/model-resolver";
 import { CHAT_MODEL_ROLE_IDS } from "../config/model-roles";
+import { parseModelString } from "../config/model-selector";
 import type { Settings } from "../config/settings";
 import { concreteThinkingLevel } from "../thinking/levels";
 
@@ -61,7 +62,9 @@ export async function resolvePrimaryModel(
 		if (
 			(!resolved?.model && selectors.length === 0) ||
 			selectors.some(selector =>
-				resolveConfiguredModelPatterns(selector, settings).some(pattern => pattern.startsWith("company/")),
+				resolveConfiguredModelPatterns(selector, settings).some(
+					pattern => parseModelString(pattern)?.provider.trim().toLowerCase() === COMPANY_PROVIDER_ID,
+				),
 			)
 		) {
 			throw new Error(companyError);

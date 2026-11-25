@@ -74,6 +74,13 @@ const TIME: ToolRef = ToolRef(6);
 const TOOLS: [(&str, ToolRef); 5] =
 	[("time", TIME), ("timeout", TIMEOUT), ("urlmap", URLMAP), ("nohup", NOHUP), ("git", GIT)];
 
+/// Whether the engine must keep raw operands with this callout. Layered Git
+/// must see them to refuse unrepresentable arguments rather than bypassing
+/// its guard through `PATH`.
+pub(crate) const fn accepts_raw_args(tool: ToolRef) -> bool {
+	matches!(tool, TIMEOUT | NOHUP | TIME | URLMAP | GIT)
+}
+
 /// The switch that hands `nohup` to the system binary.
 const NOHUP_OFF: &str = "PI_DISABLE_NOHUP_BUILTIN";
 
@@ -223,6 +230,24 @@ struct SpawnState {
 	measurement:   HashMap<u32, Measurement>,
 }
 
+impl SpawnState {
+	fn clear_records(&mut self, labels: &[u32]) {
+		self.spawned.retain(|(label, _)| !labels.contains(label));
+		for label in labels {
+			self.external.remove(label);
+		}
+		// Only a sweep may raise the threshold. Releasing unrelated labels
+		// must not postpone a sweep of the remaining handles.
+		self.next_sweep_at = self.next_sweep_at.min(
+			self
+				.spawned
+				.len()
+				.saturating_mul(2)
+				.max(SpawnLog::PRUNE_THRESHOLD),
+		);
+	}
+}
+
 /// External identities and measurement policy for labeled subshell trees.
 ///
 /// Pin each live identity at spawn, before a PID can be recycled. Keep the
@@ -322,18 +347,18 @@ impl SpawnLog {
 		labels.iter().any(|label| state.external.contains(label))
 	}
 
-	fn forget(&self, labels: &[u32]) {
+	/// Clear one invocation's records before reusing its label.
+	fn clear_records(&self, labels: &[u32]) {
+		self.0.lock().clear_records(labels);
+	}
+
+	/// Release labels that will not be reused, including their policies.
+	fn release(&self, labels: &[u32]) {
 		let mut state = self.0.lock();
-		state.spawned.retain(|(label, _)| !labels.contains(label));
+		state.clear_records(labels);
 		for label in labels {
-			state.external.remove(label);
 			state.measurement.remove(label);
 		}
-		state.next_sweep_at = state
-			.spawned
-			.len()
-			.saturating_mul(2)
-			.max(Self::PRUNE_THRESHOLD);
 	}
 }
 
@@ -388,7 +413,7 @@ impl Labels {
 
 	fn release(&mut self, group: &[u32]) {
 		self.parents.retain(|(child, _)| !group.contains(child));
-		self.log.forget(group);
+		self.log.release(group);
 	}
 }
 
@@ -607,7 +632,7 @@ impl ToolCalls {
 
 	/// Start the callout `id` the engine returned.
 	pub fn on_call(&mut self, shell: &mut Shell, cx: &mut Cx<'_>, id: CallId, call: ToolCall) {
-		if matches!(call.tool, GIT | EXTRA)
+		if !accepts_raw_args(call.tool)
 			&& call
 				.argv
 				.iter()
@@ -755,7 +780,7 @@ mod tests {
 		assert!(live);
 		assert!(!log.has_live(&[7]));
 		assert!(log.has_external(&[7]), "an exited external remains recorded");
-		log.forget(&[7]);
+		log.clear_records(&[7]);
 		assert!(!log.has_external(&[7]));
 		assert_eq!(snapshot[0].status(), crate::proctree::ProcessStatus::Exited);
 	}
@@ -781,6 +806,7 @@ mod tests {
 			});
 			child.kill().unwrap();
 			child.wait().unwrap();
+			log.release(&[8]); // A nested builtin-only tool leaves no process records.
 		}
 		let retained = log.0.lock().spawned.len();
 		let history = log.has_external(&[7]);
@@ -799,7 +825,7 @@ mod tests {
 		assert_eq!(snapshot.len(), 1, "the live member must survive pruning");
 		assert_eq!(snapshot[0].pid(), i32::try_from(live.id()).unwrap());
 		assert!(signalled, "the retained live identity must still accept cancellation");
-		log.forget(&[7, 9]);
+		log.release(&[7, 9]);
 		assert!(!log.has_external(&[7, 9]));
 	}
 
@@ -816,6 +842,12 @@ mod tests {
 		assert!(labels.log.measured(inner));
 		assert!(labels.log.measured(innermost));
 		assert!(!labels.log.measured(other));
+		labels
+			.log
+			.record(Lineage { label: inner, detached: false }, || None);
+		labels.log.clear_records(&[inner]);
+		assert!(!labels.log.has_external(&[inner]));
+		assert!(labels.log.measured(inner), "a reused label keeps its measurement policy");
 		let foreground = labels.fresh(outer);
 		labels.log.set_measurement(foreground, Measurement::Direct);
 		let timed = labels.fresh(foreground);

@@ -41,17 +41,15 @@ import {
 	sourceFromMeta,
 } from "../../../extensibility/inventory/types";
 
-/**
- * Provider-level gate for one discovered item: the whole-provider switch, plus
- * the `~/` opt-in for user-level items of foreign tools. Item-level disable and
- * shadowing take precedence and are decided by the caller.
- *
- * Mirrors the loader's foreign gate (`allowedRoots` / `isSourceEnabled`,
- * #10666/#10743): a user-scope `claude-plugins` item whose `origin` is not the
- * foreign `~/.claude` tree is an omp-native marketplace root under
- * `~/.omp/plugins` and loads without the opt-in — so the dashboard must render
- * it active, not a phantom `user-opt-in` disabled (#12776).
- */
+/** Which opt-in, if any, gates this source's effective origin. */
+export function userOptInProvider(source: SourceMeta): string | undefined {
+	const { provider, origin, level } = source;
+	if (provider === "claude-plugins" && origin !== undefined) return origin === "claude" ? provider : undefined;
+	if (provider === "agent-plugins" && origin === "claude") return "claude-plugins";
+	return level === "user" ? provider : undefined;
+}
+
+/** Item disable and shadowing take precedence over provider and source switches. */
 function resolveState(
 	source: SourceMeta,
 	isDisabled: boolean,
@@ -60,10 +58,8 @@ function resolveState(
 	if (isDisabled) return { state: "disabled", disabledReason: "item-disabled" };
 	if (isShadowed) return { state: "shadowed", disabledReason: "shadowed" };
 	if (!isProviderEnabled(source.provider)) return { state: "disabled", disabledReason: "provider-disabled" };
-	if (source.provider === "claude-plugins" && source.origin !== undefined && source.origin !== "claude") {
-		return { state: "active" };
-	}
-	if (source.level === "user" && !isUserSourceEnabled(source.provider)) {
+	const optIn = userOptInProvider(source);
+	if (optIn !== undefined && !isUserSourceEnabled(optIn)) {
 		return { state: "disabled", disabledReason: "user-opt-in" };
 	}
 	return { state: "active" };
@@ -194,8 +190,12 @@ export async function loadAllExtensions(
 			extensionRoots,
 		});
 		for (const skill of skills.skills) {
+			const id = makeExtensionId("skill", skill.name);
+			// An explicit switch uses the resolved row ID, not the inherited bare-name selector.
+			// Keep the effective gate in the catalog entry even when the item is explicitly disabled.
+			const disabledReason = disabledExtensions.has(id) ? "item-disabled" : skill.disabledReason;
 			extensions.push({
-				id: makeExtensionId("skill", skill.name),
+				id,
 				kind: "skill",
 				name: skill.name,
 				displayName: skill.name,
@@ -203,8 +203,8 @@ export async function loadAllExtensions(
 				trigger: skill.frontmatter?.globs?.join(", "),
 				path: skill.filePath,
 				source: sourceFromMeta(skill._source),
-				state: skill.disabledReason ? "disabled" : "active",
-				disabledReason: skill.disabledReason,
+				state: disabledReason ? "disabled" : "active",
+				disabledReason,
 				// Inspector keeps the capability shape, without its pre-resolution
 				// shadow marker: namespaced versions are independently invocable.
 				raw: { ...skill, path: skill.filePath },
@@ -417,7 +417,7 @@ export function toggleProvider(providerId: string): boolean {
 export function toggleUserSource(providerId: string): boolean {
 	if (isUserSourceEnabled(providerId)) {
 		disableUserSource(providerId);
-		return false;
+		return isUserSourceEnabled(providerId);
 	}
 	enableUserSource(providerId);
 	return true;

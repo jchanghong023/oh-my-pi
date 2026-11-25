@@ -72,8 +72,8 @@
 ### 6.1 codecovcli 流程（首选）
 
 - Step 0：检查 `codecovcli --version`；未安装时配置华为 npm 仓库后 `npm install -g @baize/codecovcli@latest`
-- Step 1：从加载 `improve-coverage` 时返回的 baseDir 下 `scripts/java/extract-maven-config.js` 输出获取 settingsPath 和 mavenProperties，无输出用默认参数
-- Step 2：按 scenario 构建命令；incremental 场景必须加 `--targetbranch "{targetBranch}"`，路径用引号包裹，mavenProperties 不带引号
+- Step 1：按 [Maven 配置提取](coverage-rules.md#maven-配置提取) 读取配置和处理回退。
+- Step 2：按 [codecovcli 覆盖率分析命令](coverage-rules.md#codecovcli-覆盖率分析命令) 构建命令，按 scenario 调整；incremental 场景必须加 `--targetbranch "{targetBranch}"`。
 - Step 3：`bash` 工具执行，timeout: 1200（20 分钟）
 - Step 4：解析输出返回行覆盖率、分支覆盖率、被测类列表、测试结果
 
@@ -81,13 +81,11 @@
 
 codecovcli 执行失败（未安装、命令报错、超时等）后自动执行以下步骤，无需询问用户：
 
-- Step 1：复用 baseDir 下 `scripts/java/extract-maven-config.js` 提取 Maven 配置（settingsPath + mavenProperties），与 codecovcli 逻辑一致
-- Step 2：构建 JaCoCo 命令
-  - 有配置：`mvn clean test jacoco:report -pl {module} -Dtest={testClass} -DfailIfNoTests=false -s "{settingsPath}" {mavenProperties}`
-  - 无配置：`mvn clean test jacoco:report -pl {module} -Dtest={testClass} -DfailIfNoTests=false`
+- Step 1：复用 [Maven 配置提取](coverage-rules.md#maven-配置提取)，与 codecovcli 一致。
+- Step 2：按 [JaCoCo 覆盖率分析命令](coverage-rules.md#jacoco-覆盖率分析命令备选) 构建 Maven 命令。
 - Step 3：`bash` 工具执行，timeout: 1200（20 分钟）
-- Step 4：执行 `node "{SKILL_DIR}/scripts/java/extract-jacoco-coverage.js" {className} {module}/target/site/jacoco/jacoco.xml` 提取覆盖率数据（`{SKILL_DIR}` 为 `improve-coverage` 加载时返回的 baseDir，Windows 下路径反斜杠须改为正斜杠）
-  - 脚本从 `jacoco.xml` 中解析指定类的覆盖率，生成 `.codecovcli/cache/java_{className}.json`
-  - 输出格式与 codecovcli 一致，后续分析流程无需区分数据来源
+- Step 4：按同节的脚本命令提取覆盖率数据（`{SKILL_DIR}` 为 `improve-coverage` 加载时返回的 baseDir，Windows 下路径反斜杠须改为正斜杠）。
+  - 缓存文件 `.codecovcli/cache/java_{className}.json` 保存目标类的统计，格式与 codecovcli 一致。
+  - `Source File Missed Lines` 和 `Source File Covered Lines` 只表示源文件级汇总。按 [JaCoCo 覆盖率分析命令](coverage-rules.md#jacoco-覆盖率分析命令备选) 核实行号归属后再设计测试。
 
 **异常处理建议**：检查 codecovcli 是否安装、settings.xml 路径、类全限定名、目标分支是否存在；JaCoCo fallback 时检查 pom.xml 是否配置 jacoco-plugin、模块路径是否正确。

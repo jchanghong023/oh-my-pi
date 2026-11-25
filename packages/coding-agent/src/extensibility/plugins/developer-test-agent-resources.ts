@@ -5,15 +5,15 @@ import { gunzipSync } from "node:zlib";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import bundledArchive from "./developer-test-agent-archive";
 
-/** Resolve the source tree or materialize the build's immutable plugin resources in the active profile. */
+/** Resolve the real resource root, materializing the build's immutable resources in the active profile if needed. */
 export async function getDeveloperTestAgentRoot(agentDir: string = getAgentDir()): Promise<string> {
-	if (!bundledArchive) return path.join(import.meta.dir, "bundled/developer-test-agent");
+	if (!bundledArchive) return fs.realpath(path.join(import.meta.dir, "bundled/developer-test-agent"));
 
 	const { digest } = bundledArchive;
 	const parent = path.join(agentDir, "developer-test-agent", "resources");
 	const destination = path.join(parent, digest, "developer-test-agent");
 	try {
-		if ((await fs.stat(destination)).isDirectory()) return destination;
+		if ((await fs.stat(destination)).isDirectory()) return await fs.realpath(destination);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
@@ -36,7 +36,8 @@ export async function getDeveloperTestAgentRoot(agentDir: string = getAgentDir()
 			if (resource === null) {
 				await fs.mkdir(target, { recursive: true });
 			} else {
-				await Bun.write(target, Buffer.from(resource.data, "base64"));
+				// Bun.write can fail with ENOENT when a Windows staging path exceeds MAX_PATH.
+				await fs.writeFile(target, Buffer.from(resource.data, "base64"));
 				await fs.chmod(target, resource.mode);
 			}
 		}
@@ -53,5 +54,5 @@ export async function getDeveloperTestAgentRoot(agentDir: string = getAgentDir()
 	} finally {
 		await fs.rm(temporary, { recursive: true, force: true });
 	}
-	return destination;
+	return fs.realpath(destination);
 }

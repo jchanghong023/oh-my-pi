@@ -507,20 +507,22 @@ export function contentData(ext: Extension): { content: string; applyTo?: string
 }
 
 /** `Active`, `Disabled (why)`, `Shadowed by …`. */
-export function enablementLabel(state: ExtensionState, reason?: string, shadowedBy?: string): string {
+export function enablementLabel(state: ExtensionState, reason?: string, shadowedBy?: string, blocked?: string): string {
 	switch (state) {
 		case "active":
 			return "Active";
-		case "disabled":
-			return `Disabled (${
-				reason === "provider-disabled"
+		case "disabled": {
+			const detail =
+				sanitizeDisplayLineField(blocked) ??
+				(reason === "provider-disabled"
 					? "provider disabled"
 					: reason === "user-opt-in"
 						? "~/ config not enabled"
 						: reason === "item-disabled"
 							? "manually disabled"
-							: "unknown"
-			})`;
+							: "unknown");
+			return `Disabled (${detail})`;
+		}
 		case "shadowed":
 			return `Shadowed${shadowedBy ? ` by ${sanitizeDisplayText(shadowedBy)}` : ""}`;
 	}

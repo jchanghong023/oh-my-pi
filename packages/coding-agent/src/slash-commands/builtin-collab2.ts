@@ -1,5 +1,5 @@
 import { isCollab2RoomNumber, NumberedRoomError } from "../collab/numbered-room";
-import { clearSubmittedText } from "./helpers/draft";
+import { refuseImages } from "./helpers/draft";
 import type { SlashCommandSpec } from "./types";
 
 export const BUILTIN_COLLAB2_SLASH_COMMAND: SlashCommandSpec = {
@@ -9,8 +9,11 @@ export const BUILTIN_COLLAB2_SLASH_COMMAND: SlashCommandSpec = {
 	inlineHint: "<room-number> | join <room-number> | stop",
 	allowArgs: true,
 	async handleTui(command, runtime) {
+		if (refuseImages(command, runtime)) return;
 		const ctx = runtime.ctx;
-		clearSubmittedText(runtime);
+		if (!runtime.draftDetached && ctx.composer.expandedText().trim() === command.text.trim()) {
+			ctx.composer.setText("");
+		}
 		const [verb, argument, extra] = command.args.split(/\s+/);
 		const joining = verb === "join";
 		const stopping = verb === "stop" && argument === undefined;

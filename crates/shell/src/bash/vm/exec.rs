@@ -627,6 +627,15 @@ fn errexit_on(k: &mut Kernel, cx: &mut Cx<'_>, vp: &Vproc) -> bool {
 /// `exit` inside a function runs the root's trap first, above the
 /// function's frames: bash's trap sees its `FUNCNAME` and locals.
 pub(super) fn exit_shell(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, status: i32) {
+	// A trap that exits the shell supersedes an ordinary tail command.
+	// An explicit exec's own signal is not provisional.
+	if vp.trap_frames != 0
+		&& let Some(run) = vp.runs.front()
+		&& let std::collections::hash_map::Entry::Occupied(entry) = k.run_signals.entry(run.id)
+		&& matches!(entry.get(), super::RunSignal::TailExternal(_))
+	{
+		entry.remove();
+	}
 	// zsh `zexit` while its hooks run: the hook calls end, the status is the
 	// new one.
 	if vp.zsh.is_some()

@@ -2,13 +2,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnv } from "node:util";
-import { getAgentDir, getConfigRootDir, getProjectDir, refreshDirsFromEnv } from "./dirs";
+import { getAgentDir, getConfigRootDir, getProjectCwd, getProjectDir, refreshDirsFromEnv } from "./dirs";
 import { isBunTestRuntime } from "./test-runtime";
 
 export * from "./test-runtime";
 export * from "./worker-host";
 
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PROFILE_ENV_NAME_RE = process.platform === "win32" ? /^(?:OMP|PI)_PROFILE$/i : /^(?:OMP|PI)_PROFILE$/;
 
 /**
  * Strict shell-identifier shape. Used for dotenv keys we accept into
@@ -205,6 +206,7 @@ function filterChildShellEnvInternal(
 			// an empty launcher value with the dotenv one, so restore the launcher
 			// value whenever what survived is exactly what the dotenv file defines.
 			if (
+				result[key] !== undefined &&
 				result[key] !== launchValue &&
 				(result[key] === launchEnv[key] ||
 					result[key] === expandedLaunchEnv[key] ||
@@ -290,7 +292,7 @@ export function parseEnvFile(filePath: string): Record<string, string> {
 const homeEnv = parseEnvFile(path.join(os.homedir(), ".env"));
 const piEnv = parseEnvFile(path.join(getConfigRootDir(), ".env"));
 const agentEnv = parseEnvFile(path.join(getAgentDir(), ".env"));
-const projectEnv = parseEnvFile(path.join(getProjectDir(), ".env"));
+const projectEnv = parseEnvFile(path.join(getProjectCwd(), ".env"));
 
 for (const key of Object.keys(Bun.env)) {
 	const value = Bun.env[key];
@@ -383,6 +385,8 @@ export function withOmpOtelEnv<T>(fn: () => T): T {
 for (const file of [projectEnv, agentEnv, piEnv, homeEnv]) {
 	for (const key in file) {
 		if (isMacosMallocStackLoggingEnvName(key)) continue;
+		// Profile selection precedes dotenv; do not change it for later consumers.
+		if (PROFILE_ENV_NAME_RE.test(key)) continue;
 		if (file !== projectEnv && claimOmpOtelEnvFileEntry(key, file[key])) continue;
 		if (!Bun.env[key]) {
 			Bun.env[key] = file[key];

@@ -40,6 +40,7 @@ import { getBundledAgent } from "../task/agents";
 import { type ExecutorOptions, runSubagentFollowUpTurn, runSubprocess } from "../task/executor";
 import { generateTaskName, sanitizeAgentId } from "../task/name-generator";
 import { AgentOutputManager } from "../task/output-manager";
+import { canColdReviveSubagent } from "../task/persisted-revive";
 import { type AgentDefinition } from "../task/types";
 import { type AgentProgress, oneLineLabel, type SingleResult } from "../task/task-details";
 import type { ToolSession } from "../tools";
@@ -146,6 +147,8 @@ interface VibeRecord {
 	/** Pre-expansion role alias behind {@link modelOverride}, when the worker agent named one. */
 	modelRole?: string;
 	state: VibeSessionState;
+	/** Cold-restored transcript without the live authority required to send another turn. */
+	readOnlyHistory?: boolean;
 	createdAt: number;
 	lastActivityAt: number;
 	/** One-line gist of the latest activity (intent, tool, or result preview). */
@@ -592,7 +595,7 @@ export class VibeSessionRegistry {
 		parentSessionFile: string,
 		spawn: VibeSpawnLifecycleEvent,
 		options?: { requireAgentMatch?: boolean },
-	): Promise<string | undefined> {
+	): Promise<{ sessionFile: string; canColdRevive: boolean } | undefined> {
 		if (options?.requireAgentMatch !== false && spawn.agent !== VIBE_CLI_AGENT[spawn.cli]) return undefined;
 		if (!/^[A-Za-z0-9_-]+$/.test(spawn.id) || spawn.childSessionFile !== `${spawn.id}.jsonl`) return undefined;
 		const artifactsDir = path.resolve(parentSessionFile.slice(0, -6));
@@ -603,7 +606,9 @@ export class VibeSessionRegistry {
 		}
 		try {
 			const persisted = await SessionManager.peekSessionInit(childSessionFile);
-			return persisted?.init ? childSessionFile : undefined;
+			return persisted?.init
+				? { sessionFile: childSessionFile, canColdRevive: canColdReviveSubagent(persisted.init) }
+				: undefined;
 		} catch {
 			return undefined;
 		}
@@ -739,9 +744,9 @@ export class VibeSessionRegistry {
 		for (const id of terminalIntents.keys()) {
 			const spawn = allSpawns.get(id);
 			if (!spawn) continue;
-			const childSessionFile = await this.#resolvePersistedChild(sessionFile, spawn, { requireAgentMatch: false });
-			if (!childSessionFile) continue;
-			await this.#markTerminalRef(id, scope.ownerId, childSessionFile);
+			const child = await this.#resolvePersistedChild(sessionFile, spawn, { requireAgentMatch: false });
+			if (!child) continue;
+			await this.#markTerminalRef(id, scope.ownerId, child.sessionFile);
 			this.#records.delete(scopeKey(scope, id));
 		}
 
@@ -749,17 +754,23 @@ export class VibeSessionRegistry {
 		for (const candidate of candidates.values()) {
 			const { spawn } = candidate;
 			if (candidate.tombstoneReason || terminalIntents.has(spawn.id) || candidate.turnCount < 1) continue;
-			const childSessionFile = await this.#resolvePersistedChild(sessionFile, spawn);
-			if (!childSessionFile) continue;
+			const child = await this.#resolvePersistedChild(sessionFile, spawn);
+			if (!child) continue;
+			const childSessionFile = child.sessionFile;
 			const key = scopeKey(scope, spawn.id);
 			if (this.#records.has(key)) continue;
 			const existing = AgentRegistry.global().get(spawn.id);
-			const existingIsResumable =
-				existing?.kind === "sub" &&
-				existing.parentId === scope.ownerId &&
-				existing.sessionFile === childSessionFile &&
-				(existing.status === "idle" || existing.status === "parked");
+			const existingMatchesWorker =
+				existing?.kind === "sub" && existing.parentId === scope.ownerId && existing.sessionFile === childSessionFile;
+			const existingIsResumable = existingMatchesWorker && (existing.status === "idle" || existing.status === "parked");
 			const blockedByCollision = Boolean(existing && !existingIsResumable);
+			const hasWarmSession =
+				existing &&
+				existingIsResumable &&
+				!existing.history?.executionEnded &&
+				(existing.session !== null || AgentLifecycleManager.global().has(spawn.id, existing));
+			const readOnlyHistory =
+				!hasWarmSession && (!child.canColdRevive || (existingMatchesWorker && existing.history?.executionEnded === true));
 			const { agent, modelOverride, modelRole } = this.#resolveWorker(session, spawn.cli);
 			if (!existing) {
 				AgentRegistry.global().register({
@@ -770,7 +781,10 @@ export class VibeSessionRegistry {
 					session: null,
 					sessionFile: childSessionFile,
 					status: "parked",
+					history: readOnlyHistory ? { executionEnded: true } : undefined,
 				});
+			} else if (readOnlyHistory && existingIsResumable && !existing.history?.executionEnded) {
+				AgentRegistry.global().setHistory(spawn.id, { executionEnded: true }, childSessionFile);
 			}
 			this.#records.set(key, {
 				id: spawn.id,
@@ -782,21 +796,24 @@ export class VibeSessionRegistry {
 				agent,
 				modelOverride,
 				modelRole,
-				state: "idle",
+				state: readOnlyHistory ? "dead" : "idle",
+				readOnlyHistory,
 				createdAt: spawn.createdAt,
 				lastActivityAt: candidate.lastActivityAt,
-				lastActivity: blockedByCollision
-					? "blocked by an agent id collision"
-					: candidate.inFlight
-						? `turn ${candidate.turnCount} interrupted by process restart`
-						: undefined,
+				lastActivity: readOnlyHistory
+					? "read-only history; this worker cannot resume after restart"
+					: blockedByCollision
+						? "blocked by an agent id collision"
+						: candidate.inFlight
+							? `turn ${candidate.turnCount} interrupted by process restart`
+							: undefined,
 				queue: [],
 				turnCount: candidate.turnCount,
 				killed: false,
 				suspended: false,
 				terminalPersisted: false,
 			});
-			restored++;
+			if (!readOnlyHistory) restored++;
 		}
 		return restored;
 	}
@@ -903,6 +920,7 @@ export class VibeSessionRegistry {
 	async send(session: ToolSession, args: { session: string; message: string }): Promise<VibeSendOutcome> {
 		const scope = this.ownerScope(session);
 		const record = this.#record(scope, args.session);
+		if (record.readOnlyHistory) throw new ToolError(`Vibe session "${record.id}" is a read-only execution record.`);
 		if (record.state === "dead") {
 			throw new ToolError(`Vibe session "${record.id}" is dead. Spawn a new one with vibe_spawn.`);
 		}
@@ -1030,7 +1048,7 @@ export class VibeSessionRegistry {
 		const records = [...this.#records.values()].filter(record => matchesScope(record, scope));
 		const teardown = records.map(record => ({
 			record,
-			ref: this.#registeredAgent(record),
+			ref: record.readOnlyHistory ? undefined : this.#registeredAgent(record),
 			job: record.turn && manager ? manager.getJob(record.turn.jobId) : undefined,
 		}));
 		for (const { record } of teardown) {
@@ -1061,6 +1079,7 @@ export class VibeSessionRegistry {
 				});
 				this.#continueSuspendedCleanup(scope, record, jobTask);
 			}
+			if (record.readOnlyHistory) continue;
 			if (this.#records.has(scopeKey(scope, record.id))) continue;
 			const lateRef = this.#registeredAgent(record);
 			if (lateRef && lateRef !== ref) {
@@ -1091,6 +1110,8 @@ export class VibeSessionRegistry {
 		const scope = this.ownerScope(session);
 		return this.#withTerminationLock(scope, () => {
 			const record = this.#record(scope, id);
+			if (record.readOnlyHistory)
+				throw new ToolError(`Vibe session "${record.id}" is a read-only execution record.`);
 			return this.#killRecord(record, session.asyncJobManager, session, "explicit-kill");
 		});
 	}
@@ -1114,7 +1135,10 @@ export class VibeSessionRegistry {
 
 	async #killAllLocked(session: VibeParentSession, scope: VibeOwnerScope): Promise<number> {
 		const records = [...this.#records.values()].filter(
-			record => matchesScope(record, scope) && !(record.state === "dead" && record.terminalPersisted),
+			record =>
+				matchesScope(record, scope) &&
+				!record.readOnlyHistory &&
+				!(record.state === "dead" && record.terminalPersisted),
 		);
 		if (records.length === 0) {
 			const entries = session.sessionManager?.getBranch() ?? [];

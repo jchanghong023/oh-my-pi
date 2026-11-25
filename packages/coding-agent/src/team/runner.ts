@@ -18,6 +18,7 @@ import type { Settings } from "../config/settings";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Rule } from "../capability/rule";
 import type { Skill } from "../extensibility/skills";
+import type { CostGateApi } from "../session/cost-gate";
 import type { WorkspaceTree } from "../workspace-tree";
 import { TEAM_ROLE_SYSTEM_PROMPTS } from "./prompts";
 import { getTeamTransportSchema } from "./schemas";
@@ -45,11 +46,16 @@ export interface TeamRunnerDeps extends NativeChildSessionHooks {
 	/** Persisted session file; child transcripts nest beside it. `null` uses a temp dir. */
 	sessionFile: string | null;
 	artifactsDir: string | null;
+	parentLocalRoot?: string;
+	/** Session-shared leases outside the ordinary persisted artifact tree. */
+	readIsolationRoots?: Set<string>;
 	parentAgentId: string;
 	eventBus?: EventBus;
 	subagentEventBus?: EventBus;
 	isCurrentSession?: () => boolean;
 	parentActiveModelPattern?: string;
+	parentActiveProvider?: string;
+	costGate?: CostGateApi;
 	skills?: readonly Skill[];
 	promptTemplates?: PromptTemplate[];
 	rules?: Rule[];
@@ -108,7 +114,10 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 	};
 	const eventBus = bindEventBus(deps.eventBus);
 	const subagentEventBus = deps.subagentEventBus === deps.eventBus ? eventBus : bindEventBus(deps.subagentEventBus);
-	const readIsolationRoots = new Set<string>();
+	const protectedRoots = [deps.sessionFile, deps.artifactsDir, deps.parentLocalRoot].filter((root): root is string =>
+		Boolean(root),
+	);
+	const readIsolationRoots = deps.readIsolationRoots ?? new Set<string>();
 	// Each discussion owns a namespace: separate managers can otherwise allocate
 	// the same stage IDs before either concurrent run has written its artifacts.
 	const outputManager = new AgentOutputManager(() => deps.artifactsDir, {
@@ -166,7 +175,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 				let lease: ArtifactLease;
 				try {
 					lease = await leaseArtifacts(deps);
-					readIsolationRoots.add(lease.artifactsDir);
+					if (lease.temporary) readIsolationRoots.add(lease.artifactsDir);
 					logger.info("Team artifact lease prepared", {
 						component: "team.runner",
 						event: "team_lease_completed",
@@ -190,6 +199,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 				// result (child session disposal overran its deadline); the temp lease
 				// must survive until it settles or the rm below races open handles.
 				let deferredCleanup: Promise<void> | undefined;
+				let externalLocalRoot: string | undefined;
 				let subprocessStarted: number | undefined;
 				try {
 					stage = "artifacts";
@@ -237,8 +247,14 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						agent,
 						task: call.task,
 						assignment: call.task,
+						// Stage labels are already meaningful; don't send the assignment
+						// to the executor's separate, model-generated label helper.
+						description: call.label,
 						modelOverride: call.modelPattern,
+						exactModel: true,
 						parentActiveModelPattern: deps.parentActiveModelPattern,
+						parentActiveProvider: deps.parentActiveProvider,
+						costGate: deps.costGate,
 						id,
 						index: 0,
 						outputSchema: getTeamTransportSchema(call.schema),
@@ -253,17 +269,25 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						enableMCP: false,
 						restrictToolNames: true,
 						keepAlive: false,
+						retainRecord: !lease.temporary,
 						signal,
 						onCleanupDeferred: completion => {
 							deferredCleanup = completion;
+						},
+						onSessionCreated: session => {
+							const localRoot = session.localRoot;
+							const relative = path.relative(lease.artifactsDir, localRoot);
+							if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+								// On Windows a long child path can put its spills outside the lease.
+								externalLocalRoot = localRoot;
+								readIsolationRoots.add(localRoot);
+							}
 						},
 						sessionFile: lease.sessionFile,
 						persistArtifacts: !lease.temporary,
 						artifactsDir: lease.artifactsDir,
 						localProtocolOptions: {
-							getArtifactsDir: () => path.join(lease.artifactsDir, id),
-							getReadIsolationRoots: () => [...readIsolationRoots],
-							getSessionId: () => id,
+							getReadIsolationRoots: () => [...protectedRoots, lease.artifactsDir, ...readIsolationRoots],
 							// agent:// and history:// are global cross-agent namespaces;
 							// disabling IRC messaging alone does not isolate their reads.
 							allowCrossAgentReads: false,
@@ -282,13 +306,19 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						eventBus,
 						subagentEventBus,
 					});
-					const failure = (error: string): TeamSubagentOutcome =>
-						result.structuredOutput && Object.hasOwn(result.structuredOutput, "data")
-							? { ok: false, error, data: result.structuredOutput.data }
-							: { ok: false, error };
+					const artifactError = !lease.temporary ? result.artifactError : undefined;
+					const failure = (error: string): TeamSubagentOutcome => ({
+						ok: false,
+						error,
+						...(result.costCapped ? { costCapped: true } : {}),
+						...(artifactError !== undefined ? { artifactError } : {}),
+						...(result.structuredOutput && Object.hasOwn(result.structuredOutput, "data")
+							? { data: result.structuredOutput.data }
+							: {}),
+					});
 					const processResult = signal.aborted
 						? "cancelled"
-						: result.aborted || result.exitCode !== 0 || result.error
+						: result.aborted || result.exitCode !== 0 || result.error || artifactError !== undefined
 							? "failed"
 							: "completed";
 					terminationDiagnostics = { request_count: result.requests };
@@ -359,6 +389,10 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						finish("failed", result.exitCode !== 0 ? "nonzero_exit" : "executor_error");
 						return failure(result.stderr || result.error || `exit code ${result.exitCode}`);
 					}
+					if (artifactError !== undefined) {
+						finish("failed", "artifact_publication_failed");
+						return failure("原稿发布失败");
+					}
 					stage = "model_check";
 					// A ":" suffix can be part of a distinct catalog model ID (e.g.
 					// ":free"), not just a thinking annotation on the display selector.
@@ -421,6 +455,11 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 							});
 							try {
 								await fs.rm(lease.artifactsDir, { recursive: true, force: true });
+								readIsolationRoots.delete(lease.artifactsDir);
+								if (externalLocalRoot) {
+									await fs.rm(externalLocalRoot, { recursive: true, force: true });
+									readIsolationRoots.delete(externalLocalRoot);
+								}
 								logger.info("Team temporary artifacts removed", {
 									component: "team.runner",
 									event: "team_artifacts_cleanup_completed",

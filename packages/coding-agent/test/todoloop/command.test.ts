@@ -2,9 +2,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { executeBuiltinSlashCommand } from "../../src/slash-commands/builtin-registry";
 import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
-import type { SlashCommandRuntime } from "../../src/slash-commands/types";
+import { executeBuiltinSlashCommand } from "../../src/slash-commands/builtin-registry";
 import type { TodoLoopRunOptions, TodoLoopState } from "../../src/todoloop/runner";
 import { initTheme } from "../../src/ui/theme/service";
 import { attachTerminal, createInteractiveModeContext, renderTranscript } from "../helpers/interactive-mode-context";
@@ -191,7 +190,17 @@ describe("native /todoloop command", () => {
 		expect(unregister).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not dispatch in ACP", async () => {
-		expect(await executeAcpBuiltinSlashCommand("/todoloop a.md --check", {} as SlashCommandRuntime)).toBe(false);
+	it("rejects /todoloop in ACP", async () => {
+		const { session, sessionManager, settings, showError } = createInteractiveModeContext();
+		const result = await executeAcpBuiltinSlashCommand("/todoloop a.md --check", {
+			session,
+			sessionManager,
+			settings,
+			cwd: sessionManager.getCwd(),
+			output: showError,
+			refreshCommands: () => {},
+			reloadPlugins: async () => {},
+		});
+		expect(result).toEqual({ consumed: true, failed: true });
 	});
 });

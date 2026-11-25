@@ -20,12 +20,10 @@ import { MCPManager } from "../mcp/manager";
 import { discoverAuthStorage, initializeOfflineModelCommand, loadCliExtensionProviders } from "../sdk";
 import type { AuthStorage } from "../session/auth-storage";
 import type { ToolSession } from "../tools";
-import { parseReadUrlTarget } from "../tools/fetch";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
-import { ReadTool, splitImageQuestionTarget } from "../tools/read";
+import { ReadTool } from "../tools/read";
 import { renderError } from "../tools/tool-errors";
 import { type ResolvedImageQuestionModel, resolveImageQuestionModel } from "../utils/image-question";
-import { parseXUrl } from "../web/x";
 
 import { cfgDisabledExtensions, cfgExtensions, cfgSkills } from "../extensibility/settings";
 import { cfgMcpEnableProjectConfig } from "../mcp/settings";
@@ -95,50 +93,49 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 			return mcpManager;
 		});
 
-		// `read <image>?q=<question>` delegates to a vision model, and X URLs read
-		// through Grok's X tools; both need a model registry to resolve models and
-		// fetch credentials. The lightweight session above omits it (other reads
-		// never touch a model), so build one on demand — otherwise image questions
-		// abort with "Model registry is unavailable for image questions." before
-		// resolving anything (issue #11338), and X reads report missing xAI
-		// credentials.
-		const urlTarget = parseReadUrlTarget(cmd.path);
-		const imageQuestion = splitImageQuestionTarget(cmd.path).question;
-		if (imageQuestion || (urlTarget && parseXUrl(urlTarget.path))) {
-			const companyLane = await initializeOfflineModelCommand(settings, undefined, message => {
+		// Ordinary file reads (including JSON selectors) need neither credentials nor a registry.
+		// Initialize them only for X reads or once ReadTool routes a question to its image loader.
+		let companyLane: boolean | undefined;
+		const initializeModels = async (): Promise<boolean> => {
+			if (companyLane !== undefined) return companyLane;
+			const offline = await initializeOfflineModelCommand(settings, undefined, message => {
 				process.stderr.write(`${message}\n`);
 			});
 			authStorage ??= await discoverAuthStorage(undefined, { settings });
 			const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
 			for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 			await modelRegistry.hydrateCredentialScopedModelCaches();
-			await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline: companyLane });
+			await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline });
 			session.modelRegistry = modelRegistry;
-			const companyError = companyLane && imageQuestion ? getCompanyConfigError() : undefined;
-			if (companyError) {
-				// A configured non-company route is an explicit choice, not a fallback.
-				// Keep a broken company selection from falling through to @default.
-				if (expandRoleAlias("@vision", settings).toLowerCase().startsWith(`${COMPANY_PROVIDER_ID}/`)) {
-					throw new Error(companyError);
-				}
-				let resolved: ResolvedImageQuestionModel;
-				try {
-					resolved = resolveImageQuestionModel(session);
-				} catch {
-					throw new Error(companyError);
-				}
-				const role = resolved.selectedPattern === "@vision" ? "vision" : "default";
-				if (
-					!resolved.selectedPattern ||
-					!settings.getModelRole(role) ||
-					resolved.model.provider === COMPANY_PROVIDER_ID
-				) {
-					throw new Error(companyError);
-				}
-			}
-		}
+			return (companyLane = offline);
+		};
 
-		const tool = wrapToolWithMetaNotice(new ReadTool(session));
+		const resolveVisionModel = async (): Promise<ResolvedImageQuestionModel> => {
+			const companyError = (await initializeModels()) ? getCompanyConfigError() : undefined;
+			if (!companyError) return resolveImageQuestionModel(session);
+			// A configured non-company route is an explicit choice, not a fallback.
+			// Keep a broken company selection from falling through to @default.
+			if (expandRoleAlias("@vision", settings).toLowerCase().startsWith(`${COMPANY_PROVIDER_ID}/`)) {
+				throw new Error(companyError);
+			}
+			let resolved: ResolvedImageQuestionModel;
+			try {
+				resolved = resolveImageQuestionModel(session);
+			} catch {
+				throw new Error(companyError);
+			}
+			const role = resolved.selectedPattern === "@vision" ? "vision" : "default";
+			if (
+				!resolved.selectedPattern ||
+				!settings.getModelRole(role) ||
+				resolved.model.provider === COMPANY_PROVIDER_ID
+			) {
+				throw new Error(companyError);
+			}
+			return resolved;
+		};
+
+		const tool = wrapToolWithMetaNotice(new ReadTool(session, undefined, resolveVisionModel, initializeModels));
 		const result = await tool.execute("omp-read", { path: cmd.path });
 
 		for (const block of result.content) {

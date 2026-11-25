@@ -43,6 +43,7 @@ import {
 	resolveAgentAdvisorSelection,
 	resolveAgentPrewalkPattern,
 	resolveConfiguredModelPatterns,
+	resolveExactModelIdentity,
 	resolveExplicitModelRole,
 	resolveModelOverride,
 	resolveModelOverrideWithAuthFallback,
@@ -102,7 +103,8 @@ import { type CostCapRefusal, CostCapError, type CostGateApi } from "../session/
 import { INTERRUPTED_TURN_ERROR } from "../session/exit-diagnostics";
 import { SKILL_PROMPT_MESSAGE_TYPE, usageContextTokens } from "../session/messages";
 import type { CompletionJournal } from "../session/model-usage-journal";
-import { hasConversationalHistory, SessionManager } from "../session/session-manager";
+import type { FileEntry } from "../session/session-entries";
+import { hasConversationalHistory, type PersistedSessionInit, SessionManager } from "../session/session-manager";
 import { truncateTail } from "../tools/streaming-output";
 import { type WorkspaceModeState, WORKSPACE_MODE_STATE_TYPE } from "../workspace-mode";
 import {
@@ -130,6 +132,7 @@ import { runFollowUpTurnOnHome, runSubprocessPlaced } from "../thread/executor-r
 import { existingSubagentWorkerPool, subagentWorkerPool } from "../thread/subagent-worker";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { WorkspaceTree } from "../workspace-tree";
+import { getBundledAgent } from "./agents";
 import { isCompletionProbeEnabled, startCompletionProbe } from "./completion-probe";
 import { appendToolResult, createTaskWidgetInputs, TOOLS_SOURCE_LABEL } from "./widget-inputs";
 import { TextTap } from "../job-widgets/text-tap";
@@ -318,10 +321,42 @@ interface SubagentRetryFallbackCandidate {
 	selector: string;
 }
 
+const SPEC_EXECUTOR_AGENT = "spec-executor";
+const SPEC_EXECUTOR_DELEGATION_ENTRY = "task:native-spec-executor";
+
+/** Scope trusted native spec executors to the bounded tools of their default task delegate. */
+const specExecutorDelegationScopes = new WeakSet<object>();
+
+export function specExecutorDelegateTools(session: ToolSession): string[] | undefined {
+	if (!session.sessionManager || !specExecutorDelegationScopes.has(session.sessionManager)) return;
+	if (session.isToolActive?.("task") !== true) return;
+	return [
+		"bash",
+		...["read", "find", "grep", "glob", "write", "edit", "wait"].filter(name => session.isToolActive?.(name)),
+	];
+}
+
+/** Restore only the delegation stamped by the native spawn, not a same-named transcript. */
+export function restoreSpecExecutorDelegation(
+	sessionManager: SessionManager,
+	init: PersistedSessionInit,
+	entries: readonly FileEntry[],
+): void {
+	if (init.agent !== SPEC_EXECUTOR_AGENT || init.restrictToolNames !== true || !init.tools.includes("task")) return;
+	const native = getBundledAgent(SPEC_EXECUTOR_AGENT);
+	const nativeTools = native?.tools;
+	if (!nativeTools || init.spawns !== native?.spawns || !init.tools.every(name => nativeTools.includes(name))) return;
+	const stamp = entries.findLast(
+		entry => entry.type === "custom" && entry.customType === SPEC_EXECUTOR_DELEGATION_ENTRY,
+	);
+	if (stamp?.type === "custom" && stamp.data === true) specExecutorDelegationScopes.add(sessionManager);
+}
+
 function resolveSubagentRetryFallbackCandidates(
 	modelPatterns: string[],
 	modelRegistry: ModelRegistry,
 	settings: Settings,
+	allowedProvider: string | null | undefined,
 ): SubagentRetryFallbackCandidate[] {
 	const candidates: SubagentRetryFallbackCandidate[] = [];
 	const seen = new Set<string>();
@@ -329,7 +364,8 @@ function resolveSubagentRetryFallbackCandidates(
 	for (const pattern of modelPatterns) {
 		const resolved = resolveModelOverride([pattern], modelRegistry, settings);
 		if (!resolved.model) continue;
-		if (disabledProviders.has(resolved.model.provider)) continue;
+		const { provider } = resolved.model;
+		if (disabledProviders.has(provider) || (allowedProvider !== undefined && provider !== allowedProvider)) continue;
 		const selector = resolved.explicitThinkingLevel
 			? formatModelSelectorValue(formatModelStringWithRouting(resolved.model), resolved.thinkingLevel)
 			: formatModelStringWithRouting(resolved.model);
@@ -386,8 +422,9 @@ function installSubagentRetryFallbackChain(args: {
 	const { settings, id, candidates, inheritedFallbackChain, model, authFallbackUsed } = args;
 	if (!model || authFallbackUsed || candidates.length === 0) return undefined;
 
+	const modelIdentity = formatModelStringWithRouting(model);
 	const selectedIndex = candidates.findIndex(
-		candidate => candidate.model.provider === model.provider && candidate.model.id === model.id,
+		candidate => formatModelStringWithRouting(candidate.model) === modelIdentity,
 	);
 	if (selectedIndex < 0) return undefined;
 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
@@ -500,6 +537,8 @@ export interface ExecutorOptions extends NativeChildSessionHooks {
 	 */
 	detached?: boolean;
 	modelOverride?: string | string[];
+	/** Dispatch only the one canonical routed identity in modelOverride; no auth or model-changing fallback. */
+	exactModel?: boolean;
 	/** Explicit pre-expansion model role alias selected for this run. */
 	modelRole?: string;
 	/** Extension routing note for the chosen model; surfaced as `resolvedModelRoute`. */
@@ -568,6 +607,8 @@ export interface ExecutorOptions extends NativeChildSessionHooks {
 	/** Live-host callbacks and their invocation-local request, never persisted as authority. */
 	subagentHooks?: NativeSubagentHooks;
 	subagentRequest?: StructuredSubagentRequest;
+	/** Observe initial setup failure without changing the host hook used again on warm revival. */
+	onInitialSpawnFailed?: () => void;
 	/** Observe the actual child before autoload/dispatch; cleanup runs before deferred shutdown. */
 	onSessionCreated?: (session: AgentSession) => void | (() => void);
 	/** Preserve required source material; oversized context must fail rather than auto-compact. */
@@ -679,6 +720,8 @@ export interface ExecutorOptions extends NativeChildSessionHooks {
 	 * set this false so disposal unregisters them instead of leaving idle peers.
 	 */
 	keepAlive?: boolean;
+	/** When keepAlive is false, retain the persisted transcript as a read-only execution record. */
+	retainRecord?: boolean;
 	/** Internal ownership handoff for cleanup that outlives the visible Task result. */
 	onCleanupDeferred?: (completion: Promise<void>) => void;
 	/** Releases resources retained for a kept-alive agent when its lifecycle ends. */
@@ -1077,6 +1120,7 @@ export function createMCPProxyTools(mcpManager: MCPManagerApi, scope: MCPToolSco
 			description: tool.description ?? "",
 			parameters: tool.parameters,
 			strict: tool.strict,
+			loadMode: tool.loadMode,
 			mcpServerName: serverName,
 			mcpToolName,
 			mcpReadOnlyHint: tool.mcpReadOnlyHint,
@@ -2695,6 +2739,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 interface DriveOutcome {
 	exitCode: number;
 	error?: string;
+	costCapped?: boolean;
 	aborted: boolean;
 	abortReasonText?: string;
 }
@@ -2780,6 +2825,7 @@ async function driveSessionToResult(
 	const abortSignal = monitor.abortSignal;
 	let exitCode = 0;
 	let error: string | undefined;
+	let costCapped: boolean | undefined;
 	let aborted = false;
 	let abortReasonText: string | undefined;
 	// Cost-cap refusals are terminal: no retry or reminder can be sent until the cap is raised.
@@ -3122,6 +3168,7 @@ async function driveSessionToResult(
 		// without throwing): its message is why the run produced no result.
 		const refusal = costCapRefusal();
 		if (!delivered && refusal && !aborted) {
+			costCapped = true;
 			exitCode = 1;
 			error ??= refusal.message;
 		}
@@ -3143,6 +3190,7 @@ async function driveSessionToResult(
 		} else {
 			exitCode = 1;
 			if (!abortSignal.aborted) {
+				if (err instanceof CostCapError) costCapped = true;
 				// A cost-cap refusal is a reason for the parent, not a crash to diagnose.
 				error =
 					err instanceof CostCapError
@@ -3163,12 +3211,20 @@ async function driveSessionToResult(
 		}
 	}
 
-	return { exitCode, error, aborted, abortReasonText };
+	return { exitCode, error, costCapped, aborted, abortReasonText };
 }
 
 interface FinalizeRunArgs {
 	monitor: SubagentRunMonitor;
-	done: { exitCode: number; error?: string; aborted?: boolean; abortReason?: string; durationMs: number };
+	done: {
+		exitCode: number;
+		error?: string;
+		costCapped?: boolean;
+		recordRetentionError?: string;
+		aborted?: boolean;
+		abortReason?: string;
+		durationMs: number;
+	};
 	index: number;
 	id: string;
 	agent: AgentDefinition;
@@ -3183,6 +3239,7 @@ interface FinalizeRunArgs {
 	outputSchemaSource?: StructuredSubagentSchemaSource;
 	signal?: AbortSignal;
 	artifactsDir?: string;
+	requireArtifacts?: boolean;
 	eventBus?: EventBus;
 	subagentEventBus?: EventBus;
 	parentToolCallId?: string;
@@ -3198,6 +3255,11 @@ interface FinalizeRunArgs {
 	publishMessageResult?: boolean;
 	sessionFile?: string;
 	startTime: number;
+}
+
+function artifactPublicationError(artifact: string, error: unknown): string {
+	const code = isRecord(error) ? error.code : undefined;
+	return `Could not publish the subagent ${artifact} artifact${typeof code === "string" && /^E[A-Z0-9_]+$/.test(code) ? ` (${code})` : ""}.`;
 }
 
 /**
@@ -3240,6 +3302,12 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	rawOutput = finalized.rawOutput;
 	exitCode = finalized.exitCode;
 	stderr = finalized.stderr;
+	// Retention is independent of output validation and publication: an accepted
+	// report remains available even if its transcript could not be closed cleanly.
+	if (done.recordRetentionError !== undefined) {
+		exitCode ||= 1;
+		stderr = stderr ? `${stderr}\n${done.recordRetentionError}` : done.recordRetentionError;
+	}
 	// Salvage for cancelled/aborted children that produced no completed output:
 	// surface the last assistant text + stats instead of "(no output)" so the
 	// parent doesn't redo work the child already finished.
@@ -3268,6 +3336,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	// asked for, not conversational replies to peers or cancelled follow-ups.
 	let outputMeta: { lineCount: number; charCount: number } | undefined;
 	let outputPath: string | undefined;
+	let artifactError: string | undefined;
 	const hasMessageResult =
 		args.publishMessageResult &&
 		!structured &&
@@ -3286,6 +3355,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 				charCount: rawOutput.length,
 			};
 		} catch (error) {
+			artifactError = artifactPublicationError("output", error);
 			logger.warn("Failed to persist subagent output artifact", {
 				agentId: id,
 				path: candidatePath,
@@ -3305,6 +3375,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 				if (serialized !== undefined) await writeArtifact(sidecarPath, `${serialized}\n`);
 				else await fs.rm(sidecarPath, { force: true });
 			} catch (error) {
+				artifactError = artifactPublicationError("structured output", error);
 				logger.warn("Failed to persist subagent structured output sidecar", {
 					agentId: id,
 					path: sidecarPath,
@@ -3361,7 +3432,11 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 						? monitor.resolveSignalAbortReason()
 						: monitor.resolveAbortReasonText()
 		: undefined;
-	progress.status = wasAborted ? "aborted" : exitCode === 0 ? "completed" : "failed";
+	progress.status = wasAborted
+		? "aborted"
+		: exitCode !== 0 || (args.requireArtifacts && artifactError !== undefined)
+			? "failed"
+			: "completed";
 	monitor.scheduleProgress(true);
 
 	// Emit lifecycle end event after finalization so yield status is reflected
@@ -3406,10 +3481,12 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		resolvedModelRoute: progress.resolvedModelRoute,
 		advisor: progress.advisor,
 		error: exitCode !== 0 && stderr ? stderr : undefined,
+		...(exitCode !== 0 && !wasAborted && done.costCapped ? { costCapped: true } : {}),
 		aborted: wasAborted,
 		abortReason: finalAbortReason,
 		usage: monitor.hasUsage() ? monitor.accumulatedUsage : undefined,
 		outputPath,
+		...(artifactError === undefined ? {} : { artifactError }),
 		extractedToolData: progress.extractedToolData,
 		retryFailure: progress.retryFailure,
 		outputMeta,
@@ -3686,7 +3763,9 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 						reportJobProgress = progress => {
 							void reportProgress(`Running background task ${id}...`, { progress: [progress] });
 						};
-						return untilAborted(signal, outcome.promise);
+						// Cancel the child immediately, but keep the job unsettled until
+						// its actual finalizer (including peer delivery) finishes.
+						return outcome.promise.finally(() => relay.promise);
 					},
 					{
 						id,
@@ -3763,7 +3842,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 		const userPrompted = records.some(record =>
 			record.role === "user" ? record.attribution === "user" : record.role === "developer" && record.userInitiated,
 		);
-		return async turnError => {
+		const finalizeWakeTurn = async (turnError: unknown): Promise<void> => {
 			unsubscribeTurn();
 			unsubscribeParentSteer();
 			const activeSession = turnMonitor.takeActiveSession();
@@ -3924,9 +4003,17 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 						id,
 						error: relayError instanceof Error ? relayError.message : String(relayError),
 					});
-				} finally {
-					relay.resolve();
 				}
+			}
+		};
+		return async turnError => {
+			try {
+				await finalizeWakeTurn(turnError);
+			} catch (error) {
+				wakeJob?.outcome.reject(error);
+				throw error;
+			} finally {
+				relay.resolve();
 			}
 		};
 	});
@@ -3947,13 +4034,14 @@ export async function finalizeSubagentLifecycle(args: {
 	/** Which watchdog (if any) requested the abort; `shutdown` releases instead of adopting. */
 	abortKind?: AbortReason;
 	keepAlive: boolean;
+	retainRecord?: boolean;
 	isolated: boolean;
 	agentIdleTtlMs: number;
 	reviveSession: AgentReviver | null;
 	cleanupDeadlineAt?: number;
 	onCleanupDeferred?: (completion: Promise<void>) => void;
 	onRelease?: () => Promise<void>;
-}): Promise<void> {
+}): Promise<string | undefined> {
 	const registry = AgentRegistry.global();
 	const ref = registry.get(args.id);
 	const ownsRef = Boolean(ref && ref.session === args.session);
@@ -3974,9 +4062,11 @@ export async function finalizeSubagentLifecycle(args: {
 			await untilAborted(AbortSignal.timeout(remainingMs), () => disposal);
 		} catch (error) {
 			if (Date.now() >= cleanupDeadlineAt) {
+				void disposal.catch(disposeError => args.session.notifyDisposed(`dispose failed: ${String(disposeError)}`));
 				args.onCleanupDeferred?.(disposal);
 				return;
 			}
+			args.session.notifyDisposed(`dispose failed: ${String(error)}`);
 			logger.warn("Subagent session cleanup failed", {
 				id: args.id,
 				error: error instanceof Error ? error.message : String(error),
@@ -3990,6 +4080,21 @@ export async function finalizeSubagentLifecycle(args: {
 			logger.warn("Subagent lifecycle resource cleanup failed", { id: args.id, error: String(error) });
 		}
 	};
+
+	if (!args.keepAlive && args.retainRecord && ref?.sessionFile && ownsRef) {
+		try {
+			await AgentLifecycleManager.global().release(args.id, ref, {
+				retainRecord: true,
+				dispose: args.abortKind === "shutdown" ? { reason: postmortem.Reason.EXIT } : undefined,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			logger.warn("Failed to retain subagent execution record", { id: args.id, error: message });
+			return `Failed to retain subagent execution record: ${message}`;
+		}
+		await releaseOwnedResources();
+		return;
+	}
 
 	// An aborted run leaves a consistent session with its transcript on disk, so
 	// a kept-alive agent with a reviver stays resumable like a finished one.
@@ -4385,6 +4490,7 @@ interface SubagentSessionSpec {
 	hooks?: NativeSubagentHooks;
 	request?: StructuredSubagentRequest;
 	onSessionCreated?: ExecutorOptions["onSessionCreated"];
+	specExecutorDelegation?: boolean;
 }
 
 /** Launch-only session inputs: a revived session restores these from its transcript or goes without. */
@@ -4461,6 +4567,15 @@ function buildSubagentSessionOptions(
 			// prompt prefix as a cache hit.
 			return [...defaultPrompt, subagentPrompt];
 		},
+		...(spec.options.localProtocolOptions?.allowCrossAgentReads === false
+			? {
+					localProtocolOptions: {
+						...spec.options.localProtocolOptions,
+						getArtifactsDir: () => sessionManager.getArtifactsDir(),
+						getSessionId: () => sessionManager.getSessionId(),
+					},
+				}
+			: undefined),
 	};
 }
 
@@ -4576,8 +4691,8 @@ function restoreSubagentSettings(recipe: SubagentSettingsRecipe): Settings {
 interface WarmReviveCapture {
 	sessionFile: string;
 	spec: SubagentSessionSpec;
-	/** A per-call worker never switches models; its warm revive keeps only the exact saved model. */
-	perCallModel: boolean;
+	/** An exact worker's warm revive keeps the saved model instead of a session-local handoff. */
+	exactModel: boolean;
 	/** Re-captured whenever the live session is disposed, so a revive restores its latest settings writes. */
 	settings: SubagentSettingsRecipe;
 	parentArtifactManager: ArtifactManagerApi | undefined;
@@ -4687,7 +4802,7 @@ async function reviveAdmittedSubagent(
 	// dispatch and persisted revival do, never the spawn-time copy.
 	const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
 	// Session-local handoffs own revival, except for exact per-call models.
-	const sessionLocalModel = capture.perCallModel ? undefined : reopened.getSessionLocalModelChange()?.model;
+	const sessionLocalModel = capture.exactModel ? undefined : reopened.getSessionLocalModelChange()?.model;
 	capture.spec.prompt.reviving = true;
 	try {
 		let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
@@ -4748,9 +4863,16 @@ async function reviveAdmittedSubagent(
 			mcpFollower?.dispose();
 			// Observer setup can fail after SDK attachment; dispose the session and
 			// its installed observers before exposing the failed revival to callers.
-			await sessionPromise?.then(created => created.session.dispose()).catch(() => {});
+			const cleanup = sessionPromise
+				? sessionPromise.then(
+						created => created.session.dispose(),
+						() => reopened.close(),
+					)
+				: reopened.close();
+			await cleanup.catch(() => {});
 			throw error;
 		}
+		if (capture.spec.specExecutorDelegation) specExecutorDelegationScopes.add(reopened);
 		mcpFollower?.bind(revived);
 		trackSubagentSettings(revived, capture);
 		trackSubagentPendingCandidate(revived, capture);
@@ -4848,6 +4970,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 		id,
 		worktree,
 		modelOverride,
+		exactModel,
 		modelRole,
 		thinkingLevel,
 		outputSchema,
@@ -4856,6 +4979,8 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 		onProgress,
 	} = options;
 	const cleanupGraceMs = options.cleanupGraceMs ?? TASK_ABORT_CLEANUP_GRACE_MS;
+	const retainRecord =
+		options.keepAlive === false && options.retainRecord === true && options.persistArtifacts === true;
 	const structured = usesYield(outputSchema);
 	const startTime = Date.now();
 	// Set by the session's onFirstChatDispatch hook the first time the agent
@@ -4902,10 +5027,12 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	// owner is its parent subagent) and lands on the child's
 	// `modelRoles.advisor`, preserving automatic aliases and explicit branches.
 	// The same role-aware pattern is persisted for cold revival.
-	const advisorSelection = resolveAgentAdvisorSelection({
-		settingsOverride: cfgTaskAgentAdvisor.get(settings)[agent.name],
-		agentAdvisor: agent.advisor,
-	});
+	const advisorSelection = exactModel
+		? undefined
+		: resolveAgentAdvisorSelection({
+				settingsOverride: cfgTaskAgentAdvisor.get(settings)[agent.name],
+				agentAdvisor: agent.advisor,
+			});
 	const advisorRolePattern = advisorSelection?.model
 		? resolveAgentAdvisorRolePattern(advisorSelection.model, settings)
 		: undefined;
@@ -4937,7 +5064,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	const childDepth = parentDepth + 1;
 	const restrictToolNames =
 		options.restrictToolNames === true ||
-		(agent.source === "bundled" && ["spec-requirements", "spec-planner", "spec-executor"].includes(agent.name));
+		(agent.source === "bundled" && ["spec-requirements", "spec-planner", SPEC_EXECUTOR_AGENT].includes(agent.name));
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
 
 	// Add tools if specified. Unstructured runs never get `yield`, even when
@@ -4991,7 +5118,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 
 	const lspEnabled = enableLsp ?? true;
 
-	const completionProbe = isCompletionProbeEnabled(settings, parentDepth);
+	const completionProbe = !exactModel && isCompletionProbeEnabled(settings, parentDepth);
 	const monitor = createSubagentRunMonitor({
 		index,
 		id,
@@ -5049,17 +5176,13 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 		artifactsDir: options.artifactsDir,
 	};
 
-	const runSubagent = async (): Promise<{
-		exitCode: number;
-		error?: string;
-		aborted?: boolean;
-		abortReason?: string;
-		durationMs: number;
-	}> => {
+	const runSubagent = async (): Promise<FinalizeRunArgs["done"]> => {
 		const sessionAbortController = new AbortController();
 		const abortSignal = monitor.abortSignal;
 		let exitCode = 0;
 		let error: string | undefined;
+		let costCapped: boolean | undefined;
+		let recordRetentionError: string | undefined;
 		let aborted = false;
 		let abortReasonText: string | undefined;
 		const checkAbort = () => {
@@ -5093,6 +5216,9 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 		let sessionCreatedAt: number | undefined;
 		let readyAt: number | undefined;
 		let disposeSessionObserver: (() => void) | undefined;
+		let unclaimedSessionManager: Promise<SessionManager> | undefined;
+		let acquiredSession: AgentSession | undefined;
+		let abandonedSession: Promise<void> | undefined;
 
 		try {
 			checkAbort();
@@ -5117,7 +5243,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			}
 			checkAbort();
 
-			if (options.perCallModelGrants) {
+			if (options.perCallModelGrants || exactModel) {
 				await awaitAbortable(modelRegistry.awaitBackgroundRefresh());
 			}
 			const allowedProvider = cfgOffline.get(settings)
@@ -5131,12 +5257,25 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				preserveAutomaticRoleAliases: true,
 			});
 			const inheritedRetryFallbackChain =
-				configuredModelPatterns.length === 1
+				!exactModel && configuredModelPatterns.length === 1
 					? resolveSubagentInheritedRetryFallbackChain(
 							subagentSettings,
 							modelRegistry,
 							modelRole ?? resolveExplicitModelRole(modelPatterns, subagentSettings),
 						)
+					: undefined;
+			const exactIdentity =
+				exactModel && modelOverride !== undefined && modelPatterns.length === 1 ? modelPatterns[0] : undefined;
+			const exactResolution = exactIdentity
+				? (resolveExactModelIdentity(exactIdentity, modelRegistry) ??
+					resolveModelOverride([exactIdentity], modelRegistry, settings).model)
+				: undefined;
+			const exactMatch =
+				exactResolution &&
+				formatModelStringWithRouting(exactResolution) === exactIdentity &&
+				!cfgDisabledProviders.get(settings).includes(exactResolution.provider) &&
+				(allowedProvider === undefined || exactResolution.provider === allowedProvider)
+					? exactResolution
 					: undefined;
 			const {
 				model,
@@ -5144,18 +5283,29 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				explicitThinkingLevel,
 				authFallbackUsed,
 				warning: modelResolutionWarning,
-			} = await awaitAbortable(
-				resolveModelOverrideWithAuthFallback(
-					modelPatterns,
-					options.parentActiveModelPattern,
-					modelRegistry,
-					settings,
-					id,
-					{ exactOnly: !!options.perCallModelGrants, allowedProvider },
-				),
-			);
+			} = exactModel
+				? {
+						model: exactMatch,
+						thinkingLevel: undefined,
+						explicitThinkingLevel: false,
+						authFallbackUsed: false,
+						warning: undefined,
+					}
+				: await awaitAbortable(
+						resolveModelOverrideWithAuthFallback(
+							modelPatterns,
+							options.parentActiveModelPattern,
+							modelRegistry,
+							settings,
+							id,
+							{ exactOnly: !!options.perCallModelGrants, allowedProvider },
+						),
+					);
 			if (cfgOffline.get(settings) && !model) {
 				throw new Error("Offline mode: no subagent model is available on the active parent provider.");
+			}
+			if (exactModel && !model) {
+				throw new Error(`Requested exact model ${JSON.stringify(modelPatterns)} is unavailable.`);
 			}
 			if (options.perCallModelGrants && !model) {
 				throw new PerCallModelError(
@@ -5196,22 +5346,27 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 								resolvedModel,
 								inheritedSubagentServiceTiers(settings, options.parentServiceTier),
 							);
-			const retryFallbackRole = installSubagentRetryFallbackChain({
-				settings: subagentSettings,
-				id,
-				candidates: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, subagentSettings).filter(
-					candidate => allowedProvider === undefined || candidate.model.provider === allowedProvider,
-				),
-				inheritedFallbackChain:
-					allowedProvider === undefined
-						? inheritedRetryFallbackChain
-						: inheritedRetryFallbackChain?.filter(entry => {
-								const candidate = resolveModelOverride([entry], modelRegistry, subagentSettings).model;
-								return candidate?.provider === allowedProvider;
-							}),
-				model,
-				authFallbackUsed,
-			});
+			const retryFallbackRole = exactModel
+				? undefined
+				: installSubagentRetryFallbackChain({
+						settings: subagentSettings,
+						id,
+						candidates: resolveSubagentRetryFallbackCandidates(
+							modelPatterns,
+							modelRegistry,
+							subagentSettings,
+							allowedProvider,
+						),
+						inheritedFallbackChain:
+							allowedProvider === undefined
+								? inheritedRetryFallbackChain
+								: inheritedRetryFallbackChain?.filter(entry => {
+										const candidate = resolveModelOverride([entry], modelRegistry, subagentSettings).model;
+										return candidate?.provider === allowedProvider;
+									}),
+						model,
+						authFallbackUsed,
+					});
 			if (retryFallbackRole) {
 				logger.debug("Configured subagent runtime model fallback chain", {
 					role: retryFallbackRole,
@@ -5264,6 +5419,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 						suppressBreadcrumb: true,
 					})
 				: Promise.resolve(SessionManager.inMemory(effectiveCwd));
+			unclaimedSessionManager = sessionManagerPromise;
 			// Setup below can fail before this promise's consumption boundary.
 			// Observe rejection immediately while preserving it for the later await.
 			sessionManagerPromise.catch(() => {});
@@ -5305,14 +5461,15 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			const perCallModelGrants = options.perCallModelGrants;
 			let prewalk: Prewalk | undefined;
 			const judgmentUsage: JudgmentUsage[] = [];
-			const unconditionalPattern = perCallModelGrants
+			const fixedModel = exactModel === true || perCallModelGrants !== undefined;
+			const unconditionalPattern = fixedModel
 				? undefined
 				: resolveAgentPrewalkPattern({
 						settingsOverride: cfgTaskAgentPrewalk.get(settings)[agent.name],
 						agentPrewalk: resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings)),
 					});
 			const autoEntry =
-				unconditionalPattern === undefined && !perCallModelGrants && !restrictToolNames
+				unconditionalPattern === undefined && !fixedModel && !restrictToolNames
 					? cfgTaskAgentPrewalkAuto.get(settings)[agent.name]?.trim()
 					: undefined;
 			const autoTarget = cfgPrewalkAutoTarget.get(settings);
@@ -5383,6 +5540,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				hooks: options.subagentHooks,
 				request: options.subagentRequest,
 				onSessionCreated: options.subagentHooks ? options.onSessionCreated : undefined,
+				specExecutorDelegation: agent.source === "bundled" && agent.name === SPEC_EXECUTOR_AGENT,
 				options: {
 					cwd: effectiveCwd,
 					costGate: options.costGate,
@@ -5402,11 +5560,17 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					modelPatternFallbackRole: deferModelPatterns ? subagentRetryFallbackRole(id) : undefined,
 					modelPatternDefaultFallbackChain: deferModelPatterns ? inheritedRetryFallbackChain : undefined,
 					thinkingLevel: effectiveThinkingLevel,
-					...(perCallModelGrants || allowedProvider !== undefined
+					...(fixedModel || allowedProvider !== undefined
 						? {
 								assertDispatchModel: (dispatchModel: Model) => {
 									if (allowedProvider !== undefined && dispatchModel.provider !== allowedProvider) {
 										throw new Error("Offline mode: subagent dispatch must use the active parent provider.");
+									}
+									if (
+										exactIdentity !== undefined &&
+										formatModelStringWithRouting(dispatchModel) !== exactIdentity
+									) {
+										throw new Error(`Subagent dispatch must use the requested exact model ${exactIdentity}.`);
 									}
 									if (perCallModelGrants) {
 										assertPerCallModelApproved(dispatchModel, perCallModelGrants, modelRegistry);
@@ -5414,7 +5578,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 											assertModelSupportsEffortCeiling(dispatchModel, spawnEffortCeiling);
 									}
 								},
-								...(perCallModelGrants ? { disableModelFallback: true } : {}),
+								disableModelFallback: fixedModel || undefined,
 								disableServerSideFallback: true,
 							}
 						: {}),
@@ -5529,6 +5693,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			let modelFallbackMessage: string | undefined;
 			let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
 			let configuredRestrictToolNames = restrictToolNames;
+			let configuredSkills: readonly Skill[] | undefined;
 			try {
 				const sessionOptions = buildSubagentSessionOptions(
 					sessionSpec,
@@ -5569,9 +5734,14 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					}
 				}
 				configuredRestrictToolNames = configuredOptions.restrictToolNames === true;
+				configuredSkills = configuredOptions.skills;
 				checkAbort();
 				sessionPromise = createAgentSession(configuredOptions);
 				({ session, modelFallbackMessage } = await awaitAbortable(sessionPromise));
+				acquiredSession = session;
+				unclaimedSessionManager = undefined;
+				sessionPromise = undefined;
+				if (sessionSpec.specExecutorDelegation) specExecutorDelegationScopes.add(sessionManager);
 				// Keep the transcript empty until the SDK records the child's initial configuration.
 				if (workspaceModeSnapshot) {
 					sessionManager.appendCustomEntry(WORKSPACE_MODE_STATE_TYPE, workspaceModeSnapshot);
@@ -5589,10 +5759,18 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				}
 			} catch (err) {
 				mcpFollower?.dispose();
-				// Abort raced session startup. The session may still resolve later
-				// holding live LSP/MCP child processes — dispose it when it does so
-				// a cancelled subagent cannot leak them.
-				void sessionPromise?.then(created => created.session.dispose()).catch(() => {});
+				if (sessionPromise && abortSignal.aborted) {
+					// Only a cancelled, unclaimed SDK startup can still complete after this run.
+					unclaimedSessionManager = undefined;
+					abandonedSession = sessionPromise.then(
+						created =>
+							created.session.dispose().catch(error => {
+								created.session.notifyDisposed(`dispose failed: ${String(error)}`);
+							}),
+						() => sessionManager.close(),
+					);
+					abandonedSession.catch(() => {});
+				}
 				throw err;
 			}
 			mcpFollower?.bind(session);
@@ -5618,6 +5796,12 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			sessionCreatedAt = performance.now();
 
 			monitor.setActiveSession(session);
+			if (
+				exactIdentity !== undefined &&
+				(!session.model || formatModelStringWithRouting(session.model) !== exactIdentity)
+			) {
+				throw new Error(`Subagent session did not attach to the requested exact model ${exactIdentity}.`);
+			}
 			// Neither the agent's patterns nor the parent's model resolved (the session
 			// says why): name the agent and the setting to fix instead of letting the
 			// first prompt fail with the generic `/login` error.
@@ -5661,7 +5845,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				const reviveCapture: WarmReviveCapture = {
 					sessionFile,
 					spec: sessionSpec,
-					perCallModel: perCallModelGrants !== undefined,
+					exactModel: fixedModel,
 					settings: captureSubagentSettings(settings, subagentSettings),
 					parentArtifactManager: options.parentArtifactManager,
 					keepTodo: prewalk !== undefined,
@@ -5742,9 +5926,17 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				// The exact callbacks and input-scoped admission snapshot cannot be recovered from JSONL.
 				requiresLiveHost:
 					options.subagentHooks !== undefined ||
+					retainRecord ||
+					exactModel === true ||
+					options.localProtocolOptions?.allowCrossAgentReads === false ||
 					hasNativeChildSessionHooks(session.nativeChildCapabilities) ||
 					undefined,
 			});
+			if (sessionFile && agent.name === SPEC_EXECUTOR_AGENT) {
+				// Persist provenance from the native definition, independently of the
+				// agent's name and prompt, which a project definition can duplicate.
+				sessionManager.appendCustomEntry(SPEC_EXECUTOR_DELEGATION_ENTRY, sessionSpec.specExecutorDelegation);
+			}
 
 			abortSignal.addEventListener(
 				"abort",
@@ -5804,15 +5996,27 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			checkAbort();
 			// Autoload skills via sendCustomMessage (same mechanic as /skill:<name>)
 			if (options.autoloadSkills?.length) {
+				const availableSkills = configuredSkills ?? session.skills;
 				for (const skill of options.autoloadSkills) {
+					const admittedSkill = availableSkills.find(
+						candidate =>
+							candidate.name === skill.name && path.resolve(candidate.filePath) === path.resolve(skill.filePath),
+					);
+					if (!admittedSkill) continue;
 					// Grant exact pinned identity, never the catalog winner for a colliding name.
-					if (isExplicitOnlySkill(skill)) {
-						session.addDisposer(grantSpecSkillAccess(sessionManager, skill));
+					if (isExplicitOnlySkill(skill) || isExplicitOnlySkill(admittedSkill)) {
+						session.addDisposer(grantSpecSkillAccess(sessionManager, admittedSkill));
 					}
-					const { message, details } = await buildSkillPromptMessage(skill, { args: "" }, "autoload", session, {
-						scope: sessionManager,
-						getSessionBranch: () => sessionManager.getBranch(),
-					});
+					const { message, details } = await buildSkillPromptMessage(
+						admittedSkill,
+						{ args: "" },
+						"autoload",
+						session,
+						{
+							scope: sessionManager,
+							getSessionBranch: () => sessionManager.getBranch(),
+						},
+					);
 					await session.sendCustomMessage(
 						{
 							customType: SKILL_PROMPT_MESSAGE_TYPE,
@@ -5844,15 +6048,24 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			}
 			exitCode = outcome.exitCode;
 			error = outcome.error;
+			costCapped = outcome.costCapped;
 			aborted = outcome.aborted;
 			abortReasonText = outcome.abortReasonText;
 		} catch (err) {
+			// Configuration and other pre-SDK setup can fail after opening the
+			// transcript; close our writer before the caller removes its lease.
+			await unclaimedSessionManager
+				?.then(manager => manager.close())
+				.catch(cleanupError => {
+					logger.warn("Subagent session manager cleanup failed", { id, error: String(cleanupError) });
+				});
 			exitCode = 1;
 			if (!abortSignal.aborted) {
 				error = err instanceof Error ? err.stack || err.message : String(err);
 			}
 			if (readyAt === undefined && options.subagentRequest) {
 				try {
+					options.onInitialSpawnFailed?.();
 					await options.subagentHooks?.onSpawnFailed?.(options.subagentRequest, err);
 				} catch {
 					// Report the actual setup error through the existing native result contract.
@@ -5870,6 +6083,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					? "This task was not isolated, so its changes may remain in the working directory."
 					: "No isolated changes were applied.";
 			const lateCleanups: Promise<void>[] = [];
+			if (abandonedSession) lateCleanups.push(abandonedSession);
 			let deferredSessionShutdown: Promise<void> | undefined;
 			const deferCleanup = (completion: Promise<void>): void => {
 				lateCleanups.push(completion);
@@ -5933,18 +6147,22 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					});
 				}
 			}
-			const session = monitor.takeActiveSession();
+			const monitoredSession = monitor.takeActiveSession();
+			const session = monitoredSession ?? acquiredSession;
 			if (session) {
-				monitor.captureSalvage(session);
-				if (options.keepAlive !== false) {
+				if (monitoredSession) monitor.captureSalvage(session);
+				const setupFailed = !monitoredSession || (readyAt === undefined && options.subagentRequest && !aborted);
+				const keepAlive = !setupFailed && options.keepAlive !== false;
+				if (keepAlive) {
 					attachIrcWakeTurnMonitor(session, wakeOptions);
 				}
-				await finalizeSubagentLifecycle({
+				recordRetentionError = await finalizeSubagentLifecycle({
 					id,
 					session,
 					aborted,
 					abortKind: monitor.abortKind(),
-					keepAlive: options.keepAlive !== false,
+					keepAlive,
+					retainRecord: !setupFailed && retainRecord,
 					isolated: worktree !== undefined,
 					agentIdleTtlMs,
 					reviveSession,
@@ -6014,6 +6232,8 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 		return {
 			exitCode,
 			error,
+			costCapped,
+			recordRetentionError,
 			aborted,
 			abortReason: aborted ? abortReasonText : undefined,
 			durationMs: Date.now() - startTime,
@@ -6039,6 +6259,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			outputSchemaSource: options.outputSchemaSource,
 			signal,
 			artifactsDir: options.artifactsDir,
+			requireArtifacts: retainRecord,
 			eventBus: options.eventBus,
 			subagentEventBus: options.subagentEventBus,
 			parentToolCallId: options.parentToolCallId,

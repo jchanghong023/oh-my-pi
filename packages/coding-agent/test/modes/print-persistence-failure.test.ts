@@ -72,7 +72,7 @@ function memoizingDispose(manager: SessionManager): () => Promise<void> {
 function assistantSession(manager: SessionManager, dispose: () => Promise<void>): AgentSession {
 	return {
 		extensionRunner: undefined,
-		subscribeLocal: () => () => {},
+		subscribe: () => () => {},
 		settings: Settings.isolated(),
 		sessionManager: manager,
 		getLastAssistantMessage: () => assistant(""),
@@ -98,7 +98,7 @@ describe("headless persistence-failure surface", () => {
 
 		const session = {
 			extensionRunner: undefined,
-			subscribeLocal: () => () => {},
+			subscribe: () => () => {},
 			settings: Settings.isolated(),
 			sessionManager: manager,
 			getLastAssistantMessage: () => assistant(""),
@@ -147,7 +147,7 @@ describe("headless persistence-failure surface", () => {
 
 		const session = {
 			extensionRunner: undefined,
-			subscribeLocal: () => () => {},
+			subscribe: () => () => {},
 			settings: Settings.isolated(),
 			sessionManager: manager,
 			getLastAssistantMessage: () => assistant(""),
@@ -245,7 +245,7 @@ describe("headless persistence-failure surface", () => {
 		const stderr = captureStderr();
 		const session = {
 			extensionRunner: undefined,
-			subscribeLocal: () => () => {},
+			subscribe: () => () => {},
 			settings: Settings.isolated(),
 			sessionManager: {
 				onPersistenceError: (callback: (error: Error) => void) => {
@@ -294,7 +294,7 @@ describe("headless persistence-failure surface", () => {
 
 		const session = {
 			extensionRunner: undefined,
-			subscribeLocal: () => () => {},
+			subscribe: () => () => {},
 			settings: Settings.isolated(),
 			sessionManager: manager,
 			getLastAssistantMessage: () => assistant(""),

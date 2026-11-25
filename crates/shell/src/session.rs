@@ -978,20 +978,22 @@ impl Driver {
 			}
 		}
 		// The VM can finish unwinding before the abandoned external members
-		// finish their TERM traps. Keep the run and its streams alive for the
-		// remainder of the same grace; the spawner owns KILL escalation.
+		// finish their TERM traps. Keep the run and its streams alive and
+		// step surviving work (such as a detached pipe reader) during the
+		// remainder of the same grace. The spawner owns KILL escalation.
 		if let Some(deadline) = term_deadline {
 			while cancellation_members
 				.iter()
 				.any(|p| p.status() == crate::proctree::ProcessStatus::Running)
 			{
-				if tokio::time::Instant::now() >= deadline {
+				let now = tokio::time::Instant::now();
+				if now >= deadline {
 					break;
 				}
-				tokio::time::sleep_until(
-					(tokio::time::Instant::now() + Duration::from_millis(25)).min(deadline),
-				)
-				.await;
+				// A departed external may no longer wake the VM. Recheck its
+				// status even if the surviving work stays blocked.
+				let recheck = (now + Duration::from_millis(25)).min(deadline);
+				let _ = tokio::time::timeout_at(recheck, self.idle_turn()).await;
 			}
 		}
 		let exited = self.shell.ended_by_exit(run);

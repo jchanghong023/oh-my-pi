@@ -1623,7 +1623,7 @@ export class MCPCommandController {
 		const result = await reconnectMCPServers(mcpManager, session, {
 			enableProjectConfig: cfgMcpEnableProjectConfig.get(session.settings),
 			filterExa: true,
-			filterBrowser: session.getEvalPreludes().some(definition => definition.name === "browser"),
+			filterBrowser: session.canReplaceBrowserMcp(),
 			builtinTransforms: resolveMCPTransformContext(session.settings, {
 				evalActive: session.getActiveToolNames().includes("eval"),
 			}),

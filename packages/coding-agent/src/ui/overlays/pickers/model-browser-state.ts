@@ -635,7 +635,7 @@ export class ModelBrowserState {
 		return measuredPerf(
 			perf,
 			item,
-			hasTieredPerf(perf, item.selector) ? this.source.serviceTierFor?.(item.model) : undefined,
+			hasTieredPerf(perf, item.perfSelector ?? item.selector) ? this.source.serviceTierFor?.(item.model) : undefined,
 		);
 	}
 
@@ -790,7 +790,9 @@ export class ModelBrowserState {
 
 	/** `item`'s row from `store`, built when missing or when the service tier picking its perf or its context flag moved. */
 	#pickerItem(item: ModelBrowserItem, store: PickerRowStore): TspPickerItem {
-		const tier = store.tiers.has(item.selector) ? this.source.serviceTierFor?.(item.model) : undefined;
+		const tier = store.tiers.has(item.perfSelector ?? item.selector)
+			? this.source.serviceTierFor?.(item.model)
+			: undefined;
 		const overContext = this.isOverContext(item) ? this.#contextTokens : 0;
 		const cached = store.rows.get(item);
 		if (cached && cached.tier === tier && cached.overContext === overContext) return cached.row;

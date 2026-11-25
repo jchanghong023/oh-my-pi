@@ -214,12 +214,14 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			...(isolation ? { isolation } : {}),
 			...(customTools ? { customTools } : {}),
 		});
+		options.signal?.throwIfAborted();
 		const manager = options.session.asyncJobManager;
 		if (!manager) {
 			throw new ToolError("agent() needs the session's async job manager; unavailable here");
 		}
 		const id = await reserveStructuredSubagentId(options.session, { label: parsed.label });
 		const ownerId = options.session.getAgentId?.() ?? MAIN_AGENT_ID;
+		options.signal?.throwIfAborted();
 		manager.register(
 			"task",
 			id,

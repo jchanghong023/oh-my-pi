@@ -66,6 +66,8 @@ export interface AuthGatewayRouteOptions {
 	excludeProviders?: ReadonlySet<string>;
 	/** Upstream transport for every provider call; defaults to global `fetch`. Test seam. */
 	fetch?: FetchImpl;
+	/** Whether the host permits pi-native thinking probes; callers can still opt out. */
+	thinkingProbe?: boolean;
 	/**
 	 * Host-owned credential selection and retry policy, for an in-process router.
 	 * Scoped clients always use storage instead: the host resolver has no client

@@ -47,6 +47,7 @@ import {
 	createSubagentSettings,
 	followMCPTools,
 	replayRevivedAgentStart,
+	restoreSpecExecutorDelegation,
 	softRequestBudgetFor,
 	subagentLspWritethroughSettings,
 	subagentRetryFallbackRole,
@@ -148,6 +149,11 @@ export function persistedAgentDefinition(displayName: string, init: PersistedSes
 	};
 }
 
+/** A cold revive cannot rebind live host authority or restore an isolation worktree. */
+export function canColdReviveSubagent(init: PersistedSessionInit | null | undefined): init is PersistedSessionInit {
+	return Boolean(init && !init.requiresLiveHost && !init.isolated);
+}
+
 /**
  * Build the factory the {@link AgentLifecycleManager} uses to cold-revive a
  * `parked` subagent ref restored from disk (Agent Hub scan, collab mirror, or a
@@ -175,16 +181,7 @@ export function createPersistedSubagentReviverFactory(
 		// No persisted contract (pre-session_init file) or the recorded workspace
 		// is gone (isolated/merged worktree, moved dir): leave it transcript-only
 		// (history://) rather than resurrect a wrong or broken session.
-		if (!peek?.init) return undefined;
-		// Live capability callbacks cannot be reconstructed from a persisted transcript.
-		if (peek.init.requiresLiveHost) return undefined;
-		// Isolated runs are never resumable: their worktree is merged + cleaned,
-		// and the parent was told messaging is impossible. A retained workspace
-		// (capture/persist failure) still exists on disk and would pass the cwd
-		// probe below, so gate on the stamped contract instead — otherwise a
-		// restart + peer message revives the agent outside isolation, in the
-		// parent cwd, contradicting the delivery notice.
-		if (peek.init.isolated) return undefined;
+		if (!peek || !canColdReviveSubagent(peek.init) || ref.history?.executionEnded) return undefined;
 		try {
 			await fs.stat(peek.cwd);
 		} catch {
@@ -260,6 +257,10 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 		throw new Error(
 			`Cannot revive subagent "${ref.id}": session file "${sessionFile}" has no persisted session contract. The agent was not revived.`,
 		);
+	}
+	if (!canColdReviveSubagent(init) || expectedRef.history?.executionEnded) {
+		await reopened.close();
+		throw new Error(`Cannot revive subagent "${ref.id}": its transcript is a read-only execution record.`);
 	}
 	if (!hasConversationalHistory(entries)) {
 		await reopened.close();
@@ -510,6 +511,7 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 	// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
 	// the original run didn't carry. Unknown/missing names are ignored.
 	await session.setActiveToolsByName([...init.tools, ...session.getMountedToolCommandNames()]);
+	restoreSpecExecutorDelegation(reopened, init, entries);
 	// The yield tool's schema carries the last batch's items; the replayed prefix must match it.
 	if (init.workPoolYieldItems) await session.setWorkPoolYieldItems(init.workPoolYieldItems);
 	// Wire the extension runtime exactly as the live executor does. Without

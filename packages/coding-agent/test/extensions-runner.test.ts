@@ -1765,7 +1765,11 @@ describe("ExtensionRunner", () => {
 					const session: ToolSession = {
 						cwd: tempDir.path(),
 						hasUI: false,
-						settings: Settings.isolated({ "eval.autoBackground.enabled": false, "eval.tools.enabled": true }),
+						settings: Settings.isolated({
+							"eval.js": language === "js",
+							"eval.autoBackground.enabled": false,
+							"eval.tools.enabled": true,
+						}),
 						getSessionFile: () => null,
 						getSessionSpawns: () => null,
 						getEvalSessionId: () => owner,

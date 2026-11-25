@@ -247,7 +247,7 @@ export type SessionHostProtocol = {
 	prompt: RpcMethod<[text: string, options?: PromptOptions], boolean>;
 	steer: RpcMethod<[text: string, images?: ImageContent[], options?: SteerOptions], void>;
 	abort: RpcMethod<[options?: SessionAbortOptions], void>;
-	dispose: RpcMethod<[options?: AgentSessionDisposeOptions], void>;
+	dispose: RpcMethod<[options?: AgentSessionDisposeOptions, closeOnMain?: boolean], void>;
 	deliverIrcMessage: RpcMethod<[msg: IrcMessage], "injected" | "woken">;
 	waitForIrcReplies: RpcMethod<[], void>;
 	applyAgentModelChange: RpcMethod<[change: AgentModelChange], AgentModelSelectionState>;
@@ -314,7 +314,7 @@ export type SessionBridgeProtocol = {
 	 */
 	claimQueued: RpcMethod<[key: string, ids: string[]], string[]>;
 	entries: RpcMethod<[key: string, delta: SessionEntriesDelta], void>;
-	closed: RpcMethod<[key: string], void>;
+	closed: RpcMethod<[key: string, reason: string], void>;
 	read: RpcMethod<[session: AgentSessionHandle, fields: readonly PeerStateField[]], Partial<SessionMirrorState>>;
 	readMessages: RpcMethod<[session: AgentSessionHandle], AgentMessage[]>;
 	hasQueuedIrcFrom: RpcMethod<[session: AgentSessionHandle, from: string], boolean>;

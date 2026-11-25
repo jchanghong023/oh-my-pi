@@ -370,7 +370,7 @@ impl ExtProc for Relayed {
 		pids: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
-	) -> bool {
+	) -> Option<std::collections::HashSet<i32>> {
 		self.child.signal_wave(sig, pids, extra, groups)
 	}
 

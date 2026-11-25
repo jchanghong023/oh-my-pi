@@ -181,6 +181,7 @@ const DETACHED_DRAFT_COMMANDS = new Set([
 	"goal",
 	"goal-autopilot",
 	"team",
+	"collab2",
 	"guided-goal",
 	"tan",
 	"btw",
@@ -837,6 +838,10 @@ export class InputController {
 			if (this.ctx.session.isStreaming) {
 				this.#abortStreamingTurn();
 			}
+			// TodoLoop is tracked as eval work even when no main turn is streaming.
+			if (!this.ctx.focusedAgentId && this.ctx.session.isEvalRunning) {
+				this.ctx.session.abortEval();
+			}
 			this.ctx.pauseLoop();
 			this.ctx.cancelPendingSubmission();
 			// A setup cancelled before its turn starts emits no `agent_end`: hand the queue back here.
@@ -1051,10 +1056,11 @@ export class InputController {
 			this.#enhancedPaste = new EnhancedPasteController({
 				write: data => this.ctx.shell.host?.driver.writeRaw(data),
 				pasteText: text => this.#pasteTextIntoFocus(text),
-				pasteImage: image =>
-					this.#pasteImageIntoFocus(sink =>
+				pasteImage: async image => {
+					await this.#pasteImageIntoFocus(sink =>
 						sink.attach(image, `Unsupported pasted image format: ${image.mimeType}`),
-					),
+					);
+				},
 				// Styled text goes where images do: the composer, or a prompt that takes them.
 				acceptsHtml: () => this.#composerTakesPaste() || this.#focusedPromptPasteTarget() !== undefined,
 				pasteHtml: html => this.#pasteHtml(html),
@@ -1131,6 +1137,15 @@ export class InputController {
 		}
 		if (!text && !images?.length) return undefined;
 		return { text, images, imageLinks };
+	}
+
+	#queueCompactionSteer(
+		text: string,
+		images: ImageContent[] | undefined,
+		imageLinks: (string | undefined)[] | undefined,
+	): void {
+		const queuedImages = images?.length ? [...images] : undefined;
+		this.ctx.queueCompactionMessage(text, "steer", queuedImages, imageLinks && { imageLinks });
 	}
 
 	setupEditorSubmitHandler(): void {
@@ -1217,8 +1232,8 @@ export class InputController {
 			let hasInputImages = (inputImages?.length ?? 0) > 0;
 			const submittedImages = inputImages;
 			const originalMode = parseSlashCommand(text)?.name;
-			const teamDraftDetached = originalMode === "team";
-			if (teamDraftDetached) this.#dropSubmittedPending(submittedImages);
+			const detachedBeforeHooks = originalMode === "team" || originalMode === "collab2";
+			if (detachedBeforeHooks) this.#dropSubmittedPending(submittedImages);
 
 			// Input hooks pass in submission order with the follow-up key's (see `#submissionHookOrder`):
 			// `/queue` placement behind a queued `/compact` must follow the order the user sent them.
@@ -1233,13 +1248,13 @@ export class InputController {
 					try {
 						const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
 						if (!input) {
-							if (!teamDraftDetached) this.#dropSubmittedPending(submittedImages);
+							if (!detachedBeforeHooks) this.#dropSubmittedPending(submittedImages);
 							return;
 						}
 						({ text, images: inputImages, imageLinks: inputImageLinks } = input);
 						hasInputImages = (inputImages?.length ?? 0) > 0;
 					} catch (error) {
-						if (!teamDraftDetached) throw error;
+						if (!detachedBeforeHooks) throw error;
 						restoreDetachedDraft(this.ctx.composer, text, inputImages, inputImageLinks);
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
 						return;
@@ -1250,15 +1265,17 @@ export class InputController {
 			}
 			const submittedMode = parseSlashCommand(text)?.name;
 			const draftDetached =
-				teamDraftDetached || (submittedMode !== undefined && DETACHED_DRAFT_COMMANDS.has(submittedMode));
-			if (draftDetached && !teamDraftDetached) this.#dropSubmittedPending(submittedImages);
+				detachedBeforeHooks || (submittedMode !== undefined && DETACHED_DRAFT_COMMANDS.has(submittedMode));
+			if (draftDetached && !detachedBeforeHooks) this.#dropSubmittedPending(submittedImages);
 
 			if (!text && !hasInputImages) return;
 
 			const queueBody = parseQueueShorthand(text);
 			if (queueBody !== undefined) {
+				this.#dropSubmittedPending(submittedImages);
 				await this.#queueForYield(queueBody, {
 					historyText: text,
+					detachedText: text,
 					images: inputImages,
 					imageLinks: inputImageLinks,
 				});
@@ -1277,6 +1294,7 @@ export class InputController {
 			if (bareSlashCommand) text = bareSlashCommand.command;
 
 			// Handle built-in slash commands
+			let loopNEntry = false;
 			if (text) {
 				this.#recordSlashCommandUsage(text);
 				const input =
@@ -1306,6 +1324,7 @@ export class InputController {
 					// "/loop 10 fix bug" rather than just "fix bug".
 					if (!shouldSkipHistory(text)) this.ctx.composer.addToHistory(text);
 					text = slashResult;
+					loopNEntry = submittedMode === "loopn";
 				}
 			}
 
@@ -1340,10 +1359,11 @@ export class InputController {
 			// transcript and runnable mid-turn, so they never steer the running work.
 			// The side question carries text only, so the submitted attachments drop.
 			if (
-				await this.#runSideFileCommand(text, {
+				!loopNEntry &&
+				(await this.#runSideFileCommand(text, {
 					detach: () => this.#detachSideSubmission(draftText, submittedImages),
 					restore: () => this.#restoreResetSubmission(submittedText),
-				})
+				}))
 			) {
 				return;
 			}
@@ -1359,8 +1379,7 @@ export class InputController {
 					this.ctx.setLoopPrompt(text);
 				}
 				if (this.ctx.session.isCompacting) {
-					const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-					this.ctx.queueCompactionMessage(text, "steer", images, { imageLinks: inputImageLinks });
+					this.#queueCompactionSteer(text, inputImages, inputImageLinks);
 					return;
 				}
 				if (await this.#invokeSkillCommand(text, "steer", inputImages, inputImageLinks)) {
@@ -1375,7 +1394,7 @@ export class InputController {
 			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
-			if (text.startsWith("!")) {
+			if (!loopNEntry && text.startsWith("!")) {
 				const isExcluded = text.startsWith("!!");
 				const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
 				if (command) {
@@ -1396,7 +1415,7 @@ export class InputController {
 
 			// Handle python command (`$ <code>` for normal, `$$ <code>` for excluded from context).
 			// Shell-style variables such as `$HOME` are normal prose unless a space follows the sigil.
-			const pythonCommand = parsePythonCommandInput(text);
+			const pythonCommand = loopNEntry ? undefined : parsePythonCommandInput(text);
 			if (pythonCommand) {
 				const { code, isExcluded } = pythonCommand;
 				if (code) {
@@ -1417,17 +1436,18 @@ export class InputController {
 
 			// Queue input during compaction
 			if (this.ctx.session.isCompacting) {
-				// The queue arms the first repeat only after this prompt is admitted.
-				if (isLoopCommand(submittedMode)) this.ctx.setLoopPrompt(text);
-				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-				this.ctx.queueCompactionMessage(text, "steer", images, { imageLinks: inputImageLinks });
+				// The queue arms the repeat after admission. Unlike LoopN's first item, a
+				// plain /loop body can be a local command and must pass the usual filter.
+				if (loopNEntry) this.ctx.setLoopPrompt(text);
+				else if (submittedMode === "loop") this.ctx.captureLoopPromptOnAdmission(text)?.();
+				this.#queueCompactionSteer(text, inputImages, inputImageLinks);
 				return;
 			}
 
 			// Extension commands are local actions. Execute them before the normal
 			// submission path creates an optimistic user message; otherwise a
 			// consumed command remains rendered like a prompt sent to the model.
-			if (this.#isLocalExtensionCommand(text)) {
+			if (!loopNEntry && this.#isLocalExtensionCommand(text)) {
 				this.#clearDraft(text);
 				try {
 					await this.ctx.session.prompt(text, { images: inputImages });
@@ -1978,6 +1998,7 @@ export class InputController {
 		images?: ImageContent[],
 		imageLinks?: (string | undefined)[],
 		preserveDraft = false,
+		onPromptAdmitted?: (pending: Promise<boolean>) => void,
 	): Promise<boolean> {
 		if (!isKnownSkillCommand(this.ctx, text)) return false;
 		const draftImages = images && images.length > 0 ? [...images] : undefined;
@@ -2006,6 +2027,7 @@ export class InputController {
 				imageLinks: draftImageLinks,
 				optimistic: true,
 				propagateErrors: true,
+				onPromptAdmitted,
 			});
 			if (!dispatched) restoreDraft();
 			return dispatched;
@@ -2065,7 +2087,11 @@ export class InputController {
 		// Like /queue, it must not submit to the guest's local session.
 		if (this.ctx.collabGuest) {
 			this.ctx.showStatus("/queue is host-only during a collab session");
-			this.ctx.composer.setText(options.detachedText ?? options.historyText ?? text);
+			if (options.detachedText !== undefined) {
+				restoreDetachedDraft(this.ctx.composer, options.detachedText, options.images, options.imageLinks);
+			} else {
+				this.ctx.composer.setText(text);
+			}
 			return;
 		}
 
@@ -2085,6 +2111,7 @@ export class InputController {
 				? images.map(() => undefined)
 				: undefined;
 		if (options.detachedText === undefined) this.#clearDraft(options.historyText);
+		else if (options.historyText !== undefined) this.ctx.composer.addToHistory(options.historyText);
 
 		this.releaseStaleYieldCompaction();
 		if (this.ctx.session.isCompacting || this.ctx.yieldCompaction) {
@@ -2093,6 +2120,8 @@ export class InputController {
 					text: messages[index] ?? "",
 					mode: "followUp",
 					images: index === 0 ? images : undefined,
+					imageLinks: index === 0 ? imageLinks : undefined,
+					draftDetached: true,
 				});
 			}
 			this.ctx.updatePendingMessagesDisplay();
@@ -2235,10 +2264,6 @@ export class InputController {
 				hooksDone.resolve();
 			}
 			await earlierAdmission;
-			if (!continuesConversation(this.ctx.sessionManager, origin)) {
-				restoreDetachedDraft(this.ctx.composer, text, images, imageLinks);
-				return;
-			}
 			await this.#dispatchFollowUp(text, images, imageLinks, origin, admitted);
 		} finally {
 			admitted();
@@ -2253,6 +2278,15 @@ export class InputController {
 		origin: ConversationPosition,
 		admitted: () => void,
 	): Promise<void> {
+		const command = parseSlashCommand(text);
+		const commandName = command?.name;
+		const leave = command?.name === "leave" && command.args === "";
+		// A join may have installed the guest session while /leave waited for input hooks.
+		if (!continuesConversation(this.ctx.sessionManager, origin) && !(leave && this.ctx.collabGuest)) {
+			restoreDetachedDraft(this.ctx.composer, text, images, imageLinks);
+			return;
+		}
+
 		// Ctrl+Enter detached the draft before the first await, so a side command
 		// has no editor state left to release; a render failure hands it back.
 		const restoreSideDraft = { restore: () => restoreDetachedDraft(this.ctx.composer, text, images, imageLinks) };
@@ -2267,8 +2301,7 @@ export class InputController {
 		// A compaction queued for the next yield holds later follow-ups the same
 		// way, so they run after it.
 		this.releaseStaleYieldCompaction();
-		const commandName = parseSlashCommand(text)?.name;
-		const direct = commandName === "goal" || commandName === "goal-autopilot" || commandName === "collab2";
+		const direct = commandName === "collab2" || leave;
 		if (!direct && (this.ctx.session.isCompacting || this.ctx.yieldCompaction)) {
 			if (
 				text &&
@@ -2285,16 +2318,21 @@ export class InputController {
 			return;
 		}
 
+		let loopNEntry = false;
 		if (text) {
 			try {
 				const input =
 					(images?.length ?? 0) > 0 || (imageLinks?.length ?? 0) > 0 ? { images, imageLinks } : undefined;
-				const slashResult = await executeBuiltinSlashCommand(text, {
+				const dispatch = executeBuiltinSlashCommand(text, {
 					ctx: this.ctx,
 					input,
 					draftDetached: true,
 					followUp: origin,
 				});
+				// Collab2 claims the operation before its first await. A later stop
+				// or leave must reach that owner while the operation is pending.
+				if (commandName === "collab2") admitted();
+				const slashResult = await dispatch;
 				if (slashResult === true) {
 					if (!shouldSkipHistory(text)) this.ctx.composer.addToHistory(text);
 					return;
@@ -2304,6 +2342,7 @@ export class InputController {
 					// Record the original slash command text so Up Arrow recalls it.
 					if (!shouldSkipHistory(text)) this.ctx.composer.addToHistory(text);
 					text = slashResult;
+					loopNEntry = commandName === "loopn";
 				}
 			} catch (error) {
 				restoreDetachedDraft(this.ctx.composer, text, images, imageLinks);
@@ -2312,12 +2351,25 @@ export class InputController {
 			}
 		}
 
-		if (text && (await this.#runSideFileCommand(text, restoreSideDraft))) return;
+		if (!loopNEntry && text && (await this.#runSideFileCommand(text, restoreSideDraft))) return;
 
 		// Skill commands invoke through the custom-message path regardless of
 		// which keybinding submitted them. Enter routes them as `steer`;
 		// Ctrl+Enter (this handler) routes them as `followUp`.
-		if (text && (await this.#invokeSkillCommand(text, "followUp", images, imageLinks, true))) {
+		const capture = isLoopCommand(commandName) ? this.ctx.captureLoopPromptOnAdmission(text) : undefined;
+		if (
+			text &&
+			(await this.#invokeSkillCommand(text, "followUp", images, imageLinks, true, pending => {
+				if (capture?.()) {
+					this.ctx.armLoopAutoSubmit(
+						pending.then(forwarded => {
+							if (!forwarded) throw new Error("Loop prompt was not forwarded");
+						}),
+					);
+				}
+				admitted();
+			}))
+		) {
 			return;
 		}
 
@@ -2330,7 +2382,6 @@ export class InputController {
 		};
 
 		const wasStreaming = this.ctx.session.isStreaming;
-		const capture = isLoopCommand(commandName) ? this.ctx.captureLoopPromptOnAdmission(text) : undefined;
 		this.ctx.composer.addToHistory(text);
 		let captured = false;
 		try {
@@ -2747,17 +2798,17 @@ export class InputController {
 	}
 
 	/** Route an image paste to the focused destination; a dialog that can't take the image refuses it (#6057). */
-	#pasteImageIntoFocus(
-		paste: (sink: ImagePasteSink, owns?: () => boolean) => Promise<unknown>,
+	#pasteImageIntoFocus<T>(
+		paste: (sink: ImagePasteSink, owns?: () => boolean) => Promise<T>,
 		isCurrent?: () => boolean,
-	): Promise<void> {
+	): Promise<T | undefined> {
 		return this.#trackImagePaste(this.#routeImagePaste(paste, isCurrent));
 	}
 
-	async #routeImagePaste(
-		paste: (sink: ImagePasteSink, owns?: () => boolean) => Promise<unknown>,
+	async #routeImagePaste<T>(
+		paste: (sink: ImagePasteSink, owns?: () => boolean) => Promise<T>,
 		isCurrent?: () => boolean,
-	): Promise<void> {
+	): Promise<T | undefined> {
 		if (isCurrent && !isCurrent()) return;
 		const owner = this.ctx.sessionManager.getSessionId();
 		const focused = this.ctx.shell.focused();
@@ -2775,8 +2826,7 @@ export class InputController {
 						},
 					}
 				: this.#editorImageSink;
-			await paste(sink, owns);
-			return;
+			return paste(sink, owns);
 		}
 		const target = this.#focusedPromptPasteTarget();
 		if (!target) {
@@ -2785,7 +2835,7 @@ export class InputController {
 		}
 		const promptPaste = this.#beginPromptImagePaste(target, owns);
 		try {
-			await paste(promptPaste.sink, owns);
+			return await paste(promptPaste.sink, owns);
 		} finally {
 			promptPaste.finish();
 		}
@@ -2832,12 +2882,15 @@ export class InputController {
 		}
 	}
 
-	handleImagePathPaste(path: string, isCurrent?: () => boolean): Promise<void> {
+	handleImagePathPaste(path: string, isCurrent: () => boolean): Promise<boolean | void>;
+	handleImagePathPaste(path: string): Promise<void>;
+	handleImagePathPaste(path: string, isCurrent?: () => boolean): Promise<boolean | void> {
 		return this.#pasteImageIntoFocus((sink, owns) => this.#pasteImagePath(path, sink, owns), isCurrent);
 	}
 
-	async #pasteImagePath(path: string, sink: ImagePasteSink, isCurrent?: () => boolean): Promise<void> {
+	async #pasteImagePath(path: string, sink: ImagePasteSink, isCurrent?: () => boolean): Promise<boolean | void> {
 		if (isCurrent && !isCurrent()) return;
+		const sessionLocalPath = isCurrent !== undefined && path.startsWith("local://");
 		try {
 			if (isVideoPath(path)) {
 				if (sink.attachVideo) {
@@ -2850,7 +2903,6 @@ export class InputController {
 				return;
 			}
 			const manager = this.ctx.sessionManager;
-			const sessionLocalPath = isCurrent !== undefined && path.startsWith("local://");
 			const resolvedPath = sessionLocalPath
 				? InternalUrlRouter.instance().locateSync(path, {
 						localProtocolOptions: {
@@ -2863,6 +2915,10 @@ export class InputController {
 			const image = await loadImageInput({ path, cwd: manager.getCwd(), autoResize: false, resolvedPath });
 			if (isCurrent && !isCurrent()) return;
 			if (!image) {
+				if (sessionLocalPath) {
+					this.ctx.showStatus("Pasted path is not a supported image");
+					return;
+				}
 				// Path resolved but is not a readable image (e.g. a zero-byte or
 				// locked transient screenshot file). Prefer the clipboard bytes.
 				if (await this.#tryPasteClipboardImage(sink)) return;
@@ -2871,13 +2927,17 @@ export class InputController {
 				this.ctx.showStatus("Pasted path is not a supported image");
 				return;
 			}
-			await sink.attach(
+			return await sink.attach(
 				{ type: "image", data: image.data, mimeType: image.mimeType },
 				`Unsupported pasted image format: ${image.mimeType}`,
 				sessionLocalPath ? path : image.resolvedPath,
 			);
 		} catch (error) {
 			if (isCurrent && !isCurrent()) return;
+			if (sessionLocalPath) {
+				this.ctx.showStatus("Failed to read pasted image path");
+				return;
+			}
 			if (error instanceof ImageInputTooLargeError) {
 				sink.pasteText(path);
 				this.ctx.showStatus(error.message);

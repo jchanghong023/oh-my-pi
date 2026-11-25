@@ -25,6 +25,7 @@ interface MCPConfigFile {
 		string,
 		{
 			enabled?: boolean;
+			alwaysLoad?: boolean;
 			timeout?: number;
 			requestIdFormat?: "string" | "number";
 			instructions?: boolean;
@@ -72,6 +73,14 @@ function transformMCPConfig(config: MCPConfigFile, source: SourceMeta): MCPServe
 				}
 			}
 
+			const alwaysLoad = typeof serverConfig.alwaysLoad === "boolean" ? serverConfig.alwaysLoad : undefined;
+			if (alwaysLoad === undefined && serverConfig.alwaysLoad !== undefined) {
+				logger.warn("MCP server has invalid 'alwaysLoad' value, ignoring", {
+					name,
+					value: serverConfig.alwaysLoad,
+				});
+			}
+
 			let timeout: number | undefined;
 			if (serverConfig.timeout !== undefined) {
 				if (
@@ -104,6 +113,7 @@ function transformMCPConfig(config: MCPConfigFile, source: SourceMeta): MCPServe
 			const server: MCPServer = {
 				name,
 				enabled,
+				alwaysLoad,
 				timeout,
 				requestIdFormat,
 				instructions,

@@ -23,9 +23,11 @@
  */
 
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { logger, postmortem, untilAborted } from "@oh-my-pi/pi-utils";
 import type { AgentSessionHandle } from "../session/agent-session-handle";
 import type { AgentSessionDisposeOptions } from "../session/agent-session-types";
+import { RemoteAgentSession } from "../thread/remote-agent-session";
 import { trackLateCleanup } from "../utils/late-cleanup";
 import {
 	type AgentRef,
@@ -36,10 +38,29 @@ import {
 	type RegistryEvent,
 } from "./agent-registry";
 import { getAgentExecutionEndedPath, getAgentTombstonePath } from "./agent-tombstone";
+import { sessionFileBelongsToRoot } from "./persisted-agents";
 
 export type AgentReviver = (expected: AgentRef) => Promise<AgentSessionHandle>;
 
 const AGENT_RELEASE_GRACE_MS = 5000;
+
+// A scan can replace a detached registry row while its strict owner still
+// has work to finish. Fence the transcript, not just that row's generation.
+const pendingExecutionEnds = new WeakMap<AgentRegistryApi, Set<string>>();
+
+export function isExecutionEndPending(registry: AgentRegistryApi, sessionFile: string): boolean {
+	return pendingExecutionEnds.get(registry)?.has(path.resolve(sessionFile)) ?? false;
+}
+
+export async function hasPersistedAgentMarker(markerPath: string): Promise<boolean> {
+	try {
+		await fs.access(markerPath);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		return false;
+	}
+}
 
 async function persistAgentMarker(markerPath: string): Promise<void> {
 	try {
@@ -119,6 +140,7 @@ interface ParkInFlight {
 	cancelled: boolean;
 	/** True once the live session has been detached and status is parked. */
 	detached: boolean;
+	closeSession?: () => void;
 }
 
 interface RevivingAgent {
@@ -133,12 +155,6 @@ interface ReopeningAgent {
 	promise: Promise<AgentRef>;
 }
 
-/** In-flight releases of one ref, split so ensureLive can tell a kill (retryable) from a removal. */
-interface ReleaseFence {
-	kills: number;
-	removals: number;
-}
-
 /** How {@link AgentLifecycleApi.release} ends an agent. */
 export interface AgentReleaseOptions {
 	/** Reject failed cleanup and retain the exact owned generation for retry. */
@@ -151,14 +167,26 @@ export interface AgentReleaseOptions {
 	dispose?: AgentSessionDisposeOptions;
 }
 
+interface ReleaseCleanup {
+	adoptions: Set<AdoptedAgent>;
+	live: AgentSessionHandle | null;
+	strictlyDisposed: boolean;
+}
+
+interface OrdinaryRelease {
+	ref: AgentRef;
+	tombstone: boolean;
+	cleanup: ReleaseCleanup;
+	promise: Promise<boolean>;
+	closeSession?: () => void;
+}
+
 interface StrictRelease {
 	ref: AgentRef;
 	/** Exact lineage at reservation time, nearest parent first. */
 	ancestors: AgentRef[];
 	options: AgentReleaseOptions;
-	adoptions: Set<AdoptedAgent>;
-	live: AgentSessionHandle | null;
-	disposed: boolean;
+	cleanup: ReleaseCleanup;
 	promise?: Promise<boolean>;
 }
 
@@ -174,7 +202,7 @@ export interface AgentLifecycleApi {
 	reclaimDeadCorpse(id: string, expected: AgentRef): Promise<boolean>;
 	/** True when this lifecycle owns `registry` (identity comparison). */
 	manages(registry: AgentRegistryApi): boolean;
-	/** True while a park is disposing this agent's session. */
+	/** True while park or ordinary release owns the ref's final transition. */
 	isParking(id: string, expected?: AgentRefExpectation): boolean;
 	/** Dispose the live session of an adopted agent and mark it `parked`. */
 	park(id: string): Promise<void>;
@@ -250,12 +278,14 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	 * waits for the park and revives.
 	 */
 	readonly #parks = new Map<string, ParkInFlight>();
+	/** Session keys change on wake, while a parked ref keeps its generation. */
+	readonly #parkedSessionKeys = new WeakMap<AgentRef, Set<string>>();
 	/** In-flight revives, bound to the parked ref that initiated them, so concurrent {@link ensureLive} calls coalesce. */
 	readonly #revivals = new Map<string, RevivingAgent>();
 	/** In-flight reopens of killed refs, bound to the killed ref, so concurrent {@link ensureLive} calls coalesce. */
 	readonly #reopens = new Map<string, ReopeningAgent>();
-	/** Releases can overlap; keep the exact ref fenced until the last one finishes. */
-	readonly #releasing = new WeakMap<AgentRef, ReleaseFence>();
+	/** Best-effort cleanup can hand the same session and unfinished hooks to a strict owner. */
+	readonly #releasing = new Map<AgentRef, OrdinaryRelease>();
 	#unsubscribe: (() => void) | undefined;
 	#persistedReviverFactory: PersistedSubagentReviverFactory | undefined;
 	/** Resolves the TTL applied when a cold-revived ref is adopted on demand (read per revive). */
@@ -295,7 +325,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		let releasing = ref ? this.#strictReleases.get(ref) : undefined;
 		if (expected !== undefined && (!ref || (ref !== expected && ref.session !== expected))) {
 			for (const pending of this.#strictReleases.values()) {
-				if (pending.ref.id === id && (pending.ref === expected || pending.live === expected)) {
+				if (pending.ref.id === id && (pending.ref === expected || pending.cleanup.live === expected)) {
 					ref = pending.ref;
 					releasing = pending;
 					break;
@@ -304,7 +334,10 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		}
 		if (
 			!ref ||
-			(expected !== undefined && ref !== expected && ref.session !== expected && releasing?.live !== expected)
+			(expected !== undefined &&
+				ref !== expected &&
+				ref.session !== expected &&
+				releasing?.cleanup.live !== expected)
 		) {
 			logger.warn("AgentLifecycleManager.adopt: unknown or replaced agent id", { id });
 			opts.onReviverDropped?.();
@@ -322,11 +355,11 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		if (releasing) {
 			// A task finalizer can hand off resources while strict disposal is
 			// awaiting its session. Keep that native adoption in the same owner.
-			releasing.adoptions.add(adopted);
+			releasing.cleanup.adoptions.add(adopted);
 			if (this.#registry.get(id) === ref) this.#adopted.set(id, adopted);
 			return;
 		}
-		if (!existing || !this.#strictReleases.get(existing.ref)?.adoptions.has(existing)) dropReviver(existing);
+		if (!existing || !this.#strictReleases.get(existing.ref)?.cleanup.adoptions.has(existing)) dropReviver(existing);
 		this.#adopted.set(id, adopted);
 		this.#armTimer(id, adopted);
 	}
@@ -356,8 +389,8 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		for (const entry of this.#strictReleases.values()) {
 			if (
 				entry.ref.id === id &&
-				entry.adoptions.size > 0 &&
-				(expected === undefined || entry.ref === expected || entry.live === expected)
+				entry.cleanup.adoptions.size > 0 &&
+				(expected === undefined || entry.ref === expected || entry.cleanup.live === expected)
 			)
 				return true;
 		}
@@ -376,8 +409,18 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	 */
 	async reclaimDeadCorpse(id: string, expected: AgentRef): Promise<boolean> {
 		const ref = this.#registry.get(id);
-		if (ref !== expected || ref.status !== "parked" || ref.session) return false;
-		if (this.#adopted.has(id) || this.#parks.has(id) || this.#revivals.has(id)) return false;
+		if (ref !== expected) return false;
+		const canReclaim = () =>
+			this.#registry.get(id) === ref &&
+			ref.status === "parked" &&
+			!ref.session &&
+			!(ref.sessionFile && isExecutionEndPending(this.#registry, ref.sessionFile)) &&
+			!this.#strictReleases.has(ref) &&
+			!this.#releasing.has(ref) &&
+			!this.#adopted.has(id) &&
+			!this.#parks.has(id) &&
+			!this.#revivals.has(id);
+		if (!canReclaim()) return false;
 
 		const persistedFactory = ref.sessionFile ? this.#persistedReviverFactory : undefined;
 		if (persistedFactory) {
@@ -392,8 +435,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			}
 			// The factory awaited I/O; another lifecycle operation may now own or
 			// have replaced this ref. Revalidate every reclaim invariant.
-			if (this.#registry.get(id) !== ref || ref.status !== "parked" || ref.session) return false;
-			if (this.#adopted.has(id) || this.#parks.has(id) || this.#revivals.has(id)) return false;
+			if (!canReclaim()) return false;
 		}
 		return this.#registry.unregister(id, ref);
 	}
@@ -409,15 +451,16 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	}
 
 	/**
-	 * True while {@link park} is disposing this agent's session (lets dispose
-	 * hooks distinguish park from teardown). False once the park is cancelled
-	 * by ensureLive or after detach+dispose completes. When `expected` is
-	 * given, only a park bound to that ref (or its session) counts.
+	 * Keep an in-flight park or release in charge of the registry row, rather
+	 * than letting SDK disposal unregister it before a concurrent kill.
 	 */
 	isParking(id: string, expected?: AgentRefExpectation): boolean {
 		const park = this.#parks.get(id);
 		return Boolean(
-			park && !park.cancelled && (expected === undefined || park.ref === expected || park.ref.session === expected),
+			(park &&
+				!park.cancelled &&
+				(expected === undefined || park.ref === expected || park.ref.session === expected)) ||
+			this.#findOrdinaryRelease(id, expected, this.#registry.get(id)),
 		);
 	}
 
@@ -438,7 +481,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		if (!adopted) return;
 		const ref = this.#registry.get(id);
 		if (!ref || adopted.ref !== ref) return;
-		if (this.#strictReleases.has(ref)) return;
+		if (this.#strictReleases.has(ref) || this.#releasing.has(ref)) return;
 		const session = ref.session;
 		if (!session) return;
 
@@ -489,6 +532,13 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 					logger.debug("AgentLifecycleManager.park: cost snapshot failed", { id, error: String(error) });
 				}
 
+				const key = session.instanceKey;
+				if (key !== undefined) {
+					let parkedKeys = this.#parkedSessionKeys.get(ref);
+					if (!parkedKeys) this.#parkedSessionKeys.set(ref, (parkedKeys = new Set()));
+					parkedKeys.add(key);
+				}
+
 				// Commit: detach + parked *before* dispose so callers never see a
 				// dying session via ref.session / idle status.
 				park.detached = true;
@@ -496,7 +546,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				this.#registry.setStatus(id, "parked", ref);
 
 				try {
-					await session.dispose();
+					await this.#disposeOrdinarySession(session, park);
 				} catch (error) {
 					logger.warn("AgentLifecycleManager.park: session dispose failed", { id, error: String(error) });
 				}
@@ -504,6 +554,11 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				// Only clear if we are still the in-flight entry (a later park would
 				// have replaced us only after we resolved).
 				if (this.#parks.get(id) === park) this.#parks.delete(id);
+				if (park.closeSession) {
+					const release = this.#releasing.get(ref);
+					if (release) release.closeSession = park.closeSession;
+					else if (!this.#strictReleases.has(ref)) park.closeSession();
+				}
 			}
 		})();
 
@@ -513,15 +568,28 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 
 	#assertLiveAllowed(ref: AgentRef): void {
 		if (this.#strictReleases.has(ref)) throw new Error(`Agent "${ref.id}" is being released.`);
-		const fence = this.#releasing.get(ref);
-		if (fence) {
+		const ordinary = this.#releasing.get(ref);
+		if (ordinary) {
 			throw new Error(
-				fence.removals > 0
+				!ordinary.tombstone
 					? `Agent "${ref.id}" is being removed and cannot be revived. If a transcript exists, read history://${ref.id}.`
 					: `Agent "${ref.id}" is still shutting down after its kill; retry once it has stopped.`,
 			);
 		}
-		if (ref.history?.executionEnded) throw new Error(`Agent "${ref.id}" is a read-only execution record.`);
+		if (ref.history?.executionEnded || (ref.sessionFile && isExecutionEndPending(this.#registry, ref.sessionFile))) {
+			throw new Error(`Agent "${ref.id}" is a read-only execution record.`);
+		}
+	}
+
+	async #reconcileExecutionEnd(ref: AgentRef, sessionFile: string): Promise<void> {
+		if (await hasPersistedAgentMarker(getAgentExecutionEndedPath(sessionFile))) {
+			const current = this.#registry.get(ref.id);
+			if (current?.sessionFile === sessionFile && !current.session && !current.history?.executionEnded) {
+				this.#registry.setHistory(ref.id, { executionEnded: true }, sessionFile);
+			}
+			throw new Error(`Agent "${ref.id}" is a read-only execution record.`);
+		}
+		this.#assertLiveAllowed(ref);
 	}
 
 	/**
@@ -626,6 +694,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		}
 		// Only decides whether the kill can be undone; the cold-revive path builds
 		// its own reviver for the fresh generation.
+		await this.#reconcileExecutionEnd(killed, sessionFile);
 		const reviver = await factory(killed);
 		this.#assertLiveAllowed(killed);
 		if (this.#disposed) {
@@ -658,8 +727,10 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		const prior = adoption?.ref === ref ? adoption : undefined;
 		let revive = prior?.revive;
 		let coldAdopted = false;
-		if (!revive && ref.status === "parked" && ref.sessionFile && this.#persistedReviverFactory) {
-			revive = await this.#persistedReviverFactory(ref);
+		const sessionFile = ref.sessionFile;
+		if (!revive && ref.status === "parked" && sessionFile) {
+			await this.#reconcileExecutionEnd(ref, sessionFile);
+			revive = await this.#persistedReviverFactory?.(ref);
 			this.#assertLiveAllowed(ref);
 			// Teardown can complete during the factory await. A late cold revive must
 			// not cold-adopt (and later attach a live session + TTL) into a disposed
@@ -726,44 +797,96 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		if (options?.strict || options?.retainRecord) return this.#releaseStrict(id, expected, options);
 		const adopted = this.#adopted.get(id);
 		const current = this.#registry.get(id);
-		const currentMatches =
-			current && (expected === undefined || current === expected || current.session === expected);
-		const adoptedMatches =
-			adopted && (expected === undefined || adopted.ref === expected || adopted.ref.session === expected);
-		const ref = currentMatches ? current : adoptedMatches ? adopted.ref : undefined;
+		const matches = (ref: AgentRef, live = ref.session): boolean =>
+			expected === undefined || ref === expected || live === expected;
+		const pending = this.#findOrdinaryRelease(id, expected, current);
+		const ref =
+			pending?.ref ??
+			(current && matches(current) ? current : adopted && matches(adopted.ref) ? adopted.ref : undefined);
 		// A strict owner (including a descendant reserved for bottom-up cleanup)
 		// must keep its disposal and resource hooks retryable.
 		if (!ref || this.#strictReleases.has(ref)) return false;
-
-		// Fence this generation before the first await: a waiter that joined the same
-		// park resumes before the ref is marked aborted or unregistered.
-		const kind = options?.tombstone ? "kills" : "removals";
-		let fence = this.#releasing.get(ref);
-		if (!fence) {
-			fence = { kills: 0, removals: 0 };
-			this.#releasing.set(ref, fence);
+		if (pending) {
+			if (options?.tombstone && !pending.tombstone) {
+				pending.tombstone = true;
+				this.#markKilled(ref);
+			}
+			return pending.promise;
 		}
-		fence[kind]++;
-		try {
-			await this.#releaseRef(id, ref, adopted, options);
-			return true;
-		} finally {
-			fence[kind]--;
-			if (fence.kills + fence.removals === 0) this.#releasing.delete(ref);
+
+		// Publish the exact cleanup owner before detach or a synchronous registry notification.
+		const { promise, resolve, reject } = Promise.withResolvers<boolean>();
+		const park = this.#parks.get(id);
+		const release: OrdinaryRelease = {
+			ref,
+			tombstone: options?.tombstone === true,
+			cleanup: {
+				adoptions: new Set(adopted?.ref === ref ? [adopted] : []),
+				live: ref.session ?? (park?.ref === ref ? park.session : null),
+				strictlyDisposed: false,
+			},
+			promise,
+		};
+		this.#releasing.set(ref, release);
+		const finish = () => {
+			this.#releasing.delete(ref);
+			if (!this.#strictReleases.has(ref)) release.closeSession?.();
+		};
+		void this.#releaseRef(release, options?.dispose).then(
+			() => {
+				finish();
+				resolve(true);
+			},
+			error => {
+				finish();
+				reject(error);
+			},
+		);
+		return promise;
+	}
+
+	#findOrdinaryRelease(
+		id: string,
+		expected: AgentRefExpectation | undefined,
+		current: AgentRef | undefined,
+	): OrdinaryRelease | undefined {
+		if (expected === undefined && current) return this.#releasing.get(current);
+		for (const entry of this.#releasing.values()) {
+			if (
+				entry.ref.id === id &&
+				(expected === undefined || expected === entry.ref || expected === entry.cleanup.live)
+			) {
+				return entry;
+			}
+		}
+		return undefined;
+	}
+
+	#markKilled(ref: AgentRef): void {
+		const { id } = ref;
+		// Detach before setStatus emits synchronously. The SDK and scanners
+		// must see a detached terminal row even before the marker lands.
+		if (!this.#registry.detachSession(id, ref) || !this.#registry.setStatus(id, "aborted", ref)) {
+			logger.warn("AgentLifecycleManager.release: terminal transition rejected", { id });
 		}
 	}
 
-	async #releaseRef(
-		id: string,
-		ref: AgentRef,
-		adopted: AdoptedAgent | undefined,
-		options: AgentReleaseOptions | undefined,
+	#disposeOrdinarySession(
+		session: AgentSessionHandle,
+		owner: OrdinaryRelease | ParkInFlight,
+		options?: AgentSessionDisposeOptions,
 	): Promise<void> {
-		const onRelease = adopted && adopted.ref === ref ? adopted.onRelease : undefined;
-		if (adopted?.ref === ref) {
-			clearTimeout(adopted.timer);
-			this.#adopted.delete(id);
-			dropReviver(adopted);
+		return session instanceof RemoteAgentSession
+			? session.dispose(options, close => (owner.closeSession = close))
+			: session.dispose(options);
+	}
+
+	async #releaseRef(release: OrdinaryRelease, dispose?: AgentSessionDisposeOptions): Promise<void> {
+		const { ref, cleanup, tombstone } = release;
+		const { id } = ref;
+		for (const adoption of cleanup.adoptions) {
+			clearTimeout(adoption.timer);
+			if (this.#adopted.get(id) === adoption) this.#adopted.delete(id);
 		}
 
 		const park = this.#parks.get(id);
@@ -773,61 +896,101 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			await park.promise;
 		}
 
-		const live = this.#registry.get(id) === ref ? ref.session : null;
-		if (options?.tombstone) {
-			// Apply the terminal transition before persisting or disposing. The
-			// dying session's own dispose path calls unregisterUnlessParked
-			// (sdk.ts), which spares a ref only when it is already `aborted` AND
-			// already detached; awaiting the marker write before this transition
-			// left a window in which that unregister deleted the ref
-			// (issue #10531). Persisting the sidecar afterward is safe: within the
-			// process the still-registered `aborted` row already blocks re-adoption
-			// via the `if (!registry.get(id))` discovery guard, and the sidecar
-			// only needs to exist before a later cross-restart discovery pass —
-			// release awaits the write below before returning.
-			// Detach before publishing `aborted`: setStatus emits synchronously, so
-			// every subscriber must observe a terminal ref with session === null.
-			if (!this.#registry.detachSession(id, ref) || !this.#registry.setStatus(id, "aborted", ref)) {
-				logger.warn("AgentLifecycleManager.release: terminal transition rejected", { id });
-			}
-		}
+		const live =
+			this.#registry.get(id) === ref && !(park?.ref === ref && park.detached) ? (ref.session ?? cleanup.live) : null;
+		cleanup.live ??= live;
+		if (tombstone) this.#markKilled(ref);
 		try {
-			if (options?.tombstone && ref.sessionFile) await persistAgentMarker(getAgentTombstonePath(ref.sessionFile));
+			if (tombstone && ref.sessionFile) await persistAgentMarker(getAgentTombstonePath(ref.sessionFile));
 		} finally {
-			// Detaching removes the registry's only route to the live session. Always
-			// dispose the captured session, even when tombstone persistence fails.
-			if (live) {
+			// A failed marker write does not release ownership of the captured
+			// session. Dispose it unless a strict release has taken over.
+			if (live && !this.#strictReleases.has(ref)) {
 				try {
-					await live.dispose(options?.dispose);
+					await this.#disposeOrdinarySession(live, release, dispose);
 				} catch (error) {
 					logger.warn("AgentLifecycleManager.release: session dispose failed", { id, error: String(error) });
 				}
 			}
-			try {
-				await onRelease?.();
-			} catch (error) {
-				logger.warn("AgentLifecycleManager.release: owned resource cleanup failed", {
-					id,
-					error: String(error),
-				});
+			for (const adoption of cleanup.adoptions) {
+				if (this.#strictReleases.has(ref)) break;
+				try {
+					await adoption.onRelease?.();
+					adoption.onRelease = undefined;
+				} catch (error) {
+					logger.warn("AgentLifecycleManager.release: owned resource cleanup failed", {
+						id,
+						error: String(error),
+					});
+				}
+			}
+			if (!this.#strictReleases.has(ref)) {
+				for (const adoption of cleanup.adoptions) dropReviver(adoption);
 			}
 		}
-		if (!options?.tombstone) this.#registry.unregister(id, ref);
+		if (!tombstone && release.tombstone && ref.sessionFile) {
+			await persistAgentMarker(getAgentTombstonePath(ref.sessionFile));
+		}
+		if (!release.tombstone && !this.#strictReleases.has(ref)) this.#registry.unregister(id, ref);
 	}
 
-	#ancestorRefs(ref: AgentRef, detachedRoot?: AgentRef): AgentRef[] {
+	#sessionKey(ref: AgentRef | undefined): string | undefined {
+		if (!ref) return undefined;
+		return (ref.session ?? this.#strictReleases.get(ref)?.cleanup.live ?? this.#releasing.get(ref)?.cleanup.live)
+			?.instanceKey;
+	}
+
+	#ancestorRefs(ref: AgentRef, root?: AgentRef): AgentRef[] {
 		const ancestors: AgentRef[] = [];
 		const seen = new Set([ref.id]);
-		let parentId = ref.parentId;
-		while (parentId) {
+		let child = ref;
+		while (child.parentId) {
+			const parentId = child.parentId;
 			if (seen.has(parentId)) return [];
-			const parent =
-				this.#registry.get(parentId) ??
-				(detachedRoot?.id === parentId ? detachedRoot : this.#adopted.get(parentId)?.ref);
-			if (!parent) break;
+			const current = this.#registry.get(parentId);
+			const requested = root?.id === parentId ? root : undefined;
+			const adopted = this.#adopted.get(parentId)?.ref;
+			const key = child.parentSessionKey;
+			let parent: AgentRef | undefined;
+			if (key !== undefined) {
+				const matchesSpawner = (candidate: AgentRef | undefined): boolean =>
+					candidate !== undefined &&
+					(this.#sessionKey(candidate) === key || this.#parkedSessionKeys.get(candidate)?.has(key) === true);
+				if (matchesSpawner(requested)) parent = requested;
+				else if (matchesSpawner(current)) parent = current;
+				else if (matchesSpawner(adopted)) parent = adopted;
+			}
+			if (!parent) {
+				// Scanned refs lack a live spawner key. A transcript under a
+				// detached root is evidence of ownership; a reused id is not.
+				const within = (candidate: AgentRef): boolean =>
+					Boolean(
+						child.sessionFile &&
+						candidate.sessionFile &&
+						sessionFileBelongsToRoot(child.sessionFile, candidate.sessionFile),
+					);
+				if (
+					requested &&
+					(key === undefined || this.#sessionKey(requested) === undefined) &&
+					(within(requested) ||
+						((!current || current === requested) && !(child.sessionFile && requested.sessionFile)))
+				) {
+					parent = requested;
+				} else {
+					parent = current ?? adopted;
+					if (!parent) break;
+					const keyMismatch = key !== undefined && this.#sessionKey(parent) !== undefined;
+					if (
+						(parent === requested && keyMismatch) ||
+						((keyMismatch || (child.sessionFile && parent.sessionFile)) && !within(parent))
+					) {
+						break;
+					}
+				}
+			}
 			ancestors.push(parent);
 			seen.add(parentId);
-			parentId = parent.parentId;
+			child = parent;
 		}
 		return ancestors;
 	}
@@ -841,16 +1004,26 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		if (pending) return pending;
 		const adopted = this.#adopted.get(ref.id);
 		const park = this.#parks.get(ref.id);
-		const entry: StrictRelease = {
-			ref,
-			ancestors,
-			options,
-			adoptions: new Set(adopted?.ref === ref ? [adopted] : []),
+		const ordinary = this.#releasing.get(ref);
+		const cleanup = ordinary?.cleanup ?? {
+			adoptions: new Set<AdoptedAgent>(),
 			live: ref.session ?? (park?.ref === ref ? park.session : null),
-			disposed: false,
+			strictlyDisposed: false,
 		};
+		cleanup.live ??= park?.ref === ref ? park.session : null;
+		if (adopted?.ref === ref) cleanup.adoptions.add(adopted);
+		const entry: StrictRelease = { ref, ancestors, options, cleanup };
 		this.#strictReleases.set(ref, entry);
-		for (const adoption of entry.adoptions) clearTimeout(adoption.timer);
+		for (const adoption of cleanup.adoptions) clearTimeout(adoption.timer);
+		if (options.retainRecord) {
+			if (ref.sessionFile) {
+				let transcripts = pendingExecutionEnds.get(this.#registry);
+				if (!transcripts) pendingExecutionEnds.set(this.#registry, (transcripts = new Set()));
+				transcripts.add(path.resolve(ref.sessionFile));
+			}
+			// Keep the registry record even if ordinary disposal already detached the session.
+			if (ordinary) this.#retainExecutionRecord(ref);
+		}
 		return entry;
 	}
 
@@ -866,92 +1039,105 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		const pending = [...this.#strictReleases.values()].find(
 			entry =>
 				entry.ref.id === id &&
-				matches(entry.ref, entry.live) &&
+				matches(entry.ref, entry.cleanup.live) &&
 				(expected !== undefined || !current || entry.ref === current),
 		);
 		const ref =
 			pending?.ref ??
+			this.#findOrdinaryRelease(id, expected, current)?.ref ??
 			(current && matches(current) ? current : adopted && matches(adopted.ref) ? adopted.ref : undefined);
 		if (!ref) return false;
 		return this.#releaseStrictRef(pending ?? this.#retainStrictRelease(ref, options), options.dispose);
 	}
 
+	#retainExecutionRecord(ref: AgentRef): void {
+		const { id, sessionFile } = ref;
+		if (this.#registry.get(id) !== ref) return;
+		this.#registry.setHistory(id, { executionEnded: true }, sessionFile ?? undefined);
+		this.#registry.detachSession(id, ref);
+		if (ref.status !== "aborted") this.#registry.setStatus(id, "parked", ref);
+	}
+
 	async #releaseStrictRef(owned: StrictRelease, dispose?: AgentSessionDisposeOptions): Promise<boolean> {
 		if (owned.promise) return owned.promise;
-		const { ref, options } = owned;
+		const { ref, options, cleanup } = owned;
 		const { id } = ref;
-		for (const adoption of owned.adoptions) clearTimeout(adoption.timer);
-		owned.promise = (async () => {
-			const park = this.#parks.get(id);
-			if (park?.ref === ref) {
-				if (!park.detached) park.cancel();
-				await park.promise;
-			}
-			const revival = this.#revivals.get(id);
-			if (revival?.ref === ref) await Promise.allSettled([revival.promise]);
-			owned.live ??= this.#registry.get(id) === ref ? ref.session : null;
-			if (options.retainRecord && this.#registry.get(id) === ref) {
-				// Detach before SDK disposal so it preserves this native transcript route.
-				// The strict owner remains retryable until disposal and resource hooks succeed.
-				this.#registry.setHistory(id, { executionEnded: true }, ref.sessionFile ?? undefined);
-				this.#registry.detachSession(id, ref);
-				if (ref.status !== "aborted") this.#registry.setStatus(id, "parked", ref);
-			}
-			if (options.tombstone && this.#registry.get(id) === ref) {
-				// SDK disposal preserves detached terminal rows. The captured live
-				// handle remains in this entry if strict cleanup must be retried.
-				this.#registry.detachSession(id, ref);
-				this.#registry.setStatus(id, "aborted", ref);
-			}
-			// Keep the adoption and captured session until every owned operation
-			// succeeds. SDK disposal may remove its registry route on success.
-			if (!owned.disposed) {
-				await owned.live?.dispose({ ...options.dispose, ...dispose, strict: true });
-				owned.disposed = true;
-			}
-			const releaseAdoptions = async (): Promise<void> => {
-				const failures: unknown[] = [];
-				for (const adoption of owned.adoptions) {
-					if (!adoption.onRelease) continue;
-					try {
-						await adoption.onRelease();
-						adoption.onRelease = undefined;
-					} catch (error) {
-						failures.push(error);
-					}
+		for (const adoption of cleanup.adoptions) clearTimeout(adoption.timer);
+		owned.promise = Promise.resolve()
+			.then(async () => {
+				const ordinary = this.#releasing.get(ref);
+				if (ordinary) await ordinary.promise.catch(() => {});
+				const park = this.#parks.get(id);
+				if (park?.ref === ref) {
+					if (!park.detached) park.cancel();
+					await park.promise;
 				}
-				if (failures.length === 1) throw failures[0];
-				if (failures.length) throw new AggregateError(failures, `Failed releasing owned resources of ${id}`);
-			};
-			await releaseAdoptions();
-			if (options.retainRecord && ref.sessionFile) {
-				await persistAgentMarker(getAgentExecutionEndedPath(ref.sessionFile));
-			}
-			if (options.tombstone) {
-				if (ref.sessionFile) await persistAgentMarker(getAgentTombstonePath(ref.sessionFile));
-				if (this.#registry.get(id) === ref) {
+				const revival = this.#revivals.get(id);
+				if (revival?.ref === ref) await Promise.allSettled([revival.promise]);
+				cleanup.live ??= this.#registry.get(id) === ref ? ref.session : null;
+				if (options.retainRecord) this.#retainExecutionRecord(ref);
+				if (options.tombstone && this.#registry.get(id) === ref) {
+					// SDK disposal preserves detached terminal rows. The captured live
+					// handle remains in this entry if strict cleanup must be retried.
 					this.#registry.detachSession(id, ref);
 					this.#registry.setStatus(id, "aborted", ref);
 				}
-			} else if (!options.retainRecord) {
-				this.#registry.unregister(id, ref);
-			}
-			// Account for a finalizer synchronously handing off an adoption from
-			// a registry notification before dropping the native cleanup owner.
-			for (;;) {
+				// Keep the adoption and captured session until every owned operation
+				// succeeds. SDK disposal may remove its registry route on success.
+				if (!cleanup.strictlyDisposed) {
+					await cleanup.live?.dispose({ ...options.dispose, ...dispose, strict: true });
+					cleanup.strictlyDisposed = true;
+				}
+				const releaseAdoptions = async (): Promise<void> => {
+					const failures: unknown[] = [];
+					for (const adoption of cleanup.adoptions) {
+						if (!adoption.onRelease) continue;
+						try {
+							await adoption.onRelease();
+							adoption.onRelease = undefined;
+						} catch (error) {
+							failures.push(error);
+						}
+					}
+					if (failures.length === 1) throw failures[0];
+					if (failures.length) throw new AggregateError(failures, `Failed releasing owned resources of ${id}`);
+				};
 				await releaseAdoptions();
-				let pending = false;
-				for (const adoption of owned.adoptions) pending ||= adoption.onRelease !== undefined;
-				if (!pending) break;
-			}
-			const latestAdoption = this.#adopted.get(id);
-			if (latestAdoption && owned.adoptions.has(latestAdoption)) this.#adopted.delete(id);
-			for (const adoption of owned.adoptions) dropReviver(adoption);
-			this.#strictReleases.delete(ref);
-			return true;
-		})().finally(() => {
-			owned.promise = undefined;
-		});
+				if (options.retainRecord && ref.sessionFile) {
+					await persistAgentMarker(getAgentExecutionEndedPath(ref.sessionFile));
+					// A scan may have installed a new detached ref for this exact transcript.
+					const current = this.#registry.get(id);
+					if (current?.sessionFile === ref.sessionFile && !current.session && !current.history?.executionEnded) {
+						this.#registry.setHistory(id, { executionEnded: true }, ref.sessionFile);
+					}
+					pendingExecutionEnds.get(this.#registry)?.delete(path.resolve(ref.sessionFile));
+				}
+				if (options.tombstone) {
+					if (ref.sessionFile) await persistAgentMarker(getAgentTombstonePath(ref.sessionFile));
+					if (this.#registry.get(id) === ref) {
+						this.#registry.detachSession(id, ref);
+						this.#registry.setStatus(id, "aborted", ref);
+					}
+				} else if (!options.retainRecord) {
+					this.#registry.unregister(id, ref);
+				}
+				// Account for a finalizer synchronously handing off an adoption from
+				// a registry notification before dropping the native cleanup owner.
+				for (;;) {
+					await releaseAdoptions();
+					let pending = false;
+					for (const adoption of cleanup.adoptions) pending ||= adoption.onRelease !== undefined;
+					if (!pending) break;
+				}
+				const latestAdoption = this.#adopted.get(id);
+				if (latestAdoption && cleanup.adoptions.has(latestAdoption)) this.#adopted.delete(id);
+				for (const adoption of cleanup.adoptions) dropReviver(adoption);
+				this.#strictReleases.delete(ref);
+				return true;
+			})
+			.finally(() => {
+				owned.promise = undefined;
+			});
 		return owned.promise;
 	}
 
@@ -962,25 +1148,21 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		options?: AgentReleaseOptions,
 	): Promise<void> {
 		const strict = options?.strict || options?.retainRecord;
-		const registeredRoot = this.#registry.get(root.id);
 		const refs = new Set<AgentRef>();
 		for (const entry of this.#strictReleases.values()) {
-			if (entry.ancestors.includes(root)) refs.add(entry.ref);
+			if (entry.ancestors.includes(root) || this.#ancestorRefs(entry.ref, root).includes(root)) refs.add(entry.ref);
 		}
-		// Never discover fresh descendants through a replacement root. Pinned
-		// reservations above still belong to the requested exact generation.
-		if (registeredRoot === root || (strict && !registeredRoot)) {
-			const candidates = this.#registry.list();
-			if (strict) candidates.push(...[...this.#adopted.values()].map(adopted => adopted.ref));
-			for (const ref of candidates) {
-				if (ref === root || refs.has(ref) || this.#strictReleases.has(ref)) continue;
-				const ancestors = this.#ancestorRefs(ref, strict ? root : undefined);
-				if (!ancestors.includes(root)) continue;
-				refs.add(ref);
-				if (strict && options) {
-					const childOptions = ref.status === "running" || options.retainRecord ? options : { strict: true };
-					this.#retainStrictRelease(ref, childOptions, ancestors);
-				}
+		const candidates = this.#registry.list();
+		for (const entry of this.#releasing.values()) candidates.push(entry.ref);
+		if (strict) for (const adoption of this.#adopted.values()) candidates.push(adoption.ref);
+		for (const ref of candidates) {
+			if (ref === root || refs.has(ref) || this.#strictReleases.has(ref)) continue;
+			const ancestors = this.#ancestorRefs(ref, root);
+			if (!ancestors.includes(root)) continue;
+			refs.add(ref);
+			if (strict && options) {
+				const childOptions = ref.status === "running" || options.retainRecord ? options : { strict: true };
+				this.#retainStrictRelease(ref, childOptions, ancestors);
 			}
 		}
 		await this.#releaseSnapshot(refs, deadlineAt, options, `Failed releasing descendants of ${root.id}`);
@@ -1054,6 +1236,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		this.#disposed = true;
 		this.#unsubscribe = undefined;
 		const refs = new Set(this.#strictReleases.keys());
+		for (const ref of this.#releasing.keys()) refs.add(ref);
 		for (const adoption of this.#adopted.values()) refs.add(adoption.ref);
 		for (const park of this.#parks.values()) refs.add(park.ref);
 		// A turn still running (a revived or woken agent) is cut off by this
@@ -1071,7 +1254,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		const session = await revive(ref);
 		const releasing = this.#strictReleases.get(ref);
 		if (releasing) {
-			releasing.live = session;
+			releasing.cleanup.live = session;
 			throw new Error(`Agent "${id}" is being released.`);
 		}
 		if (this.#disposed) {

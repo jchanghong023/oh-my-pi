@@ -162,7 +162,7 @@ export type AuthStorageProtocol = {
 	"credentials.revalidate": RpcMethod<[], void>;
 	"credentials.get": RpcMethod<[provider: string], AuthCredential | undefined>;
 	"credentials.all": RpcMethod<[], AuthStorageData>;
-	"credentials.list": RpcMethod<[provider?: string], StoredAuthCredential[]>;
+	"credentials.list": RpcMethod<[provider?: string, options?: { includePaused?: boolean }], StoredAuthCredential[]>;
 	"credentials.has": RpcMethod<[provider: string], boolean>;
 	"credentials.hasOAuth": RpcMethod<[provider: string], boolean>;
 	"credentials.hasSubscription": RpcMethod<[provider: string], boolean>;

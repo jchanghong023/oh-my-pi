@@ -47,7 +47,10 @@ let compileErrors = 0;
 let testName = '';
 
 if (goTestVPath && fs.existsSync(goTestVPath)) {
-  const testOutput = fs.readFileSync(goTestVPath, 'utf-8');
+  const testBytes = fs.readFileSync(goTestVPath);
+  // Windows PowerShell 5.1 redirects text as UTF-16LE with a BOM.
+  const encoding = testBytes[0] === 0xff && testBytes[1] === 0xfe ? 'utf-16le' : 'utf-8';
+  const testOutput = new TextDecoder(encoding).decode(testBytes);
   const testLines = testOutput.split('\n');
 
   // 检测编译错误
@@ -133,8 +136,8 @@ if (!fs.existsSync(coverprofilePath)) {
 //   count=0 表示未覆盖，count>0 表示已覆盖
 const targetFileSuffix = '/' + className + '.go';
 
-let totalStatements = 0;   // 总语句数（总行数）
-let coveredStatements = 0;  // 已覆盖语句数（已覆盖行数）
+let totalStatements = 0;
+let coveredStatements = 0;
 let foundTargetFile = false;
 const uncoveredBlocks = [];
 const coveredBlocks = [];
@@ -149,15 +152,17 @@ if (coverContent) {
 
     // 解析数据行: package/file.go:lineStart.col,lineEnd.col numStatements count
     // 格式: <path>:<startLine>.<startCol>,<endLine>.<endCol> <numStatements> <count>
-    const match = /^(.+\.go):(\d+)\.\d+,\d+\.\d+\s+(\d+)\s+(\d+)$/.exec(trimmed);
+    const match = /^(.+\.go):(\d+)\.\d+,(\d+)\.(\d+)\s+(\d+)\s+(\d+)$/.exec(trimmed);
     if (!match) {
       continue;
     }
 
     const filePath = match[1];
     const startLine = parseInt(match[2]);
-    const numStatements = parseInt(match[3]);
-    const count = parseInt(match[4]);
+    // The end coordinate is exclusive; column 1 contributes no bytes on that line.
+    const endLine = parseInt(match[3]) - (match[4] === '1' ? 1 : 0);
+    const numStatements = parseInt(match[5]);
+    const count = parseInt(match[6]);
 
     // 过滤到目标文件（文件名匹配 className.go）
     if (!filePath.endsWith(targetFileSuffix)) {
@@ -169,9 +174,9 @@ if (coverContent) {
 
     if (count > 0) {
       coveredStatements += numStatements;
-      coveredBlocks.push({ startLine, numStatements, count });
-    } else {
-      uncoveredBlocks.push({ startLine, numStatements, count });
+    }
+    if (numStatements > 0) {
+      (count > 0 ? coveredBlocks : uncoveredBlocks).push({ startLine, endLine });
     }
   }
 
@@ -185,17 +190,20 @@ if (coverContent) {
   }
 }
 
-const totalLines = totalStatements;
-const coveredLines = coveredStatements;
+// Keep the existing report totals statement-based; use source positions only for line detail.
+const validation = validateCoverageData(totalStatements, coveredStatements);
+const totalLines = validation.valid ? totalStatements : 0;
+const coveredLines = validation.valid ? coveredStatements : 0;
 const missedLines = totalLines - coveredLines;
 const linePercentage = totalLines > 0
   ? Math.round((coveredLines / totalLines) * 10000) / 100
   : 0;
 
 // ========== 覆盖率数据校验 ==========
-const validation = validateCoverageData(totalLines, coveredLines);
 if (!validation.valid) {
   errorDetailParts.push(`覆盖率数据校验失败: ${validation.reason}`);
+} else if (totalStatements > 2000 && coveredStatements / totalStatements < 0.6) {
+  console.warn(`[WARN] ${className}.go：总语句数 ${totalStatements}，覆盖语句数 ${coveredStatements}，覆盖率 ${linePercentage.toFixed(2)}%（总语句数>2000且覆盖率<60%）`);
 }
 
 function validateCoverageData(total, covered) {
@@ -207,17 +215,6 @@ function validateCoverageData(total, covered) {
   // 防御：覆盖行大于总行数，数据不一致
   if (covered > total) {
     return { valid: false, reason: `覆盖行(${covered})大于总行数(${total})，数据不一致` };
-  }
-
-  // 异常判定：总行数>2000 且覆盖率<60%
-  if (total > 2000) {
-    const rate = covered / total;
-    if (rate < 0.6) {
-      return {
-        valid: false,
-        reason: `异常数据：总行数 ${total}，覆盖行 ${covered}，覆盖率 ${(rate * 100).toFixed(2)}%（总行数>2000且覆盖率<60%）`,
-      };
-    }
   }
 
   return { valid: true };
@@ -235,24 +232,18 @@ if (testFilePath) {
 }
 
 // ========== 收集行级覆盖详情 ==========
-const coveredLineNumbers = [];
-const missedLineNumbers = [];
+const coveredLineNumbers = validation.valid ? blockLineNumbers(coveredBlocks) : [];
+const missedLineNumbers = validation.valid ? blockLineNumbers(uncoveredBlocks) : [];
 
-for (const block of coveredBlocks) {
-  // 将语句块展开为行号列表
-  for (let i = 0; i < block.numStatements; i++) {
-    coveredLineNumbers.push(block.startLine + i);
+function blockLineNumbers(blocks) {
+  const lines = new Set();
+  for (const { startLine, endLine } of blocks) {
+    for (let line = startLine; line <= endLine; line++) {
+      lines.add(line);
+    }
   }
+  return [...lines].sort((a, b) => a - b);
 }
-
-for (const block of uncoveredBlocks) {
-  for (let i = 0; i < block.numStatements; i++) {
-    missedLineNumbers.push(block.startLine + i);
-  }
-}
-
-coveredLineNumbers.sort((a, b) => a - b);
-missedLineNumbers.sort((a, b) => a - b);
 
 // ========== 控制台输出 ==========
 console.log('');
@@ -261,11 +252,11 @@ console.log('  Go 代码覆盖率报告');
 console.log('============================================================');
 console.log('');
 console.log('汇总信息：');
-console.log('行覆盖率 (Line Coverage):');
+console.log('语句覆盖率 (Statement Coverage):');
 printTable([
-  ['已覆盖行数', String(coveredLines)],
-  ['未覆盖行数', String(missedLines)],
-  ['总行数', String(totalLines)],
+  ['已覆盖语句数', String(coveredLines)],
+  ['未覆盖语句数', String(missedLines)],
+  ['总语句数', String(totalLines)],
   ['覆盖率', `${linePercentage}%`],
 ]);
 console.log('');
@@ -448,7 +439,7 @@ function countCodeLines(content) {
 
     // 开始多行注释
     if (trimmed.startsWith('/*')) {
-      if (!trimmed.includes('*/') || trimmed.indexOf('*/') === trimmed.length - 2) {
+      if (trimmed.indexOf('*/', 2) === -1) {
         inBlockComment = true;
       }
       continue;

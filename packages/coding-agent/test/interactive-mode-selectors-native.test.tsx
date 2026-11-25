@@ -134,18 +134,15 @@ describe("inline selectors in a Tern terminal", () => {
 	});
 
 	it("/login marks a provider without a credential as not signed in, not as failed", async () => {
+		vi.spyOn(authStorage.keys, "source").mockReturnValue(undefined);
 		await using ui = await nativeShell(mode.shell);
 		const checked = vi.spyOn(session.modelRegistry, "getApiKeyForProvider");
 		await mode.showOAuthSelector("login");
 
 		const picker = sheet(ui);
-		expect(picker).toMatchObject({ title: "Sign in", layout: "cards", size: "md" });
-		const unconfigured = picker.items!.filter(item => item.detail === "Not configured");
-		expect(unconfigured.length).toBeGreaterThan(0);
-		expect(unconfigured.every(item => item.dot === "muted")).toBe(true);
-		// Only credentials the picker can act on are validated.
-		const validated = new Set(checked.mock.calls.map(call => call[0]));
-		expect(unconfigured.some(item => validated.has(item.id))).toBe(false);
+		expect(picker).toMatchObject({ title: "登录", layout: "cards", size: "md" });
+		expect(picker.items?.find(item => item.id === "anthropic")).toMatchObject({ detail: "未配置", dot: "muted" });
+		expect(checked).not.toHaveBeenCalled();
 
 		ui.type(ESCAPE);
 		expect(has(ui, "picker")).toBe(false);
@@ -166,15 +163,20 @@ describe("inline selectors in a Tern terminal", () => {
 			})),
 		);
 		await using ui = await nativeShell(mode.shell);
-		await mode.showOAuthSelector("logout");
+		const reload = vi.spyOn(authStorage.credentials, "reload");
+		const logout = mode.showOAuthSelector("logout");
+		// The command reloads its store and then stays pending until the pickers are answered.
+		await reload.mock.results[0]!.value;
 		const providers = sheet(ui);
-		expect(providers.title).toBe("Sign out");
+		expect(providers.title).toBe("退出登录");
 		expect(providers.items!.map(item => item.id)).toEqual(["anthropic"]);
 
-		await mode.showOAuthSelector("logout", "anthropic");
+		ui.send({ ev: "action", sf: ui.sf, id: ui.node("picker").id, act: "confirm" });
+		await Promise.resolve();
 		const accounts = sheet(ui);
 		expect(accounts.items).toHaveLength(2);
 		ui.type(ESCAPE);
+		await logout;
 		expect(has(ui, "picker")).toBe(false);
 		expect(has(ui, "editor")).toBe(true);
 	});
@@ -285,16 +287,22 @@ describe("inline selectors in a Tern terminal", () => {
 			/>
 		));
 		const treeSheet = sheet(ui);
-		expect(treeSheet).toMatchObject({ title: "Session tree", size: "lg", layout: "tree", preview: "side" });
+		expect(treeSheet).toMatchObject({ title: "会话树", size: "lg", layout: "tree", preview: "side" });
 		// Row text folds line breaks to spaces and keeps the other spacing.
 		expect(treeSheet.items![0]!.label).toEqual([
 			{ t: "user: ", s: "accent strong" },
 			{ t: "# Title  body  text", s: "accent strong" },
 		]);
-		// The selected tool result previews as what `/copy` would take: named by its tool, output as code.
 		expect(treeSheet.selected).toBe("result");
-		expect(ui.node("text").p).toMatchObject({ role: "omp.picker.title", text: "Bash result" });
-		expect(ui.node("code").p).toMatchObject({ text: "alpha\nbeta", wrap: true });
+		const picker = ui.node("picker");
+		expect(ui.children(picker).find(node => node.p.role === "omp.picker.title")?.p.text).toBe("[bash]");
+
+		// The details action exposes the original multiline output without folding whitespace.
+		ui.send({ ev: "action", sf: ui.sf, id: picker.id, act: "details" });
+		const details = ui.children(ui.get(picker.id)).find(node => node.k === "list")!;
+		expect(ui.children(details).find(node => node.k === "text")?.p.text).toEqual(
+			expect.stringContaining("alpha\nbeta"),
+		);
 		tree.close();
 
 		const reset = mode.showEditorAreaDialog(() => (

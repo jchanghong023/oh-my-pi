@@ -25,6 +25,17 @@ async function probe(scenario: string, archive?: Buffer): Promise<void> {
 	if (archive) await fs.writeFile(path.join(root, "resources.json.gz"), archive);
 	const child = Bun.spawn([process.execPath, "--preload", preload, fixture, scenario, root, sourceRoot], {
 		cwd: project,
+		env: {
+			...process.env,
+			HOME: root,
+			USERPROFILE: root,
+			BUN_RUNTIME_TRANSPILER_CACHE_PATH:
+				process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH ??
+				path.join(import.meta.dir, "../../../node_modules/.cache/bun-transpiler"),
+			OMP_PROFILE: "default",
+			OMP_CONFIG_ROOT: path.join(root, "config"),
+			PI_CODING_AGENT_DIR: path.join(root, "default-profile"),
+		},
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
@@ -55,7 +66,7 @@ describe("Developer Test Agent archive materialization", () => {
 	});
 
 	it("publishes concurrently, isolates profiles and requires the archive only on a cache miss", async () => {
-		await probe("cache", await buildDeveloperTestAgentResources());
+		await probe("cache", gzipSync(JSON.stringify([["commands", null], file("commands/dt.md", "# DT fixture\n")])));
 	});
 
 	it("rejects traversal, absolute, Windows and empty path components without publishing or leaking staging files", async () => {

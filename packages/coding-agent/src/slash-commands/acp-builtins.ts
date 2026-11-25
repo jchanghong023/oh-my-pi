@@ -1,19 +1,23 @@
 import type { AvailableCommand } from "@oh-my-pi/pi-utils/acp";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL, lookupBuiltinSlashCommand } from "./builtin-registry";
-import { parseSlashCommand } from "./helpers/parse";
+import { parseSlashCommand, usage } from "./helpers/parse";
 import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types";
 
 export type { AcpBuiltinSlashCommandResult } from "./types";
 
 /**
- * All names (primary + aliases) that are reserved by ACP builtins. Used to
- * filter out extension commands that would shadow a builtin or its alias at
+ * All names (primary + aliases) reserved by ACP builtins with text handlers.
+ * Used to filter out extensions that would shadow a builtin or its alias at
  * dispatch time (e.g. `models` is an alias for `/model`, so an extension
  * registering `models` would appear in the palette but execute the builtin).
  */
 export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
 	BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [c.name, ...(c.aliases ?? [])]),
 );
+
+export function isTuiOnlyTodoLoopCommand(text: string): boolean {
+	return /^\/todoloop(?:\s|$)/.test(text);
+}
 
 /**
  * Whether an extension command named `name` would be captured by ACP builtin
@@ -24,7 +28,7 @@ export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
  * advertised to ACP clients.
  */
 export function isAcpBuiltinShadowedName(name: string): boolean {
-	if (ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
+	if (name === "todoloop" || ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
 	const colon = name.indexOf(":");
 	return colon !== -1 && ACP_BUILTIN_RESERVED_NAMES.has(name.slice(0, colon));
 }
@@ -50,8 +54,8 @@ export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = BUILTIN_SLASH_COMM
 
 /**
  * Dispatch a slash command in ACP/text mode. Returns:
- * - `false` when no builtin matched (or matched a TUI-only entry); the caller
- *   should forward the input as a prompt.
+ * - `false` when no text-mode builtin matched; the caller should forward
+ *   the input as a prompt. Exact `/todoloop` invocations are refused locally.
  * - `{ consumed: true }` when the command handled the input entirely.
  * - `{ prompt }` when the command was handled but a residual prompt should be
  *   sent to the model.
@@ -60,6 +64,9 @@ export async function executeAcpBuiltinSlashCommand(
 	text: string,
 	runtime: SlashCommandRuntime,
 ): Promise<AcpBuiltinSlashCommandResult> {
+	if (isTuiOnlyTodoLoopCommand(text)) {
+		return (await usage("/todoloop is only supported in the TUI.", runtime)) ?? { consumed: true };
+	}
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
 	const command = lookupBuiltinSlashCommand(parsed.name);

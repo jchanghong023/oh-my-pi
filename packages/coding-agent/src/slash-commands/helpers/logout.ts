@@ -160,10 +160,14 @@ export async function logoutProviderForCommand(
 	}
 	// Login providers may store credentials under a different id (storeCredentialsAs).
 	const storageProvider = getOAuthCredentialProvider(provider.id);
-	const accounts = toLogoutAccounts(storageProvider, authStorage.credentials.list(storageProvider), {
-		activeIdentity: authStorage.oauth.identity(storageProvider, session.sessionId),
-		activeApiKey: authStorage.keys.source(storageProvider)?.kind === "api_key",
-	});
+	const accounts = toLogoutAccounts(
+		storageProvider,
+		authStorage.credentials.list(storageProvider, { includePaused: true }),
+		{
+			activeIdentity: authStorage.oauth.identity(storageProvider, sessionId),
+			activeApiKey: authStorage.keys.source(storageProvider)?.kind === "api_key",
+		},
+	);
 	if (accounts.length === 0) {
 		const source = authStorage.keys.describe(storageProvider, session.sessionId);
 		const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
@@ -231,7 +235,7 @@ export async function listLogoutAccounts(
 ): Promise<LogoutAccount[]> {
 	const provider = getOAuthCredentialProvider(loginProvider);
 	await authStorage.credentials.reload();
-	return toLogoutAccounts(provider, authStorage.credentials.list(provider), {
+	return toLogoutAccounts(provider, authStorage.credentials.list(provider, { includePaused: true }), {
 		activeIdentity: authStorage.oauth.identity(provider, sessionId),
 		activeApiKey: authStorage.keys.source(provider)?.kind === "api_key",
 	});

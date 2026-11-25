@@ -56,6 +56,7 @@ import {
 	resolveAuthBrokerConfig,
 	resolveEffectiveSettings,
 } from "../session/auth-broker-config";
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import { GATEWAY_MODEL_KINDS, runAuthGatewayStdio } from "./auth-gateway-stdio";
 import { generateToken, readTokenFile, writeTokenFile } from "./token-file";
 
@@ -441,6 +442,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		resolveModel: (id, options) => resolveGatewayModel(id, index, options),
 		listModels: () => index.qualified.values(),
 		excludeProviders: new Set(cfgDisabledProviders.get(settings)),
+		thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 		clients,
 	});
 	process.stdout.write(`auth-gateway listening on ${handle.url}\n`);

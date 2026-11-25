@@ -1,4 +1,5 @@
 import { logger, toError } from "@oh-my-pi/pi-utils";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "../config/settings";
 import { type ArtifactAllocator, type OutputArtifactError, OutputSink } from "../tools/streaming-output";
 import { statusEventKey } from "../tools/details/eval";
@@ -84,6 +85,7 @@ export interface KernelExecutorBaseOptions {
 	onReply?: (text: string) => void;
 	toolSession?: ToolSession;
 	parentToolCallId?: string;
+	toolContext?: AgentToolContext;
 	bridgeSessionId?: string;
 	allocateArtifact?: ArtifactAllocator;
 	/** Set by the kernel session registry; true when this cell is the first on a replacement for a dead kernel. */
@@ -542,6 +544,7 @@ export async function executeWithKernelBase<
 			? registerPyToolBridge(options.bridgeSessionId, runId, {
 					toolSession: options.toolSession,
 					parentToolCallId: options.parentToolCallId,
+					toolContext: options.toolContext,
 					signal: options.signal,
 					cellTimeoutMs: executionTimeoutMs ?? options.idleTimeoutMs ?? 0,
 					shieldedSignal: abortShield.signal,
@@ -666,8 +669,8 @@ export async function executeWithKernelBase<
 		if (restartNotice) error.message = `${restartNotice}\n${error.message}`;
 		throw error;
 	} finally {
-		await sink.dispose();
 		unregisterBridge?.();
+		await sink.dispose();
 		abortShield.dispose?.();
 	}
 }

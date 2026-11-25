@@ -53,7 +53,10 @@ describe("omp read <image>?q=", () => {
 			fs.mkdirSync(path.join(project, ".omp"), { recursive: true });
 			// Bound the completion attempt so a dead endpoint aborts quickly instead
 			// of running the provider SDK's full connection backoff.
-			fs.writeFileSync(path.join(project, ".omp", "config.yml"), "images:\n  questionTimeoutMs: 3000\n");
+			fs.writeFileSync(
+				path.join(project, ".omp", "config.yml"),
+				"images:\n  questionTimeoutMs: 3000\nmodelRoles:\n  vision: testvision/vmodel\n",
+			);
 			fs.writeFileSync(path.join(agentDir, "models.yml"), MODELS_YML);
 			const pngPath = path.join(project, "test.png");
 			fs.writeFileSync(pngPath, Buffer.from(PNG_1X1, "base64"));
@@ -74,6 +77,10 @@ describe("omp read <image>?q=", () => {
 					env: {
 						...process.env,
 						HOME: home,
+						USERPROFILE: home,
+						OMP_CONFIG_ROOT: home,
+						OMP_PROFILE: "",
+						PI_PROFILE: "",
 						PI_CODING_AGENT_DIR: agentDir,
 						PI_TEST_RUNTIME: "1",
 					},

@@ -248,8 +248,8 @@ class RemoteCredentials implements CredentialsApi {
 	all(): AuthStorageData {
 		return this.#remote.callSync("credentials.all");
 	}
-	list(provider?: string): StoredAuthCredential[] {
-		return this.#remote.callSync("credentials.list", provider);
+	list(provider?: string, options?: { includePaused?: boolean }): StoredAuthCredential[] {
+		return this.#remote.callSync("credentials.list", provider, options);
 	}
 	has(provider: string): boolean {
 		return this.#remote.callSync("credentials.has", provider);

@@ -1741,15 +1741,16 @@ impl ExtProc for UnixProc {
 	}
 
 	fn signal(&mut self, sig: Signal) -> io::Result<()> {
+		self.scope.signal(sig)?;
 		self.tracker.lock().signalled(sig);
-		self.scope.signal(sig)
+		Ok(())
 	}
 
 	fn signal_single(&mut self, sig: Signal) -> io::Result<()> {
-		self.tracker.lock().signalled(sig);
 		let number = i32::from(sig.number(Platform::current()));
 		// SAFETY: the child is held unreaped for the lifetime of this handle.
 		if unsafe { libc::kill(self.pid, number) } == 0 {
+			self.tracker.lock().signalled(sig);
 			Ok(())
 		} else {
 			Err(io::Error::last_os_error())
@@ -1762,8 +1763,9 @@ impl ExtProc for UnixProc {
 		children: &[(u32, Option<u32>)],
 		extra: &[crate::proctree::Process],
 		groups: bool,
-	) -> bool {
+	) -> Option<std::collections::HashSet<i32>> {
 		let mut targets = crate::proctree::TerminationTargets::new();
+		let mut single = Vec::new();
 		for process in extra {
 			if children
 				.iter()
@@ -1771,34 +1773,36 @@ impl ExtProc for UnixProc {
 			{
 				continue;
 			}
-			if groups && let Some(pgid) = process.group_id() {
-				targets.add_pgid(pgid);
+			if groups {
+				if let Some(pgid) = process.group_id() {
+					targets.add_pgid(pgid);
+				}
+				targets.add_process(process.clone());
+			} else {
+				single.push(process.clone());
 			}
-			targets.add_process(process.clone());
 		}
 		for &(pid, pgid) in children {
 			let Some(process) = i32::try_from(pid)
 				.ok()
 				.and_then(crate::proctree::Process::from_pid)
 			else {
-				// Never claim to have signalled a child whose identity could not
-				// be pinned; let the caller use its live process handles.
-				return false;
+				// Nothing has been sent yet: use the original host handles
+				// when one of the children cannot be pinned.
+				return None;
 			};
-			// The handle keeps its launch scope even when an exited leader
-			// can no longer report a group but has left live group members.
-			if groups && let Some(pgid) = pgid.and_then(|id| i32::try_from(id).ok()) {
-				targets.add_pgid(pgid);
+			if groups {
+				// Preserve the launch group even if its leader has exited.
+				if let Some(pgid) = pgid.and_then(|id| i32::try_from(id).ok()) {
+					targets.add_pgid(pgid);
+				}
+				targets.add_process(process);
+			} else {
+				single.push(process);
 			}
-			targets.add_process(process);
 		}
 		let number = i32::from(sig.number(Platform::current()));
-		if groups {
-			targets.signal(number);
-		} else {
-			targets.signal_roots(number);
-		}
-		true
+		Some(targets.signal_wave(single, number))
 	}
 
 	fn record_wave_signal(&mut self, sig: Signal) {

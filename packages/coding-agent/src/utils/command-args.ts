@@ -5,19 +5,30 @@
  * argument or follows an option `=`, and a matching quote ends one (`--model="model selector"`
  * stays one argument; `don't stop` splits into `don't`, `stop`). `strict` applies shell-style
  * quoting and escapes instead and throws on an unterminated quote or trailing backslash.
+ * `literalBackslashesAfter` keeps path separators in the value after that option,
+ * while allowing an unquoted backslash to escape a space or tab.
  */
-export function parseCommandArgs(argsString: string, options?: { strict?: boolean }): string[] {
+export function parseCommandArgs(
+	argsString: string,
+	options?: { strict?: boolean; preserveEmpty?: boolean; literalBackslashesAfter?: string },
+): string[] {
 	const args: string[] = [];
 	let current = "";
 	let inQuote: string | null = null;
 	let started = false;
+	const preserveEmpty = options?.strict || options?.preserveEmpty;
 
 	for (let i = 0; i < argsString.length; i++) {
 		const char = argsString[i];
 		if (options?.strict && char === "\\" && inQuote !== "'") {
 			const next = argsString[i + 1];
-			if (next === undefined) throw new Error("Incomplete command escape.");
-			if (inQuote === null || next === '"' || next === "\\" || next === "$" || next === "`") {
+			const after = options.literalBackslashesAfter;
+			const literal = after !== undefined && args.at(-1) === after;
+			if (!literal && next === undefined) throw new Error("Incomplete command escape.");
+			const escape = literal
+				? inQuote === null && (next === " " || next === "\t")
+				: inQuote === null || next === '"' || next === "\\" || next === "$" || next === "`";
+			if (next !== undefined && escape) {
 				current += next;
 				started = true;
 				i++;
@@ -39,7 +50,7 @@ export function parseCommandArgs(argsString: string, options?: { strict?: boolea
 			started = true;
 			if (close !== -1) i = close;
 		} else if (char === " " || char === "\t") {
-			if (current || (options?.strict && started)) {
+			if (current || (preserveEmpty && started)) {
 				args.push(current);
 			}
 			current = "";
@@ -51,7 +62,7 @@ export function parseCommandArgs(argsString: string, options?: { strict?: boolea
 	}
 
 	if (options?.strict && inQuote) throw new Error("Unterminated command quote.");
-	if (current || (options?.strict && started)) {
+	if (current || (preserveEmpty && started)) {
 		args.push(current);
 	}
 

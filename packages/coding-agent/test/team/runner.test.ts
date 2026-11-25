@@ -364,6 +364,7 @@ describe("team root observability", () => {
 					eventBus,
 					subagentEventBus,
 					sessionManager: {
+						getSessionId: () => sessionId,
 						getAdditionalDirectories: () => [],
 						getArtifactsDir: () => null,
 					},

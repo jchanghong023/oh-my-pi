@@ -7,7 +7,7 @@ import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPath } from "../utils/open";
 import { restoreDetachedDraft } from "./helpers/draft";
 import { errorMessage } from "./helpers/parse";
-import type { SlashCommandSpec } from "./types";
+import type { ParsedSlashCommand, SlashCommandSpec, TuiSlashCommandRuntime } from "./types";
 
 interface SketchSessionState {
 	current?: { cancel(): void };
@@ -27,6 +27,34 @@ function sessionState(session: AgentSession): SketchSessionState {
 	return state;
 }
 
+export function restoreSketchDraft(command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime): void {
+	const { composer } = runtime.ctx;
+	// Enter may already have removed the command; never clear newer typing or
+	// turn the slash invocation itself back into ordinary prompt text.
+	if (!runtime.draftDetached && composer.expandedText().trim() === command.text.trim()) composer.setText("");
+	const images = runtime.input?.images;
+	if (!images?.length) return;
+	const missing = images.flatMap((image, index) =>
+		composer.pendingImages.includes(image) ? [] : [{ image, link: runtime.input?.imageLinks?.[index] }],
+	);
+	const currentText = composer.expandedText();
+	const refs = compactImageMarkers(currentText, composer.pendingImages.length);
+	const unreferenced = images.flatMap(image => {
+		const index = composer.pendingImages.indexOf(image);
+		return index >= 0 && refs && !refs.keep.includes(index) ? [formatVisionMarker("image", index + 1)] : [];
+	});
+	if (unreferenced.length)
+		composer.setCollapsedText([unreferenced.join(" "), currentText].filter(Boolean).join("\n\n"));
+	if (missing.length) {
+		restoreDetachedDraft(
+			composer,
+			missing.map((_, index) => formatVisionMarker("image", index + 1)).join(" "),
+			missing.map(item => item.image),
+			missing.map(item => item.link),
+		);
+	}
+}
+
 export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "sketch",
@@ -34,28 +62,7 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
 			const { composer, session, sessionManager } = ctx;
-			// Enter may already have removed the command; never clear newer typing or
-			// turn the slash invocation itself back into ordinary prompt text.
-			if (!runtime.draftDetached && composer.expandedText().trim() === command.text.trim()) composer.setText("");
-			const missing = (runtime.input?.images ?? []).flatMap((image, index) =>
-				composer.pendingImages.includes(image) ? [] : [{ image, link: runtime.input?.imageLinks?.[index] }],
-			);
-			const currentText = composer.expandedText();
-			const refs = compactImageMarkers(currentText, composer.pendingImages.length);
-			const unreferenced = (runtime.input?.images ?? []).flatMap(image => {
-				const index = composer.pendingImages.indexOf(image);
-				return index >= 0 && refs && !refs.keep.includes(index) ? [formatVisionMarker("image", index + 1)] : [];
-			});
-			if (unreferenced.length)
-				composer.setCollapsedText([unreferenced.join(" "), currentText].filter(Boolean).join("\n\n"));
-			if (missing.length) {
-				restoreDetachedDraft(
-					composer,
-					missing.map((_, index) => formatVisionMarker("image", index + 1)).join(" "),
-					missing.map(item => item.image),
-					missing.map(item => item.link),
-				);
-			}
+			restoreSketchDraft(command, runtime);
 			const state = sessionState(session);
 			if (state.current) {
 				ctx.showWarning("A sketch is already open in this session; finish it or press Escape to cancel.");
@@ -99,7 +106,30 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				ctx.shell.focused() === focus;
 			state.current = owned;
 			try {
-				server = startSketchServer();
+				server = startSketchServer(async (png, isOpen) => {
+					const ownsDraft = () => isOpen() && isCurrent();
+					if (!ownsDraft()) return "stale";
+					try {
+						const localUrl = `local://sketch-${crypto.randomUUID()}.png`;
+						const artifactsDir = sessionManager.getArtifactsDir();
+						const filePath = InternalUrlRouter.instance().locateSync(localUrl, {
+							localProtocolOptions: {
+								getArtifactsDir: () => artifactsDir,
+								getSessionId: () => sessionId,
+							},
+						});
+						if (filePath === undefined) throw new Error("Unable to locate the session sketch artifact");
+						await Bun.write(filePath, png);
+						if (!ownsDraft()) return "stale";
+						if (await ctx.handleImagePathPaste(localUrl, ownsDraft)) return "attached";
+						if (!ownsDraft()) return "stale";
+						throw new Error("Unable to attach the sketch PNG to the draft");
+					} catch (error) {
+						if (!ownsDraft()) return "stale";
+						ctx.showError(`Sketch failed: ${errorMessage(error)}`);
+						return "failed";
+					}
+				});
 				removeSessionChange = session.registerSessionChangeCallback(owned.cancel);
 				removeInput = ctx.shell.interceptInput(event => {
 					if (!isCurrent()) {
@@ -120,20 +150,7 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						: "open this URL if the browser does not launch";
 				ctx.showStatus(`Sketch canvas: ${server.url} (${hint})`);
 				if (!offline) openPath(server.url);
-				const png = await server.result;
-				if (!png || !isCurrent()) return;
-				const localUrl = `local://sketch-${crypto.randomUUID()}.png`;
-				const artifactsDir = sessionManager.getArtifactsDir();
-				const filePath = InternalUrlRouter.instance().locateSync(localUrl, {
-					localProtocolOptions: {
-						getArtifactsDir: () => artifactsDir,
-						getSessionId: () => sessionId,
-					},
-				});
-				if (filePath === undefined) throw new Error("Unable to locate the session sketch artifact");
-				await Bun.write(filePath, png);
-				if (!isCurrent()) return;
-				await ctx.handleImagePathPaste(localUrl, isCurrent);
+				await server.result;
 			} catch (error) {
 				if (isCurrent()) ctx.showError(`Sketch failed: ${errorMessage(error)}`);
 			} finally {

@@ -10,6 +10,8 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { orderedSettings } from "../config/all-settings";
 import { type AnySetting, lookup } from "../config/registry";
 import { Settings, settings } from "../config/settings";
+import type { TeamConfigSaveResult } from "../team/config-types";
+import { cfgTeamMembers } from "../team/settings";
 import { initXdg } from "./commands/init-xdg";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 
@@ -330,6 +332,40 @@ function handleGet(key: string | undefined, flags: { json?: boolean }): void {
 	console.log(formatValue(value));
 }
 
+async function saveTeamMembers(value: unknown, expectedRevision: string): Promise<TeamConfigSaveResult> {
+	const [
+		{ ModelRegistry },
+		{ initializeOfflineModelCommand, loadCliExtensionProviders },
+		{ AuthStorage },
+		{ loadEffectiveAuthAccountPolicyConfig },
+		{ TeamConfigService },
+		{ getAgentDbPath },
+	] = await Promise.all([
+		import("../config/model-registry"),
+		import("../sdk"),
+		import("../session/auth-storage"),
+		import("../session/auth-broker-config"),
+		import("../team/config"),
+		import("@oh-my-pi/pi-utils/dirs"),
+	]);
+	const scope = Settings.instance;
+	const { accountPolicies, defaultReservePct } = await loadEffectiveAuthAccountPolicyConfig({ settings: scope });
+	// Configuration must not contact a broker or refresh a provider. Recover the same local catalog caches as startup.
+	const auth = await AuthStorage.create(getAgentDbPath(scope.getAgentDir()), { accountPolicies, defaultReservePct });
+	try {
+		await auth.credentials.reload();
+		await initializeOfflineModelCommand(scope);
+		const registry = new ModelRegistry(auth, undefined, { settings: scope });
+		await loadCliExtensionProviders(registry, scope, scope.getCwd(), { discoverModels: false });
+		await registry.hydrateCredentialScopedModelCaches();
+		await registry.refreshRuntimeProviders("offline");
+		const service = new TeamConfigService({ getSettings: () => scope, getModelRegistry: () => registry });
+		return await service.saveTeamConfig(value, expectedRevision);
+	} finally {
+		auth.close();
+	}
+}
+
 async function handleSet(key: string | undefined, value: string | undefined, flags: { json?: boolean }): Promise<void> {
 	if (!key || value === undefined) {
 		console.error(chalk.red(`Usage: ${APP_NAME} config set <key> <value>`));
@@ -344,22 +380,33 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 		process.exit(1);
 	}
 
+	let teamSave: TeamConfigSaveResult | undefined;
 	try {
 		const parsed = def.setting.parse(value);
 		def.setting.assertWritable(parsed);
 		const snapshot = await settings.readUserSetting(def.path);
 		if (snapshot.revision === null) throw new Error("User configuration cannot be safely read; nothing was saved.");
-		await settings.saveUserSetting(def.path, parsed, snapshot.revision);
+		if (def.path === cfgTeamMembers.id) teamSave = await saveTeamMembers(parsed, snapshot.revision);
+		else await settings.saveUserSetting(def.path, parsed, snapshot.revision);
 	} catch (err) {
 		console.error(chalk.red(String(err)));
+		if (def.path === cfgTeamMembers.id)
+			console.error("Team CLI validation uses only local credentials and cached model metadata.");
 		process.exit(1);
 	}
 
 	// Report the value written to config.yml. When another layer or an environment variable still
 	// supplies the effective value, say which instead of echoing its value as if it had been set.
-	const saved = globalValue(def.setting);
+	const saved = teamSave ? teamSave.config.userMembers?.map(slot => slot.rawSelector) : globalValue(def.setting);
 	const redacted = def.setting.isCredential && !!saved;
-	const shadow = shadowingSource(def.setting);
+	const shadow = teamSave
+		? teamSave.effectiveMatchesRequested
+			? undefined
+			: (shadowingSource(def.setting) ?? {
+					json: { effectiveMatchesRequested: false },
+					message: teamSave.effectiveNote,
+				})
+		: shadowingSource(def.setting);
 
 	if (flags.json) {
 		console.log(
@@ -376,7 +423,8 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 			`${currentTheme().symbols.symbol("status.success")} Set ${def.path} = ${redacted ? REDACTED : formatValue(saved)}`,
 		),
 	);
-	if (shadow) console.log(chalk.yellow(`${currentTheme().symbols.symbol("status.warning")} ${shadow.message}`));
+	if (shadow?.message)
+		console.log(chalk.yellow(`${currentTheme().symbols.symbol("status.warning")} ${shadow.message}`));
 }
 
 /** Value `setting` holds in the global config layer — what `config set` wrote. */

@@ -61,7 +61,8 @@ describe("copyToClipboard OSC 52 routing", () => {
 			throw new Error("X11 clipboard unavailable");
 		});
 		harness = await startActiveTerminal();
-		const server = startSketchServer();
+		const rejectDelivery = vi.fn<Parameters<typeof startSketchServer>[0]>(async () => "failed");
+		const server = startSketchServer(rejectDelivery);
 		try {
 			expect(requestOfflineBrowserUrlCopy(server.url)).toBe(true);
 			const payload = /^\x1b\]52;c;([A-Za-z0-9+/=]+)\x07$/.exec(harness.routed[0] ?? "")?.[1];
@@ -72,6 +73,7 @@ describe("copyToClipboard OSC 52 routing", () => {
 			expect(response.status).toBe(200);
 			expect(response.headers.get("content-type")).toContain("text/html");
 			await response.arrayBuffer();
+			expect(rejectDelivery).not.toHaveBeenCalled();
 		} finally {
 			server.close();
 		}

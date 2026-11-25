@@ -121,8 +121,9 @@ import {
 	discoverLmStudioModelRuntimeMetadata,
 	discoverModelsByProviderType,
 	ensureLlamaCppV1BaseUrl,
-	getImplicitOllamaBaseUrl,
+	getImplicitOllamaEndpoint,
 	getOllamaContextLengthOverride,
+	hasConfiguredDiscoveryEndpoint,
 	isDiscoveryAuthRejection,
 	LLAMA_CPP_DEFAULT_BASE_URLS,
 	normalizeBareDiscoveryBaseUrl,
@@ -1186,7 +1187,8 @@ export class ModelRegistry {
 	reapplyModelPolicies(): Promise<void> {
 		if (this.#owner) return this.#owner.reapplyModelPolicies();
 		this.#policyReapplyRequested = true;
-		this.#policyReapply ??= this.#runPolicyReapply();
+		// Publish the single-flight before the first synchronous disk read can fail.
+		this.#policyReapply ??= Promise.resolve().then(() => this.#runPolicyReapply());
 		return this.#policyReapply;
 	}
 
@@ -2745,22 +2747,18 @@ export class ModelRegistry {
 		for (const provider of ["local", "web"]) {
 			if (!disabledProviders.has(provider)) this.#keylessProviders.add(provider);
 		}
-		const ollamaEndpointEnv = Bun.env.OLLAMA_BASE_URL?.trim()
-			? "OLLAMA_BASE_URL"
-			: Bun.env.OLLAMA_HOST?.trim()
-				? "OLLAMA_HOST"
-				: undefined;
 		if (!configuredProviders.has("ollama") && !disabledProviders.has("ollama")) {
+			const { baseUrl, env } = getImplicitOllamaEndpoint();
 			this.#discoverableProviders.push({
 				provider: "ollama",
 				api: "openai-responses",
-				baseUrl: getImplicitOllamaBaseUrl(),
+				baseUrl,
 				discovery: { type: "ollama" },
-				optional: ollamaEndpointEnv === undefined,
+				optional: env === undefined,
 			});
 			this.#keylessProviders.add("ollama");
 			this.#implicitLocalProviders.add("ollama");
-			if (ollamaEndpointEnv) this.#implicitProviderEndpointEnv.set("ollama", ollamaEndpointEnv);
+			if (env) this.#implicitProviderEndpointEnv.set("ollama", env);
 		}
 		if (!configuredProviders.has("llama.cpp") && !disabledProviders.has("llama.cpp")) {
 			this.#discoverableProviders.push({
@@ -3032,24 +3030,21 @@ export class ModelRegistry {
 				? Promise.resolve<Array<ConfiguredModelDiscoveryResult & { provider: DiscoveryProviderConfig }>>([])
 				: Promise.all(
 						selectedDiscoverableProviders.map(async provider => {
-							const unconfiguredEndpoint =
+							const cacheOnly =
 								intranet &&
 								strategy !== "offline" &&
-								(!provider.baseUrl?.trim() ||
+								(!hasConfiguredDiscoveryEndpoint(provider) ||
 									(this.#implicitLocalProviders.has(provider.provider) &&
 										!this.#implicitProviderEndpointEnv.has(provider.provider)));
 							return {
 								provider,
-								...(await this.#discoverProviderModelsCoalesced(
-									provider,
-									unconfiguredEndpoint ? "offline" : strategy,
-								)),
+								...(await this.#discoverProviderModelsCoalesced(provider, cacheOnly ? "offline" : strategy)),
 							};
 						}),
 					);
 		const [configuredDiscoveryResults, builtInDiscovery] = await Promise.all([
 			configuredDiscoveriesPromise,
-			// Built-in catalogs have public fallbacks; extension callbacks do not expose a discovery endpoint.
+			// Built-in catalogs can fall back to public endpoints; extension callbacks are opaque.
 			this.#discoverBuiltInProviderModels(intranet ? "offline" : strategy, providerFilter),
 		]);
 		// A pass whose fetch finished while an earlier one still prepares lands after it,

@@ -45,7 +45,13 @@ import { buildOutputValidator } from "../tools/output-schema-validator";
 import { trackLateCleanup } from "../utils/late-cleanup";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { renderStepPrompts } from "./steps";
-import { type ExecutorOptions, runSubprocess, type SubagentToolResult, usesYield } from "./executor";
+import {
+	type ExecutorOptions,
+	runSubprocess,
+	specExecutorDelegateTools,
+	type SubagentToolResult,
+	usesYield,
+} from "./executor";
 import {
 	applyEligibleNestedPatches,
 	type IsolationContext,
@@ -747,6 +753,15 @@ function buildExecutorOptions(
 	const restrictToolNames =
 		policy.planMode || session.restrictToolNames === true || policy.effectiveAgent.restrictToolNames === true;
 	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
+	const delegateTools =
+		restrictToolNames &&
+		!policy.planMode &&
+		request.invocationKind === "task" &&
+		policy.agent.source === "bundled" &&
+		policy.agent.name === "task" &&
+		policy.effectiveAgent.tools === undefined
+			? specExecutorDelegateTools(session)
+			: undefined;
 	return {
 		cwd: session.cwd,
 		costGate: session.costGate,
@@ -756,7 +771,7 @@ function buildExecutorOptions(
 		onPayload: session.onPayload,
 		onResponse: session.onResponse,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
-		agent: policy.effectiveAgent,
+		agent: delegateTools ? { ...policy.effectiveAgent, tools: delegateTools } : policy.effectiveAgent,
 		...spawnPrompts(request, policy.structured),
 		assignment: request.assignment.trim(),
 		context: request.context?.trim() || undefined,
@@ -1001,7 +1016,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		result = await runAdmittedSubagent(request, spawnOverrides);
 	} catch (error) {
 		try {
-			await hooks?.onSettled?.(request, undefined);
+			await hooks?.onSettled?.(request, error instanceof StructuredSubagentError ? error.result : undefined);
 		} catch {
 			// Do not replace the original invocation failure.
 		}
@@ -1036,6 +1051,33 @@ async function runAdmittedSubagent(
 	// failure must carry the exit status and artifact the child produced.
 	let settled: SingleResult | undefined;
 	let retainSalvagedArtifact = false;
+	let artifactsFinalized = false;
+	const finalizeArtifacts = async (initializationFailed = false): Promise<void> => {
+		if (!lease.temporary || artifactsFinalized) return;
+		artifactsFinalized = true;
+		const shouldRetainArtifacts =
+			!initializationFailed &&
+			(request.detached === true ||
+				retainSalvagedArtifact ||
+				(request.retainArtifacts && (completedSuccessfully || hasValidStructuredOutput)) ||
+				(policy.isIsolated && (!policy.applyChanges || changesApplied === false || requiresRecoveryArtifacts)));
+		const cleanupArtifacts = async (): Promise<void> => {
+			await fs.rm(lease.artifactsDir, { recursive: true, force: true });
+			lease.unregister?.();
+		};
+		if (shouldRetainArtifacts) {
+			// The caller owns disposal once its retained handle is no longer needed.
+			request.onArtifactsRetained?.(cleanupArtifacts);
+		} else if (deferredCleanup && !initializationFailed) {
+			trackLateCleanup(deferredCleanup.then(cleanupArtifacts), {
+				resource: "artifacts",
+				artifactsDir: lease.artifactsDir,
+			});
+		} else {
+			await deferredCleanup;
+			await cleanupArtifacts();
+		}
+	};
 	const onSubprocessResult =
 		request.invocationKind === "eval" || request.session.subagentHooks?.onSpawnFailed
 			? (result: SingleResult): void => {
@@ -1054,13 +1096,9 @@ async function runAdmittedSubagent(
 		if (spawnOverrides?.keepAlive !== undefined) baseOptions.keepAlive = spawnOverrides.keepAlive;
 		const hooks = request.session.subagentHooks;
 		let spawnFailed = false;
-		if (hooks?.onSpawnFailed) {
-			baseOptions.subagentHooks = {
-				...hooks,
-				onSpawnFailed: async (child, error) => {
-					spawnFailed = true;
-					await hooks.onSpawnFailed!(child, error);
-				},
+		if (hooks) {
+			baseOptions.onInitialSpawnFailed = () => {
+				spawnFailed = true;
 			};
 		}
 		let sharedResult: SingleResult | undefined;
@@ -1205,6 +1243,12 @@ async function runAdmittedSubagent(
 		}
 
 		completedSuccessfully = result.exitCode === 0 && !result.error && !result.aborted;
+		// A failed cold setup has no retained child to own a temporary lease.
+		if (spawnFailed && !result.aborted && lease.temporary) {
+			await finalizeArtifacts(true);
+			delete result.outputPath;
+			delete result.outputMeta;
+		}
 		return {
 			result,
 			policy,
@@ -1214,7 +1258,7 @@ async function runAdmittedSubagent(
 			temporaryArtifacts: lease.temporary,
 		};
 	} catch (error) {
-		if (error instanceof StructuredSubagentError) throw error;
+		if (error instanceof StructuredSubagentError && (!settled || error.result)) throw error;
 		// The failure message points the parent at the artifact, so it must
 		// survive the cleanup below.
 		retainSalvagedArtifact = settled?.outputPath !== undefined;
@@ -1224,31 +1268,7 @@ async function runAdmittedSubagent(
 			{ cause: error, result: settled },
 		);
 	} finally {
-		const shouldRetainArtifacts =
-			request.detached === true ||
-			retainSalvagedArtifact ||
-			(request.retainArtifacts && (completedSuccessfully || hasValidStructuredOutput)) ||
-			(policy.isIsolated && (!policy.applyChanges || changesApplied === false || requiresRecoveryArtifacts));
-		const shouldCleanup = lease.temporary && !shouldRetainArtifacts;
-		const cleanupArtifacts = async (): Promise<void> => {
-			await fs.rm(lease.artifactsDir, { recursive: true, force: true });
-			lease.unregister?.();
-		};
-		if (shouldCleanup) {
-			if (deferredCleanup) {
-				trackLateCleanup(deferredCleanup.then(cleanupArtifacts), {
-					resource: "artifacts",
-					artifactsDir: lease.artifactsDir,
-				});
-			} else {
-				await cleanupArtifacts();
-			}
-		} else if (lease.temporary && request.onArtifactsRetained) {
-			// Retained rather than cleaned up now: the caller (e.g. an async
-			// job body) owns disposing it once the retained handle is no
-			// longer needed, instead of it leaking for the process lifetime.
-			request.onArtifactsRetained(cleanupArtifacts);
-		}
+		await finalizeArtifacts();
 	}
 }
 

@@ -437,7 +437,7 @@ if "__omp_prelude_loaded__" not in globals():
         base, token, session = _tool_proxy_from_env()
         _run_id_getter = globals().get("__omp_current_run_id__")
         _run_id = (
-            _run_id_getter()
+            _run_id_getter(name == "__prelude__")
             if callable(_run_id_getter)
             else globals().get("__omp_run_id__")
         )

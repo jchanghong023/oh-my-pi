@@ -34,24 +34,25 @@ import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as runStatus from "@oh-my-pi/pi-coding-agent/utils/run-status";
 import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
-import type { UiNode } from "@oh-my-pi/pi-tui";
-import { bubbleEvent } from "@oh-my-pi/pi-tui/dispatch";
 import * as terminalSession from "@oh-my-pi/pi-tui/driver/session";
-import { initTheme } from "../../../src/ui/theme/service";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import type { TspNode } from "@oh-my-pi/pi-wire";
+import { initTheme } from "../../../src/ui/theme/service";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 import { createModeTerminal, type ModeTerminal } from "../../helpers/mode-terminal";
+import { nativeShell } from "../../helpers/native-shell";
 
 type AgentPause = Extract<AgentSessionEvent, { type: "agent_pause" }>;
 type AgentEnd = Extract<AgentSessionEvent, { type: "agent_end" }>;
 
-function findPath(nodes: readonly UiNode[], role: string): UiNode[] | undefined {
-	for (const node of nodes) {
-		if (node.props().role === role) return [node];
-		const child = findPath(node.children(), role);
-		if (child) return [node, ...child];
-	}
-	return undefined;
+function* nativeNodes(node: TspNode): IterableIterator<TspNode> {
+	yield node;
+	for (const child of node.c ?? []) yield* nativeNodes(child);
+}
+
+function nativeText(node: TspNode): string | undefined {
+	if (node.k !== "text" && node.k !== "shimmer") return undefined;
+	return node.p?.text ?? node.p?.spans?.map(span => span.t).join("");
 }
 
 beforeAll(() => {
@@ -292,6 +293,9 @@ describe("EventController — ending the wait on a real session", () => {
 			manager.register("bash", "sleep 150", async () => await gate.promise, { ownerId: "Main" });
 
 			terminal = createModeTerminal({ columns: 120, rows: 30, settings: session.settings });
+			// The mode terminal paints plain VT rows. Start a Tern peer before the mode adopts
+			// the frame for the case that exercises the native-only control.
+			await using ui = action === "native Stop" ? await nativeShell(terminal.frame.shell) : undefined;
 			mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, terminal.frame);
 			await mode.init({ suppressWelcomeIntro: true });
 			mode.composer.setText("DRAFT_ANCHOR");
@@ -300,31 +304,48 @@ describe("EventController — ending the wait on a real session", () => {
 			const unsubscribe = session.subscribeLocal(event => events.push(event));
 			await session.prompt("start the long job");
 			await session.waitForIdle();
+			await controller.runSerialized(async () => {});
 			expect(events.some(event => event.type === "agent_pause" && event.yielded)).toBe(true);
 			expect(events.some(event => event.type === "agent_end")).toBe(false);
 			expect(mock.calls.length).toBe(1);
 			expect(controller.isAwaitingAsyncWork()).toBe(true);
-			await terminal.waitFor(rows => rows.some(row => row.includes("Waiting for")));
-			const waitingRows = terminal.screen();
-			expect(waitingRows.filter(row => row.includes("Waiting for"))).toHaveLength(1);
-			expect(waitingRows.findIndex(row => row.includes("Waiting for"))).toBeLessThan(
-				waitingRows.findIndex(row => row.includes("DRAFT_ANCHOR")),
-			);
-
-			if (action === "Escape") {
-				terminal.press("escape");
+			if (ui) {
+				const dock = [...nativeNodes(ui.tree("dock"))];
+				const waitingRows = dock.filter(node => nativeText(node)?.includes("Waiting for"));
+				expect(waitingRows).toHaveLength(1);
+				const editor = dock.findIndex(node => node.k === "editor" && node.p?.text === "DRAFT_ANCHOR");
+				expect(editor).toBeGreaterThan(dock.indexOf(waitingRows[0]!));
+				const stop = dock.find(
+					node => node.k === "text" && node.p?.text === "Stop" && node.p.actions?.click === "interrupt",
+				);
+				if (!stop) throw new Error("Native Stop did not advertise the interrupt action");
+				ui.send({ ev: "action", sf: ui.sf, id: stop.id, act: "interrupt" });
 			} else {
-				const stop = findPath(mode.shell.surface.dock(), "omp.compact.wait.stop");
-				expect(stop).toBeDefined();
-				bubbleEvent(stop!, { type: "action", key: "stop", act: "interrupt", mods: [] });
+				await terminal.waitFor(rows => rows.some(row => row.includes("Waiting for")));
+				const waitingRows = terminal.screen();
+				expect(waitingRows.filter(row => row.includes("Waiting for"))).toHaveLength(1);
+				expect(waitingRows.findIndex(row => row.includes("Waiting for"))).toBeLessThan(
+					waitingRows.findIndex(row => row.includes("DRAFT_ANCHOR")),
+				);
+				terminal.press("escape");
 			}
 			await session.waitForRunEnd();
 			// Let the dispatched `agent_end` finish its teardown.
 			await controller.runSerialized(async () => {});
 			expect(session.isRunActive).toBe(false);
 			expect(events.filter(event => event.type === "agent_end")).toHaveLength(1);
-			await terminal.waitFor(rows => rows.some(row => row.includes("Stopped waiting")));
-			expect(terminal.screen().join("\n")).not.toContain("Waiting for");
+			if (ui) {
+				expect(
+					[...nativeNodes(ui.tree("main"))].some(
+						node => node.k === "toast" && node.p?.text.startsWith("Stopped waiting"),
+					),
+				).toBe(true);
+				const dock = [...nativeNodes(ui.tree("dock"))];
+				expect(dock.some(node => nativeText(node)?.includes("Waiting for"))).toBe(false);
+			} else {
+				await terminal.waitFor(rows => rows.some(row => row.includes("Stopped waiting")));
+				expect(terminal.screen().join("\n")).not.toContain("Waiting for");
+			}
 
 			gate.resolve("JOB_FINISHED");
 			await manager.waitForAll();

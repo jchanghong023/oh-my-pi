@@ -74,7 +74,8 @@ import type { SessionInfo as StoredSessionInfo } from "../../session/session-lis
 import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
-import { DEFAULT_STT_MODEL_KEY, STT_MODELS } from "../../stt/models";
+import { parseSlashCommand } from "../../slash-commands/helpers/parse";
+import { getDefaultLocalSttModel, STT_MODELS } from "../../stt/models";
 import { refreshAgentDiscovery } from "../../task";
 import { sumSubagentTreeCost } from "../agent-hub-runtime";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking/levels";
@@ -199,6 +200,8 @@ type PromptDispatchCancellation = { cancelled: boolean };
 
 type PromptTurnState = {
 	abortController: AbortController;
+	teamOnly: boolean;
+	teamCommand?: Promise<void>;
 	cancelRequested: boolean;
 	settled: boolean;
 	/**
@@ -483,10 +486,10 @@ type AcpSpeechTtsModelOption = AcpSpeechOption & {
 	voices: AcpSpeechVoiceOption[];
 };
 
-function buildAcpSpeechModelsCatalog(): Record<string, unknown> {
+function buildAcpSpeechModelsCatalog(dictationLanguage: string): Record<string, unknown> {
 	const localSelector = (modelId: string) => `local/${modelId}`;
 	const defaultSpeechModel = localSelector(TTS_LOCAL_MODELS[0].key);
-	const defaultDictationModel = localSelector(DEFAULT_STT_MODEL_KEY);
+	const defaultDictationModel = localSelector(getDefaultLocalSttModel(dictationLanguage).key);
 	const voices = TTS_LOCAL_VOICE_OPTIONS.map(({ value, label }) => ({ value, label }));
 	// Speed settings are numeric, so presets are advertised as numbers clients can write back as-is.
 	const speeds = TTS_SPEED_OPTIONS.map(({ value, label }) => ({ value: Number(value), label }));
@@ -1276,6 +1279,7 @@ export class AcpAgent implements Agent {
 				const pendingPrompt = Promise.withResolvers<PromptResponse>();
 				record.promptTurn = {
 					abortController: new AbortController(),
+					teamOnly: parseSlashCommand(converted.text)?.name === "team",
 					cancelRequested: false,
 					settled: false,
 					errorTextDelivery: undefined,
@@ -1287,9 +1291,13 @@ export class AcpAgent implements Agent {
 					promise: pendingPrompt.promise,
 				};
 
-				record.promptTurn.unsubscribe = record.session.subscribe(event => {
-					this.#trackPromptEvent(record, event);
-				});
+				// A Team prompt owns only the discussion; a concurrent model loop
+				// cannot finish it before the persisted report reaches command output.
+				if (!record.promptTurn.teamOnly) {
+					record.promptTurn.unsubscribe = record.session.subscribe(event => {
+						this.#trackPromptEvent(record, event);
+					});
+				}
 
 				// Cancelled before the turn ever started (dispatch window or
 				// queued behind a cancelled predecessor): settle the wire
@@ -1316,7 +1324,9 @@ export class AcpAgent implements Agent {
 				// guard above cannot fire and a client prompt lands on AgentSession's busy
 				// guard. Type that failure for the wire instead of letting transport.ts wrap
 				// it as a generic -32603 internal error.
-				this.#runPromptOrCommand(record, converted.text, converted.images).catch((error: unknown) => {
+				const dispatch = this.#runPromptOrCommand(record, converted.text, converted.images);
+				if (record.promptTurn.teamOnly) record.promptTurn.teamCommand = dispatch;
+				dispatch.catch((error: unknown) => {
 					this.#finishPrompt(
 						record,
 						undefined,
@@ -1620,14 +1630,20 @@ export class AcpAgent implements Agent {
 
 	async #runCancelCleanup(record: ManagedSessionRecord, promptTurn: PromptTurnState): Promise<void> {
 		let timer: NodeJS.Timeout | undefined;
-		const timeout = new Promise<never>((_, reject) => {
-			timer = setTimeout(
-				() => reject(RequestError.resourceNotFound(record.protocolSessionId)),
-				this.#cancelCleanupTimeoutMs,
-			);
-		});
 		try {
-			await Promise.race([record.session.abort({ reason: USER_INTERRUPT_LABEL }), timeout]);
+			if (promptTurn.teamOnly) {
+				// The signal already cancelled this discussion. Await its unwind
+				// without aborting or timing out independent session work.
+				await promptTurn.teamCommand?.catch(() => {});
+			} else {
+				const timeout = new Promise<never>((_, reject) => {
+					timer = setTimeout(
+						() => reject(RequestError.resourceNotFound(record.protocolSessionId)),
+						this.#cancelCleanupTimeoutMs,
+					);
+				});
+				await Promise.race([record.session.abort({ reason: USER_INTERRUPT_LABEL }), timeout]);
+			}
 		} finally {
 			if (timer) clearTimeout(timer);
 			// Order matters: clear `cleanup` before evicting the slot so the slot-eviction
@@ -1641,8 +1657,14 @@ export class AcpAgent implements Agent {
 
 	async extMethod(method: string, params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
 		switch (method) {
-			case SPEECH_MODELS_LIST_METHOD:
-				return buildAcpSpeechModelsCatalog();
+			case SPEECH_MODELS_LIST_METHOD: {
+				const session =
+					typeof params.sessionId === "string"
+						? this.#getSessionRecord(params.sessionId).session
+						: this.#initialSession;
+				const settings = session?.settings ?? (await Settings.init());
+				return buildAcpSpeechModelsCatalog(settings.getDictationLanguage());
+			}
 			case "_omp/sessions/listAll": {
 				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(5000, params.limit as number)) : 1000;
 				const sessions = await SessionManager.listAll();
@@ -1950,7 +1972,7 @@ export class AcpAgent implements Agent {
 			...createAcpClientBridge(this.#connection, record.protocolSessionId, this.#clientCapabilities),
 			get deferAgentInitiatedTurns() {
 				const promptTurn = record.promptTurn;
-				return !promptTurn || promptTurn.settled || promptTurn.cancelRequested;
+				return !promptTurn || promptTurn.teamOnly || promptTurn.settled || promptTurn.cancelRequested;
 			},
 		});
 		// Client-declared servers live in `record.mcpManager`, not the session's

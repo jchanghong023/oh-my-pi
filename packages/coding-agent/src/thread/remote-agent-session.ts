@@ -249,6 +249,8 @@ export interface RemoteAgentSessionInit {
 	readonly modelRegistry?: ModelRegistry | null;
 	/** Main job manager the worker session registers its async jobs with. */
 	readonly asyncJobManager?: AsyncJobManagerApi | null;
+	/** Releases the mirror and the worker hold when the main-side disposal owner commits closure. */
+	readonly onClose?: (reason: string) => void;
 }
 
 /** Content-addressed blob store shared by every session of this process (the worker writes to the same directory). */
@@ -306,6 +308,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	readonly #listeners = new Set<LocalAgentSessionEventListener>();
 	readonly #runStateListeners = new Set<(state: SessionRunState) => void>();
 	#closed: string | undefined;
+	#onClose: ((reason: string) => void) | undefined;
 
 	constructor(init: RemoteAgentSessionInit) {
 		this.instanceKey = init.key;
@@ -314,6 +317,7 @@ export class RemoteAgentSession implements AgentViewSession {
 		this.#host = init.host;
 		this.#modelRegistry = init.modelRegistry ?? undefined;
 		this.#asyncJobs = init.asyncJobManager ?? undefined;
+		this.#onClose = init.onClose;
 		this.#state = init.state;
 		this.#pendingToolCalls = new Set(init.state.pendingToolCalls);
 		this.#messages = init.messages;
@@ -896,14 +900,23 @@ export class RemoteAgentSession implements AgentViewSession {
 		return this.#command("setWorkPoolYieldItems", items);
 	}
 
-	/** Dispose on the home worker; a session that is already gone counts as disposed. */
-	async dispose(options?: AgentSessionDisposeOptions): Promise<void> {
-		if (this.#closed !== undefined) return;
-		try {
-			await this.#command("dispose", options);
-		} catch (error) {
-			if (!(error instanceof RpcClosedError)) throw error;
+	/** A soft lifecycle owner can defer closing the route until strict takeover is no longer possible. */
+	async dispose(options?: AgentSessionDisposeOptions, deferClose?: (close: () => void) => void): Promise<void> {
+		if (this.#closed !== undefined) {
+			if ((options?.strict || deferClose) && this.#closed !== "disposed") throw this.#goneError();
+			return;
 		}
+		try {
+			await this.#command("dispose", options, deferClose !== undefined);
+		} catch (error) {
+			deferClose?.(() => this.#onClose?.(`dispose failed: ${String(error)}`));
+			// Best-effort callers outside the lifecycle already tolerate a dead
+			// worker; the lifecycle must not count a lost reply as a successful dispose.
+			if (options?.strict || deferClose || !(error instanceof RpcClosedError)) throw error;
+			return;
+		}
+		if (deferClose) deferClose(() => this.#onClose?.("disposed"));
+		else if (options?.strict) this.#onClose?.("disposed");
 	}
 
 	/** Bridge only: merge a state patch from the publisher. */
@@ -1026,6 +1039,7 @@ export class RemoteAgentSession implements AgentViewSession {
 		};
 		if (wasRunning) this.applyRunState("idle");
 		this.#closed = reason;
+		this.#onClose = undefined;
 		this.#settledQueued.clear();
 		this.#withdrawnQueued.clear();
 		this.#listeners.clear();

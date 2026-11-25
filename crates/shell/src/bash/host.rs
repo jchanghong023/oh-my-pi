@@ -58,8 +58,9 @@ pub trait Host {
 	/// Resolve a command name before PATH search (functions and aliases are
 	/// already handled by the engine).
 	fn resolve(&mut self, name: &BStr, mode: ModeId, why: ResolveCtx) -> Resolved;
-	/// Whether this host command accepts non-UTF-8 arguments without loss.
-	/// Intrinsics operate on bytes and do not use this hook.
+	/// Whether to dispatch this host command with non-UTF-8 arguments rather
+	/// than searching PATH. The command must handle the original bytes or
+	/// reject them without a lossy conversion. Intrinsics do not use this hook.
 	fn accepts_raw_args(&self, _name: &BStr, _resolved: &Resolved) -> bool {
 		false
 	}
@@ -733,17 +734,18 @@ pub trait ExtProc: Send {
 	}
 	/// Signal a complete wave when this host can snapshot it. `children`
 	/// contains each selected handle's PID and, for group waves only, its
-	/// launch PGID. `extra` contains pinned processes no longer owned by
-	/// the interpreter.
-	/// Returns false without signaling when batching is unsupported.
+	/// launch PGID. Without a PGID the handle is a process-only target.
+	/// `extra` contains pinned processes no longer owned by the interpreter.
+	/// Returns the PIDs whose delivery failed, or `None` without sending any
+	/// signals when batching is unavailable.
 	fn signal_wave(
 		&mut self,
 		_sig: Signal,
 		_children: &[(u32, Option<u32>)],
 		_extra: &[crate::proctree::Process],
 		_groups: bool,
-	) -> bool {
-		false
+	) -> Option<std::collections::HashSet<i32>> {
+		None
 	}
 	/// Record a signal delivered by [`ExtProc::signal_wave`] for this process.
 	fn record_wave_signal(&mut self, _sig: Signal) {}

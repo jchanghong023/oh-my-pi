@@ -11,6 +11,8 @@ import {
 	getFastembedCacheDir,
 	isRetryableStatus,
 	logger,
+	resolveExtraCa,
+	withExtraCaInit,
 	withLoopPhase,
 } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
@@ -461,6 +463,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 			callerSignal?.throwIfAborted();
 			const baseUrl = embeddingBaseUrl();
 			const allowRemote = activeEmbeddingOptions()?.allowRemote;
+			const requestRedirect = activeEmbeddingOptions()?.requestRedirect;
 			if (allowRemote?.(baseUrl) === false) return null;
 			const url = `${baseUrl.replace(/\/+$/, "")}/embeddings`;
 			const model = defaultModel();
@@ -553,9 +556,10 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 							requestSignal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
 						}
 						const init = { method: "POST", headers, body, signal: retryTimeouts ? callerSignal : requestSignal };
+						const extraCa = resolveExtraCa();
 						const res = await logger.withLogContext({ auth_attempt: authAttempt }, () =>
 							fetchWithRetry(url, {
-								...init,
+								...(extraCa ? withExtraCaInit(init, extraCa) : init),
 								maxAttempts,
 								defaultDelayMs: [1000, 2000, 4000],
 								fixedDelayMs,
@@ -569,7 +573,14 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 								fetch: async (input, requestInit) => {
 									if (allowRemote?.(baseUrl) === false)
 										throw new Error("Remote embedding provider is not allowed");
-									const response = await fetch(input, requestInit);
+									const redirect = requestRedirect?.();
+									// Let a blocked redirect return as a non-retryable HTTP response.
+									const response = await fetch(
+										input,
+										redirect === undefined
+											? requestInit
+											: { ...requestInit, redirect: redirect === "error" ? "manual" : redirect },
+									);
 									const { status } = response;
 									const readsRetryHint = fixedDelayMs === undefined && isRetryableStatus(status);
 									if (!retryTimeouts || (!response.ok && !readsRetryHint) || status === 204 || status === 205)

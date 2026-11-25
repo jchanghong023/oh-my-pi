@@ -21,8 +21,9 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { isCompactionGoalRestoreEntry } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, AssistantMessageEvent, ImageContent } from "@oh-my-pi/pi-ai";
-import { getConfigRootDir, logger, toError } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, isRecord, logger, toError } from "@oh-my-pi/pi-utils";
 import { takeAutoRejoin } from "@oh-my-pi/pi-wire";
 import type { AgentHubRemote, AgentHubRemoteTranscript } from "../modes/view-model/overlays/agent-hub";
 import type { InteractiveModeContext } from "../modes/types";
@@ -669,16 +670,20 @@ export class CollabGuestLink {
 				// Entries are never rendered directly — rendering is events-only
 				// (prevents double-render). They keep the replica file, the agent's
 				// message array (/dump, context estimates), and todos current.
-				this.#ctx.sessionManager.ingestReplicatedEntry(frame.entry);
-				if (frame.entry.type === "message") {
-					this.#ctx.session.agent.replaceMessages([...this.#ctx.session.messages, frame.entry.message]);
-				} else if (frame.entry.type === "compaction" || frame.entry.type === "branch_summary") {
-					// Compaction/branch entries rewrite the host's model context: the
-					// pre-boundary transcript collapses behind a summary. Appending
-					// the entry alone leaves the replica holding the stale full
-					// history, so rebuild the message array from the ingested entries
-					// exactly as the host does after appendCompaction/branchWithSummary
-					// (session-maintenance.ts, agent-session.ts).
+				const { entry } = frame;
+				const restoresGoal =
+					entry.type === "custom_message" &&
+					isRecord(entry.details) &&
+					typeof entry.details.compactionEntryId === "string" &&
+					isCompactionGoalRestoreEntry(entry, entry.details.compactionEntryId);
+				if (restoresGoal && this.#ctx.sessionManager.getEntry(entry.id)) break;
+				this.#ctx.sessionManager.ingestReplicatedEntry(entry);
+				if (entry.type === "message") {
+					this.#ctx.session.agent.replaceMessages([...this.#ctx.session.messages, entry.message]);
+				} else if (entry.type === "compaction" || entry.type === "branch_summary" || restoresGoal) {
+					// Rebuild from the journal so compaction and branch boundaries
+					// replace the old context, and a Goal restoration supersedes
+					// any notice still present in the retained tail.
 					this.#ctx.session.agent.replaceMessages(this.#ctx.session.buildDisplaySessionContext().messages);
 				}
 				break;

@@ -402,6 +402,7 @@ pub struct Shell {
 /// Provenance of a signal-derived run status, not an ordinary `exit 128+n`.
 enum RunSignal {
 	External(i32),
+	TailExternal(i32),
 	Virtual,
 }
 
@@ -524,7 +525,8 @@ pub struct Kernel {
 	/// The last root run that `exit` or `set -e` ended
 	/// ([`Shell::ended_by_exit`]); not imaged.
 	pub exited:             Option<RunId>,
-	/// Signal deaths of submitted runs pending their completion report.
+	/// Signals that ended submitted runs or their external operands, pending
+	/// report.
 	run_signals:            HashMap<RunId, RunSignal>,
 	/// Signal death associated with the most recently reported run.
 	reported_signal:        Option<(RunId, RunSignal)>,
@@ -2229,6 +2231,13 @@ impl Shell {
 		resume: bool,
 		mut tracked: Option<&mut Vec<crate::proctree::Process>>,
 	) {
+		// A raw Windows process reference can only hard-terminate. Preserve
+		// other signals' semantics by using only the live host handles.
+		let extra = if cfg!(windows) && sig != Signal::Kill {
+			&[][..]
+		} else {
+			extra
+		};
 		let included =
 			|i: usize, detached: bool| selected.map_or(!detached, |hits| hits.contains(&i));
 		let mut children = Vec::new();
@@ -2253,7 +2262,7 @@ impl Shell {
 		if children.is_empty() && extra.is_empty() {
 			return;
 		}
-		let mut batched = false;
+		let mut failed = None;
 		'first: for (i, p) in self.procs.iter_mut().enumerate() {
 			if !included(i, p.lineage.detached) {
 				continue;
@@ -2262,12 +2271,12 @@ impl Shell {
 				if let Some(sc) = frame.scratch.as_mut()
 					&& let Live::Ext(ext) = &mut sc.live
 				{
-					batched = ext.signal_wave(sig, &children, extra, groups);
+					failed = ext.signal_wave(sig, &children, extra, groups);
 					break 'first;
 				}
 			}
 		}
-		if !batched && !extra.is_empty() {
+		if failed.is_none() && !extra.is_empty() {
 			let mut targets = crate::proctree::TerminationTargets::new();
 			for process in extra {
 				if !children
@@ -2295,12 +2304,21 @@ impl Shell {
 				if let Some(sc) = frame.scratch.as_mut()
 					&& let Live::Ext(ext) = &mut sc.live
 				{
-					if batched {
-						ext.record_wave_signal(sig);
-					} else if groups {
-						let _ = ext.signal(sig);
-					} else {
-						let _ = ext.signal_single(sig);
+					match &failed {
+						Some(failed)
+							if i32::try_from(ext.pid()).is_ok_and(|pid| failed.contains(&pid)) =>
+						{
+							// This handle keeps the child's PID unreaped. Retry only
+							// this PID so no other wave member is signaled twice.
+							let _ = ext.signal_single(sig);
+						},
+						Some(_) => ext.record_wave_signal(sig),
+						None if groups => {
+							let _ = ext.signal(sig);
+						},
+						None => {
+							let _ = ext.signal_single(sig);
+						},
 					}
 					if resume {
 						let _ = ext.cont();
@@ -2919,6 +2937,19 @@ impl Shell {
 				DefaultAction::Stop | DefaultAction::Continue => {
 					let stop = sig.default_action() == DefaultAction::Stop;
 					let p = &mut self.procs[i];
+					// A Unix terminal-stop signal can be caught or ignored
+					// (in particular TSTP in an orphaned process group).
+					// Keep polling the external for its actual stop or exit.
+					if cfg!(unix)
+						&& stop
+						&& externals_signaled
+						&& p.frames.iter().any(|f| {
+							f.scratch
+								.as_ref()
+								.is_some_and(|sc| matches!(sc.live, Live::Ext(_)))
+						}) {
+						continue;
+					}
 					if p.stopped != stop {
 						changed.push((p.vpid, stop.then_some(sig)));
 					}
@@ -2979,12 +3010,14 @@ impl Shell {
 		self.k.exited == Some(run)
 	}
 
-	/// The signal that killed an external replacing `run`, if any. Ask
-	/// immediately after its [`Step::Done`]; ordinary `exit 128+n` is not
-	/// a signal death.
+	/// The signal that killed an external replacing `run` or standing in
+	/// for a tool operand, if any. Ask immediately after [`Step::Done`];
+	/// ordinary `exit 128+n` is not a signal death.
 	pub fn exec_signal(&self, run: RunId) -> Option<i32> {
 		match self.k.reported_signal {
-			Some((id, RunSignal::External(signal))) if id == run => Some(signal),
+			Some((id, RunSignal::External(signal) | RunSignal::TailExternal(signal))) if id == run => {
+				Some(signal)
+			},
 			_ => None,
 		}
 	}
@@ -3179,10 +3212,11 @@ fn interrupt_wait(p: &mut Vproc, status: i32) {
 /// rather than of `p` itself, as when bash `exec`s a subshell's last
 /// command: `Some(true)` when `p` is a subshell vproc (no `EXIT` trap of its
 /// own) whose one frame awaits the external that is its last command (`cmd
-/// &`, a pipeline stage, `( cmd )`) or one it `exec`s; `Some(false)` when it
-/// only waits for the stages of its pipeline or its `( … )` before it exits
-/// (the job vproc of `a | b &`), and the signal reaches those too
-/// (`children`: a job, label or broadcast target); `None` otherwise.
+/// &`, a pipeline stage, `( cmd )`, a tool operand) or one it `exec`s;
+/// `Some(false)` when it only waits for the stages of its pipeline or its
+/// `( … )` before it exits (the job vproc of `a | b &`), and the signal
+/// reaches those too (`children`: a job, label or broadcast target);
+/// `None` otherwise.
 fn transparent(p: &Vproc, children: bool) -> Option<bool> {
 	if !p.transient || p.own_traps.has(crate::bash::store::TrapKey::Exit) {
 		return None;
@@ -3197,7 +3231,10 @@ fn transparent(p: &Vproc, children: bool) -> Option<bool> {
 	match (&sc.live, op.code) {
 		(Live::Ext(_), ir::Opcode::Exec) => {
 			let exec = sc.exec.as_ref().is_some_and(|e| e.exec_as.is_some());
-			(exec || code_at(frame.pc + 1) == Some(ir::Opcode::SubExit)).then_some(true)
+			(exec
+				|| code_at(frame.pc + 1) == Some(ir::Opcode::SubExit)
+				|| command::labeled_run_tail(p))
+			.then_some(true)
 		},
 		(_, ir::Opcode::Spawn) if children && !sc.children.is_empty() => {
 			let spawn = unit.spawns.get(op.a as usize)?;

@@ -666,6 +666,7 @@ fn blocking<T: Send + 'static + ToNapiValue + TypeName>(
 		catch_panic(tag, || f(&repo))
 	})
 }
+
 fn repo_blocking<T: Send + 'static + ToNapiValue + TypeName>(
 	tag: &'static str,
 	repo: omp_vcs::Repo,

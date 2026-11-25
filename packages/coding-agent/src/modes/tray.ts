@@ -79,7 +79,7 @@ export interface TrayInput {
 	widget(job: AsyncJob): JobWidgetView | undefined;
 	/** False under `display.pinnedAgents: off`: no agent cards, no done card. */
 	readonly showAgents: boolean;
-	/** Whether focusing agent `ref` can show its transcript (a live session, or one on disk to revive). */
+	/** Whether the tray can open this transcript, by focusing its session or inspecting a retained record. */
 	canOpen(ref: AgentRecordLike): boolean;
 	/**
 	 * Whether agent `id` is being opened for viewing: reviving it to show its
@@ -130,9 +130,10 @@ export function collectTrayInput(sources: TraySources): TrayInput {
 		consumed: id => manager?.isJobResultConsumed(id) ?? false,
 		widget: job => manager?.widgets?.view(job),
 		showAgents: sources.showAgents,
-		// Focusing revives through the lifecycle: a live session, or a transcript on disk. Advisors are
-		// read-only transcripts that focusing never opens.
-		canOpen: ref => sources.canFocus && ref.kind === "sub" && (ref.session !== null || ref.sessionFile !== null),
+		canOpen: ref =>
+			sources.canFocus &&
+			ref.kind === "sub" &&
+			(ref.sessionFile !== null || (!ref.history?.executionEnded && ref.session !== null)),
 		reviving: id => sources.reviving.has(id),
 		now: Date.now(),
 	};
@@ -1040,8 +1041,10 @@ export interface TrayHost {
 	input(): TrayInput;
 	/** The main agent's state now. */
 	main(): TrayMain;
-	/** Focus agent `id`'s session, as the hub's Open transcript does. */
+	/** Focus a live or revivable agent's session. */
 	focusAgent(id: string): void;
+	/** Inspect a retained execution without reviving it. */
+	openTranscript(id: string): void;
 	/** The jobs sheet, on job `selected` when it lists it. */
 	showJobsSheet(selected?: string): void;
 	/** Stop agent `id` for good, as cancelling its task job does. */
@@ -1136,15 +1139,12 @@ export class TrayFeed {
 				// The done card opens nothing: its closer look lists the agents, and each row opens one.
 				if (item?.item === "done") return;
 				if (item?.item === "agent") {
-					if (!item.openable) return;
-					this.#model.peek.set(undefined);
-					this.#host.focusAgent(item.ref);
+					if (item.openable) this.#openAgent(item.ref);
 				} else if (item?.item === "job") {
 					this.#model.peek.set(undefined);
 					this.#host.showJobsSheet(item.ref);
 				} else if (ref && this.#doneEntry(ref)?.openable) {
-					this.#model.peek.set(undefined);
-					this.#host.focusAgent(ref);
+					this.#openAgent(ref);
 				}
 				return;
 			}
@@ -1162,6 +1162,15 @@ export class TrayFeed {
 				this.#host.showJobsSheet();
 				return;
 		}
+	}
+
+	#openAgent(id: string): void {
+		const input = this.#host.input();
+		const ref = input.refs.find(candidate => candidate.id === id);
+		if (!ref || !input.canOpen(ref)) return;
+		this.#model.peek.set(undefined);
+		if (ref.history?.executionEnded) this.#host.openTranscript(id);
+		else this.#host.focusAgent(id);
 	}
 
 	#doneEntry(id: string): TrayDoneEntry | undefined {

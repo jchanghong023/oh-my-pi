@@ -2,6 +2,7 @@ import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "../autocomplete/autocomplete";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
 import { JCH_SLASH_COMMANDS } from "../jch-commands";
+import { visionMarkerRanges } from "../modes/view-model/prompt/composer-attachments";
 import { BUILTIN_COLLAB2_SLASH_COMMAND } from "./builtin-collab2";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import { BUILTIN_COMMIT_SLASH_COMMANDS } from "./builtin-commit";
@@ -24,7 +25,7 @@ import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "./builtin-magic-keywords";
 import { BUILTIN_MARKETPLACE_SLASH_COMMANDS, reloadTuiPluginState } from "./builtin-marketplace";
 import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
-import { BUILTIN_SKETCH_SLASH_COMMANDS } from "./builtin-sketch";
+import { BUILTIN_SKETCH_SLASH_COMMANDS, restoreSketchDraft } from "./builtin-sketch";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
 import { parseSlashCommand } from "./helpers/parse";
 import type {
@@ -151,6 +152,24 @@ export function buildTuiBuiltinSlashCommands(runtime: TuiSlashCommandRuntime): R
  */
 export const BUILTIN_SLASH_COMMANDS_INTERNAL: ReadonlyArray<SlashCommandSpec> = BUILTIN_SLASH_COMMAND_REGISTRY;
 
+function parseTuiSlashCommand(text: string, imageCount: number): ParsedSlashCommand | null {
+	if (imageCount > 0 && text.startsWith("/sketch")) {
+		// The composer expands its chips before dispatch, including chips pasted
+		// directly after the command name. Ignore only references owned by this submission.
+		let commandText = "";
+		let offset = 0;
+		for (const { from, to } of visionMarkerRanges(text, imageCount)) {
+			commandText += text.slice(offset, from);
+			offset = to;
+		}
+		if (offset > 0) {
+			const parsed = parseSlashCommand((commandText + text.slice(offset)).trimEnd());
+			if (parsed?.name === "sketch") return { ...parsed, text };
+		}
+	}
+	return parseSlashCommand(text);
+}
+
 /**
  * Execute a builtin slash command in the interactive TUI.
  *
@@ -162,7 +181,8 @@ export async function executeBuiltinSlashCommand(
 	text: string,
 	runtime: BuiltinSlashCommandRuntime,
 ): Promise<string | boolean> {
-	const parsed = parseSlashCommand(text);
+	const imageCount = runtime.input?.images?.length ?? 0;
+	const parsed = parseTuiSlashCommand(text, imageCount);
 	if (!parsed) return false;
 
 	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
@@ -174,8 +194,10 @@ export async function executeBuiltinSlashCommand(
 	// host-only; the allowlist covers purely local/read-only commands.
 	if (runtime.ctx.collabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
 		runtime.ctx.showStatus(`/${command.name} is host-only during a collab session`);
-		// A detached draft already left the editor: give it back, images included.
-		if (runtime.draftDetached) {
+		// A sketch stays local even when disallowed, but its images must stay in the draft.
+		if (command.name === "sketch" && imageCount > 0) {
+			restoreSketchDraft(parsed, runtime);
+		} else if (runtime.draftDetached) {
 			restoreDetachedDraft(runtime.ctx.composer, parsed.text, runtime.input?.images, runtime.input?.imageLinks);
 		} else {
 			clearSubmittedText(runtime);

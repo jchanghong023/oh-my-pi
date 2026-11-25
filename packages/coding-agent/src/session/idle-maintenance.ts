@@ -114,9 +114,14 @@ export class IdleMaintenance {
 		this.#schedule();
 	}
 
-	/** Supersede the current stretch and any terminal event still owed by the outgoing transcript. */
+	/** Cancel maintenance while a transcript transition is attempted. */
 	onSessionTransition(): void {
-		this.#runSuperseded = this.#session.isRunActive;
+		this.#invalidate();
+	}
+
+	/** Ignore a terminal event only once its transcript is actually being abandoned. */
+	onRunSuperseded(): void {
+		if (this.#session.isRunActive) this.#runSuperseded = true;
 		this.#invalidate();
 	}
 

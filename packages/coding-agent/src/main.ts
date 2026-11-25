@@ -42,6 +42,7 @@ import {
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
+import { parseSlashCommand } from "./slash-commands/helpers/parse";
 import { KeybindingsManager } from "./config/keybindings/keybindings";
 import { formatKeyHint } from "./ui/keys/hints";
 import type { SessionPickerOptions } from "./modes/view-model/apps/session-picker";
@@ -62,7 +63,7 @@ import {
 } from "./config/company-provider";
 import { cfgNoJudge, cfgNoSpotlight, cfgOffline } from "./config/auxiliary-model-policy";
 import { ModelRegistry } from "./config/model-registry";
-import { formatModelSelectorValue } from "./config/model-selector";
+import { formatModelSelectorValue, parseModelString } from "./config/model-selector";
 import {
 	disabledProviderIds,
 	expandRoleAlias,
@@ -2127,8 +2128,8 @@ export async function runRootCommand(
 			(pipedInput !== undefined || !stdinIsTerminal) && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
 		const companyExplicitlyRequested =
-			parsedArgs.provider === COMPANY_PROVIDER_ID ||
-			parsedArgs.model?.startsWith(`${COMPANY_PROVIDER_ID}/`) === true;
+			(parsedArgs.provider || parseModelString(parsedArgs.model ?? "")?.provider)?.trim().toLowerCase() ===
+			COMPANY_PROVIDER_ID;
 		// Begin settings independently; auth discovery and model consumers must wait for the snapshot.
 		const settingsPromise = deps.settings
 			? Promise.resolve(deps.settings)
@@ -3099,7 +3100,7 @@ export async function runRootCommand(
 			});
 			watchScopedModelSettings(session, parsedArgs, modelRegistry, settingsInstance);
 
-			if (modelFallbackMessage) {
+			if (modelFallbackMessage && (!isInteractive || modelFallbackMessage !== companyProviderError)) {
 				notifs.push({ kind: "warn", message: modelFallbackMessage });
 				// Non-interactive runs have no notification surface: a model that still
 				// started in place of the requested one is reported on stderr, keeping
@@ -3121,7 +3122,7 @@ export async function runRootCommand(
 			// Only the first explicit CLI message may enter local dispatch without a
 			// model. stdin and @file content are prompt data, not command syntax.
 			const startsWithLocalCommand =
-				(mode === "text" || mode === "json") && initialArgs.messages[0]?.startsWith("/") === true;
+				!isInteractive && (mode === "text" || mode === "json") && initialArgs.messages[0]?.startsWith("/") === true;
 			if (!isInteractive && !session.model && !startsWithLocalCommand) {
 				if (modelRegistryError) {
 					process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
@@ -3166,10 +3167,18 @@ export async function runRootCommand(
 				process.exit(1);
 			}
 
-			// Without a model, dispatch the explicit command before attempting any
-			// prompt. Keep it separate so stdin and @file content cannot become its arguments.
+			// Isolate explicit Team and exact TodoLoop submissions from their stdin/@file
+			// data. Print mode settles the command and its context as one submission.
+			const firstMessage = initialArgs.messages[0] ?? "";
+			const firstCommandName = startsWithLocalCommand ? parseSlashCommand(firstMessage)?.name : undefined;
 			const initialCommand =
-				!isInteractive && !session.model && startsWithLocalCommand ? initialArgs.messages.shift() : undefined;
+				startsWithLocalCommand &&
+				(!session.model ||
+					firstCommandName === "team" ||
+					(firstCommandName === "todoloop" &&
+						(await import("./slash-commands/acp-builtins")).isTuiOnlyTodoLoopCommand(firstMessage)))
+					? initialArgs.messages.shift()
+					: undefined;
 			const { initialMessage, initialImages } = buildInitialMessage({
 				parsed: initialCommand === undefined ? initialArgs : { ...initialArgs, messages: [] },
 				fileText: processedFiles?.text,
@@ -3270,6 +3279,7 @@ export async function runRootCommand(
 					mode,
 					messages: initialArgs.messages,
 					initialCommand,
+					initialHasCompanions: initialArgs.fileArgs.length > 0 || pipedInput !== undefined,
 					initialMessage,
 					initialImages,
 					printThoughts: initialArgs.printThoughts,

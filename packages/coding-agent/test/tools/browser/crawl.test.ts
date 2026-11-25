@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import type { Browser } from "puppeteer-core";
 import type { SlashCommandRuntime } from "../../../src/slash-commands/types";
+import type { CrawlBrowserTab } from "../../../src/tools/browser";
 import * as access from "../../../src/tools/browser/crawl-access";
 import { type CrawlOptions, runCrawl } from "../../../src/tools/browser/crawl";
 import { closeLaunchedBrowser, ensureChromiumExecutable, loadPuppeteer } from "../../../src/tools/browser/launch";
@@ -26,42 +27,52 @@ function fixture(
 	onNavigate?: (url: string) => void,
 	runCode?: (code: string, url: string) => Promise<unknown>,
 ) {
-	const tabs = new Map<string, string>();
+	const tabs = new Map<string, CrawlBrowserTab>();
 	const opened: string[] = [];
 	const closed: string[] = [];
+	let peakOpenTabs = 0;
 	const written: Array<{ content: string; name: string }> = [];
 	const output: string[] = [];
 	const codes: string[] = [];
-	const requests: Array<{ action: string; name: string; url?: string; app?: { relay: boolean } }> = [];
+	const requests: Array<{ action: string; name: string; url?: string; app?: string }> = [];
 	const runtime = {
 		session: {},
 		output: (text: string) => {
 			output.push(text);
 		},
 	} as unknown as SlashCommandRuntime;
-	spyOn(access, "crawlBrowserRequest").mockImplementation(async (_session, parameters, signal) => {
-		const args = parameters as { action: string; name: string; code?: string; chain?: Array<{ method: string }> };
-		requests.push(parameters as (typeof requests)[number]);
-		if (args.action === "close") {
-			closed.push(args.name);
-			tabs.delete(args.name);
-			return { content: [], details: {} };
-		}
+	spyOn(access, "crawlBrowserRequest").mockImplementation(async (_session, parameters, signal, operation) => {
+		const args = parameters as (typeof requests)[number] & { code?: string };
+		requests.push(args);
 		if (signal?.aborted) throw new Error("aborted");
-		if (args.action === "open") {
-			opened.push(args.name);
+		if (args.action === "open" && operation?.kind === "open") {
+			const { name } = args;
+			const tab: CrawlBrowserTab = {
+				name,
+				route: { browserKey: "relay:fixture", targetId: name },
+				async release() {
+					closed.push(name);
+					tabs.delete(name);
+				},
+			};
+			tabs.set(name, tab);
+			peakOpenTabs = Math.max(peakOpenTabs, tabs.size);
+			opened.push(name);
+			operation.onOpen(tab);
 			return { content: [], details: {} };
 		}
-		if (args.action === "run") {
-			codes.push(args.code ?? "");
-			const match = /navigate\(("(?:[^"\\]|\\.)*")/.exec(args.code ?? "");
+		if (args.action === "run" && operation?.kind === "run") {
+			if (tabs.get(args.name) !== operation.tab) throw new Error("unexpected owned tab");
+			const { code } = args;
+			if (!code) throw new Error("missing browser code");
+			codes.push(code);
+			const match = /navigate\(("(?:[^"\\]|\\.)*")/.exec(code);
 			if (!match) throw new Error("missing navigation URL");
 			const url = JSON.parse(match[1]!) as string;
-			tabs.set(args.name, url);
 			onNavigate?.(url);
 			const page = pages[url];
 			if (!page) throw new Error(`Unexpected URL ${url}`);
-			if (runCode) return { content: [], details: { value: await runCode(args.code ?? "", url) } };
+			if (runCode) return { content: [], details: { value: await runCode(code, url) } };
 			const finalUrl = page.finalUrl ?? url;
 			return {
 				content: [],
@@ -91,7 +102,7 @@ function fixture(
 		written.push({ name, content });
 		return `/out/${name}`;
 	});
-	return { runtime, opened, closed, written, output, codes, requests };
+	return { runtime, opened, closed, peakOpenTabs: () => peakOpenTabs, written, output, codes, requests };
 }
 
 /** Execute the browser script against a page whose DOM and URL change on a virtual clock. */
@@ -144,6 +155,9 @@ function scriptedPage({
 	const controlMarkers = new Set<string>();
 	const control = {
 		tagName: fullArticle?.url ? "A" : "BUTTON",
+		get baseURI() {
+			return currentUrl();
+		},
 		get innerText() {
 			return expanded ? "收起全文" : (fullArticle?.label ?? "查看全文");
 		},
@@ -220,6 +234,8 @@ function scriptedPage({
 				setAttribute: () => {},
 			}));
 			const document = {
+				baseURI: currentUrl(),
+				querySelector: () => null,
 				body: { innerText: loaded() ? renderedText() : "Article title\nLoading..." },
 				contentType: "text/html",
 				readyState: "complete",
@@ -890,39 +906,12 @@ describe("crawl engine", () => {
 
 	it("caps concurrent child pages at the requested worker count", async () => {
 		const children = Array.from({ length: 5 }, (_, index) => `https://example.test/child-${index}`);
-		const pages = Object.fromEntries(["https://example.test/", ...children].map(url => [url, {}]));
-		const release = Promise.withResolvers<void>();
-		const saturated = Promise.withResolvers<void>();
-		let active = 0;
-		let maximum = 0;
-		const f = fixture(pages, undefined, async (_code, url) => {
-			if (url !== options.url) {
-				active++;
-				maximum = Math.max(maximum, active);
-				if (active === 2) saturated.resolve();
-				await release.promise;
-				active--;
-			}
-			return {
-				url,
-				status: 200,
-				contentType: "text/html",
-				attachment: false,
-				info: { url, links: url === options.url ? children : [], contentType: "text/html", login: false },
-				markdown: `Content for ${url}`,
-				endUrl: url,
-			};
+		const f = fixture({
+			[options.url]: { links: children },
+			...Object.fromEntries(children.map(url => [url, {}])),
 		});
-		const running = runCrawl(f.runtime, options, new AbortController().signal);
-		try {
-			await saturated.promise;
-			expect(active).toBe(2);
-			expect(maximum).toBe(2);
-		} finally {
-			release.resolve();
-			await running;
-		}
-		expect(maximum).toBe(2);
+		await runCrawl(f.runtime, options, new AbortController().signal);
+		expect(f.peakOpenTabs()).toBe(options.concurrency);
 		expect(f.written).toHaveLength(6);
 		expect(f.closed.sort()).toEqual(f.opened.sort());
 	});
@@ -954,10 +943,12 @@ describe("crawl engine", () => {
 	it("uses only owned Relay tabs and never adopts or focuses user tabs", async () => {
 		const f = fixture({ "https://example.test/": {} });
 		await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);
-		expect(f.requests.map(request => request.action)).toEqual(["open", "run", "close"]);
-		expect(f.requests[0]).toMatchObject({ url: "about:blank", app: "relay" });
+		expect(f.requests.map(request => request.action)).toEqual(["open", "run"]);
+		expect(f.requests[0]).toMatchObject({ app: "relay" });
+		expect(f.requests[0]).not.toHaveProperty("url");
 		expect(new Set(f.requests.map(request => request.name)).size).toBe(1);
 		expect(f.requests[0]?.name).toMatch(/^crawl-/);
+		expect(f.closed).toEqual(f.opened);
 		expect(f.written).toHaveLength(1);
 	});
 

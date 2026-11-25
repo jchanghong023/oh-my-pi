@@ -15,6 +15,8 @@ export interface ChoiceOption {
 	label: FormSpan[];
 	checked: boolean;
 	disabled: boolean;
+	/** The empty first option of a required, single-row select, directly under the select. */
+	placeholder?: true;
 }
 
 export const implicitChoiceDefaults = new WeakSet<ChoiceOption>();
@@ -461,7 +463,8 @@ class FormBuilder {
 		const tag = control.localName;
 		if (tag === "select") {
 			const multi = control.hasAttribute("multiple");
-			const options: ChoiceOption[] = control.querySelectorAll("option").map(option => {
+			const optionElements = control.querySelectorAll("option");
+			const options: ChoiceOption[] = optionElements.map(option => {
 				const text = (option.textContent ?? "").replace(/\s+/g, " ").trim();
 				return {
 					value: option.getAttribute("value") ?? text,
@@ -470,6 +473,16 @@ class FormBuilder {
 					disabled: option.hasAttribute("disabled"),
 				};
 			});
+			const firstOption = options[0];
+			if (
+				required &&
+				!multi &&
+				firstOption?.value === "" &&
+				optionElements[0]?.parentElement === control &&
+				!(Number.parseInt(control.getAttribute("size") ?? "", 10) > 1)
+			) {
+				firstOption.placeholder = true;
+			}
 			// A single select always has a selection: the first enabled option unless one is marked.
 			if (!multi && !options.some(option => option.checked)) {
 				const first = options.find(option => !option.disabled);

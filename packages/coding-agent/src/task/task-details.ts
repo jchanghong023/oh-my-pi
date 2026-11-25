@@ -364,12 +364,16 @@ export interface SingleResult {
 	/** Retains {@link AgentProgress.advisor} after the advised session is disposed. */
 	advisor?: boolean;
 	error?: string;
+	/** A model request required to finish this run was refused by the session cost gate. */
+	costCapped?: boolean;
 	aborted?: boolean;
 	abortReason?: string;
 	/** Aggregated usage from the subprocess, accumulated incrementally from message_end events. */
 	usage?: Usage;
 	/** Output path for the task result */
 	outputPath?: string;
+	/** Output publication failed; the actual structured result is still available. */
+	artifactError?: string;
 	/**
 	 * Ran inside an isolation worktree. Such agents are parked without a
 	 * reviver once the worktree is torn down, so they are never resumable or

@@ -231,6 +231,7 @@ describe("InputController skill queue chip metadata", () => {
 		expect(promptCustomMessage.mock.calls[0]?.[1]).toEqual({
 			streamingBehavior: "followUp",
 			queueChipText: "/skill:test-skill arg1 arg2",
+			onPromptAdmitted: expect.any(Function),
 		});
 	});
 

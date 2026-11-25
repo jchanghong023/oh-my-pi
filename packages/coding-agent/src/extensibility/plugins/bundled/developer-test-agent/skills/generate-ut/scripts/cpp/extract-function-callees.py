@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""使用 libclang 提取 C++ 代码中调用的函数"""
+"""使用 libclang 提取 C/C++ 函数调用与源码上下文。"""
 
-import clang.cindex as ci
+from __future__ import annotations
+
+import argparse
+from functools import cached_property
 import json
 import os
-import re
+from pathlib import Path
+import shlex
 import sys
 from typing import TypedDict, Optional
 
+try:
+    import clang.cindex as ci
+except ImportError:
+    ci = None
 
 STDLIB_NAMES = frozenset({
     '__va_list_tag',
@@ -32,13 +40,25 @@ class CppCallExtractor:
         self._ensure_libclang_initialized()
 
     def _ensure_libclang_initialized(self):
+        if ci is None:
+            raise RuntimeError("C/C++ 分析需要 Python clang.cindex 和 libclang")
         if CppCallExtractor._libclang_initialized:
             return
         if self.libclang_path is None:
-            self.libclang_path = self._find_libclang()
-        if not os.path.exists(self.libclang_path):
-            raise FileNotFoundError(f"libclang.so not found at {self.libclang_path}")
-        ci.Config.set_library_file(self.libclang_path)
+            configured = ci.Config().get_filename()
+            if os.path.isabs(configured) and os.path.isfile(configured):
+                self.libclang_path = configured
+            else:
+                try:
+                    self.libclang_path = self._find_libclang()
+                except FileNotFoundError:
+                    # The binding may be able to load libclang from the system loader's search path.
+                    pass
+        if self.libclang_path is not None:
+            self.libclang_path = os.path.abspath(self.libclang_path)
+            if not os.path.isfile(self.libclang_path):
+                raise FileNotFoundError(f"libclang not found at {self.libclang_path}")
+            ci.Config.set_library_file(self.libclang_path)
         CppCallExtractor._libclang_initialized = True
 
     def _find_libclang(self) -> str:
@@ -80,7 +100,8 @@ class CppCallExtractor:
                     return sorted(matches)[-1]
         raise FileNotFoundError(f"Cannot find {libclang_name}, please specify --libclang-path")
 
-    def _find_clang_resource_dir(self) -> Optional[str]:
+    @cached_property
+    def _clang_resource_dir(self) -> Optional[str]:
         import subprocess
         import glob as glob_module
         is_windows = sys.platform == 'win32'
@@ -94,7 +115,7 @@ class CppCallExtractor:
                     return os.path.dirname(matches[0])
         except (subprocess.SubprocessError, FileNotFoundError):
             pass
-        libclang_path = self.libclang_path or self._find_libclang()
+        libclang_path = ci.Config.library_file
         if libclang_path:
             clang_include = os.path.join(os.path.dirname(os.path.dirname(libclang_path)), 'lib', 'clang', '*', 'include')
             matches = glob_module.glob(clang_include)
@@ -132,13 +153,13 @@ class CppCallExtractor:
                 return True
         return False
 
-    def _is_system_location(self, cursor) -> bool:
+    def _is_system_location(self, cursor, directory: str) -> bool:
         try:
             loc = cursor.location
             if loc and loc.file:
                 filename = loc.file.name
                 if filename:
-                    abs_path = os.path.realpath(filename)
+                    abs_path = os.path.realpath(os.path.join(directory, filename))
                     if sys.platform == 'win32':
                         abs_path_lower = abs_path.lower()
                         system_dirs = [
@@ -156,245 +177,385 @@ class CppCallExtractor:
             pass
         return False
 
-    def _is_valid_function_call(self, cursor) -> bool:
+    @staticmethod
+    def _called_symbol(cursor):
+        if cursor.kind != ci.CursorKind.CALL_EXPR:
+            return None
+        callee = cursor.referenced
+        if callee and callee.spelling and callee.kind in (
+            ci.CursorKind.FUNCTION_DECL, ci.CursorKind.CXX_METHOD, ci.CursorKind.FUNCTION_TEMPLATE,
+            ci.CursorKind.DESTRUCTOR, ci.CursorKind.CONVERSION_FUNCTION, ci.CursorKind.VAR_DECL,
+        ):
+            return callee
+        return None
+
+    @staticmethod
+    def _split_command(command: str) -> list[str]:
+        if sys.platform != 'win32':
+            return shlex.split(command)
+
+        # Windows command lines use backslashes literally except before double quotes.
+        import ctypes
+        from ctypes import wintypes
+
+        split = ctypes.windll.shell32.CommandLineToArgvW
+        split.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+        split.restype = ctypes.POINTER(wintypes.LPWSTR)
+        free = ctypes.windll.kernel32.LocalFree
+        free.argtypes = [ctypes.c_void_p]
+        free.restype = ctypes.c_void_p
+        argc = ctypes.c_int()
+        argv = split(command.lstrip(), ctypes.byref(argc))
+        if not argv:
+            raise ctypes.WinError()
         try:
-            kind = cursor.kind
-        except Exception:
-            return False
-        valid_kinds = [
-            ci.CursorKind.CALL_EXPR,
-            ci.CursorKind.CXX_METHOD,
-            ci.CursorKind.OVERLOADED_DECL_REF,
-            ci.CursorKind.TEMPLATE_REF,
-        ]
-        cxx_member_call = getattr(ci.CursorKind, 'CXX_MEMBER_CALL_EXPR', None)
-        if cxx_member_call is not None:
-            valid_kinds.append(cxx_member_call)
-        if kind not in valid_kinds:
-            return False
-        callee = cursor.referenced
-        if not callee or not callee.spelling:
-            return False
-        if callee.kind == ci.CursorKind.CONSTRUCTOR:
-            return False
-        return True
+            return argv[:argc.value]
+        finally:
+            free(argv)
 
-    def _is_member_function(self, cursor) -> bool:
-        callee = cursor.referenced
-        if not callee:
-            return False
-        valid_member_kinds = [ci.CursorKind.CXX_METHOD, ci.CursorKind.OVERLOADED_DECL_REF]
-        return callee.kind in valid_member_kinds
+    @staticmethod
+    def _path_key(path: str, directory: str = '') -> str:
+        return os.path.normcase(os.path.realpath(os.path.join(directory, path)))
 
-    def _get_compile_args(self, file_path: str, compile_commands_path: str) -> list[str]:
-        if not compile_commands_path:
-            return []
-        with open(compile_commands_path, 'r') as f:
-            compile_commands = json.load(f)
-        for entry in compile_commands:
-            if os.path.normpath(entry['file']) == os.path.normpath(file_path):
-                cmd = entry['command']
-                args = re.findall(r'(?:[^\s,"]|"(?:[^"\\]|\\.)*")+', cmd)
-                compile_args = args[1:]
-                filtered = []
-                skip_next = False
-                for arg in compile_args:
-                    if skip_next:
-                        skip_next = False
-                        continue
-                    # -c: 编译选项（只编译不链接），clang 不需要
-                    if arg in ('-c', '-o', '-Winvalid-pch'):
-                        skip_next = True
-                        continue
-                    # -include: 预编译头，GCC PCH 与 clang 不兼容
-                    if arg == '-include':
-                        skip_next = True
-                        continue
-                    # -Wl: linker 选项，传递给链接器，clang 解析时不需要
-                    if arg.startswith('-Wl,') or arg == '-Wl':
-                        continue
-                    # PCH 文件: GCC 预编译头，clang 无法使用
-                    if arg.endswith('.hxx') or arg.endswith('.h.gch') or arg.endswith('.pch'):
-                        continue
-                    filtered.append(arg)
-                return filtered
-        return []
+    @classmethod
+    def _read_compile_commands(cls, path: str, filename: str | None = None) -> dict[str, tuple[str, dict]]:
+        if not path:
+            return {}
+        database_dir = os.path.dirname(os.path.abspath(path))
+        with open(path, encoding='utf-8-sig') as f:
+            entries = json.load(f)
+        file_key = cls._path_key(filename) if filename is not None else None
+        commands = {}
+        for entry in entries:
+            directory = os.path.abspath(os.path.join(database_dir, entry['directory']))
+            key = cls._path_key(entry['file'], directory)
+            if file_key is not None and key != file_key:
+                continue
+            commands.setdefault(key, (directory, entry))
+            if file_key is not None:
+                break
+        return commands
 
-    def _get_parent_class_name(self, cursor) -> str:
+    def _parse_source(self, index, filename: str, commands: dict,
+                      options: int = 0) -> tuple[ci.TranslationUnit, str]:
+        entry_with_dir = commands.get(self._path_key(filename))
+        parse_filename = filename
+        original_dir = directory = os.getcwd()
+        args = ['-ferror-limit=0']
+        if entry_with_dir is None:
+            args += ['-x', 'c', '-std=c17'] if filename.endswith('.c') else ['-x', 'c++', '-std=c++17']
+        else:
+            directory, entry = entry_with_dir
+            command = entry['arguments'] if 'arguments' in entry else self._split_command(entry['command'])
+            if not command:
+                raise ValueError(f"Empty compile command for {filename}")
+            driver = os.path.basename(command[0]).lower().removesuffix('.exe')
+            if driver in ('cl', 'clang-cl'):
+                args.append('--driver-mode=cl')
+            elif driver.endswith('++'):
+                args.append('--driver-mode=g++')
+
+            # The database already provides the input file in argv; do not add it twice.
+            parse_filename = None
+            flags = iter(command[1:])
+            for flag in flags:
+                if flag in ('-o', '-include-pch'):
+                    next(flags, None)
+                elif flag == '--':
+                    args.append(flag)
+                    args.extend(flags)
+                    break
+                elif flag not in ('-c', '-Winvalid-pch') and not flag.startswith('-Wl,'):
+                    args.append(flag)
+
+        if not any(a == '-resource-dir' or a.startswith('-resource-dir=') for a in args):
+            resource_dir = self._clang_resource_dir
+            if resource_dir:
+                args[0:0] = ['-resource-dir', resource_dir]
+
+        # The compiler command can contain relative includes, forced headers and response files.
+        if directory != original_dir:
+            os.chdir(directory)
+        try:
+            return index.parse(parse_filename, args=args, options=options), directory
+        finally:
+            if directory != original_dir:
+                os.chdir(original_dir)
+
+    @staticmethod
+    def _symbol(cursor) -> str | ci.Cursor:
+        canonical = cursor.canonical
+        return canonical.get_usr() or canonical
+
+    @staticmethod
+    def _parent_class(cursor):
         parent = cursor.semantic_parent
         while parent:
-            if parent.kind in (ci.CursorKind.CLASS_DECL, ci.CursorKind.STRUCT_DECL):
-                return parent.spelling
+            if parent.kind in (ci.CursorKind.CLASS_DECL, ci.CursorKind.STRUCT_DECL, ci.CursorKind.CLASS_TEMPLATE):
+                return parent.canonical
             parent = parent.semantic_parent
-        return ""
+        return None
 
-    def _is_in_function_ranges(self, cursor_loc, func_ranges) -> bool:
-        if not func_ranges:
-            return False
-        if not cursor_loc or not cursor_loc.file:
-            return False
-        cursor_file = os.path.realpath(cursor_loc.file.name)
-        for func_start, func_end, _, _ in func_ranges:
-            func_file = os.path.realpath(func_start.file.name)
-            if cursor_file != func_file:
-                continue
-            if cursor_loc.line < func_start.line:
-                continue
-            if cursor_loc.line == func_start.line and cursor_loc.column < func_start.column:
-                continue
-            if cursor_loc.line > func_end.line:
-                continue
-            if cursor_loc.line == func_end.line and cursor_loc.column > func_end.column:
-                continue
-            return True
-        return False
+    @staticmethod
+    def _qualified_name(cursor) -> str:
+        parts = [cursor.spelling]
+        parent = cursor.semantic_parent
+        while parent and parent.kind != ci.CursorKind.TRANSLATION_UNIT:
+            if parent.spelling:
+                parts.append(parent.spelling)
+            parent = parent.semantic_parent
+        return '::'.join(reversed(parts))
 
-    def _parse_source(self, source_code: str, filename: str, compile_commands_path: str) -> ci.TranslationUnit:
-        index = ci.Index.create()
-        args = ['-std=c++17', '-fsyntax-only']
-        if compile_commands_path:
-            compile_args = self._get_compile_args(filename, compile_commands_path)
-            if compile_args:
-                args = compile_args
-        return index.parse(filename, args=args, unsaved_files=[(filename, source_code)])
+    def _function_definitions(self, tu, filename: str, directory: str):
+        file_key = self._path_key(filename)
+        file_matches = {}
+        function_kinds = (ci.CursorKind.CXX_METHOD, ci.CursorKind.FUNCTION_DECL,
+                          ci.CursorKind.CONSTRUCTOR, ci.CursorKind.DESTRUCTOR,
+                          ci.CursorKind.FUNCTION_TEMPLATE, ci.CursorKind.CONVERSION_FUNCTION)
 
-    def _should_skip_callee(self, node, func_ranges, callee, name, callee_info) -> bool:
-        """判断是否应该跳过该函数调用"""
-        # 调用位置不在目标函数范围内
-        if not self._is_in_function_ranges(node.location, func_ranges):
-            return True
-        # 系统位置或标准库函数
-        if self._is_system_location(callee) or self._is_stdlib_name(name):
-            return True
-        # 已处理过，避免重复
-        if name in callee_info:
-            return True
-        return False
+        def walk(cursor):
+            for node in cursor.get_children():
+                file = node.location.file
+                if file is not None:
+                    path = file.name
+                    if path not in file_matches:
+                        file_matches[path] = self._path_key(path, directory) == file_key
+                    if not file_matches[path]:
+                        continue
+                    if node.kind in function_kinds and node.is_definition():
+                        yield node
+                yield from walk(node)
 
-    def _get_callee_definition_location(self, callee, local_defs, callee_class=None) -> tuple:
-        """获取被调用函数的定义位置（文件 + 行号）"""
-        declared_in_file = None
-        declared_at_line = None
-        if callee.location and callee.location.file:
-            declared_in_file = callee.location.file.name
-            declared_at_line = callee.location.line
-        def_key = f"{callee_class}::{callee.spelling}" if callee_class else callee.spelling
-        if def_key in local_defs:
-            return local_defs[def_key]
-        return declared_in_file, declared_at_line
+        yield from walk(tu.cursor)
 
-    def _process_call_expr(self, node, func_ranges: list[tuple], filename: str,
-                           func_class: str, callee_info: dict[str, CalleeInfo],
-                           local_defs: dict[str, tuple]):
-        callee = node.referenced
-        name = callee.spelling
-        if self._should_skip_callee(node, func_ranges, callee, name, callee_info):
-            return
-        is_member = self._is_member_function(node)
-        callee_class = self._get_parent_class_name(callee) if is_member else None
-        defined_in_file, defined_at_line = self._get_callee_definition_location(callee, local_defs, callee_class)
-        def_key = f"{callee_class}::{name}" if callee_class else name
-        is_defined_locally = def_key in local_defs
-        is_same_class = is_member and bool(func_class) and callee_class == func_class
-        declared_in_header = defined_in_file.endswith('.h') if defined_in_file else False
-        callee_info[name] = CalleeInfo(
-            name=name,
-            class_name=callee_class,
-            is_internal=is_defined_locally or is_same_class,
-            defined_in_file=defined_in_file,
-            defined_at_line=defined_at_line,
-            is_member=is_member,
-            declared_in_header=declared_in_header
-        )
-
-    def _parse_and_collect(self, source_code: str, filename: str,
-                           compile_commands_path: str, target_line: int) -> tuple[dict[str, CalleeInfo], str]:
-        index = ci.Index.create()
-        args = ['-std=c++17', '-fsyntax-only', '-ferror-limit=0']
-        if compile_commands_path:
-            compile_args = self._get_compile_args(filename, compile_commands_path)
-            if compile_args:
-                args = compile_args + ['-ferror-limit=0']
-        if not any('resource-dir' in a for a in args):
-            resource_dir = self._find_clang_resource_dir()
-            if resource_dir:
-                args = ['-resource-dir', resource_dir] + args
-        tu = index.parse(filename, args=args, unsaved_files=[(filename, source_code)])
-
-        local_defs: dict[str, tuple] = {}
-        func_ranges: list[tuple] = []
-        func_class = ""
-        all_call_exprs: list = []
-
-        for node in tu.cursor.walk_preorder():
-            if node.kind in (ci.CursorKind.CXX_METHOD, ci.CursorKind.FUNCTION_DECL, ci.CursorKind.CONSTRUCTOR, ci.CursorKind.FUNCTION_TEMPLATE):
-                loc = node.location
-                same_file = loc and loc.file and os.path.normpath(loc.file.name) == os.path.normpath(filename)
-                at_target_line = loc.line == target_line if loc else False
-                if same_file:
-                    func_name = node.spelling
-                    if func_name:
-                        node_class = self._get_parent_class_name(node)
-                        def_key = f"{node_class}::{func_name}" if node_class else func_name
-                        local_defs[def_key] = (loc.file.name, loc.line)
-                if same_file and at_target_line:
-                    func_range = node.extent
-                    if func_range:
-                        func_class = self._get_parent_class_name(node)
-                        func_ranges = [(func_range.start, func_range.end, None, None)]
-            elif self._is_valid_function_call(node) and func_ranges:
-                all_call_exprs.append(node)
-
-        callee_info: dict[str, CalleeInfo] = {}
-        for node in all_call_exprs:
-            self._process_call_expr(node, func_ranges, filename, func_class, callee_info, local_defs)
-
-        return callee_info, func_class
-
-    def callees(self, source_code: str, filename: str,
-                compile_commands_path: str = "",
+    def callees(self, filename: str, compile_commands_path: str = "",
                 target_line: int = 0) -> tuple[list[CalleeInfo], str]:
         if target_line <= 0:
             raise ValueError("target_line must be specified")
-        abs_filename = os.path.abspath(filename)
-        callee_info, func_class = self._parse_and_collect(source_code, abs_filename, compile_commands_path, target_line)
-        return list(callee_info.values()), func_class
+        filename = os.path.abspath(filename)
+        index = ci.Index.create()
+        commands = self._read_compile_commands(compile_commands_path, filename)
+        tu, directory = self._parse_source(index, filename, commands)
+        target = next((node for node in self._function_definitions(tu, filename, directory)
+                       if node.location.line == target_line), None)
+        if target is None:
+            return [], ""
+
+        target_class = self._parent_class(target)
+        file_key = self._path_key(filename)
+        seen = set()
+        callees = []
+        for node in target.walk_preorder():
+            callee = self._called_symbol(node)
+            if callee is None or self._is_stdlib_name(callee.spelling) or self._is_system_location(callee, directory):
+                continue
+            key = self._symbol(callee)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            # A function pointer is an injection point, not an expandable function body.
+            definition = callee.get_definition() if callee.kind != ci.CursorKind.VAR_DECL else None
+            definition_file = definition.location.file if definition is not None else None
+            is_local = bool(definition_file and
+                            self._path_key(definition_file.name, directory) == file_key)
+            location = definition.location if is_local else callee.location
+            path = os.path.abspath(os.path.join(directory, location.file.name)) if location.file else None
+            callee_class = self._parent_class(callee) if callee.kind == ci.CursorKind.CXX_METHOD else None
+            is_same_class = target_class is not None and callee_class is not None and target_class == callee_class
+            callees.append(CalleeInfo(
+                name=callee.spelling,
+                class_name=callee_class.spelling if callee_class is not None else None,
+                is_internal=is_local or is_same_class,
+                defined_in_file=path,
+                defined_at_line=location.line if path else None,
+                is_member=callee_class is not None,
+                declared_in_header=bool(path and path.endswith('.h')),
+            ))
+        return callees, target_class.spelling if target_class is not None else ""
+
+    def write_context(self, input_path: str, output_dir: str, target_name: str, target_line: int | None,
+                      compile_commands_path: str) -> None:
+        index = ci.Index.create()
+        input_path = Path(input_path).resolve(strict=True)
+        is_directory = input_path.is_dir()
+        commands = self._read_compile_commands(compile_commands_path, None if is_directory else str(input_path))
+        no_match = f"找不到函数 {target_name} 的定义: {input_path}"
+        ambiguous = f"函数 {target_name} 存在多个定义；请指定源文件、限定名或 --line"
+
+        def matching_definitions(tu, filename, directory):
+            for node in self._function_definitions(tu, filename, directory):
+                if target_line is not None and node.location.line != target_line:
+                    continue
+                if target_name == node.spelling or ('::' in target_name and target_name == self._qualified_name(node)):
+                    yield node
+
+        def find_source():
+            match = None
+            for candidate in input_path.rglob('*'):
+                if candidate.suffix not in ('.c', '.cc', '.cpp', '.cxx', '.C', '.h', '.hh', '.hpp', '.hxx'):
+                    continue
+                if not candidate.is_file():
+                    continue
+                filename = str(candidate)
+                tu, directory = self._parse_source(index, filename, commands)
+                if next(matching_definitions(tu, filename, directory), None) is not None:
+                    if match is not None:
+                        raise ValueError(ambiguous)
+                    match = filename
+            if match is None:
+                raise ValueError(no_match)
+            return match
+
+        filename = find_source() if is_directory else str(input_path)
+        tu, directory = self._parse_source(index, filename, commands,
+                                           options=ci.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD)
+        matches = matching_definitions(tu, filename, directory)
+        target = next(matches, None)
+        if target is None:
+            raise ValueError(no_match)
+        if next(matches, None) is not None:
+            raise ValueError(ambiguous)
+        errors = [str(diagnostic) for diagnostic in tu.diagnostics if diagnostic.severity >= ci.Diagnostic.Error]
+        if errors:
+            raise ValueError("Clang 无法解析目标文件:\n" + "\n".join(errors))
+
+        functions = [target]
+        seen_callees = {self._symbol(target)}
+        globals_used = {}
+        types_used = {}
+        target_file = self._path_key(filename)
+        target_class = self._parent_class(target)
+        for function in functions:
+            # Collect references for every emitted body, but expand calls only from the target.
+            is_target = function is target
+            for node in function.walk_preorder():
+                if is_target:
+                    callee = self._called_symbol(node)
+                    if (callee is not None and callee.kind != ci.CursorKind.VAR_DECL
+                            and callee.location.file and not self._is_system_location(callee, directory)):
+                        key = self._symbol(callee)
+                        if key not in seen_callees:
+                            seen_callees.add(key)
+                            definition = callee.get_definition()
+                            callee_class = (self._parent_class(callee)
+                                            if callee.kind == ci.CursorKind.CXX_METHOD else None)
+                            if definition is not None and (file := definition.location.file) and (
+                                self._path_key(file.name, directory) == target_file
+                                or (target_class is not None and target_class == callee_class)
+                            ):
+                                functions.append(definition)
+                if node.kind not in (ci.CursorKind.DECL_REF_EXPR, ci.CursorKind.MEMBER_REF_EXPR,
+                                     ci.CursorKind.TYPE_REF, ci.CursorKind.TEMPLATE_REF):
+                    continue
+                ref = node.referenced
+                if ref is None or not ref.location.file or self._is_system_location(ref, directory):
+                    continue
+                if ref.kind == ci.CursorKind.VAR_DECL:
+                    parent = ref.semantic_parent
+                    if parent is None or parent.kind not in (
+                        ci.CursorKind.TRANSLATION_UNIT, ci.CursorKind.NAMESPACE, ci.CursorKind.LINKAGE_SPEC,
+                        ci.CursorKind.CLASS_DECL, ci.CursorKind.STRUCT_DECL, ci.CursorKind.CLASS_TEMPLATE,
+                    ):
+                        continue
+                    globals_used.setdefault(self._symbol(ref), ref.get_definition() or ref)
+                elif node.kind in (ci.CursorKind.TYPE_REF, ci.CursorKind.TEMPLATE_REF):
+                    if ref.kind == ci.CursorKind.TYPEDEF_DECL:
+                        underlying = ref.underlying_typedef_type.get_canonical()
+                        if underlying.kind == ci.TypeKind.RECORD:
+                            record = underlying.get_declaration().get_definition()
+                            if record is not None and record.location.file and not self._is_system_location(record, directory):
+                                start, alias_start = record.extent.start, ref.extent.start
+                                if (start.file.name != alias_start.file.name
+                                        or not alias_start.offset <= start.offset < ref.extent.end.offset):
+                                    types_used.setdefault(self._symbol(record), record)
+                    types_used.setdefault(self._symbol(ref), ref.get_definition() or ref)
+
+        function_ranges = {}
+        for function in functions:
+            extent = function.extent
+            path = self._path_key(extent.start.file.name, directory)
+            function_ranges.setdefault(path, []).append((extent.start.offset, extent.end.offset))
+        macros = {}
+        for node in tu.cursor.get_children():
+            if node.kind != ci.CursorKind.MACRO_INSTANTIATION or not node.location.file:
+                continue
+            loc = node.location
+            ranges = function_ranges.get(self._path_key(loc.file.name, directory), ())
+            if any(start <= loc.offset < end for start, end in ranges):
+                macro = node.referenced
+                if macro and macro.location.file and not self._is_system_location(macro, directory):
+                    macros.setdefault(self._symbol(macro), macro)
+
+        files = {}
+
+        def source_at(cursor, declaration=False):
+            extent = cursor.extent
+            path = os.path.join(directory, extent.start.file.name)
+            if path not in files:
+                files[path] = Path(path).read_bytes()
+            source = files[path]
+            snippet = source[extent.start.offset:extent.end.offset].decode('utf-8', errors='replace')
+            if declaration:
+                snippet = snippet.rstrip()
+                if not snippet.endswith(';'):
+                    snippet += ';'
+            return snippet
+
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        snippets = {
+            'target_function_body.md': [source_at(target)],
+            'callee_function_body.md': [source_at(function) for function in functions[1:]],
+            'global_var_decl.md': [source_at(var, declaration=True) for var in globals_used.values()],
+            'code_context.md': ([f'#define {source_at(macro)}' for macro in macros.values()]
+                                + [source_at(decl, declaration=True) for decl in types_used.values()]),
+            'io_paragraph.md': [
+                '## 参数',
+                *(f'- `{arg.spelling}`: `{arg.type.spelling}`' for arg in target.get_arguments()),
+                '## 返回类型',
+                f'`{target.result_type.spelling}`',
+            ],
+        }
+        for name, lines in snippets.items():
+            with (output / name).open('w', encoding='utf-8', newline='') as f:
+                f.write('\n\n'.join(lines) + '\n' if lines else '')
+
+
+def main() -> int:
+    context = sys.argv[1:2] == ['--context']
+    parser = argparse.ArgumentParser(description='提取 C/C++ 源码上下文' if context else '提取 C/C++ 函数调用')
+    parser.add_argument('--libclang-path', '-L', help='libclang 库路径')
+    parser.add_argument('--line', '-l', type=int, required=not context, help='函数定义所在行号')
+    if context:
+        parser.add_argument('--input', '-i', required=True, help='函数所在的源文件或最小目录')
+        parser.add_argument('--output', '-o', required=True, help='输出目录')
+        parser.add_argument('--target-function', '--targe-function', '-f', required=True, help='目标函数名')
+        parser.add_argument('--compile-commands', '-p', default='', help='compile_commands.json 路径')
+    else:
+        parser.add_argument('source_file', help='源文件路径')
+        parser.add_argument('--compile-commands', '-c', required=True, help='compile_commands.json 路径')
+    args = parser.parse_args(sys.argv[2:] if context else None)
+    try:
+        extractor = CppCallExtractor(libclang_path=args.libclang_path)
+        if context:
+            extractor.write_context(args.input, args.output, args.target_function.strip(), args.line, args.compile_commands)
+            return 0
+
+        callees, _ = extractor.callees(args.source_file, args.compile_commands, args.line)
+        if not callees:
+            print("无函数调用")
+        for item in callees:
+            location = f"{item['defined_in_file']}:{item['defined_at_line']}"
+            tag = "(内部依赖)" if item['is_internal'] else "(外部依赖)"
+            extra = " [需查找实现位置]" if item['is_internal'] and item['declared_in_header'] else ""
+            class_prefix = f"{item['class_name']}::" if item['class_name'] else ""
+            print(f"{class_prefix}{item['name']} {location} {tag}{extra}")
+    except Exception as error:
+        print(f"错误: {error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser(description='提取 C++ 函数调用的函数')
-    parser.add_argument('source_file', help='源文件路径')
-    parser.add_argument('--compile-commands', '-c', default='', help='compile_commands.json 路径')
-    parser.add_argument('--libclang-path', '-L', default=None, help='libclang.so 路径')
-    parser.add_argument('--line', '-l', type=int, required=True, help='函数所在行号')
-    args = parser.parse_args()
-
-    if not args.compile_commands or not os.path.isfile(args.compile_commands):
-        print(f"错误: compile_commands.json 文件不存在: {args.compile_commands}")
-        print("请检查路径是否正确")
-        exit(1)
-
-    with open(args.source_file, 'r', encoding='utf-8', errors='ignore') as f:
-        source_code = f.read()
-
-    extractor = CppCallExtractor(libclang_path=args.libclang_path)
-    result, func_class = extractor.callees(
-        source_code,
-        args.source_file,
-        compile_commands_path=args.compile_commands,
-        target_line=args.line
-    )
-    callee_list: list[CalleeInfo] = result
-
-    if not callee_list:
-        print("无函数调用")
-    for item in callee_list:
-        location = f"{item['defined_in_file']}:{item['defined_at_line']}"
-        tag = "(内部依赖)" if item['is_internal'] else "(外部依赖)"
-        extra = ""
-        if item['is_internal'] and item['declared_in_header']:
-            extra = " [需查找实现位置]"
-        class_prefix = f"{item['class_name']}::" if item['class_name'] else ""
-        print(f"{class_prefix}{item['name']} {location} {tag}{extra}")
+    sys.exit(main())

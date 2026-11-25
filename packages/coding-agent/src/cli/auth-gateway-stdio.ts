@@ -19,6 +19,7 @@ import { formatModelStringWithRouting, normalizeModelPatternList, resolveCliMode
 import { Settings } from "../config/settings";
 import { claimRpcInput } from "../modes/rpc/rpc-input";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
+import { cfgProvidersThinkingProbe } from "../session/settings";
 import { expandOnlineTinyModelFallbacks } from "../tiny/online-candidates";
 
 /** Names the caller in the gateway's logs. */
@@ -118,6 +119,7 @@ export async function runAuthGatewayStdio(): Promise<void> {
 				registry.resolver(model.provider, { sessionId, baseUrl: model.baseUrl, modelId: model.id, initialKey }),
 		},
 		resolveModel: stdioModelResolver(routed, registry),
+		thinkingProbe: cfgProvidersThinkingProbe.get(settings),
 		listModels: () => GATEWAY_MODEL_KINDS.flatMap(kind => registry.getAvailable(kind)),
 	});
 	const route = async (req: Request): Promise<Response> => {

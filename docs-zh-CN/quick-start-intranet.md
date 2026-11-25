@@ -14,6 +14,9 @@
 - GitHub：定期同步。`https://github.com/jchanghong023/oh-my-pi/releases`
 - 嵌入式 SDK：在 CNB 的 `omp` 发布中，黄区 Windows x64 选 `omp-sdk-win32-x64.zip`（需 AVX2），红区 Linux x64 选 `omp-sdk-linux-x64.zip`（glibc 2.17 baseline）。这两个 ZIP 用于[编译 SDK 宿主](../README.md#windows--linux-x64-sdk-构建包)，不是 CLI 安装包。
 
+`omp update` 只原地更新独立 fork 二进制。若当前安装由包管理器维护，要切换到本 fork，请按[安装说明](../README.md#安装)重新安装。
+如果安装版本比最新稳定版更新，`omp update --stable` 只切换更新渠道，不降级。
+
 ## 4. 红区快速使用
 
 在 CentOS 7 上将 `omp-linux-x64` 安装为 `PATH` 上的 `omp`。红区必配 `OMP_OFFLINE` 和 `OMP_CONFIG_ROOT`：下面两行 `setenv` 可放入 `.cshrc`，其余命令在 tcsh 终端执行。代理就绪后再运行 `omp`：
@@ -30,7 +33,7 @@ omp
 ### 环境变量与数据
 
 - `OMP_CONFIG_ROOT`：持久数据目录，存放配置、凭据和会话。
-- `OMP_CACHE_DIR`：可选性能目录；红区 Linux 默认使用 `/dev/shm/omp-<UID>`，缓存、统计、日志和运行依赖直接存内存，而不是网络磁盘。
+- `OMP_CACHE_DIR`：可选性能目录，使用当前用户可访问的绝对路径；红区 Linux 默认使用 `/dev/shm/omp-<UID>`。缓存、统计、日志和运行依赖可避开网络磁盘。
 - `OMP_SKILLS_DIR`：可选团队共享技能目录；用 `/extensions` 查看或启停共享技能，不改共享文件。
 
 红区模式会暂时关闭 Web Search、Browser（含 `/crawl`）和 Fetch；本地文件和已配置、可达的内网服务仍可使用。
@@ -61,13 +64,13 @@ omp
 - **Superpowers**：内置开源开发工作流，用 `/skill:brainstorming` 梳理方案。
 - **测试插件（Developer Test Agent）**：用 `/dt` 生成或修复 Python、Java、C/C++ 和 Go 单元测试。
 - **复用 Codex 技能**：默认发现已有的 Codex 用户技能，无需复制。
-- **内置记忆**：红区启用记忆后可直接复用公司向量模型，无需另配。
+- **内置记忆**：红区启用记忆后可直接复用未禁用的公司向量模型；显式向量配置仍优先。
 
 ### 多代理与无人值守
 
-- **Team**：用 `/team <需求>` 发起多代理独立调查和交叉评审，只讨论方案，不改代码。
-- **Goal Autopilot**：用 `/goal-autopilot <目标>` 运行无人值守长任务，自动审批，自动回答AI问题。
-- **按清单执行**：用 `/todoloop tasks.md` 按组执行 Markdown 待办。
+- **Team**：在 TUI 输入 `/team <需求>`，或从命令行运行 `omp -p '/team <需求>'`，发起只读调查和交叉评审，不改代码。命令行调用把问题写在命令里，不另附 stdin 或 `@文件`。
+- **Goal Autopilot**：用 `/goal-autopilot <目标>` 运行无人值守长任务。无有效推荐的表单超时后返回未答复；恢复任务仍需结题复核。
+- **按清单执行**：用 `/todoloop tasks.md --check` 只预检，用 `/todoloop tasks.md` 按组执行 Markdown 待办。
 - **按需编排**：`/orchestrate` 拆解并分派任务，`/workflowz` 组织批量工作，`/ultrathink` 深入分析。
 - **同目录实例通信**：默认允许同目录的其他 OMP 实例读取子代理输出并向其发消息；不需要时运行 `omp config set task.crossInstance false`。
 
@@ -76,7 +79,7 @@ omp
 - **需求与设计**：`/skill:jch-grill-me` 澄清需求，`/skill:jch-grill-todo` 生成任务清单，`/skill:jch-codebase-design` 设计模块与接口。
 - **大仓审查**：`/skill:big-review-scan` 把仓库或 Fork 改动拆分初审，`/skill:big-review-verify` 对照源码复核发现。
 - **独立使用档案**：用 `omp -P work` 启动，隔离配置和会话。
-- **画布**：用 `/sketch` 手绘或贴图标注后添加为附件。
+- **画布**：用 `/sketch` 手绘或贴图标注。附件加入草稿前可按 Esc 取消；PNG 成功加入后，由你手动发送。
 - **控制改动**：`/minimal` 要求最小充分改动和验证；`/workspace` 提醒 Agent 限定写入范围，不是沙箱。
 - **切换工作树**：`/wt <分支>` 切换会话工作树，不搬动或清理未提交的改动。
 - **网页转 Markdown**：`/crawl <URL>` 不调用模型，直接爬内网保存网页内容。

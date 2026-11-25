@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- CodeAgent compaction no longer retries a request with unchanged credentials, and response observers receive the request's cancellation signal.
 - Tool cancellations are reported consistently during execution and replay.
 - Compaction retries oversized requests to a separate summary endpoint.
 - A separate remote compaction endpoint uses its own retry policy and reports a single request outcome.

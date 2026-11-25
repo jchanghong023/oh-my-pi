@@ -2,6 +2,8 @@
  * TTS/STT Submit Trigger options and evaluation logic.
  */
 
+import { normalizeSttLanguage } from "./language";
+
 export const STT_SUBMIT_TRIGGER_VALUES = ["never", "release", "release-complete", "say-submit"] as const;
 
 export type SttSubmitTrigger = (typeof STT_SUBMIT_TRIGGER_VALUES)[number];
@@ -29,6 +31,43 @@ export const STT_SUBMIT_TRIGGER_OPTIONS = [
 	},
 ] satisfies ReadonlyArray<{ value: SttSubmitTrigger; label: string; description: string }>;
 
+function cjkWordLocale(text: string, language: string | undefined): string | undefined {
+	const code = normalizeSttLanguage(
+		language
+			?.trim()
+			.toLowerCase()
+			.replace(/^<\|(.+)\|>$/, "$1"),
+	);
+	switch (code) {
+		case "zh":
+		case "zho":
+		case "chi":
+		case "cmn":
+		case "yue":
+		case "chinese":
+		case "mandarin":
+		case "cantonese":
+			return "zh";
+		case "ja":
+		case "jpn":
+		case "japanese":
+			return "ja";
+		case "ko":
+		case "kor":
+		case "korean":
+			return "ko";
+		case undefined:
+		case "":
+		case "auto":
+			// Some recognizers only return text. Use its script when no language is available.
+			if (/\p{Script=Hangul}/u.test(text)) return "ko";
+			if (/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text)) return "ja";
+			return /\p{Script=Han}/u.test(text) ? "zh" : undefined;
+		default:
+			return undefined;
+	}
+}
+
 /**
  * Evaluate the submit trigger against a transcribed utterance.
  * Returns whether to submit, and the number of characters to trim from the end of the utterance.
@@ -36,6 +75,7 @@ export const STT_SUBMIT_TRIGGER_OPTIONS = [
 export function evaluateSubmitTrigger(
 	utterance: string,
 	trigger: SttSubmitTrigger,
+	language?: string,
 ): { submit: boolean; trimTrailing: number } {
 	const trimmed = utterance.trim();
 	if (!trimmed) {
@@ -47,10 +87,14 @@ export function evaluateSubmitTrigger(
 	}
 
 	if (trigger === "release") {
-		// Split by whitespace and count words
-		const words = trimmed.split(/\s+/).filter(Boolean);
-		const submit = words.length >= 2;
-		return { submit, trimTrailing: 0 };
+		const locale = cjkWordLocale(trimmed, language);
+		if (!locale) return { submit: /\s/.test(trimmed), trimTrailing: 0 };
+
+		let words = 0;
+		for (const { isWordLike } of new Intl.Segmenter(locale, { granularity: "word" }).segment(trimmed)) {
+			if (isWordLike && ++words === 2) return { submit: true, trimTrailing: 0 };
+		}
+		return { submit: false, trimTrailing: 0 };
 	}
 
 	if (trigger === "release-complete") {

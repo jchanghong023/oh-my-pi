@@ -204,9 +204,9 @@ test("public Team stages and recheck verify supplemental documents and current s
 				`Public Team command did not register its background owner.\nCommand output:\n${output.join("\n") || "(none)"}`,
 			);
 		}
-		await job.promise;
 		expect(job.status).toBe("completed");
 		const result = job.structured?.data as TeamRunResult;
+		expect(output.filter(text => text === result.reportMarkdown)).toHaveLength(1);
 		expect(result.status).toBe("completed");
 		expect(result.candidates.map(candidate => candidate.label)).toEqual(["A", "B", "C"]);
 		expect(observed.filter(call => call.marker.startsWith("proposal"))).toHaveLength(3);

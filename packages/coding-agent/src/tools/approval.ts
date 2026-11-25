@@ -188,7 +188,8 @@ function coveringGrantKeys(target: string, capability: ToolTier): string[] {
 /**
  * Mode step for `always-ask-cached`, reached only when no tool or user policy decided. Read and
  * write calls whose cache targets are all granted run; a read-tier call with no targets runs as in
- * `always-ask`. Execution still prompts even when its target has a remembered grant.
+ * `always-ask` unless the tool reports unresolved paths. Execution still prompts even when its
+ * target has a remembered grant.
  */
 function resolveCachedModeApproval(
 	tool: ApprovalSubject,
@@ -206,8 +207,14 @@ function resolveCachedModeApproval(
 	}
 	const targets = approvalCacheTargets(tool, args);
 	if (targets.length === 0) {
-		if (decision.tier === "read") return { ...base, policy: "allow" };
-		return { ...base, policy: "prompt", ...(decision.reason ? { reason: decision.reason } : {}) };
+		const unresolved = tool.approvalRestrictionPaths?.(args) === null;
+		if (decision.tier === "read" && !unresolved) return { ...base, policy: "allow" };
+		return {
+			...base,
+			policy: "prompt",
+			source: unresolved ? "tool" : base.source,
+			...(decision.reason ? { reason: decision.reason } : {}),
+		};
 	}
 	const candidates = targets.map(target => coveringGrantKeys(target, decision.tier));
 	const present = grants?.present(candidates.flat());
@@ -373,7 +380,19 @@ export function resolveApproval(
 	const resolved = resolvePolicy(tool, args, mode, userConfig, grants, context);
 	if (resolved.policy === "deny") return resolved;
 	const reason = restrictedFolderReason(tool, args, restrictions);
-	if (reason === undefined) return resolved;
+	if (reason === undefined) {
+		// An unresolved target cannot be covered by a tool-wide session grant
+		// either. Keep any mode prompt per-call, without creating a new prompt.
+		if (
+			resolved.policy === "prompt" &&
+			resolved.source === "mode" &&
+			tool.approvalCacheTargets &&
+			tool.approvalRestrictionPaths?.(args) === null
+		) {
+			return { ...resolved, source: "tool" };
+		}
+		return resolved;
+	}
 	// A restricted folder outranks every mode, policy, and grant. `override` keeps nested tool-command
 	// dispatches asking, and a source other than `mode` makes the prompt neither session-grantable
 	// nor rememberable, so every call asks again.
@@ -520,32 +539,29 @@ function isWithinFolder(root: string, candidate: string): boolean {
 
 /**
  * Absolute filesystem paths a call touches, keyed like grants (symlinks resolved, case-folded on
- * Windows); `recursive` marks a search that reads the whole tree below its path. A call whose tool
- * reports no targets is matched by the directory it runs in — its own `cwd` argument when it names
- * one, else the session's — plus any `approvalRestrictionPaths`. Non-filesystem targets (internal
- * and web URLs) touch no folder.
+ * Windows). Both cache targets and restriction-only paths may encode recursive tree scopes. A
+ * call with no cache targets is also matched by its own `cwd` argument or the session directory.
+ * Non-filesystem targets (internal and web URLs) touch no folder. `null` means the tool
+ * cannot determine all targets before execution, not that it touches no folder.
  */
 function restrictionSubjects(
 	tool: ApprovalSubject,
 	args: unknown,
 	cwd: string | undefined,
-): { path: string; recursive: boolean }[] {
+): { path: string; recursive: boolean }[] | null {
 	const targets = approvalCacheTargets(tool, args);
-	if (targets.length > 0) {
-		const subjects: { path: string; recursive: boolean }[] = [];
-		for (const target of targets) {
-			const treeFolder = approvalTreeSearchFolderKey(target);
-			const subject = treeFolder ?? target;
-			// Re-keyed: the path resolves symlinks and drops a directory key's trailing separator.
-			if (path.isAbsolute(subject)) {
-				subjects.push({ path: approvalCacheKeyForPath(subject), recursive: treeFolder !== undefined });
-			}
+	const reportedPaths = targets.length > 0 ? targets : tool.approvalRestrictionPaths?.(args);
+	if (reportedPaths === null) return null;
+	const subjects: { path: string; recursive: boolean }[] = [];
+	for (const target of reportedPaths ?? []) {
+		const treeFolder = approvalTreeSearchFolderKey(target);
+		const subject = treeFolder ?? target;
+		// Re-keyed: the path resolves symlinks and drops a directory key's trailing separator.
+		if (path.isAbsolute(subject)) {
+			subjects.push({ path: approvalCacheKeyForPath(subject), recursive: treeFolder !== undefined });
 		}
-		return subjects;
 	}
-	const subjects = (tool.approvalRestrictionPaths?.(args) ?? [])
-		.filter(target => path.isAbsolute(target))
-		.map(target => ({ path: approvalCacheKeyForPath(target), recursive: false }));
+	if (targets.length > 0) return subjects;
 	if (cwd === undefined) return subjects;
 	let workingDirectory = cwd;
 	const requested = isRecord(args) ? args.cwd : undefined;
@@ -582,7 +598,9 @@ export function restrictedFolderReason(
 		folders.push({ key: approvalCacheKeyForPath(label), label });
 	}
 	if (folders.length === 0) return undefined;
-	for (const subject of restrictionSubjects(tool, args, restrictions.cwd)) {
+	const subjects = restrictionSubjects(tool, args, restrictions.cwd);
+	if (subjects === null) return "Restricted folders are configured and the tool's targets are not yet known";
+	for (const subject of subjects) {
 		for (const { key, label } of folders) {
 			if (isWithinFolder(key, subject.path) || (subject.recursive && isWithinFolder(subject.path, key))) {
 				return `Restricted folder: ${sanitizeText(shortenPath(label))}`;

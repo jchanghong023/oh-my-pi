@@ -191,6 +191,7 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 				: nestedEmbeddings?.disabled;
 	const embeddingModel = options.embeddingModel ?? nestedEmbeddings?.model;
 	const embeddingAllowRemote = nestedEmbeddings?.allowRemote;
+	const embeddingRequestRedirect = nestedEmbeddings?.requestRedirect;
 	const embeddingAllowLocal = nestedEmbeddings?.allowLocal;
 	const embeddingAllowLocalLoad = nestedEmbeddings?.allowLocalLoad;
 	const embeddingApiUrl = options.embeddingApiUrl ?? nestedEmbeddings?.apiUrl;
@@ -207,6 +208,7 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 		embeddingDisabled !== undefined ||
 		embeddingModel !== undefined ||
 		embeddingAllowRemote !== undefined ||
+		embeddingRequestRedirect !== undefined ||
 		embeddingAllowLocal !== undefined ||
 		embeddingAllowLocalLoad !== undefined ||
 		embeddingApiUrl !== undefined ||
@@ -222,6 +224,7 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 					disabled: embeddingDisabled,
 					model: embeddingModel,
 					allowRemote: embeddingAllowRemote,
+					requestRedirect: embeddingRequestRedirect,
 					allowLocal: embeddingAllowLocal,
 					allowLocalLoad: embeddingAllowLocalLoad,
 					apiUrl: embeddingApiUrl,

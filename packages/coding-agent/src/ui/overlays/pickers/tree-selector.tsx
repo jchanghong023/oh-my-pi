@@ -65,8 +65,8 @@ export interface TreeSelectorProps {
 	readonly roots: readonly TreeSelectorNode[];
 	/** The session's current leaf. */
 	readonly currentLeafId: string | null;
-	/** Terminal rows: the list pages by about half of them. */
-	readonly terminalHeight: number;
+	/** Terminal rows (live when supplied as an accessor): the list pages by about half of them. */
+	readonly terminalHeight: number | (() => number);
 	onSelect(entryId: string, options: { summarize: boolean }): void;
 	onCancel(): void;
 	onLabelChange?(entryId: string, label: string | undefined): void;
@@ -338,10 +338,11 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 	const branchPoints = new Set(
 		rows.filter(row => row.parent !== undefined && row.siblings > 1).map(row => row.parent!),
 	);
-	const maxVisible = Math.max(
-		1,
-		Math.min(Math.max(5, Math.floor(props.terminalHeight / 2)), props.terminalHeight - 8),
-	);
+	const maxVisible = (): number => {
+		const height = typeof props.terminalHeight === "function" ? props.terminalHeight() : props.terminalHeight;
+		return Math.max(1, Math.min(Math.max(5, Math.floor(height / 2)), height - 8));
+	};
+	const detailHeight = (): number => Math.max(1, Math.floor(maxVisible() / 2));
 
 	const filter = signal<TreeFilterMode>(props.initialFilterMode ?? "default");
 	const search = signal<LineState>({ text: "", cursor: 0 });
@@ -390,10 +391,28 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 	/** The selection the user made; shown as its nearest visible row. */
 	const anchor = signal<string | null>(leafId ?? rows.at(-1)?.node.entry.id ?? null);
 	const selected = computed(() => nearestVisible(anchor()));
-	const expanded = signal<{ id: string; text: string } | undefined>(undefined);
-	const detailScroll = signal(0);
+	const expanded = signal<{ id: string; text: string; lines: string[] } | undefined>(undefined);
+	const detailScroll = signal<{ offset: number; terminalMax?: number }>({ offset: 0 });
+	const nativeDetailMax = (details: { lines: readonly string[] }): number =>
+		Math.max(0, details.lines.length - detailHeight());
+	const clampDetailScroll = (max: number): number => {
+		const scroll = detailScroll();
+		// Only the terminal painter knows how many rows the details wrapped into.
+		scroll.terminalMax = max;
+		return (scroll.offset = Math.min(scroll.offset, max));
+	};
 	effect(() => {
-		if (expanded()?.id !== selected()) expanded.set(undefined);
+		const details = expanded();
+		if (!details) return;
+		if (details.id !== selected()) {
+			expanded.set(undefined);
+			return;
+		}
+		const scroll = detailScroll();
+		if (scroll.terminalMax === undefined) {
+			const max = nativeDetailMax(details);
+			if (scroll.offset > max) detailScroll.set({ offset: max });
+		}
 	});
 	const toggleDetails = (): void => {
 		const id = selected();
@@ -401,8 +420,8 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 		const node = nodeById.get(id);
 		const text = expanded()?.id === id || !node ? undefined : toolDetails(node.entry);
 		batch(() => {
-			detailScroll.set(0);
-			expanded.set(text === undefined ? undefined : { id, text });
+			detailScroll.set({ offset: 0 });
+			expanded.set(text === undefined ? undefined : { id, text, lines: text.split("\n") });
 		});
 	};
 	const index = (): number => visible().findIndex(row => row.node.entry.id === selected());
@@ -551,8 +570,12 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			toggleDetails();
 			return true;
 		}
-		if (expanded() && (key.id === "shift+up" || key.id === "shift+down")) {
-			detailScroll.set(Math.max(0, detailScroll() + (key.id === "shift+up" ? -1 : 1)));
+		const details = expanded();
+		if (details && (key.id === "shift+up" || key.id === "shift+down")) {
+			const scroll = detailScroll();
+			const max = scroll.terminalMax ?? nativeDetailMax(details);
+			const offset = Math.max(0, Math.min(max, Math.min(scroll.offset, max) + (key.id === "shift+up" ? -1 : 1)));
+			if (offset !== scroll.offset) detailScroll.set({ ...scroll, offset });
 			return true;
 		}
 		const id = selectKeyId(key, keybindings);
@@ -591,11 +614,11 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 				return true;
 			case "pageUp":
 			case "left":
-				move(-maxVisible, false);
+				move(-maxVisible(), false);
 				return true;
 			case "pageDown":
 			case "right":
-				move(maxVisible, false);
+				move(maxVisible(), false);
 				return true;
 			case "shift+enter":
 				confirm(true);
@@ -730,10 +753,10 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			look: "omp.tree",
 			entries: lookRows,
 			field: search(),
-			maxRows: maxVisible,
+			maxRows: maxVisible(),
 			label: editor ? editor.line : undefined,
 			details: expanded()?.id === selected() ? expanded()?.text : undefined,
-			detailScroll: detailScroll(),
+			clampDetailScroll,
 			filterLabel: filter() === "default" ? "" : ` ${FILTER_LABELS[filter()]}`,
 			total: rows.length,
 		};
@@ -804,12 +827,12 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			return [
 				<text text={parts} role="omp.picker.title" />,
 				details?.id === id ? (
-					<list max={{ lines: Math.max(1, Math.floor(maxVisible / 2)) }}>
+					<list max={{ lines: detailHeight() }}>
 						<text
 							text={() => {
-								const lines = details.text.split("\n");
-								const height = Math.max(1, Math.floor(maxVisible / 2));
-								return lines.slice(Math.min(detailScroll(), Math.max(0, lines.length - height))).join("\n");
+								const height = detailHeight();
+								const offset = Math.min(detailScroll().offset, nativeDetailMax(details));
+								return details.lines.slice(offset, offset + height).join("\n");
 							}}
 						/>
 					</list>

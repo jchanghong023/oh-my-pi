@@ -66,6 +66,8 @@ function parseCommandTemplate(
 export interface LoadSlashCommandsOptions {
 	/** Working directory for project-local commands. Default: getProjectDir() */
 	cwd?: string;
+	/** Native profile config root; defaults to the active profile. */
+	agentDir?: string;
 	/** Session-local extension roots for post-startup reloads (explicit + mode + configured). */
 	extensionRoots?: EffectiveExtensionRoots;
 }
@@ -77,6 +79,7 @@ export interface LoadSlashCommandsOptions {
 export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}): Promise<FileSlashCommand[]> {
 	const result = await loadCapability<SlashCommand>(slashCommandCapability.id, {
 		cwd: options.cwd,
+		agentDir: options.agentDir,
 		extensionRoots: options.extensionRoots,
 	});
 

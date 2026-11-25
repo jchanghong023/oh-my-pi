@@ -172,8 +172,15 @@ SOFTWARE.
       const container = document.getElementById('canvasContainer');
       const panButton = document.getElementById('panButton');
       const zoomLevel = document.getElementById('zoomLevel');
-      const initialWidth = Math.max(1, viewport.clientWidth);
-      const initialHeight = Math.max(1, viewport.clientHeight);
+      // Keep the bitmap below browser surface limits and bound each RGBA copy.
+      const MAX_SIDE = 8192;
+      const MAX_PIXELS = 16 * 1024 * 1024;
+      const viewportWidth = Math.max(1, viewport.clientWidth);
+      const viewportHeight = Math.max(1, viewport.clientHeight);
+      const initialScale = Math.min(1, MAX_SIDE / viewportWidth, MAX_SIDE / viewportHeight,
+        Math.sqrt(MAX_PIXELS / (viewportWidth * viewportHeight)));
+      const initialWidth = Math.max(1, Math.floor(viewportWidth * initialScale));
+      const initialHeight = Math.max(1, Math.floor(viewportHeight * initialScale));
       let zoom = 1;
       let offsetX = 0;
       let offsetY = 0;
@@ -189,7 +196,9 @@ SOFTWARE.
       var resizing = false;
       var restoring = false;
       var pending = false;
+      var cancelling = false;
       var finished = false;
+      var terminalError = '';
       var pasteGeneration = 0;
       var states = [];
       var lastX = 0;
@@ -203,7 +212,7 @@ SOFTWARE.
         status.textContent = message;
       }
 
-      function busy() { return pending || finished || restoring; }
+      function busy() { return pending || cancelling || finished || restoring; }
 
       function updateView() {
         container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${zoom})`;
@@ -389,27 +398,43 @@ SOFTWARE.
       bindChoices('.color-btn', function (button) { brushColor = button.getAttribute('data-color'); });
 
       function transport(action, body) {
-        pending = true;
+        const submitting = action === 'submit';
+        if (submitting) pending = true;
+        else cancelling = true;
         sendButton.disabled = true;
-        cancelButton.disabled = true;
-        setStatus('pending', action === 'submit' ? '正在添加绘图附件…' : '正在取消…');
+        cancelButton.disabled = cancelling;
+        setStatus('pending', submitting ? '正在添加绘图附件…' : '正在取消…');
         var xhr = new XMLHttpRequest();
-        function failed(message) {
-          pending = false;
-          sendButton.disabled = false;
-          cancelButton.disabled = false;
-          setStatus('error', message + ' 绘图已保留，请重试。');
+        function received() {
+          if (submitting) pending = false;
+          else cancelling = false;
+          return !finished;
+        }
+        function failed(message, code) {
+          if (!received()) return;
+          if (code === 500 || (code === 410 && !terminalError)) terminalError = message;
+          // The other request may still confirm which action closed the session.
+          if (pending || cancelling) {
+            cancelButton.disabled = cancelling || !!terminalError;
+            if (pending) setStatus('pending', '正在添加绘图附件…');
+            return;
+          }
+          finished = !!terminalError;
+          sendButton.disabled = finished;
+          cancelButton.disabled = finished;
+          setStatus('error', terminalError ? terminalError + ' 绘图已保留。' : message + ' 绘图已保留，请重试。');
         }
         xhr.open('POST', endpoint + action, true);
         xhr.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
         xhr.onload = function () {
           if (xhr.status !== 200) {
-            failed(xhr.responseText || '无法添加绘图附件。');
+            failed(xhr.responseText || (submitting ? '无法添加绘图附件。' : '无法取消绘图。'), xhr.status);
             return;
           }
+          if (!received()) return;
           finished = true;
-          pending = false;
-          setStatus('success', action === 'submit'
+          cancelButton.disabled = true;
+          setStatus('success', submitting
             ? '绘图已添加为附件。请返回 OMP 补充文字并手动发送消息。可以关闭此标签页。'
             : '已取消绘图。可以关闭此标签页。');
           window.close();
@@ -423,7 +448,12 @@ SOFTWARE.
         finishStroke();
         pasteGeneration++;
         try {
-          transport('submit', canvas.toDataURL('image/png').split(',')[1]);
+          var encoded = canvas.toDataURL('image/png').split(',')[1];
+          if (!encoded) {
+            setStatus('error', '无法导出 PNG。绘图已保留，请缩小画布后重试。');
+            return;
+          }
+          transport('submit', encoded);
         } catch (error) {
           pending = false;
           sendButton.disabled = false;
@@ -432,7 +462,7 @@ SOFTWARE.
         }
       }
       function cancel() {
-        if (busy()) return;
+        if (cancelling || finished || terminalError || restoring) return;
         finishStroke();
         pasteGeneration++;
         transport('cancel', '');
@@ -522,18 +552,32 @@ SOFTWARE.
         const startY = event.clientY;
         const startWidth = canvas.width;
         const startHeight = canvas.height;
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        let imageData;
+        let oversized = false;
         function move(moveEvent) {
-          if (moveEvent.pointerId !== resizeId) return;
-          canvas.width = Math.max(200, Math.round(startWidth + (moveEvent.clientX - startX) / zoom));
-          canvas.height = Math.max(150, Math.round(startHeight + (moveEvent.clientY - startY) / zoom));
+          if (moveEvent.pointerId !== resizeId || busy()) return;
+          const width = Math.max(200, Math.round(startWidth + (moveEvent.clientX - startX) / zoom));
+          const height = Math.max(150, Math.round(startHeight + (moveEvent.clientY - startY) / zoom));
+          if (width > MAX_SIDE || height > MAX_SIDE || width * height > MAX_PIXELS) {
+            if (!oversized) setStatus('error', '超出画布尺寸限制。已保留上一次有效的尺寸和绘图。');
+            oversized = true;
+            return;
+          }
+          if (oversized) setStatus('ready', '可继续绘图或添加附件。');
+          oversized = false;
+          if (width === canvas.width && height === canvas.height) return;
+          imageData ??= ctx.getImageData(0, 0, startWidth, startHeight);
+          // Shrink first so an intermediate size cannot exceed the pixel budget.
+          if (width < canvas.width) canvas.width = width;
+          if (height !== canvas.height) canvas.height = height;
+          if (width !== canvas.width) canvas.width = width;
           whiteBackground();
           ctx.putImageData(imageData, 0, 0);
         }
         function finishResize(finishEvent) {
           if (finishEvent.pointerId !== resizeId) return;
           resizing = false;
-          saveState();
+          if (canvas.width !== startWidth || canvas.height !== startHeight) saveState();
           resizeHandle.removeEventListener('pointermove', move);
           resizeHandle.removeEventListener('pointerup', finishResize);
           resizeHandle.removeEventListener('pointercancel', finishResize);
@@ -548,13 +592,13 @@ SOFTWARE.
 
       canvas.width = initialWidth;
       canvas.height = initialHeight;
-      updateView();
+      if (initialScale < 1) fitCanvas();
+      else updateView();
       whiteBackground();
       saveState();
       window.addEventListener('beforeunload', function () {
-        // A submit may already be accepted while its acknowledgement is in
-        // flight. Do not let unload cancellation race a pending submission.
-        if (!finished && !pending && navigator.sendBeacon) navigator.sendBeacon(endpoint + 'cancel', '');
+        // Do not re-cancel while an explicit request is awaiting confirmation.
+        if (!finished && !pending && !cancelling && navigator.sendBeacon) navigator.sendBeacon(endpoint + 'cancel', '');
       });
     }());
   </script>

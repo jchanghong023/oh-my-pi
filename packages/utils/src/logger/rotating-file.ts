@@ -248,12 +248,22 @@ export class RotatingFileSink {
 		}
 		const buf = Buffer.from(this.#pending, "utf8");
 		let off = 0;
-		while (off < buf.length) {
-			const written = fs.writeSync(this.#fd!, buf, off);
-			if (written <= 0) throw new Error("Log write made no progress");
-			off += written;
+		try {
+			while (off < buf.length) {
+				const written = fs.writeSync(this.#fd!, buf, off);
+				if (written <= 0) throw new Error("Log write made no progress");
+				off += written;
+			}
+		} catch (error) {
+			// The LF ends a complete record on every platform, including CRLF on Windows.
+			// Keep the whole torn record, if any, ahead of the records not yet attempted.
+			const replayOffset = off === 0 ? 0 : buf.lastIndexOf(0x0a, off - 1) + 1;
+			if (replayOffset > 0) {
+				this.#pending = buf.toString("utf8", replayOffset);
+				this.#pendingBytes = buf.length - replayOffset;
+			}
+			throw error;
 		}
-		// On failure replay complete JSON records at the fallback, never byte fragments.
 		this.#pending = "";
 		this.#pendingBytes = 0;
 	}

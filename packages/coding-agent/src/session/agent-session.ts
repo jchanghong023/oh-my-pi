@@ -162,6 +162,7 @@ import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { releaseCompletionHandles } from "../eval/completion-bridge";
 import { releaseJudgmentBatches } from "../eval/judgment-batch-bridge";
 import type { EvalPreludeDefinition } from "../eval/preludes";
+import { getCachedPythonKernelAvailability, onPythonKernelAvailable } from "../eval/py/kernel";
 import type { PythonResult } from "../eval/py/executor";
 import { EVAL_STATE_CONTEXT_TYPE, formatEvalStateContext, isEvalStateContext } from "../eval/state";
 import { WorkPoolRegistry } from "../task/workpool";
@@ -203,7 +204,7 @@ import {
 import { checkSkillInvocation } from "../spec-driven/skill-policy";
 import { expandSlashCommand, type FileSlashCommand, loadSlashCommands } from "../extensibility/slash-commands";
 import { normalizeToolEventInput, resolveToolEventInput } from "../extensibility/tool-event-input";
-import { GoalRuntime } from "../goals/runtime";
+import { GoalAutopilotCompletionRequest, GoalRuntime } from "../goals/runtime";
 import { type GoalModeState, type GoalTokenUsage, type LocalGoalModeState, publicGoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import {
@@ -588,6 +589,7 @@ export * from "./agent-session-types";
 export type { AdvisorStats, AdvisorStatusOverviewEntry, PerAdvisorStat } from "./session-advisors";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
+const GOAL_AUTOPILOT_ADMISSION_ENTRY = "goal-autopilot-admission";
 /** Assistant thinking+reply words a deferred auto-title waits for before retitling from context. */
 const DEFERRED_TITLE_MIN_WORDS = 40;
 /** Cap on the forked title request itself (measured p90 2.3s). */
@@ -636,7 +638,13 @@ import { cfgInterruptMode } from "../modes/settings";
 import { cfgFollowUpMode } from "../modes/settings";
 import { cfgSteeringMode } from "../modes/settings";
 import { cfgDisabledProviders, cfgModelRoles } from "../config/model-settings";
-import { cfgEvalJs, cfgEvalPy, cfgEvalToolsEnabled, cfgEvalWorkpoolFreshAgents } from "../eval/settings";
+import {
+	cfgEvalJs,
+	cfgEvalPy,
+	cfgEvalToolsEnabled,
+	cfgEvalWorkpoolFreshAgents,
+	cfgPythonInterpreter,
+} from "../eval/settings";
 import { cfgExtensions, type SkillsSettings } from "../extensibility/settings";
 import {
 	cfgImagesAutoResize,
@@ -1084,6 +1092,15 @@ function isEvalActivity(message: AgentMessage): boolean {
 	);
 }
 
+/** An unavailable or still-unprobed Python kernel cannot replace a browser MCP server. */
+export function isBrowserEvalBackendAvailable(settings: Settings, cwd: string): boolean {
+	return (
+		cfgEvalJs.get(settings) ||
+		(cfgEvalPy.get(settings) &&
+			getCachedPythonKernelAvailability(cwd, cfgPythonInterpreter.get(settings)?.trim() || undefined)?.ok === true)
+	);
+}
+
 /**
  * Whether a dispose for `reason` ends the process under a running turn (an exit, the
  * host's SIGTERM or SIGHUP, a crash) rather than the user stopping it (a quit, Ctrl+C,
@@ -1190,8 +1207,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	readonly #queuedMessageRawText = new WeakMap<AgentMessage, string>();
 	/** Initial Goal provenance follows its original input, never the provider payload or restored history. */
-	readonly #goalAutoOrchestrateInitialSources = new WeakMap<AgentMessage, { goalId: string; generation: number }>();
+	readonly #goalAutoOrchestrateInitialSources = new WeakMap<
+		AgentMessage,
+		{ goalId: string; generation: number; manualResume?: boolean }
+	>();
 	#autopilotRun?: GoalAutopilotRequest["run"];
+	/** Explicit resume can request initial delivery without authorizing another request. */
+	#autopilotResumeSource?: { goalId: string; sessionGeneration: number };
+	#autopilotAdmission?: { goalId: string; sessionGeneration: number; promptGeneration: number };
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -1207,6 +1230,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#autoQaEnabled = false;
 	/** Teardowns registered via {@link addDisposer} (including settings listeners bound to this session); drained on dispose. */
 	#disposers: Array<() => void> = [];
+	#disposeListeners: Array<(reason: string) => void> = [];
+	#disposeNotificationDeferred = false;
+	#disposeNotice: string | undefined;
 	/** Idle recap and idle compaction, once the owner opts in via {@link enableIdleMaintenance}. */
 	#idleMaintenance: IdleMaintenance | undefined;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
@@ -1330,7 +1356,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	readonly #eval: EvalRunner;
 	readonly #evalToolSession: ToolSession | undefined;
+	readonly #agentDir: string;
 	#todoLoopController: AbortController | undefined;
+	#todoLoopInFlight = false;
+	readonly #admittedRequestAuth = new AsyncLocalStorage<{
+		model: Model;
+		thinkingLevel: ThinkingLevel | "off";
+		auth: SimpleStreamOptions["requestAuth"];
+		consumed: boolean;
+	}>();
 	/** Manager owned by this top-level session; subagents borrow but never dispose it. */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	/** Root-scoped manager shared with descendants; job queries and cancellation stay owner-scoped. */
@@ -2372,6 +2406,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			kernelOwnerId: config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`,
 		});
 		this.#evalToolSession = config.evalToolSession;
+		this.#agentDir = config.memoryAgentDir ?? this.settings.getAgentDir();
 		const initialEvalStateContext = this.#buildEvalStateContextMessage(this.agent.state.messages);
 		if (initialEvalStateContext) {
 			// Persist the startup snapshot at the slot this process sends it from, so
@@ -2618,6 +2653,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			if (this.#goalModeState?.autoOrchestrate)
 				context.captureToolRequestScope ??= () => this.#captureAutopilotRequest(context, signal);
 			if (!cfgRetryUsageAwareFallback.get(this.settings)) return;
+			// Usage/account health applies to registry credentials, not the host's
+			// already-admitted request for this exact model.
+			const model = this.model;
+			if (model && this.getAdmittedRequestAuth(model)?.auth !== undefined) return;
 			if (this.#usagePreflightReadyForNextModelCall) {
 				const checkedModel = this.#usagePreflightReadyModel;
 				this.#usagePreflightReadyForNextModelCall = false;
@@ -2890,6 +2929,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
 			settings: this.settings,
+			agentDir: this.#agentDir,
 			effectiveExtensionRoots: () => this.effectiveExtensionRoots,
 			modelRegistry: this.#modelRegistry,
 			extensionRunner: () => this.#extensionRunner,
@@ -3081,6 +3121,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#goalRuntime = new GoalRuntime({
 			getState: () => this.#goalModeState,
 			setState: state => this.setGoalModeState(state),
+			onAutopilotResumed: (goalId, source) => this.#resumeAutopilot(goalId, source),
 			getCurrentUsage: () => this.#goalUsage(),
 			emit: event => {
 				if (event.type === "goal_updated") {
@@ -3398,6 +3439,23 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		cfgCompactionModelThresholds.listen(this, () => this.#reapplyContextWindowPolicy());
 		cfgCompactionModelThresholdsEnabled.listen(this, () => this.#reapplyContextWindowPolicy());
 		cfgBrowserEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("browser.enabled", enabled));
+		if (this.#reconcileBrowserMcpFilter && !this.restrictToolNames) {
+			this.addDisposer(
+				onPythonKernelAvailable((cwd, interpreter) => {
+					if (
+						!this.#isDisposed &&
+						cfgBrowserEnabled.get(this.settings) &&
+						cfgEvalPy.get(this.settings) &&
+						!cfgEvalJs.get(this.settings) &&
+						this.#evalToolSession?.isToolActive?.("eval") &&
+						cwd === path.resolve(this.sessionManager.getCwd()) &&
+						interpreter === (cfgPythonInterpreter.get(this.settings)?.trim() || undefined)
+					) {
+						void this.#reconcileEvalPreludeSetting("browser.enabled", true);
+					}
+				}),
+			);
+		}
 		cfgComputerEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("computer.enabled", enabled));
 		cfgRatchetEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("ratchet.enabled", enabled));
 		cfgArchiveEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("archive.enabled", enabled));
@@ -3443,6 +3501,29 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#disposers.push(dispose);
 	}
 
+	/** Observe terminal disposal, including when the owner abandons ordinary cleanup. */
+	addDisposeListener(listener: (reason: string) => void): void {
+		if (this.#disposeNotice !== undefined) listener(this.#disposeNotice);
+		else this.#disposeListeners.push(listener);
+	}
+
+	/** The SDK owns the final completion notification when it wraps disposal. */
+	deferDisposeNotification(): void {
+		this.#disposeNotificationDeferred = true;
+	}
+
+	notifyDisposed(reason = "disposed"): void {
+		if (this.#disposeNotice !== undefined || (reason !== "disposed" && this.#strictDisposalRequested)) return;
+		this.#disposeNotice = reason;
+		for (const listener of this.#disposeListeners.splice(0)) {
+			try {
+				listener(reason);
+			} catch (error) {
+				logger.warn("Session dispose listener failed", { error: String(error) });
+			}
+		}
+	}
+
 	/**
 	 * Opt this session in to autonomous idle maintenance (the idle recap and idle compaction, both governed by
 	 * their settings); recaps reach the owner through `options.onRecap`. One scheduler per session: repeating the
@@ -3484,6 +3565,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		try {
 			if (path === "browser.enabled" && this.#reconcileBrowserMcpFilter) {
 				const tools = await this.#reconcileBrowserMcpFilter(enabled);
+				if (this.#isDisposed) return;
 				await this.refreshMCPTools(tools);
 			}
 			if (this.agent.state.messages.length === 0) await this.refreshBaseSystemPrompt();
@@ -4327,7 +4409,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Emit an event to all listeners */
 	#emit(event: LocalAgentSessionEvent): void {
 		this.#modelStage = nextModelStage(this.#modelStage, event);
-		if (event.type === "message_start" && event.message.role === "user") {
+		if (event.type === "message_start" && isUserAuthoredMessage(event.message)) {
 			this.#latestTurnToolDiffs.start(this.sessionId);
 		}
 		// Listener array is copy-on-write (see `subscribe`), so iterating the
@@ -4679,10 +4761,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	};
 
 	/** Commit messages in emission order without waiting for notification listeners. */
-	#queueMessageEndPersistence(message: AgentMessage, promptGeneration: number): Promise<void> {
+	#queueMessageEndPersistence(
+		message: AgentMessage,
+		promptGeneration: number,
+		admittedAutopilotGoalId?: string,
+	): Promise<void> {
 		const key = sessionMessagePersistenceKey(message);
 		const pending = this.#messageEndPersistenceTail
-			.then(() => this.#persistMessageEnd(message, promptGeneration))
+			.then(() => this.#persistMessageEnd(message, promptGeneration, admittedAutopilotGoalId))
 			.finally(() => {
 				if (key !== undefined && this.#pendingMessageEndPersistence.get(key) === pending) {
 					this.#pendingMessageEndPersistence.delete(key);
@@ -4906,7 +4992,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		};
 	}
 
-	#persistMessageEnd(message: AgentMessage, promptGeneration: number): void {
+	#persistMessageEnd(message: AgentMessage, promptGeneration: number, admittedAutopilotGoalId?: string): void {
 		// Session transitions may replace the transcript before a queued commit
 		// runs. Never append the previous conversation to the replacement session.
 		if (this.#promptGeneration !== promptGeneration) {
@@ -4951,6 +5037,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			return;
 		}
 		this.#persistSessionMessageIfMissing(message);
+		if (admittedAutopilotGoalId) {
+			this.sessionManager.appendCustomEntry(GOAL_AUTOPILOT_ADMISSION_ENTRY, admittedAutopilotGoalId);
+		}
 	}
 
 	/**
@@ -5246,6 +5335,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.agent.steer(checkpointReminder);
 		}
 
+		let admittedAutopilotGoalId: string | undefined;
 		// Local completion time for prompt→yield timing: stamped here, not by the
 		// provider, so the usage row's Δ is exact and provider-independent — some
 		// providers never report `duration` (gitlab-duo) or stamp `timestamp` at
@@ -5253,12 +5343,24 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		if (event.type === "message_end" && event.message.role === "assistant") {
 			event.message.completedAt = Date.now();
 			this.#tools.bindReplyToCapturedPrompt(event.message);
+			const admission = this.#autopilotAdmission;
+			this.#autopilotAdmission = undefined;
+			// A saved initial notice is not proof of delivery. Confirm it with the
+			// first response before committing the durable admission to this branch.
+			if (
+				admission?.sessionGeneration === this.#sessionGeneration &&
+				admission.promptGeneration === eventPromptGeneration &&
+				event.message.stopReason !== "error" &&
+				event.message.stopReason !== "aborted"
+			) {
+				admittedAutopilotGoalId = admission.goalId;
+			}
 		}
 		// Turn-boundary maintenance awaits this commit before draining steering;
 		// extension notifications must not own or delay the persistence work.
 		const messageEndPersistence =
 			event.type === "message_end"
-				? this.#queueMessageEndPersistence(event.message, eventPromptGeneration)
+				? this.#queueMessageEndPersistence(event.message, eventPromptGeneration, admittedAutopilotGoalId)
 				: undefined;
 
 		// Deobfuscate assistant message content for display emission — the LLM echoes back
@@ -7064,7 +7166,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	): Promise<void> {
 		while (turn.nested.size > 0) await Promise.allSettled(turn.nested);
 		turn.released = true;
-		if (fromOutside) this.#queuedSessionTransitions--;
+		if (fromOutside && --this.#queuedSessionTransitions === 0) this.#idleMaintenance?.refresh();
 		done.resolve();
 	}
 
@@ -7326,19 +7428,27 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	dispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
 		if (options.strict) this.#strictDisposalRequested = true;
 		if (this.#strictDisposalRequested) {
-			this.#strictDisposeCall ??= this.#doStrictDispose(options).catch(error => {
-				this.#strictDisposeCall = undefined;
-				throw error;
-			});
+			this.#strictDisposeCall ??= this.#doStrictDispose(options)
+				.then(() => {
+					if (!this.#disposeNotificationDeferred) this.notifyDisposed();
+				})
+				.catch(error => {
+					this.#strictDisposeCall = undefined;
+					throw error;
+				});
 			return this.#strictDisposeCall;
 		}
 		if (!this.#disposeCall) {
-			this.#disposeCall = this.#doDispose(options).catch(error => {
-				// Retain one-time shutdown preparation, but allow a failed final
-				// transcript close to retry after its filesystem error is resolved.
-				this.#disposeCall = undefined;
-				throw error;
-			});
+			this.#disposeCall = this.#doDispose(options)
+				.then(() => {
+					if (!this.#disposeNotificationDeferred && !this.#strictDisposalRequested) this.notifyDisposed();
+				})
+				.catch(error => {
+					// Retain one-time shutdown preparation, but allow a failed final
+					// transcript close to retry after its filesystem error is resolved.
+					this.#disposeCall = undefined;
+					throw error;
+				});
 		}
 		return this.#disposeCall;
 	}
@@ -7496,11 +7606,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#fallbackExtensionTimers?.clearAll();
 			this.abortRetry();
 			this.abortCompaction();
-			const abortReason = options.reason === postmortem.Reason.EXIT ? INTERRUPTED_TURN_ERROR : undefined;
+			const abortReason = cutsTurnOff(options.reason) ? INTERRUPTED_TURN_ERROR : undefined;
 			const postPromptDrain = this.#cancelPostPromptTasks(abortReason);
 			this.agent.abort(abortReason);
-			const hindsightState = this.getHindsightSessionState();
-			const mnemopiState = setMnemopiSessionState(this, undefined);
+			// A settings-driven startup can still install state after beginDispose().
+			const memoryStates = this.#memory.transition.then(() => ({
+				hindsight: this.getHindsightSessionState(),
+				mnemopi: setMnemopiSessionState(this, undefined),
+			}));
 			const ownerId = this.#eval.getKernelOwnerId();
 			// Retain each failed operation and its captured resource; successful
 			// operations are removed individually rather than replayed on retry.
@@ -7519,12 +7632,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 								"Timed out draining auto-learn capture during dispose",
 							)
 						: undefined,
-				() => this.#memory.transition,
 				() => this.#disposeOwnedAsyncJobs(true),
 				() => this.#eval.disposeKernels({ strict: true }),
 				() =>
 					withTimeout(
-						releaseTabsForOwner(ownerId, { kill: true, strict: true }),
+						releaseTabsForOwner(ownerId, { kill: true, strict: true, timeoutMs: 3_000 }),
 						3_000,
 						"Timed out releasing owned browser tabs during dispose",
 					).then(() => {}),
@@ -7543,9 +7655,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 							)
 						: undefined,
 				() => this.#advisors.recorderClosed(),
-				() => hindsightState?.flushRetainQueue(),
-				() => mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs }),
-				() => flushSharpshooterExtraction(this, options.mnemopiConsolidateTimeoutMs, { strict: true }),
+				async () => (await memoryStates).hindsight?.flushRetainQueue(),
+				async () => (await memoryStates).mnemopi?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs }),
+				async () => {
+					await memoryStates;
+					await flushSharpshooterExtraction(this, options.mnemopiConsolidateTimeoutMs, { strict: true });
+				},
 				() => releaseShellSessions(this.sessionManager.getSessionId()),
 			]);
 			this.#strictDisposeFinalizers = new Set<() => void | Promise<void>>([
@@ -7557,8 +7672,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					this.#movedFromEmptySessionFile = undefined;
 				},
 				() => this.#maintenance.cancelSpeculation(),
-				() => {
-					hindsightState?.dispose();
+				async () => {
+					(await memoryStates).hindsight?.dispose();
 					this.setHindsightSessionState(undefined);
 				},
 				() => this.#disconnectFromAgent(),
@@ -7863,14 +7978,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	async resetSessionContext(): Promise<ResetSessionContextResult | undefined> {
 		const queued = this.#enterSessionTransition(() => this.resetSessionContext());
 		if (queued) return queued;
-		using _transition = this.#beginSessionTransition();
 		// Refuse while a response streams OR a foreground user bash/python
 		// execution is in flight: those complete via recordBashResult()/
 		// recordPythonResult(), which append directly to agent.state when not
 		// streaming, so a command finishing after the reset would land its output
 		// after the boundary and re-enter the supposedly empty context. The
 		// sibling boundary op (branchFromBtw) guards on the same predicates.
-		if (this.isStreaming || this.isBashRunning || this.isEvalRunning) return undefined;
+		if (this.isStreaming || this.isBashRunning || this.isEvalRunning) {
+			this.#idleMaintenance?.onSessionTransition();
+			return undefined;
+		}
+		using _transition = this.#beginSessionTransition();
+		this.#idleMaintenance?.onRunSuperseded();
 		const droppedCount = this.agent.state.messages.length;
 
 		// Tear down the same per-turn runtime state that newSession() resets across
@@ -8485,10 +8604,13 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			.catch(() => {})
 			.then(async () => {
 				resetCapabilities();
-				this.#slashCommands = await loadSlashCommands({
-					cwd: this.sessionManager.getCwd(),
-					extensionRoots: this.effectiveExtensionRoots,
-				});
+				this.#slashCommands = await withActiveSettings(this.settings, () =>
+					loadSlashCommands({
+						cwd: this.sessionManager.getCwd(),
+						agentDir: this.#agentDir,
+						extensionRoots: this.effectiveExtensionRoots,
+					}),
+				);
 				// Resets the capability cache again, rediscovers skills, rebuilds the prompt,
 				// and fires the command-metadata notification after both lists are current.
 				await this.#tools.refreshSkills();
@@ -8524,6 +8646,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Current enabled eval prelude definitions. */
 	getEvalPreludes(): readonly EvalPreludeDefinition[] {
 		return this.#getEvalPreludes?.() ?? [];
+	}
+
+	/** Whether this session can replace configured browser MCP servers with native Eval. */
+	canReplaceBrowserMcp(): boolean {
+		return (
+			isBrowserEvalBackendAvailable(this.settings, this.sessionManager.getCwd()) &&
+			this.getEvalPreludes().some(definition => definition.name === "browser")
+		);
 	}
 
 	/** Records a call into an eval prelude; its first-call guide follows the current tool batch. */
@@ -9034,22 +9164,35 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	async #buildWorkspaceModeMessage(): Promise<CustomMessage | undefined> {
+		const cwd = this.sessionManager.getCwd();
 		const state = await this.getWorkspaceModeSnapshot();
-		return state.enabled && state.inheritedScope ? buildWorkspaceModeMessage(state.inheritedScope) : undefined;
+		if (!state.enabled || !state.inheritedScope || this.sessionManager.getCwd() !== cwd) return undefined;
+		return { ...buildWorkspaceModeMessage(state.inheritedScope), details: { cwd } };
 	}
 
 	/** Applies workspace context before the configured primary/side request transforms. */
 	async prepareWorkspaceModeContext(messages: AgentMessage[], refreshMissing = true): Promise<AgentMessage[]> {
 		const state = this.getWorkspaceModeState();
 		if (!state.enabled) return messages.filter(message => !isWorkspaceModeContext(message));
-		// A delivered reminder occupies the same user-message slot in both live
-		// steering and history replay. Never rewrite the user's own message.
-		const prepared = messages.map(message =>
-			isWorkspaceModeContext(message) && "content" in message && typeof message.content === "string"
-				? { role: "user" as const, content: message.content, timestamp: message.timestamp }
-				: message,
-		);
-		if (messages.some(isWorkspaceModeContext) || !refreshMissing) return prepared;
+		// A delivered reminder occupies its original user-message slot, but only
+		// in the workspace it describes. Never rewrite the user's own message.
+		const cwd = this.sessionManager.getCwd();
+		const prepared: AgentMessage[] = [];
+		let hasReminder = false;
+		for (const message of messages) {
+			if (!isWorkspaceModeContext(message)) {
+				prepared.push(message);
+			} else if (
+				message.role === "custom" &&
+				typeof message.content === "string" &&
+				isRecord(message.details) &&
+				message.details.cwd === cwd
+			) {
+				prepared.push({ role: "user", content: message.content, timestamp: message.timestamp });
+				hasReminder = true;
+			}
+		}
+		if (hasReminder || !refreshMissing) return prepared;
 		// Rebuilds and retries may have discarded hidden messages without a new submission.
 		// Native children also inherit active context before their synthetic initial assignment.
 		// Refresh context here, never by manufacturing or requeueing a user turn.
@@ -9061,9 +9204,17 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const hasInheritedContext = state.enabled && state.inheritedScope !== undefined;
 		if (!hasUserSubmission && !hasInheritedContext) return prepared;
 		const context = await this.#buildWorkspaceModeMessage();
-		return context && this.getWorkspaceModeState().enabled
-			? [{ role: "user", content: context.content, timestamp: context.timestamp }, ...prepared]
-			: prepared;
+		if (!context || !this.getWorkspaceModeState().enabled || this.sessionManager.getCwd() !== cwd) return prepared;
+		const reminder: UserMessage = { role: "user", content: context.content, timestamp: context.timestamp };
+		const first = prepared[0];
+		// Native replay must open with the signed summary and keep its exact
+		// retained assistant/tool-result sequence ahead of the rebuilt reminder.
+		if (first?.role === "compactionSummary" && first.providerPayload?.type === "anthropicCompaction") {
+			prepared.push(reminder);
+			return prepared;
+		}
+		prepared.unshift(reminder);
+		return prepared;
 	}
 
 	/** Prompt templates */
@@ -9109,7 +9260,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			run &&
 			(state?.enabled !== this.#goalModeState?.enabled || state?.goal.status !== this.#goalModeState?.goal.status)
 		)
-			this.#autopilotRun = { goalId: run.goalId, sessionGeneration: run.sessionGeneration };
+			this.#autopilotRun = {
+				goalId: run.goalId,
+				sessionGeneration: run.sessionGeneration,
+				...(state?.goal.status === "budget-limited" && state.enabled ? { review: run.review } : {}),
+			};
+		if (!state?.enabled || state.goal.id !== this.#autopilotResumeSource?.goalId) {
+			this.#autopilotResumeSource = undefined;
+		}
 		this.#goalModeState = state;
 	}
 
@@ -9504,14 +9662,60 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return buildGoalAutoOrchestrateMessage(state, this.getEnabledToolNames());
 	}
 
-	#captureAutopilotRequest(context: AgentContext, signal?: AbortSignal): GoalAutopilotRequest | undefined {
+	#resumeAutopilot(goalId: string, source: "explicit" | "restored"): void {
+		if (this.#agentKind !== "main") return;
+		const sessionGeneration = this.#sessionGeneration;
+		const run = this.#autopilotRun;
+		const alreadyAdmitted =
+			(source === "explicit" && run?.goalId === goalId && run.sessionGeneration === sessionGeneration) ||
+			this.sessionManager
+				.getBranchView()
+				.some(
+					entry =>
+						entry.type === "custom" &&
+						entry.customType === GOAL_AUTOPILOT_ADMISSION_ENTRY &&
+						entry.data === goalId,
+				);
+		if (alreadyAdmitted) {
+			// Resuming creates a new run; no response from the earlier run is current.
+			this.#autopilotRun = { goalId, sessionGeneration };
+			this.#autopilotResumeSource = undefined;
+		} else if (source === "explicit") {
+			this.#autopilotResumeSource = { goalId, sessionGeneration };
+		}
+	}
+
+	#pendingAutopilotResumeId(message?: AgentMessage): string | undefined {
+		const resume = this.#autopilotResumeSource;
+		if (resume?.sessionGeneration !== this.#sessionGeneration || resume.goalId !== this.#goalModeState?.goal.id)
+			return undefined;
+		if (
+			message &&
+			(!isUserAuthoredMessage(message) ||
+				(message.role === "user" && (message.synthetic || message.attribution === "agent")))
+		)
+			return undefined;
+		return resume.goalId;
+	}
+
+	#captureAutopilotRequest(
+		context: AgentContext,
+		signal?: AbortSignal,
+	): GoalAutopilotRequest | GoalAutopilotCompletionRequest | undefined {
 		const state = this.#goalModeState;
-		if (this.#agentKind !== "main" || !state?.autoOrchestrate || !state.enabled || state.goal.status !== "active")
+		if (
+			signal?.aborted ||
+			this.#agentKind !== "main" ||
+			!state?.autoOrchestrate ||
+			!state.enabled ||
+			(state.goal.status !== "active" && state.goal.status !== "budget-limited")
+		)
 			return;
 		const goalId = state.goal.id;
 		const generation = this.#promptGeneration;
 		const sessionGeneration = this.#sessionGeneration;
 		if (this.#autopilotRun?.goalId !== goalId || this.#autopilotRun.sessionGeneration !== sessionGeneration) {
+			if (state.goal.status !== "active") return;
 			if (
 				!context.messages.some(message => {
 					const source = this.#goalAutoOrchestrateInitialSources.get(message);
@@ -9519,18 +9723,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				})
 			)
 				return;
+			this.#autopilotAdmission = { goalId, sessionGeneration, promptGeneration: generation };
+			this.#autopilotResumeSource = undefined;
 			this.#autopilotRun = { goalId, sessionGeneration };
 		}
 		const run = this.#autopilotRun;
-		return new GoalAutopilotRequest(
-			run,
-			() =>
-				!signal?.aborted &&
-				this.#autopilotRun === run &&
-				this.#sessionGeneration === sessionGeneration &&
-				this.#promptGeneration === generation,
-			() => this.#goalRuntime.flushUsage("allowed"),
-		);
+		if (state.goal.status === "budget-limited" && !run.review) return;
+		const isCurrent = () =>
+			!signal?.aborted &&
+			this.#autopilotRun === run &&
+			this.#sessionGeneration === sessionGeneration &&
+			this.#promptGeneration === generation;
+		return state.goal.status === "budget-limited"
+			? new GoalAutopilotCompletionRequest(run, isCurrent)
+			: new GoalAutopilotRequest(run, isCurrent, () => this.#goalRuntime.flushUsage("allowed"));
 	}
 
 	#buildGoalAutoOrchestrateContext(compactionEntryId?: string, initialGoalId?: string): CustomMessage | undefined {
@@ -9575,7 +9781,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	#buildGoalAutoOrchestrateInitialContext(message: AgentMessage): CustomMessage | undefined {
 		const source = this.#goalAutoOrchestrateInitialSources.get(message);
-		return source?.generation === this.#promptGeneration
+		return source?.generation === this.#promptGeneration && !source.manualResume
 			? this.#buildGoalAutoOrchestrateContext(undefined, source.goalId)
 			: undefined;
 	}
@@ -10253,6 +10459,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						.filter((content): content is TextContent => content.type === "text")
 						.map(content => content.text)
 						.join("");
+		const resumeGoalId = this.#pendingAutopilotResumeId();
+		const goalAutoOrchestrateInitialId =
+			options?.goalAutoOrchestrateInitialId ??
+			(message.customType === "goal-continuation" &&
+			resumeGoalId !== undefined &&
+			textContent === this.#goalRuntime.buildContinuationPrompt()
+				? resumeGoalId
+				: undefined);
 
 		let keywordNotices: CustomMessage[] = [];
 		// Queued deliveries bypass the idle-turn notice injection, so a queued user
@@ -10290,7 +10504,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const queued = await this.#queueCustomMessage(message, streamingBehavior, {
 				queueChipText: options?.queueChipText,
 				prependMessages: queuedNotices,
-				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
+				goalAutoOrchestrateInitialId,
 				onPromptAdmitted: onPromptQueuedAdmitted,
 				onPromptQueued: options?.onPromptQueued,
 			});
@@ -10337,7 +10551,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				queueChipText: options?.queueChipText,
 				preprocessed: { content: preparedMessage.content },
 				prependMessages: queuedNotices,
-				goalAutoOrchestrateInitialId: options?.goalAutoOrchestrateInitialId,
+				goalAutoOrchestrateInitialId,
 				onPromptAdmitted: onPromptQueuedAdmitted,
 				onPromptQueued: options?.onPromptQueued,
 			});
@@ -10347,6 +10561,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 		outcome.sessionClaimed = await this.#promptWithMessage(preparedMessage, textContent, {
 			...options,
+			goalAutoOrchestrateInitialId,
 			followUpBatch: followUps,
 			prependMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 		});
@@ -10363,6 +10578,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const userMessages = messages.filter(isUserAuthoredQueuedMessage);
 		const first = userMessages[0];
 		const hasInitialSource = messages.some(message => this.#goalAutoOrchestrateInitialSources.has(message));
+		const resumeMessage =
+			!hasInitialSource && this.#pendingAutopilotResumeId() !== undefined
+				? userMessages.find(message => this.#pendingAutopilotResumeId(message) !== undefined)
+				: undefined;
 		if (!first && !hasInitialSource) return undefined;
 		const workspaceMessage = first ? await this.#buildWorkspaceModeMessage() : undefined;
 		const text: string[] = [];
@@ -10389,7 +10608,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				? this.#prepareQueuedUserTask(first, promptText, preparationImages, signal)
 				: this.#prepareAgentStart(first, promptText, preparationImages, this.#promptGeneration, signal, "queued");
 		const relaxed = preparation ? this.#commitOnDelivery(preparation, messages, promptText) : undefined;
-		if (!hasInitialSource && !workspaceMessage) return relaxed;
+		if (!hasInitialSource && !workspaceMessage && !resumeMessage) return relaxed;
 		const generation = this.#promptGeneration;
 		const sessionGeneration = this.#sessionGeneration;
 		return Promise.resolve(relaxed).then(prepared => ({
@@ -10408,6 +10627,16 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					workspaceMessage && this.getWorkspaceModeState().enabled
 						? [...additional, workspaceMessage]
 						: additional;
+				if (resumeMessage) {
+					const resumeGoalId = this.#pendingAutopilotResumeId(resumeMessage);
+					if (resumeGoalId !== undefined) {
+						this.#goalAutoOrchestrateInitialSources.set(resumeMessage, {
+							goalId: resumeGoalId,
+							generation,
+							manualResume: true,
+						});
+					}
+				}
 				// Construct only after async preparation and Agent's delivery ownership check.
 				let notice: CustomMessage | undefined;
 				for (const message of messages) {
@@ -10614,6 +10843,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		throw new AgentStartPolicyChangedError();
 	}
 
+	/** A preflight result belongs only to the first primary dispatch of this submission. */
+	getAdmittedRequestAuth(model: Model, consume = false): { auth: SimpleStreamOptions["requestAuth"] } | undefined {
+		const admission = this.#admittedRequestAuth.getStore();
+		if (!admission || admission.consumed) return undefined;
+		const matches = admission.model === model && admission.thinkingLevel === (this.thinkingLevel ?? "off");
+		if (!consume) return matches ? admission : undefined;
+		const { auth } = admission;
+		admission.consumed = true;
+		admission.auth = undefined;
+		return matches ? { auth } : undefined;
+	}
+
 	async #promptWithMessage(
 		message: AgentMessage,
 		expandedText: string,
@@ -10651,6 +10892,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// Restore the previous task's planning model before checking credentials.
 			// If Escalate moves this task to a planner, that settles before usage preflight.
 			const userTask = this.#isUserTask(message);
+			const goalAutoOrchestrateInitialId =
+				options?.goalAutoOrchestrateInitialId ?? this.#pendingAutopilotResumeId(message);
 			if (userTask) await this.#prewalk.beginAutoTask(message);
 			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 			// A capped session hands the prompt back without spending on judges or moving to a planner.
@@ -10665,11 +10908,33 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						"Then use /model to select a model.",
 				);
 			}
-			const apiKey = await this.#modelRegistry.getApiKey(admissionModel, this.sessionId, {
-				signal: setupAbort.signal,
-			});
+			const resolveRequestAuth = this.#evalToolSession?.resolveRequestAuth;
+			const admissionThinkingLevel = this.thinkingLevel ?? "off";
+			const hostAdmission =
+				resolveRequestAuth && !cfgDisabledProviders.get(this.settings).includes(admissionModel.provider)
+					? {
+							model: admissionModel,
+							thinkingLevel: admissionThinkingLevel,
+							auth: await resolveRequestAuth(admissionModel, setupAbort.signal, {
+								thinkingLevel: admissionThinkingLevel,
+							}).catch(error => {
+								if (setupAbort.signal.aborted) return undefined;
+								throw new PromptPreflightError("Host request authentication failed.", { cause: error });
+							}),
+							consumed: false,
+						}
+					: undefined;
 			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
-			if (!apiKey && !(await this.#recovery.applyMissingCredentialFallback(setupAbort.signal))) {
+			const apiKey =
+				hostAdmission?.auth === undefined
+					? await this.#modelRegistry.getApiKey(admissionModel, this.sessionId, { signal: setupAbort.signal })
+					: undefined;
+			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
+			if (
+				hostAdmission?.auth === undefined &&
+				!apiKey &&
+				!(await this.#recovery.applyMissingCredentialFallback(setupAbort.signal))
+			) {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 				throw new PromptPreflightError(
 					`No API key found for ${admissionModel.provider}.\n\n` +
@@ -10689,10 +10954,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					)
 				: undefined;
 			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
-			const usageAllowed = await logger.time("prompt:usagePreflight", () =>
-				this.#runUsageAwarePreflightForNextModelCall(setupAbort.signal),
-			);
-			if (!usageAllowed) return false;
+			if (hostAdmission?.auth === undefined || this.model !== admissionModel) {
+				const usageAllowed = await logger.time("prompt:usagePreflight", () =>
+					this.#runUsageAwarePreflightForNextModelCall(setupAbort.signal),
+				);
+				if (!usageAllowed) return false;
+			}
 			// Flush any pending bash messages before the new prompt
 			await this.#bash.flushPending();
 			this.#eval.flushPending();
@@ -10926,20 +11193,32 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			try {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 				options?.onPromptAdmitted?.();
-				if (options?.goalAutoOrchestrateInitialId)
+				if (goalAutoOrchestrateInitialId)
 					this.#goalAutoOrchestrateInitialSources.set(message, {
-						goalId: options.goalAutoOrchestrateInitialId,
+						goalId: goalAutoOrchestrateInitialId,
 						generation,
+						manualResume: options?.goalAutoOrchestrateInitialId === undefined,
 					});
-				await this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions, () => {
-					// `agent.prompt` claims streaming synchronously before its
-					// first await: this callback fires exactly when THIS
-					// client-owned run goes live (never on a busy-retry that
-					// waits behind an autonomous run) — wake steers parked on
-					// the dispatch so they admit into the run they targeted.
-					this.#wakeDispatchLiveWaiters();
-					options?.followUpBatch?.release();
-				});
+				const dispatch = () =>
+					this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions, () => {
+						// `agent.prompt` claims streaming synchronously before its
+						// first await: this callback fires exactly when THIS
+						// client-owned run goes live (never on a busy-retry that
+						// waits behind an autonomous run) — wake steers parked on
+						// the dispatch so they admit into the run they targeted.
+						this.#wakeDispatchLiveWaiters();
+						options?.followUpBatch?.release();
+					});
+				if (hostAdmission) {
+					try {
+						await this.#admittedRequestAuth.run(hostAdmission, dispatch);
+					} finally {
+						hostAdmission.consumed = true;
+						hostAdmission.auth = undefined;
+					}
+				} else {
+					await dispatch();
+				}
 			} finally {
 				this.#stats.setPendingSnapshot(undefined);
 			}
@@ -12149,6 +12428,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				normalized.display,
 				normalized.details,
 				normalized.attribution,
+				normalized.timestamp,
+				normalized.excludeFromContext,
 			);
 			this.agent.appendMessage(normalized);
 			// A first /team result has no assistant turn to open the lazy transcript gate.
@@ -13696,6 +13977,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 		}
 
+		this.#idleMaintenance?.onRunSuperseded();
 		this.#disconnectFromAgent();
 		let advisorRecordersDetached = false;
 		await this.abort();
@@ -13899,6 +14181,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				this.#bash.finishSessionTransition(bashTransition, false);
 				return false;
 			}
+			this.#idleMaintenance?.onRunSuperseded();
 			this.#bash.markSessionTransition(bashTransition);
 			this.#bash.finishSessionTransition(bashTransition, true);
 			// The fork clones the transcript and keeps this recovery state running
@@ -13980,7 +14263,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	/** Move the active session and artifacts after enforcing mode transition invariants. */
 	async moveSession(newCwd: string, targetSessionDir?: string): Promise<void> {
+		const queued = this.#enterSessionTransition(() => this.moveSession(newCwd, targetSessionDir));
+		if (queued) return queued;
+		if (this.#todoLoopInFlight) throw new Error("Wait for TodoLoop to finish or stop it before moving the session.");
 		this.#assertVibeSessionTransitionAllowed("move the session");
+		using _transition = this.#beginSessionTransition();
 		await this.sessionManager.moveTo(newCwd, targetSessionDir);
 	}
 
@@ -14993,11 +15280,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	async runTodoLoop(options: Omit<TodoLoopRunOptions, "cwd">): Promise<TodoLoopState> {
 		this.assertEvalExecutionAllowed();
 		if (this.#isDisposed || this.#sessionTransitionDepth > 0) throw new Error("TodoLoop requires an active session");
-		if (this.#todoLoopController) throw new Error("TodoLoop is already running");
+		if (this.#todoLoopInFlight) throw new Error("TodoLoop is already running");
 		const session = this.#evalToolSession;
 		if (!session) throw new Error("TodoLoop requires a live eval tool session");
 		const controller = new AbortController();
 		this.#todoLoopController = controller;
+		this.#todoLoopInFlight = true;
 		const abort = (): void => controller.abort(options.signal?.reason);
 		options.signal?.addEventListener("abort", abort, { once: true });
 		if (options.signal?.aborted) abort();
@@ -15026,6 +15314,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			unsubscribe();
 			options.signal?.removeEventListener("abort", abort);
 			if (this.#todoLoopController === controller) this.#todoLoopController = undefined;
+			this.#todoLoopInFlight = false;
 		}
 	}
 
@@ -15544,6 +15833,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 		}
 
+		this.#idleMaintenance?.onRunSuperseded();
 		this.#disconnectFromAgent();
 		await this.abort({ goalReason: "internal" });
 		await this.#sessionBeforeSwitchReconciler?.();
@@ -16067,6 +16357,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			try {
 				// A prompt admitted during the drain awaits above belongs to the history
 				// being replaced; the generation bump drops its pending setup.
+				this.#idleMaintenance?.onRunSuperseded();
 				this.#promptGeneration++;
 				if (!leafId) {
 					const title = this.sessionManager.getSessionName();
@@ -16480,6 +16771,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 		// All cancellation/no-op exits are behind us. Invalidate prompt setup
 		// admitted on the abandoned branch before committing any tree changes.
+		this.#idleMaintenance?.onRunSuperseded();
 		this.#promptGeneration++;
 
 		// Determine the new leaf position based on target type

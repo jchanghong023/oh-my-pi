@@ -1,5 +1,6 @@
 import {
 	type AgentTool,
+	type AgentToolContext,
 	type AgentToolResult,
 	type AgentToolUpdateCallback,
 	validateAgentToolArguments,
@@ -56,6 +57,8 @@ export type { JsStatusEvent } from "./shared/types";
 export interface ToolBridgeOptions {
 	session: ToolSession;
 	parentToolCallId?: string;
+	/** Originating cell context, including its request scope, for prelude authorization. */
+	toolContext?: AgentToolContext;
 	signal?: AbortSignal;
 	/** The cell's `timeout` in ms, the budget of a prelude call that sets none (`EvalPreludeContext.cellTimeoutMs`). */
 	cellTimeoutMs?: number;
@@ -253,7 +256,7 @@ async function dispatchSessionTool(name: string, args: unknown, options: ToolBri
 					toolCallId,
 					signal: options.signal,
 					cellTimeoutMs: options.cellTimeoutMs,
-					context: options.session.getToolContext?.(),
+					context: options.toolContext ?? options.session.getToolContext?.(),
 				}),
 			);
 			return bridgeValueFromToolResult(

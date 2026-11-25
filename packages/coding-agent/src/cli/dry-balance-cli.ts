@@ -75,7 +75,6 @@ export interface DryBalanceModelRegistry {
 	authStorage: DryBalanceAuthStorage;
 	getAll(): Model<Api>[];
 	getAvailable(): Model<Api>[];
-	getApiKey(model: Model<Api>, sessionId?: string): Promise<string | undefined>;
 }
 
 export interface DryBalanceRuntime {
@@ -546,11 +545,19 @@ async function createDefaultRuntime(configFiles: string[] | undefined): Promise<
 	}
 }
 
+interface DryBalanceModelSelection {
+	model: Model<Api>;
+	warning?: string;
+	firstSample?: DryBalanceAttemptResult;
+	benchTargets?: DryBalanceBenchTarget[];
+}
+
 async function resolveDryBalanceModel(
 	modelSelector: string | undefined,
 	modelRegistry: DryBalanceModelRegistry,
 	settings: Settings | undefined,
-): Promise<{ model: Model<Api>; warning?: string }> {
+	sampleSessionId: string | undefined,
+): Promise<DryBalanceModelSelection> {
 	const preferences = getModelMatchPreferences(settings);
 	if (modelSelector) {
 		const resolved = resolveCliModel({
@@ -575,20 +582,30 @@ async function resolveDryBalanceModel(
 		settings,
 		matchPreferences: preferences,
 	});
-	if (defaultRoleSpec.model) {
-		return { model: defaultRoleSpec.model, warning: defaultRoleSpec.warning };
+	const defaultModel = defaultRoleSpec.model;
+	if (defaultModel && settings?.getModelRoleProvenance("default") !== "default") {
+		return { model: defaultModel, warning: defaultRoleSpec.warning };
 	}
 
+	// Resolve with the same path the command will use, and keep the result so
+	// the selected candidate's first sample or bench targets aren't resolved twice.
+	const resolveCandidate = async (model: Model<Api>): Promise<DryBalanceModelSelection> =>
+		sampleSessionId === undefined
+			? { model, benchTargets: await resolveBenchTargets(model, modelRegistry.authStorage) }
+			: { model, firstSample: await runOneAttempt(model, modelRegistry, sampleSessionId) };
+	const isUsable = ({ firstSample, benchTargets }: DryBalanceModelSelection): boolean =>
+		firstSample?.ok === true || benchTargets?.some(target => target.ok) === true;
+
+	// Keep the preferred model's result when every automatic candidate fails.
+	const fallback = await resolveCandidate(defaultModel ?? allowedModels[0]);
+	if (defaultModel) fallback.warning = defaultRoleSpec.warning;
+	if (isUsable(fallback)) return fallback;
 	for (const candidate of allowedModels) {
-		const apiKey = await modelRegistry.getApiKey(candidate);
-		if (apiKey) return { model: candidate };
+		if (candidate === fallback.model) continue;
+		const resolved = await resolveCandidate(candidate);
+		if (isUsable(resolved)) return resolved;
 	}
-
-	return {
-		model: allowedModels[0],
-		warning:
-			"No allowed model had usable credentials during default resolution; dry-balance will report OAuth failures for the first allowed model.",
-	};
+	return fallback;
 }
 
 async function runOneAttempt(
@@ -806,14 +823,20 @@ export async function runDryBalanceCommand(
 	};
 	try {
 		const modelSelector = command.flags.model ?? command.model;
-		const { model, warning } = await resolveDryBalanceModel(modelSelector, runtime.modelRegistry, runtime.settings);
+		const sessionIds = Array.from({ length: samples }, () => randomSessionId());
+		const { model, warning, firstSample, benchTargets } = await resolveDryBalanceModel(
+			modelSelector,
+			runtime.modelRegistry,
+			runtime.settings,
+			isBench ? undefined : sessionIds[0],
+		);
 		if (warning) writeStderr(`${chalk.yellow(`Warning: ${warning}`)}\n`);
 		let results: DryBalanceAttemptResult[];
 		let benchResults: DryBalanceBenchResult[] | undefined;
 		let summarySamples = samples;
 		let summaryConcurrency = concurrency;
 		if (isBench) {
-			const targets = await resolveBenchTargets(model, runtime.modelRegistry.authStorage);
+			const targets = benchTargets ?? (await resolveBenchTargets(model, runtime.modelRegistry.authStorage));
 			if (targets.length === 0) throw new Error(`No OAuth accounts resolved for provider ${model.provider}`);
 			summarySamples = targets.length;
 			summaryConcurrency = targets.length;
@@ -838,9 +861,10 @@ export async function runDryBalanceCommand(
 				target.ok ? { ok: true, account: target.account } : { ok: false, reason: target.error },
 			);
 		} else {
-			const sessionIds = Array.from({ length: samples }, () => randomSessionId());
-			results = await mapConcurrent(sessionIds, concurrency, sessionId =>
-				runOneAttempt(model, runtime.modelRegistry, sessionId),
+			results = await mapConcurrent(sessionIds, concurrency, (sessionId, index) =>
+				index === 0 && firstSample
+					? Promise.resolve(firstSample)
+					: runOneAttempt(model, runtime.modelRegistry, sessionId),
 			);
 		}
 		closeProgress();

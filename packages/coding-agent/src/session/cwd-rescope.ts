@@ -1,5 +1,6 @@
-import type { Settings } from "../config/settings";
-import { clearClaudePluginRootsCache } from "../discovery/helpers";
+import * as os from "node:os";
+import { type Settings, withActiveSettings } from "../config/settings";
+import { preloadPluginRoots } from "../discovery/helpers";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import type { AgentSession } from "./agent-session";
@@ -24,7 +25,9 @@ export async function rescopeSessionToCwd(
 		// commits so the next prompt cannot recall or retain against the source project.
 		await rebindMemoryBackendForCwd(session);
 	}
-	clearClaudePluginRootsCache();
+	await withActiveSettings(settings ?? session.settings, () =>
+		preloadPluginRoots(os.homedir(), cwd, { refresh: true }),
+	);
 	session.setTitleSystemPrompt(await resolvePromptInput(discoverTitleSystemPromptFile(cwd), "title system prompt"));
 	await session.refreshProjectScope();
 	await session.refreshSkillsAndCommands();

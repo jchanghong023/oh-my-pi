@@ -44,6 +44,7 @@ import readSourcesDoc from "../prompts/tools/read-sources.md" with { type: "text
 import type { ToolSession } from "../sdk";
 import { McpResourceNotFoundError } from "../internal-urls/mcp-protocol";
 import { parseInternalUrl } from "../internal-urls/parse";
+import type { SkillReadContext } from "../internal-urls/skill-protocol";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -73,9 +74,10 @@ import {
 	MAX_IMAGE_INPUT_BYTES,
 	webpExclusionForModel,
 } from "../utils/image-input";
-import { askImageQuestion, resolveImageQuestionModel } from "../utils/image-question";
+import { askImageQuestion, type ResolvedImageQuestionModel, resolveImageQuestionModel } from "../utils/image-question";
 import { CONVERTIBLE_EXTENSIONS, convertFileWithMarkit } from "../utils/markit";
 import { isSampleProfilePath, renderSampleProfile } from "../utils/sample-profile";
+import { parseXUrl } from "../web/x";
 import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import {
 	formatConflictSummary,
@@ -874,7 +876,7 @@ function formatLocatedFileNotice(url: string, backingPath: string, size: number,
  * Peel `?q=<question>` (ask a vision model about an image) from a plain path or a URL whose
  * scheme declares {@link SchemeSpec.imageQuestion}; every other URL owns its query string.
  */
-export function splitImageQuestionTarget(readPath: string): { path: string; question?: string } {
+function splitImageQuestionTarget(readPath: string): { path: string; question?: string } {
 	if (readPath.includes("://")) {
 		const scheme = extractUriScheme(readPath);
 		if (!scheme || !InternalUrlRouter.instance().spec(scheme)?.imageQuestion) return { path: readPath };
@@ -1352,6 +1354,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	constructor(
 		private readonly session: ToolSession,
 		private readonly completeImageRequest: typeof completeSimple = completeSimple,
+		private readonly resolveImageModel: (
+			session: ToolSession,
+		) => ResolvedImageQuestionModel | Promise<ResolvedImageQuestionModel> = resolveImageQuestionModel,
+		private readonly initializeXModels?: () => Promise<unknown>,
 	) {}
 
 	/** Live `read.defaultLimit`, clamped to `[1, DEFAULT_MAX_LINES]`. */
@@ -1762,7 +1768,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			throw new ToolError(`Image file too large: ${sizeStr} exceeds ${maxStr} limit.`);
 		}
 		try {
-			const resolved = question ? resolveImageQuestionModel(this.session) : undefined;
+			const resolved = question ? await this.resolveImageModel(this.session) : undefined;
 			const imageLoadOptions = {
 				path: readPath,
 				cwd: this.session.cwd,
@@ -2166,6 +2172,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (parsedUrlTarget) {
 			if (!cfgFetchEnabled.get(this.session.settings)) {
 				throw new ToolError("URL reads are disabled by settings.");
+			}
+			if (this.initializeXModels && !this.session.modelRegistry && parseXUrl(parsedUrlTarget.path)) {
+				await this.initializeXModels();
 			}
 			const urlSel = parsedUrlTarget.sel;
 			const urlRaw = isRawSelector(urlSel);
@@ -3562,25 +3571,27 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	): Promise<AgentToolResult<ReadToolDetails>> {
 		const { url, spec } = target;
 		const programmatic = toolContext?.programmatic === true;
+		const router = InternalUrlRouter.instance();
+		const context: SkillReadContext = sessionResolveContext(this.session, { signal });
 		if (this.session.localProtocolOptions?.allowCrossAgentReads === false) {
-			const backing = await InternalUrlRouter.instance().locate(
-				url,
-				sessionResolveContext(this.session, { signal }),
-				{ localOnly: true },
-			);
-			if (backing) await assertTeamReadTarget(this.session, backing);
+			if (extractUriScheme(url) === "skill") {
+				// A skill resource may come from MCP. Check its actual local backing, if any,
+				// inside resolve rather than requiring a local file from a read-only route.
+				context.assertSkillReadTarget = backing => assertTeamReadTarget(this.session, backing);
+			} else {
+				const backing = await router.locate(url, context, { localOnly: true });
+				if (backing) await assertTeamReadTarget(this.session, backing);
+			}
 		}
 		if (parsedSel.kind === "image") {
 			// A file-backed URL that locate deferred to a remote resolve (an unknown skill:// while
 			// MCP is available) reports its local miss (`Unknown skill`), not the selector refusal.
 			if (spec.backing === "file") {
-				await InternalUrlRouter.instance().locate(url, sessionResolveContext(this.session, { signal }), {
-					localOnly: true,
-				});
+				await router.locate(url, context, { localOnly: true });
 			}
 			throw new ToolError("The ':img' selector requires a file-backed path.");
 		}
-		const resource = await InternalUrlRouter.instance().resolve(url, sessionResolveContext(this.session, { signal }));
+		const resource = await router.resolve(url, context);
 		if (typeof resource.content !== "string") {
 			// Bytes take the file pipeline under the URL's identity: images and documents by their
 			// content and type, anything else as a binary file (`:raw` reads it verbatim).

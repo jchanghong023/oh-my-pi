@@ -6,6 +6,14 @@
  * pushes tab lifecycle and `chrome.debugger` events as they happen.
  */
 
+/** Parses the synthetic tab or page target minted by the relay. */
+export function parseTargetId(targetId: string): { key: string; kind: "tab" | "page" } | null {
+	const match = /^(TAB|PAGE)([^.]+)\.(\d+)$/.exec(targetId);
+	if (!match) return null;
+	const kind: "tab" | "page" = match[1] === "TAB" ? "tab" : "page";
+	return { key: `${match[2]}:${match[3]}`, kind };
+}
+
 /** Minimal view of a Chrome tab shared between extension and relay. */
 export interface TabSnapshot {
 	tabId: number;

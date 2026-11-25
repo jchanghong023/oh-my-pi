@@ -1086,7 +1086,7 @@ export class UiHelpers {
 			text,
 			mode,
 			images: queuedImages,
-			...(options?.imageLinks ? { imageLinks: options.imageLinks } : {}),
+			...(options?.imageLinks?.some(link => link !== undefined) ? { imageLinks: options.imageLinks } : {}),
 			draftDetached: options?.draftDetached ?? !options?.preserveDraft,
 		});
 		if (options?.preserveDraft) this.ctx.composer.addToHistory(text);
@@ -1131,7 +1131,8 @@ export class UiHelpers {
 						: undefined,
 				draftDetached: message.draftDetached,
 				followUp:
-					message.mode === "followUp" && command === "workspace"
+					message.mode === "followUp" &&
+					(command === "workspace" || command === "goal" || command === "goal-autopilot")
 						? conversationPosition(this.ctx.sessionManager)
 						: undefined,
 			});
@@ -1151,14 +1152,16 @@ export class UiHelpers {
 				message.mode === "followUp" && isLoopCommand(command)
 					? this.ctx.captureLoopPromptOnAdmission(builtin)
 					: undefined;
+			const skill =
+				isLoopCommand(command) && isKnownSkillCommand(this.ctx, builtin)
+					? await buildSkillCommandPrompt(this.ctx, builtin, message.mode, message.images)
+					: undefined;
 			let queuedForTurn = false;
 			const dispatch = () => {
 				requireOwner();
-				return owner.prompt(builtin, {
-					streamingBehavior: message.mode,
-					images: message.images,
+				const callbacks = {
 					onPromptQueued: admitLoopPrompt
-						? queued => {
+						? (queued: readonly AgentMessage[]) => {
 								queuedForTurn = queued.length > 0;
 								onQueued(queued);
 							}
@@ -1175,7 +1178,10 @@ export class UiHelpers {
 								);
 							}
 						: undefined,
-				});
+				};
+				return skill
+					? owner.promptCustomMessage(skill.message, { ...skill.options, ...callbacks })
+					: owner.prompt(builtin, { streamingBehavior: message.mode, images: message.images, ...callbacks });
 			};
 			// An admission callback may run synchronously, before dispatch returns.
 			const promptPromise: Promise<boolean> = admitLoopPrompt ? Promise.resolve().then(dispatch) : dispatch();

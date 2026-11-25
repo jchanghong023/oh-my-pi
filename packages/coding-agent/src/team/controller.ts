@@ -10,9 +10,11 @@
  */
 import { logger } from "@oh-my-pi/pi-utils";
 import { AsyncJobError, type AsyncJobRunResult } from "../async";
+import { cfgOffline } from "../config/auxiliary-model-policy";
 import { filterAvailableModelsByEnabledPatterns, formatModelStringWithRouting } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";
 import type { Settings } from "../config/settings";
+import { Semaphore } from "../task/parallel";
 import { cfgTaskMaxConcurrency } from "../task/settings";
 import { cfgTeamMembers } from "./settings";
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
@@ -21,7 +23,7 @@ import type { AgentSession } from "../session/agent-session";
 import { runTeamDiscussion } from "./orchestrator";
 import { assembleTeamFailure } from "./report";
 import { createTeamSubagentRunner, type TeamRunnerDeps } from "./runner";
-import { resolveTeamParticipants } from "./members";
+import { resolveTeamParticipants, type TeamMembersResult } from "./members";
 import type { TeamParticipant, TeamProgressUpdate } from "./types";
 
 /** Custom message type persisted with the final `/team` report. */
@@ -40,11 +42,15 @@ export interface StartTeamDiscussionArgs {
 	session: AgentSession;
 	settings: Settings;
 	cwd: string;
+	signal?: AbortSignal;
+	/** Echo the persisted report when the host does not present it from the transcript. */
+	echoReport?: boolean;
 	hooks: TeamControllerHooks;
 }
 
 export interface StartTeamDiscussionResult {
 	started: boolean;
+	registrationRefused?: boolean;
 	jobId?: string;
 	/** User-facing feedback for the dispatch outcome. */
 	message: string;
@@ -53,6 +59,25 @@ export interface StartTeamDiscussionResult {
 const QUESTION_PREVIEW_LENGTH = 80;
 
 const DELIVERY_IDLE_POLL_MS = 250;
+
+const teamSessionState = new WeakMap<
+	AgentSession,
+	{ sessionId: string; semaphore: Semaphore; readIsolationRoots: Set<string> }
+>();
+
+function getTeamSessionState(session: AgentSession, settings: Settings) {
+	const sessionId = session.sessionManager.getSessionId();
+	let state = teamSessionState.get(session);
+	if (!state || state.sessionId !== sessionId) {
+		state = {
+			sessionId,
+			semaphore: new Semaphore(cfgTaskMaxConcurrency.get(settings)),
+			readIsolationRoots: new Set(),
+		};
+		teamSessionState.set(session, state);
+	}
+	return state;
+}
 
 /**
  * Wait until the final report can land in the persisted transcript, or until
@@ -72,18 +97,21 @@ export async function waitForSessionIdle(
 	return !signal.aborted && !session.isStreaming;
 }
 
+type TeamDeliveryStatus = "completed" | "failed" | "cancelled";
+
 export async function deliverTeamReport(
 	session: Pick<AgentSession, "isStreaming" | "appendCustomMessage">,
 	signal: AbortSignal,
 	content: string,
 	details: { jobId: string; question: string },
-	rebuildChat?: () => void | Promise<void>,
-	waitOptions?: { timeoutMs?: number; pollMs?: number },
-): Promise<boolean> {
+	onPersisted?: (content: string) => void | Promise<void>,
+	options?: { timeoutMs?: number; pollMs?: number; isCurrentSession?: () => boolean },
+): Promise<TeamDeliveryStatus> {
+	const isCancelled = () => signal.aborted || options?.isCurrentSession?.() === false;
 	return logger.withLogContext({ job_id: details.jobId }, async () => {
 		const started = performance.now();
 		let stage = "wait_idle";
-		const finish = (result: "completed" | "failed" | "cancelled", category?: string): boolean => {
+		const finish = (result: TeamDeliveryStatus, category?: string): TeamDeliveryStatus => {
 			const fields = {
 				component: "team.controller",
 				event: `team_delivery_${result}`,
@@ -94,7 +122,7 @@ export async function deliverTeamReport(
 			};
 			if (result === "failed") logger.error("Team report delivery failed", fields);
 			else logger.info("Team report delivery finished", fields);
-			return result === "completed";
+			return result;
 		};
 		logger.info("Team report delivery started", {
 			component: "team.controller",
@@ -102,12 +130,12 @@ export async function deliverTeamReport(
 			stage,
 			result: "started",
 			streaming: session.isStreaming,
-			timeout_ms: waitOptions?.timeoutMs,
+			timeout_ms: options?.timeoutMs,
 		});
 		try {
-			if (signal.aborted) return finish("cancelled");
-			if (!(await waitForSessionIdle(session, signal, waitOptions))) {
-				return finish(signal.aborted ? "cancelled" : "failed", signal.aborted ? undefined : "idle_timeout");
+			if (isCancelled()) return finish("cancelled");
+			if (!(await waitForSessionIdle(session, signal, options))) {
+				return isCancelled() ? finish("cancelled") : finish("failed", "idle_timeout");
 			}
 			logger.info("Team report delivery idle wait completed", {
 				component: "team.controller",
@@ -116,7 +144,7 @@ export async function deliverTeamReport(
 				result: "completed",
 				elapsed_ms: performance.now() - started,
 			});
-			if (signal.aborted) return finish("cancelled");
+			if (isCancelled()) return finish("cancelled");
 			stage = "append";
 			const appendStarted = performance.now();
 			logger.info("Team report append started", {
@@ -143,10 +171,12 @@ export async function deliverTeamReport(
 				persisted: true,
 				elapsed_ms: performance.now() - appendStarted,
 			});
-			if (signal.aborted) return finish("cancelled");
+			// A receipt can arrive after cancellation. Keep the committed history,
+			// but do not notify the caller or acknowledge delivery.
+			if (isCancelled()) return finish("cancelled");
 			stage = "post_persist";
 			try {
-				await rebuildChat?.();
+				await onPersisted?.(content);
 			} catch (error) {
 				// A post-persist callback failure must not undo durable delivery.
 				logger.warn("Team report post-persist callback failed", {
@@ -158,9 +188,9 @@ export async function deliverTeamReport(
 					...logger.diagnosticError(error),
 				});
 			}
-			return finish("completed");
+			return finish(isCancelled() ? "cancelled" : "completed");
 		} catch (error) {
-			if (signal.aborted) return finish("cancelled");
+			if (isCancelled()) return finish("cancelled");
 			logger.error("Team report delivery threw", {
 				component: "team.controller",
 				event: "team_delivery_failed",
@@ -181,18 +211,23 @@ function previewQuestion(question: string): string {
 }
 
 /** Resolve independent slots from settings and the effective available models. */
-export function resolveTeamParticipantsForSession(session: AgentSession, settings: Settings) {
+export function resolveTeamParticipantsForSession(session: AgentSession, settings: Settings): TeamMembersResult {
 	const sessionModel = session.model;
-	const configuredMembers = cfgTeamMembers.get(settings);
+	const configuredMembers = settings.rawValue(cfgTeamMembers);
+	if (configuredMembers !== undefined && !Array.isArray(configuredMembers)) {
+		return { ok: false, error: "team.members 必须是模型选择器数组；请在 config.yml 修正。" };
+	}
 	const availableModels = filterAvailableModelsByEnabledPatterns(
 		session.modelRegistry.getAvailable(),
 		cfgEnabledModels.get(settings),
 		settings,
 	);
 	return resolveTeamParticipants({
-		configuredMembers,
+		configuredMembers: configuredMembers ?? [],
 		sessionModel,
-		availableModels,
+		availableModels: cfgOffline.get(settings)
+			? availableModels.filter(model => model.provider === sessionModel?.provider)
+			: availableModels,
 	});
 }
 
@@ -203,7 +238,8 @@ export function buildRunnerDeps(
 	cwd: string,
 	isCurrentSession?: () => boolean,
 ): TeamRunnerDeps {
-	const sessionId = session.sessionId;
+	const sessionId = session.sessionManager.getSessionId();
+	const activeModel = session.model;
 	const modelRegistry = session.modelRegistry;
 	const parentCapabilities = session.nativeChildCapabilities;
 	const sessionHooks = resolveNativeChildSessionHooks({}, parentCapabilities);
@@ -219,10 +255,15 @@ export function buildRunnerDeps(
 		authStorage: modelRegistry.authStorage,
 		sessionFile: session.sessionFile ?? null,
 		artifactsDir: session.sessionManager.getArtifactsDir(),
+		parentLocalRoot: session.localRoot,
+		readIsolationRoots: getTeamSessionState(session, settings).readIsolationRoots,
+		parentActiveModelPattern: activeModel ? formatModelStringWithRouting(activeModel) : undefined,
+		parentActiveProvider: activeModel?.provider,
+		costGate: session.costGate,
 		parentAgentId: MAIN_AGENT_ID,
 		eventBus: session.eventBus,
 		subagentEventBus: session.subagentEventBus,
-		isCurrentSession: isCurrentSession ?? (() => session.sessionId === sessionId),
+		isCurrentSession: isCurrentSession ?? (() => session.sessionManager.getSessionId() === sessionId),
 		skills: session.skills,
 		promptTemplates: session.promptTemplates ? [...session.promptTemplates] : undefined,
 	};
@@ -247,10 +288,11 @@ async function startTeamDiscussionImpl(
 	question: string,
 	args: StartTeamDiscussionArgs,
 ): Promise<StartTeamDiscussionResult> {
-	const { session, settings, hooks } = args;
-	const sessionId = session.sessionId;
+	const { session, settings, hooks, signal: requestSignal } = args;
+	if (requestSignal?.aborted) return { started: false, message: "/team 已取消。" };
+	const sessionId = session.sessionManager.getSessionId();
 	let sessionChanged = false;
-	const isCurrentSession = (): boolean => !sessionChanged && session.sessionId === sessionId;
+	const isCurrentSession = (): boolean => !sessionChanged && session.sessionManager.getSessionId() === sessionId;
 	// Best-effort transcript output: synchronous throws and rejected promises
 	// must not turn a UI failure into a failed dispatch or discussion.
 	const emitOutput = async (text: string): Promise<void> => {
@@ -267,10 +309,10 @@ async function startTeamDiscussionImpl(
 			});
 		}
 	};
-	const report = (text: string): void => {
+	const report = async (text: string): Promise<void> => {
 		if (!isCurrentSession()) return;
 		hooks.showError?.(text);
-		void emitOutput(text);
+		await emitOutput(text);
 	};
 
 	const sessionModel = session.model;
@@ -289,7 +331,7 @@ async function startTeamDiscussionImpl(
 			rejection_category: "session_model_missing",
 		});
 		const message = "/team 需要一个当前会话模型（主代理），但当前会话未选择模型。";
-		report(message);
+		await report(message);
 		return { started: false, message };
 	}
 
@@ -305,7 +347,7 @@ async function startTeamDiscussionImpl(
 			result: "rejected",
 			rejection_category: "participants_unavailable",
 		});
-		report(members.error);
+		await report(members.error);
 		return { started: false, message: members.error };
 	}
 
@@ -319,7 +361,7 @@ async function startTeamDiscussionImpl(
 			rejection_category: "job_manager_missing",
 		});
 		const message = "后台任务不可用：/team 依赖会话的 async job 能力来承载多阶段讨论。";
-		report(message);
+		await report(message);
 		return { started: false, message };
 	}
 
@@ -328,25 +370,35 @@ async function startTeamDiscussionImpl(
 	const label = `/team ${previewQuestion(question)}`;
 
 	let jobId: string | undefined;
+	let registrationAttempted = false;
 	let unregisterSessionChange: (() => void) | undefined;
 	const sessionAbort = new AbortController();
+	const dispatchSignal = requestSignal ? AbortSignal.any([sessionAbort.signal, requestSignal]) : sessionAbort.signal;
+	const cancelJob = (): void => {
+		if (jobId) manager.cancel(jobId);
+	};
+	dispatchSignal.addEventListener("abort", cancelJob, { once: true });
 	try {
 		// Capture roots, artifacts, models and buses before the manager starts the
 		// asynchronous job; the live AgentSession may later adopt another identity.
 		const runnerDeps = buildRunnerDeps(session, settings, cwd, isCurrentSession);
+		const maxConcurrency = cfgTaskMaxConcurrency.get(settings);
+		const { semaphore } = getTeamSessionState(session, settings);
+		semaphore.resize(maxConcurrency);
 		unregisterSessionChange = session.registerSessionChangeCallback(() => {
 			sessionChanged = true;
 			sessionAbort.abort();
-			if (jobId) manager.cancel(jobId);
 			unregisterSessionChange?.();
 		});
+		registrationAttempted = true;
 		jobId = manager.register(
 			"task",
 			label,
 			async ({ jobId: owningJobId, signal: jobSignal, reportProgress }) =>
 				logger.withLogContext({ job_id: owningJobId }, async () => {
-					const signal = AbortSignal.any([jobSignal, sessionAbort.signal]);
+					const signal = AbortSignal.any([jobSignal, dispatchSignal]);
 					const cleanupSessionChange = (): void => {
+						dispatchSignal.removeEventListener("abort", cancelJob);
 						unregisterSessionChange?.();
 						unregisterSessionChange = undefined;
 					};
@@ -385,7 +437,9 @@ async function startTeamDiscussionImpl(
 							hooks.showStatus?.(update.text);
 							void emitOutput(update.text);
 						};
-						const onReportPersisted = (): void | Promise<void> => {
+						const onReportPersisted = async (content: string): Promise<void> => {
+							if (!isCurrentSession()) return;
+							if (args.echoReport !== false) await emitOutput(content);
 							if (signal.aborted || !isCurrentSession()) return;
 							const ackStarted = performance.now();
 							logger.info("Team report acknowledgement started", {
@@ -415,7 +469,7 @@ async function startTeamDiscussionImpl(
 								});
 								throw error;
 							}
-							if (isCurrentSession()) return hooks.rebuildChat?.();
+							if (isCurrentSession()) await hooks.rebuildChat?.();
 						};
 						const result = await runTeamDiscussion({
 							question,
@@ -424,7 +478,8 @@ async function startTeamDiscussionImpl(
 							sessionModelPattern,
 							runner,
 							signal,
-							maxConcurrency: cfgTaskMaxConcurrency.get(settings),
+							maxConcurrency,
+							semaphore,
 							onProgress,
 						});
 						jobResult = {
@@ -441,41 +496,41 @@ async function startTeamDiscussionImpl(
 						};
 						discussionStatus = result.status;
 						stage = "delivery";
-						if (result.status === "completed") {
-							const delivered = await deliverTeamReport(
-								session,
-								signal,
-								result.reportMarkdown!,
-								{ jobId: owningJobId, question },
-								onReportPersisted,
-							);
-							deliveryCompleted = delivered;
-							finishJob(delivered ? "completed" : signal.aborted ? "cancelled" : "failed");
-							jobResult.text = `${delivered ? "team discussion complete" : "team discussion cancelled"}\n${jobResult.text}`;
-							return jobResult;
-						}
-						if (result.status === "cancelled") {
+						const delivery =
+							result.status === "cancelled"
+								? "cancelled"
+								: await deliverTeamReport(
+										session,
+										signal,
+										result.status === "completed"
+											? result.reportMarkdown!
+											: assembleTeamFailure(question, result.failureReason ?? "未知原因"),
+										{ jobId: owningJobId, question },
+										onReportPersisted,
+										{ isCurrentSession },
+									);
+						deliveryCompleted = delivery === "completed";
+						if (delivery === "cancelled") {
+							if (!jobSignal.aborted) manager.cancel(owningJobId);
 							finishJob("cancelled");
 							jobResult.text = `team discussion cancelled\n${jobResult.text}`;
 							return jobResult;
 						}
-						const delivered = await deliverTeamReport(
-							session,
-							signal,
-							assembleTeamFailure(question, result.failureReason ?? "未知原因"),
-							{ jobId: owningJobId, question },
-							onReportPersisted,
-						);
-						deliveryCompleted = delivered;
-						if (!delivered) finishJob(signal.aborted ? "cancelled" : "failed");
-						if (!delivered) {
-							jobResult.text = `team discussion cancelled\n${jobResult.text}`;
-							return jobResult;
+						if (delivery === "failed") {
+							throw new AsyncJobError(
+								`Team report delivery did not complete\n${jobResult.text}`,
+								jobResult.structured,
+							);
 						}
-						throw new AsyncJobError(
-							`${result.failureReason ?? "team discussion failed"}\n${jobResult.text}`,
-							jobResult.structured,
-						);
+						if (result.status === "failed") {
+							throw new AsyncJobError(
+								`${result.failureReason ?? "team discussion failed"}\n${jobResult.text}`,
+								jobResult.structured,
+							);
+						}
+						finishJob("completed");
+						jobResult.text = `team discussion complete\n${jobResult.text}`;
+						return jobResult;
 					} catch (error) {
 						logger[signal.aborted ? "info" : "error"]("Team job threw", {
 							component: "team.controller",
@@ -515,8 +570,9 @@ async function startTeamDiscussionImpl(
 				}),
 			{ ownerId: MAIN_AGENT_ID, suppressDelivery: true },
 		);
-		if (sessionChanged) manager.cancel(jobId);
+		if (dispatchSignal.aborted) cancelJob();
 	} catch (error) {
+		dispatchSignal.removeEventListener("abort", cancelJob);
 		unregisterSessionChange?.();
 		logger.warn("Team job registration failed", {
 			component: "team.controller",
@@ -533,7 +589,8 @@ async function startTeamDiscussionImpl(
 			reason,
 			"请等待现有后台任务完成，或经 Agent Hub / hub cancel 取消后重试。",
 		].join("\n");
-		report(message);
+		await report(message);
+		if (registrationAttempted && jobId === undefined) return { started: false, registrationRefused: true, message };
 		return { started: false, message };
 	}
 	logger.info("Team job registered", {
@@ -569,7 +626,7 @@ async function startTeamDiscussionImpl(
 	};
 	logFollowupStage("started");
 	try {
-		if (!isCurrentSession()) return { started: true, jobId, message: dispatchNotice };
+		if (!isCurrentSession() || dispatchSignal.aborted) return { started: true, jobId, message: dispatchNotice };
 		await session.appendCustomMessage(
 			{
 				customType: TEAM_DISPATCH_MESSAGE_TYPE,
@@ -578,7 +635,7 @@ async function startTeamDiscussionImpl(
 				attribution: "agent",
 				details: { jobId, question, dispatch: true },
 			},
-			{ signal: sessionAbort.signal, waitForIdle: false },
+			{ signal: dispatchSignal, waitForIdle: false },
 		);
 		noticeDispatchCompleted = true;
 		logFollowupStage("completed");
@@ -595,6 +652,7 @@ async function startTeamDiscussionImpl(
 		hooks.showStatus?.(`Dispatched /team discussion ${jobId}`);
 		logFollowupStage("completed");
 	} catch (error) {
+		if (dispatchSignal.aborted) return { started: true, jobId, message: dispatchNotice };
 		logger.warn(
 			noticeStage === "notice_dispatch" ? "Team dispatch notice failed" : "Team dispatch UI update failed",
 			{
@@ -615,7 +673,7 @@ async function startTeamDiscussionImpl(
 		// would lose the submitted question and surface an unhandled rejection.
 		const reason = error instanceof Error ? error.message : String(error);
 		const failure = noticeDispatchCompleted ? "派发通知已记录，但刷新界面失败" : "但写入派发通知失败";
-		report(`/team 已启动（任务 ${jobId}），${failure}：${reason}`);
+		await report(`/team 已启动（任务 ${jobId}），${failure}：${reason}`);
 	}
 
 	return { started: true, jobId, message: dispatchNotice };

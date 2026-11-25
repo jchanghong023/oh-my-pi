@@ -137,7 +137,11 @@ fn cancellation_wave_signals_shared_group_once() {
 		.unwrap();
 	until("both signal handlers", || first_ready.exists() && second_ready.exists());
 	let children = [(first.pid(), first.pgid()), (second.pid(), second.pgid())];
-	assert!(first.signal_wave(Signal::Term, &children, &[], true));
+	assert!(
+		first
+			.signal_wave(Signal::Term, &children, &[], true)
+			.is_some_and(|failed| failed.is_empty())
+	);
 	first.record_wave_signal(Signal::Term);
 	second.record_wave_signal(Signal::Term);
 	assert_eq!(wait(&mut first), ExitStatus::Exited(0));
@@ -155,7 +159,11 @@ fn foreground_wave_does_not_signal_other_group_members() {
 		.spawn(spec(&args, &env, PgroupSpec::Join(first.pid())))
 		.unwrap();
 	let pid = first.pid();
-	assert!(first.signal_wave(Signal::Term, &[(pid, None)], &[], false));
+	assert!(
+		first
+			.signal_wave(Signal::Term, &[(pid, None)], &[], false)
+			.is_some_and(|failed| failed.is_empty())
+	);
 	first.record_wave_signal(Signal::Term);
 	assert_eq!(wait(&mut first), ExitStatus::Signaled(Signal::Term));
 	assert!(live(second.pid() as i32), "foreground signal reached another group member");

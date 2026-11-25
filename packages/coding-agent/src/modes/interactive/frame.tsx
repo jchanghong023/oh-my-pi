@@ -47,6 +47,7 @@ import { actionKey, activeKeyStyle, formatTooltipKey } from "../../ui/keys/hints
 import { holdSettle, type Shell, Shell as ShellClass, type TranscriptBlock, ViewList } from "../../ui/shell";
 import { type ComposerBarAction, type ComposerBarRoutes, composerFacts } from "../../ui/status/composer-facts";
 import { createStatusLine, shapePlacement } from "../../ui/status/status-line";
+import type { ComposerTerm } from "../../ui/styles/composer/frame";
 import { composerShape, type StatusAttachment } from "../../ui/styles/composer/shapes";
 import { welcomeTip } from "../../ui/welcome/tips";
 import { Welcome, WelcomeModel } from "../../ui/welcome/welcome";
@@ -211,7 +212,11 @@ export class AppFrame {
 			this.composer.setSlots({});
 			return;
 		}
-		const placement = computed(() => shapePlacement(composerShape(this.#shape()), this.composer.completing()));
+		const placement = computed(() => {
+			const term = (this.composer.node.props() as { term?: ComposerTerm }).term;
+			const shape = composerShape(term?.shape);
+			return shapePlacement(shape, this.composer.completing(), term?.paddingX ?? shape.paddingX);
+		});
 		const line = createStatusLine({ settings: statusLine.settings, facts: statusLine.facts, placement });
 		this.composer.setStatus(line.chrome.composerStatus);
 		this.#statusPreview = line.preview;

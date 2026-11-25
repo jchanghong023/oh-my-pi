@@ -57,15 +57,14 @@ interface CandidateRoot {
  * Every directory that may contain an Agent Plugin: marketplace and
  * `--plugin-dir` roots from the shared registries, plus configured extension
  * package roots. First occurrence wins on duplicates, except an inventory-only
- * Claude root cannot mask an active installation of the same skill directory.
+ * Claude root cannot mask an active installation of the same plugin.
  */
-async function listCandidateRoots(ctx: LoadContext, preferActive = false): Promise<CandidateRoot[]> {
+async function listCandidateRoots(ctx: LoadContext): Promise<CandidateRoot[]> {
 	const [marketplace, extensionRoots] = await Promise.all([
 		listClaudePluginRoots(ctx.home, ctx.cwd, { includeClaude: isUserSourceEnabled("claude-plugins", ctx) }),
 		listOmpExtensionRoots(ctx),
 	]);
 	const prioritizeActive =
-		preferActive &&
 		ctx.includeOptOutUserSources &&
 		!isUserSourceEnabled("claude-plugins", { ...ctx, includeOptOutUserSources: false });
 	let optedOut: CandidateRoot[] | undefined;
@@ -223,7 +222,7 @@ async function scanStandardSkills(
 }
 
 async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
-	const candidates = await listCandidateRoots(ctx, true);
+	const candidates = await listCandidateRoots(ctx);
 	const results = await Promise.all(
 		candidates.map(async (candidate): Promise<LoadResult<Skill>> => {
 			const status = await classifyAgentPluginRoot(candidate.path);
@@ -321,7 +320,7 @@ async function loadPluginMCPServers(
 			// §7.2.1: configured headers are literal, origin-locked package data —
 			// never expanded and never forwarded to a different origin.
 			...(server.url !== undefined && { headerPolicy: "origin-locked" as const }),
-			_source: createSourceMeta(PROVIDER_ID, mcpPath, candidate.level),
+			_source: createSourceMeta(PROVIDER_ID, mcpPath, candidate.level, candidate.origin),
 		});
 	}
 	return { items, warnings };

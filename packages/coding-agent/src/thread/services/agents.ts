@@ -105,8 +105,9 @@ export class MainSessionBridge {
 	/** A publisher opened a session: create and hold its canonical mirror. */
 	opened(opened: SessionOpened): void {
 		if (!(opened.host instanceof SessionHostClient)) throw new Error("Session opened without a host");
+		const { key } = opened;
 		const session = new RemoteAgentSession({
-			key: opened.key,
+			key,
 			home: this.#peer.threadId,
 			agentId: opened.agentId,
 			host: opened.host,
@@ -114,12 +115,13 @@ export class MainSessionBridge {
 			messages: opened.messages,
 			modelRegistry: opened.modelRegistry,
 			asyncJobManager: opened.asyncJobManager,
+			onClose: reason => this.closed(key, reason),
 		});
-		holdRemoteSession(opened.key, session);
-		this.#open.set(opened.key, { session, release: this.#peer.retain?.() ?? (() => {}) });
+		holdRemoteSession(key, session);
+		this.#open.set(key, { session, release: this.#peer.retain?.() ?? (() => {}) });
 	}
 
-	/** A publisher closed its session (dispose began). */
+	/** Drop the holds after disposal succeeds, is abandoned, or loses its worker. */
 	closed(key: string, reason = "disposed"): void {
 		const open = this.#open.get(key);
 		if (!open) return;
@@ -228,7 +230,7 @@ function serveBridge(): RpcServe<MainSessionBridge, SessionBridgeProtocol> {
 		viewPatch: (bridge, key, patch) => bridge.session(key)?.applyViewPatch(patch),
 		claimQueued: (bridge, key, ids) => bridge.session(key)?.claimQueued(ids) ?? [],
 		entries: (bridge, key, delta) => bridge.session(key)?.applyEntries(delta),
-		closed: (bridge, key) => bridge.closed(key),
+		closed: (bridge, key, reason) => bridge.closed(key, reason),
 		read: (_bridge, session, fields) => readSessionFields(session, fields),
 		readMessages: (_bridge, session) => toWireData(session.messages),
 		hasQueuedIrcFrom: (_bridge, session, from) => session.hasQueuedIrcFrom(from),

@@ -1327,46 +1327,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	): Promise<AgentToolResult<BashToolDetails>> {
 		const exitCode = result.exitCode;
 		const failedExit = exitCode !== undefined && exitCode !== 0;
-		if (exitCode === 0 && !result.cancelled && options.completePage !== undefined) {
-			// A sole query's structured page is not a shell preview: preserve JSON and complete sections.
-			return {
-				content: [{ type: "text", text: options.completePage }],
-				details: { toolCommands: options.toolCommands?.slice(), meta: { completePage: true } },
-			};
-		}
-
-		const shaped =
-			options.toolCallId === undefined
-				? undefined
-				: await this.#shapeOutput(result, options.toolCallId, options.command);
-		const outputLines = [shaped?.text ?? this.#formatResultOutput(result)];
-		const notices: string[] = [];
-		const wallTimeMs = options.wallTimeMs;
-		const wallTimeNoticeEmitted = wallTimeMs !== undefined && wallTimeMs >= WALL_TIME_NOTICE_MIN_MS;
-		if (wallTimeNoticeEmitted) {
-			notices.push(formatWallTimeNotice(wallTimeMs));
-		}
-		if (options.notices) {
-			for (const notice of options.notices) {
-				if (notice) notices.push(notice);
-			}
-		}
-		const resetNotice = formatShellResetNotice(result, this.session.cwd);
-		if (resetNotice) notices.push(resetNotice);
-		const fork = "fork" in result ? result.fork : undefined;
-		if (fork && !fork.carried) notices.push(FORK_STATE_LOST_NOTICE);
-		if (fork?.jobs) notices.push(FORK_JOBS_NOTICE);
-		if (notices.length > 0) outputLines.push("", ...notices);
-		// Shaped output already leads with its exit status.
-		if (failedExit && !shaped?.text?.startsWith("[exit code ")) outputLines.push("", formatExitCodeNotice(exitCode));
-		const outputText = outputLines.join("\n");
-
-		// Timeouts are not failures — the command ran its course. Return an error
-		// result (isError=true for the model) but flag timedOut so the renderer
-		// uses a warning border instead of error red. Both interactive and
-		// non-interactive results carry an explicit `timedOut` field from the
-		// executor/PTY layer.
 		const isTimeout = result.timedOut === true;
+		const completePage = exitCode === 0 && !result.cancelled && !isTimeout ? options.completePage : undefined;
+		const wallTimeMs = options.wallTimeMs;
+		const wallTimeNoticeEmitted =
+			completePage === undefined && wallTimeMs !== undefined && wallTimeMs >= WALL_TIME_NOTICE_MIN_MS;
 
 		const details: BashToolDetails = { wallTimeNoticeEmitted };
 		if (timeoutSec === undefined) {
@@ -1385,10 +1350,40 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 		if (options.replies?.length) details.replies = [...options.replies];
 		if (options.toolCommands?.length) details.toolCommands = [...options.toolCommands];
-		if (shaped?.spotlight) details.spotlight = shaped.spotlight;
 		// Native history is bounded; retain it whole so persisted calls remain replayable.
 		const trace = "trace" in result ? result.trace : undefined;
 		if (trace) details.trace = trace;
+
+		if (completePage !== undefined) {
+			// A sole query's structured page is not a shell preview: keep its body exact and its run replayable.
+			details.meta = { completePage: true };
+			return { content: [{ type: "text", text: completePage }], details };
+		}
+
+		const shaped =
+			options.toolCallId === undefined
+				? undefined
+				: await this.#shapeOutput(result, options.toolCallId, options.command);
+		if (shaped?.spotlight) details.spotlight = shaped.spotlight;
+		const outputLines = [shaped?.text ?? this.#formatResultOutput(result)];
+		const notices: string[] = [];
+		if (wallTimeNoticeEmitted) {
+			notices.push(formatWallTimeNotice(wallTimeMs));
+		}
+		if (options.notices) {
+			for (const notice of options.notices) {
+				if (notice) notices.push(notice);
+			}
+		}
+		const resetNotice = formatShellResetNotice(result, this.session.cwd);
+		if (resetNotice) notices.push(resetNotice);
+		const fork = "fork" in result ? result.fork : undefined;
+		if (fork && !fork.carried) notices.push(FORK_STATE_LOST_NOTICE);
+		if (fork?.jobs) notices.push(FORK_JOBS_NOTICE);
+		if (notices.length > 0) outputLines.push("", ...notices);
+		// Shaped output already leads with its exit status.
+		if (failedExit && !shaped?.text?.startsWith("[exit code ")) outputLines.push("", formatExitCodeNotice(exitCode));
+		const outputText = outputLines.join("\n");
 
 		// Final-defense inline cap config, shared by the timeout and normal
 		// completion paths. The sink already bounds inline bodies to the spill
@@ -1405,6 +1400,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		};
 
 		if (isTimeout) {
+			// A timeout is an error result, but the renderer shows a warning border rather than a failed exit.
 			details.timedOut = true;
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
@@ -2603,6 +2599,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						},
 						onWrite: noticeUrlWrites(pendingNotices),
 						toolCallId,
+						toolContext: ctx,
 					}).shellFilesystem(),
 					speech: sessionShellSpeech(this.session),
 					// The call is the run here: a tool command's approval prompt blocks it until answered.

@@ -34,6 +34,8 @@ export interface JobSnapshot {
 	settledAtMs?: number;
 	/** Process exit status when the job reports one. */
 	exitCode?: number;
+	/** Bash reported an actual command timeout. */
+	timedOut?: boolean;
 	/** Bash's measured wall time, not the age of the tracked job. */
 	wallTimeMs?: number;
 	/** Whether Bash appended its wall-time notice to the captured text. */

@@ -205,7 +205,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 		});
 
 		cleanups.push(() => session.dispose());
-		if (options.persistHistory) cleanups.push(() => sessionManager.close());
 		return { session, sessionManager, observedContexts };
 	}
 
@@ -369,7 +368,19 @@ describe("AgentSession mid-run threshold compaction", () => {
 			},
 		};
 		session.setGoalModeState(state);
-		mockCompaction("SUMMARY-WITHOUT-GOAL-OR-RULES");
+		mockCompaction("SUMMARY-WITHOUT-GOAL-OR-RULES").mockImplementation(async preparation => {
+			const initial = sessionManager
+				.getBranch()
+				.find(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context");
+			if (!initial) throw new Error("Expected initial auto Goal notice in the kept tail");
+			return {
+				summary: "SUMMARY-WITHOUT-GOAL-OR-RULES",
+				shortSummary: undefined,
+				firstKeptEntryId: initial.id,
+				tokensBefore: preparation.tokensBefore,
+				details: {},
+			};
+		});
 
 		await session.prompt("work on the release", { goalAutoOrchestrateInitialId: state.goal.id });
 		const expected = expectedAtContinuation;
@@ -377,7 +388,14 @@ describe("AgentSession mid-run threshold compaction", () => {
 		expect(expected.content).toContain(state.goal.objective);
 
 		expect(observedContexts).toHaveLength(2);
-		expect(liveAtContinuation).toEqual([expect.objectContaining({ content: expected.content, attribution: "user" })]);
+		expect(liveAtContinuation).toEqual([
+			expect.objectContaining({
+				content: expected.content,
+				attribution: "user",
+				details: { source: "goal-auto-orchestrate", goalId: state.goal.id },
+			}),
+			expect.objectContaining({ content: expected.content, attribution: "user" }),
+		]);
 		expect(durableAtContinuation).toEqual([
 			expect.objectContaining({ content: expected.content, attribution: "user" }),
 		]);
@@ -390,11 +408,11 @@ describe("AgentSession mid-run threshold compaction", () => {
 					(block: { type: string; text?: string }) => block.type === "text" && block.text === expected.content,
 				),
 		);
-		expect(recoveryInput).toHaveLength(1);
+		expect(recoveryInput).toHaveLength(2);
 		const live = session.messages.filter(
 			message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
 		);
-		expect(live).toHaveLength(1);
+		expect(live).toHaveLength(2);
 		expect(live[0]).toMatchObject({ content: expected.content, attribution: "user" });
 		const branch = sessionManager.getBranch();
 		const committed = branch.findIndex(entry => entry.type === "compaction");
@@ -429,7 +447,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 					.messages.filter(
 						message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
 					),
-			).toHaveLength(1);
+			).toHaveLength(2);
 			expect(reopened.getBranch()).toContainEqual(expect.objectContaining({ content: expected.content }));
 			expect(
 				reopened
@@ -1298,7 +1316,12 @@ describe("AgentSession mid-run threshold compaction", () => {
 			let liveAtContinuation: AgentMessage[] = [];
 			let durableAtContinuation: unknown[] = [];
 			const { session, sessionManager, observedContexts } = await createHarness(
-				{ "compaction.thresholdTokens": 10_000 },
+				{
+					"compaction.thresholdTokens": 10_000,
+					"compaction.keepRecentTokens": 1,
+					// Pre-prompt speculation can start well below the threshold.
+					"compaction.asyncEnabled": false,
+				},
 				{
 					persistHistory: true,
 					onProviderCall: index => {
@@ -1342,6 +1365,26 @@ describe("AgentSession mid-run threshold compaction", () => {
 					},
 				},
 			);
+			// Keep enough older history to reclaim space for the full recovery notice.
+			const model = session.model!;
+			const now = Date.now();
+			sessionManager.appendMessage({
+				role: "user",
+				content: "Previously completed release validation with archived staging reports. ".repeat(112),
+				timestamp: now - 2,
+			});
+			sessionManager.appendMessage({
+				role: "assistant",
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				content: [{ type: "text", text: "Previously delivered work." }],
+				usage: highUsage(20),
+				stopReason: "stop",
+				timestamp: now - 1,
+			});
+			sessionManager.appendMessage({ role: "user", content: "Keep this request.", timestamp: now });
+			session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
 			if (transition === "replace") {
 				await session.goalRuntime.createGoal({ objective: "Original ordinary Goal" });
 			}

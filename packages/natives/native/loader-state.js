@@ -7,12 +7,19 @@ import * as path from "node:path";
 import packageJson from "../package.json" with { type: "json" };
 import { embeddedAddon } from "./embedded-addon.js";
 import {
+	getPrivateNativeCacheUid,
+	isPrivateCacheDirectory,
+	lstatIfPresent,
 	normalizeProfileName,
+	prepareLinuxPrivateCacheDirectory,
+	preparePrivateCacheDirectory,
 	resolveAbsoluteDir,
 	resolveCacheRoot,
 	resolveLinuxPrivateCacheRoot,
+	resolveNativesDirOverride,
 	resolvePersistentRoot,
 	resolveXdgRoot,
+	UnsafeLinuxCacheError,
 } from "./offline-root.js";
 import { bindingsHaveReleaseIdentity, bindingsReleaseVersion, containsVersionStamp } from "./version-sentinel.js";
 
@@ -65,7 +72,7 @@ function startupMarker(text) {
 }
 
 function getNativeDirs() {
-	const override = resolveAbsoluteDir(process.env.PI_NATIVES_DIR);
+	const override = resolveNativesDirOverride();
 	if (override) return { nativesDir: override, addonCacheDir: override };
 
 	const safeProfile = value => {
@@ -275,48 +282,6 @@ const NATIVE_CACHE_CLEANUP_GRACE_MS = 10 * 60_000;
 const EMBEDDED_ADDON_DIR_PREFIX = "embedded-";
 const EMBEDDED_ADDON_HASH = /^[0-9a-f]+$/;
 
-class UnsafeOfflineNativeCacheError extends Error {
-	constructor(entryPath, expected) {
-		super(`Unsafe Linux offline native cache path ${entryPath}: expected ${expected}`);
-	}
-}
-
-function lstatIfPresent(entryPath) {
-	return fs.lstatSync(entryPath, { throwIfNoEntry: false });
-}
-
-function isPrivateCacheDirectory(stat, uid) {
-	return stat?.isDirectory() && stat.uid === uid && (stat.mode & 0o022) === 0;
-}
-
-/** Create and verify every component below an already trusted parent. */
-function preparePrivateNativeCacheDirectory(trustedParent, targetDir, uid) {
-	const relative = path.relative(trustedParent, targetDir);
-	if (!relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) {
-		throw new UnsafeOfflineNativeCacheError(targetDir, `a directory below ${trustedParent}`);
-	}
-	let entryPath = trustedParent;
-	for (const component of relative.split(path.sep)) {
-		entryPath = path.join(entryPath, component);
-		let stat = lstatIfPresent(entryPath);
-		if (!stat) {
-			try {
-				fs.mkdirSync(entryPath, { mode: 0o700 });
-			} catch (err) {
-				if (err?.code !== "EEXIST") throw err;
-			}
-			// Validate the actual directory, including a concurrent mkdir winner.
-			stat = lstatIfPresent(entryPath);
-		}
-		if (!isPrivateCacheDirectory(stat, uid)) {
-			throw new UnsafeOfflineNativeCacheError(
-				entryPath,
-				`a real directory owned by uid ${uid} without group/other write access`,
-			);
-		}
-	}
-}
-
 function isEmbeddedAddonDirectoryName(name) {
 	return (
 		name.startsWith(EMBEDDED_ADDON_DIR_PREFIX) &&
@@ -324,7 +289,7 @@ function isEmbeddedAddonDirectoryName(name) {
 	);
 }
 
-// Never descend into unverified trees on the shared-memory filesystem. The
+// Never descend into unverified trees in a per-user cache. The
 // only subdirectories under a version are the private, flat hash directories.
 function removePrivateNativeCacheDirectory(dir, uid, allowEmbeddedDirs = false) {
 	if (!isPrivateCacheDirectory(lstatIfPresent(dir), uid)) return false;
@@ -349,7 +314,7 @@ function findPrivateNativeCacheFile(filePath, uid) {
 	const stat = lstatIfPresent(filePath);
 	if (!stat) return undefined;
 	if (!stat.isFile() || stat.uid !== uid || (stat.mode & 0o022) !== 0 || stat.nlink !== 1) {
-		throw new UnsafeOfflineNativeCacheError(
+		throw new UnsafeLinuxCacheError(
 			filePath,
 			`a regular file owned by uid ${uid} without group/other write access or additional hard links`,
 		);
@@ -357,33 +322,19 @@ function findPrivateNativeCacheFile(filePath, uid) {
 	return stat;
 }
 
-function prepareLinuxPrivateNativeCache(ctx) {
-	const sharedDir = "/dev/shm";
-	for (const ancestor of ["/", "/dev"]) {
-		if (!isPrivateCacheDirectory(lstatIfPresent(ancestor), 0)) {
-			throw new UnsafeOfflineNativeCacheError(
-				ancestor,
-				"a real root-owned directory without group/other write access",
-			);
-		}
-	}
-	const shared = lstatIfPresent(sharedDir);
-	// Sticky /dev/shm prevents other accounts from replacing our UID-owned entry.
-	if (!shared?.isDirectory() || shared.uid !== 0 || ((shared.mode & 0o022) !== 0 && (shared.mode & 0o1000) === 0)) {
-		throw new UnsafeOfflineNativeCacheError(sharedDir, "a real root-owned directory, sticky if group/other writable");
-	}
-	if (ctx.offlineCacheUid !== undefined) {
-		const targetDir = ctx.isCompiledBinary ? ctx.versionedDir : ctx.addonCacheDir;
-		preparePrivateNativeCacheDirectory(sharedDir, targetDir, ctx.offlineCacheUid);
-		if (ctx.isCompiledBinary) touchNativeVersionDir(ctx.versionedDir);
-	}
-	if (ctx.offlineGrammarCacheUid !== undefined) {
-		const trustedParent = ctx.addonCacheDir === ctx.nativesDir ? ctx.nativesDir : sharedDir;
-		preparePrivateNativeCacheDirectory(
-			trustedParent,
-			path.join(ctx.nativesDir, "grammars"),
-			ctx.offlineGrammarCacheUid,
-		);
+/** Grammar cache I/O must not prevent using an otherwise usable addon. */
+function prepareNativeGrammarDir(ctx) {
+	const grammarDir = path.join(ctx.nativesDir, "grammars");
+	if (ctx.offlineGrammarCacheUid === undefined) return grammarDir;
+	try {
+		const stat =
+			ctx.isCompiledBinary && ctx.offlineCacheUid !== undefined && ctx.addonCacheDir === ctx.nativesDir
+				? preparePrivateCacheDirectory(ctx.nativesDir, grammarDir, ctx.offlineGrammarCacheUid)
+				: prepareLinuxPrivateCacheDirectory(grammarDir, ctx.offlineGrammarCacheUid);
+		return stat ? grammarDir : undefined;
+	} catch (err) {
+		if (err instanceof UnsafeLinuxCacheError) throw err;
+		return undefined;
 	}
 }
 
@@ -753,7 +704,7 @@ export function extractEmbeddedAddons({ files, targetDir, offlineCacheUid }) {
 	for (const file of files) {
 		const targetPath = embeddedAddonPath(targetDir, file);
 		const addonDir = path.dirname(targetPath);
-		if (offlineCacheUid !== undefined) preparePrivateNativeCacheDirectory(targetDir, addonDir, offlineCacheUid);
+		if (offlineCacheUid !== undefined) preparePrivateCacheDirectory(targetDir, addonDir, offlineCacheUid);
 		if (isEmbeddedAddonFileCurrent(targetPath, file, offlineCacheUid)) continue;
 		if (prepareError) throw prepareError;
 		const content = Bun.zstdDecompressSync(fs.readFileSync(file.zstdPath));
@@ -825,7 +776,7 @@ function maybeExtractEmbeddedAddon(ctx, errors, file) {
 		extractEmbeddedAddons({ files: [file], targetDir: ctx.versionedDir, offlineCacheUid: ctx.offlineCacheUid });
 		return embeddedAddonPath(ctx.versionedDir, file);
 	} catch (err) {
-		if (err instanceof UnsafeOfflineNativeCacheError) throw err;
+		if (err instanceof UnsafeLinuxCacheError) throw err;
 		const message = err instanceof Error ? err.message : String(err);
 		errors.push(`embedded addon extraction (${file.filename}): ${message}`);
 		return null;
@@ -1122,9 +1073,9 @@ function installNativeTokioRuntime(bindings) {
  * touches it: only release-version directories are removed. Older addons
  * predating the export link every grammar and need no directory.
  */
-function configureGrammarDir(bindings, nativesDir) {
+function configureGrammarDir(bindings, grammarDir) {
 	const setGrammarDir = bindings.__ompSetGrammarDir;
-	if (typeof setGrammarDir === "function") setGrammarDir(path.join(nativesDir, "grammars"));
+	if (grammarDir !== undefined && typeof setGrammarDir === "function") setGrammarDir(grammarDir);
 }
 
 
@@ -1162,20 +1113,6 @@ function buildHelpMessage(ctx) {
 		"If developing locally, build with: bun --cwd=packages/natives run build\n" +
 		"Explicit targets: bun scripts/bazel-natives.ts <target> --dest packages/natives/native"
 	);
-}
-
-/** Recognize the shared-memory layout even when an explicit cache override selects it. */
-function getPrivateNativeCacheUid(directory, privateCacheRoot) {
-	if (!privateCacheRoot) return undefined;
-	const normalizedDir = path.resolve(directory);
-	const parentDir = path.dirname(normalizedDir);
-	if (
-		path.basename(normalizedDir) === "natives" &&
-		(parentDir === privateCacheRoot || path.dirname(parentDir) === path.join(privateCacheRoot, "profiles"))
-	) {
-		return process.getuid();
-	}
-	return undefined;
 }
 
 /**
@@ -1306,9 +1243,17 @@ export function openNativeAddon(candidate) {
 export function loadNative() {
 	startupMarker("native:loadNative:start");
 	const ctx = initLoaderContext();
-	if (ctx.offlineCacheUid !== undefined || ctx.offlineGrammarCacheUid !== undefined) {
-		prepareLinuxPrivateNativeCache(ctx);
+	if (ctx.isCompiledBinary && ctx.offlineCacheUid !== undefined) {
+		if (!prepareLinuxPrivateCacheDirectory(ctx.versionedDir, ctx.offlineCacheUid)) {
+			throw new Error(`Linux native cache directory not found: ${ctx.versionedDir}`);
+		}
+		try {
+			touchNativeVersionDir(ctx.versionedDir);
+		} catch {
+			// An already verified cache hit can still be read on a read-only mount.
+		}
 	}
+	const grammarDir = prepareNativeGrammarDir(ctx);
 
 	const errors = [];
 	const hasEmbedded = hasMatchingEmbeddedAddon(ctx);
@@ -1340,13 +1285,19 @@ export function loadNative() {
 			const bindings = openNativeAddon(candidate);
 			validateLoadedBindings(ctx, bindings, candidate);
 			installNativeTokioRuntime(bindings);
-			configureGrammarDir(bindings, ctx.nativesDir);
+			configureGrammarDir(bindings, grammarDir);
 			loadedAddon = describeLoadedAddon(bindings, candidate, ctx);
-			cleanupStaleNativeVersions({
-				nativesDir: ctx.addonCacheDir,
-				currentVersion: ctx.packageVersion,
-				offlineCacheUid: ctx.offlineCacheUid,
-			});
+			if (
+				ctx.offlineCacheUid === undefined ||
+				ctx.isCompiledBinary ||
+				(grammarDir !== undefined && ctx.nativesDir === ctx.addonCacheDir)
+			) {
+				cleanupStaleNativeVersions({
+					nativesDir: ctx.addonCacheDir,
+					currentVersion: ctx.packageVersion,
+					offlineCacheUid: ctx.offlineCacheUid,
+				});
+			}
 			if (hasEmbedded) {
 				pruneStaleEmbeddedAddons({
 					targetDir: ctx.versionedDir,

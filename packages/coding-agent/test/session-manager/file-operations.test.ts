@@ -453,6 +453,7 @@ describe("SessionManager legacy session migration persistence", () => {
 		session.appendMessage(makeAssistantMessage());
 		await session.flush();
 		expect(fs.existsSync(freshSessionFile!)).toBe(true);
+		await session.close();
 
 		const resumed = await SessionManager.continueRecent(tempDir, tempDir);
 		try {
@@ -461,7 +462,6 @@ describe("SessionManager legacy session migration persistence", () => {
 			expect(resumed.getSessionFile()).toBe(freshSessionFile);
 		} finally {
 			await resumed.close();
-			await session.close();
 		}
 	});
 

@@ -163,6 +163,7 @@ describe("bundled update repository", () => {
 				assets: [{
 					name: ${JSON.stringify(binaryName)},
 					state: "uploaded",
+					id: 42,
 					size: 1,
 					digest: "sha256:" + "0".repeat(64),
 					browser_download_url: url,
@@ -624,17 +625,13 @@ describe("update-cli package manager commands", () => {
 	});
 
 	it("targets the mise GitHub backend and overrides release-age settings for attended updates", () => {
-		expect(buildMiseUpgradeArgs()).toEqual(["upgrade", "github:jchanghong023/oh-my-pi", "--bump", "--before", "0s"]);
-		expect(buildMiseUpgradeArgs(false)).toEqual(["upgrade", "github:jchanghong023/oh-my-pi", "--bump"]);
+		expect(buildMiseUpgradeArgs()).toEqual(["upgrade", "github:can1357/oh-my-pi", "--bump", "--before", "0s"]);
+		expect(buildMiseUpgradeArgs(false)).toEqual(["upgrade", "github:can1357/oh-my-pi", "--bump"]);
 		expect(buildMiseUpdateEnv({ PATH: "/bin", MISE_MINIMUM_RELEASE_AGE: "24h" })).toEqual({
 			PATH: "/bin",
 			MISE_MINIMUM_RELEASE_AGE: "0s",
 		});
-		expect(buildMiseForceInstallArgs("15.10.5")).toEqual([
-			"install",
-			"--force",
-			"github:jchanghong023/oh-my-pi@15.10.5",
-		]);
+		expect(buildMiseForceInstallArgs("15.10.5")).toEqual(["install", "--force", "github:can1357/oh-my-pi@15.10.5"]);
 	});
 
 	it.skipIf(!miseBinary)("overrides per-tool release age during actual mise upgrade resolution", async () => {
@@ -658,7 +655,7 @@ describe("update-cli package manager commands", () => {
 			await Bun.write(
 				path.join(root, "mise.toml"),
 				`[tools]
-"github:jchanghong023/oh-my-pi" = { version = "1", minimum_release_age = "999y", api_url = "${server.url}" }
+"github:can1357/oh-my-pi" = { version = "1", minimum_release_age = "999y", api_url = "${server.url}" }
 `,
 			);
 			const env = {
@@ -689,11 +686,11 @@ describe("update-cli package manager commands", () => {
 				return stdout + stderr;
 			};
 
-			const blocked = await run(["upgrade", "github:jchanghong023/oh-my-pi", "--bump", "--dry-run"]);
-			expect(blocked).not.toContain("Would install github:jchanghong023/oh-my-pi@2.0.0");
+			const blocked = await run(["upgrade", "github:can1357/oh-my-pi", "--bump", "--dry-run"]);
+			expect(blocked).not.toContain("Would install github:can1357/oh-my-pi@2.0.0");
 
 			const allowed = await run([...buildMiseUpgradeArgs(), "--dry-run"]);
-			expect(allowed).toContain("Would install github:jchanghong023/oh-my-pi@2.0.0");
+			expect(allowed).toContain("Would install github:can1357/oh-my-pi@2.0.0");
 		} finally {
 			server.stop(true);
 		}
@@ -1134,6 +1131,8 @@ describe("update-cli release binary integrity", () => {
 	const tag = "v17.1.2";
 	const binaryName = "omp-linux-x64";
 	const url = `https://github.com/${repository}/releases/download/${tag}/${binaryName}`;
+	const id = 42;
+	const apiAssetUrl = `https://api.github.com/repos/${repository}/releases/assets/${id}`;
 	const content = "verified binary";
 	const digest = `sha256:${Bun.SHA256.hash(content, "hex")}`;
 
@@ -1146,6 +1145,7 @@ describe("update-cli release binary integrity", () => {
 				{
 					name: binaryName,
 					state: "uploaded",
+					id,
 					size: Buffer.byteLength(content),
 					digest,
 					browser_download_url: url,
@@ -1159,6 +1159,7 @@ describe("update-cli release binary integrity", () => {
 		expect(updateCli.resolveReleaseBinaryAsset(releaseAsset(), tag, binaryName)).toEqual({
 			version: "17.1.2",
 			url,
+			id,
 			size: Buffer.byteLength(content),
 			digest,
 		});
@@ -1179,6 +1180,7 @@ describe("update-cli release binary integrity", () => {
 		).toEqual({
 			version: "18.0.9+fork.137",
 			url: `https://github.com/${repository}/releases/download/${forkTag}/${binaryName}`,
+			id,
 			size: Buffer.byteLength(content),
 			digest,
 		});
@@ -1236,7 +1238,7 @@ describe("update-cli release binary integrity", () => {
 			updateCli.resolveReleaseBinaryAsset({ ...releaseAsset(), prerelease: true }, tag, binaryName, {
 				allowPrerelease: true,
 			}),
-		).toEqual({ version: "17.1.2", url, size: Buffer.byteLength(content), digest });
+		).toEqual({ version: "17.1.2", url, id, size: Buffer.byteLength(content), digest });
 		expect(() =>
 			updateCli.resolveReleaseBinaryAsset({ ...releaseAsset(), draft: true }, tag, binaryName, {
 				allowPrerelease: true,
@@ -1404,9 +1406,9 @@ describe("update-cli release binary integrity", () => {
 
 		const metadataAuthorizations: Array<string | null> = [];
 		const assetAuthorizations: Array<string | null> = [];
-		const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+		const fetchImpl: Fetch = async (input, init) => {
 			const requestUrl = String(input);
-			if (requestUrl.startsWith("https://api.github.com/")) {
+			if (requestUrl === `https://api.github.com/repos/${repository}/releases/tags/${tag}`) {
 				metadataAuthorizations.push(new Headers(init?.headers).get("Authorization"));
 				return new Response(
 					JSON.stringify(
@@ -1417,32 +1419,21 @@ describe("update-cli release binary integrity", () => {
 					),
 				);
 			}
-			if (requestUrl === url) {
+			if (requestUrl === apiAssetUrl) {
 				assetAuthorizations.push(new Headers(init?.headers).get("Authorization"));
 				return new Response(altered);
 			}
 			throw new Error(`Unexpected request: ${requestUrl}`);
 		};
 
-		const previousGitHubToken = Bun.env.GITHUB_TOKEN;
-		Bun.env.GITHUB_TOKEN = "test-token";
-		try {
-			await expect(
-				updateViaBinaryAt(targetPath, "17.1.2", {
-					binaryName,
-					fetchImpl,
-				}),
-			).rejects.toThrow("digest mismatch");
-			expect(metadataAuthorizations).toEqual(["Bearer test-token"]);
-			expect(assetAuthorizations).toEqual(["Bearer test-token"]);
-			expect(await Bun.file(targetPath).text()).toBe(installed);
-			if (process.platform !== "win32") expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
-			const newResidue = (await fs.readdir(dir)).filter(name => name.endsWith(".new"));
-			expect(newResidue).toEqual([]);
-		} finally {
-			if (previousGitHubToken === undefined) delete Bun.env.GITHUB_TOKEN;
-			else Bun.env.GITHUB_TOKEN = previousGitHubToken;
-		}
+		await expect(
+			updateViaBinaryAt(targetPath, "17.1.2", { binaryName, fetchImpl, githubToken: "test-token" }),
+		).rejects.toThrow("digest mismatch");
+		expect(metadataAuthorizations).toEqual(["Bearer test-token"]);
+		expect(assetAuthorizations).toEqual(["Bearer test-token"]);
+		expect(await Bun.file(targetPath).text()).toBe(installed);
+		if (process.platform !== "win32") expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
+		expect((await fs.readdir(dir)).filter(name => name.endsWith(".new"))).toEqual([]);
 	});
 
 	it("explains how to authenticate after an anonymous GitHub API rate limit", async () => {
@@ -1463,6 +1454,7 @@ describe("update-cli release binary integrity", () => {
 			assets: [
 				{
 					name: binaryName,
+					id,
 					state: "uploaded",
 					size: Buffer.byteLength(body),
 					digest: `sha256:${Bun.SHA256.hash(body, "hex")}`,
@@ -1491,7 +1483,7 @@ describe("update-cli release binary integrity", () => {
 					]),
 				);
 			}
-			if (requestUrl.endsWith(`/download/v999.9.8/${binaryName}`)) return new Response(published);
+			if (requestUrl === apiAssetUrl) return new Response(published);
 			throw new Error(`Unexpected request: ${requestUrl}`);
 		};
 		const verified: string[] = [];

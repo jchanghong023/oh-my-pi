@@ -400,7 +400,7 @@ export async function fetchWithRetry(
 					activeSignal = signal;
 					if (signal?.aborted) throw new Error("Request was aborted");
 					const requestUrl = typeof url === "function" ? url(attempt) : url;
-					target = logger.diagnosticUrl(String(requestUrl));
+					target = logger.diagnosticUrl(requestUrl);
 					// `timeout` is destructured out of `baseInit`, so forward it to the underlying
 					// fetch on the no-`prepareInit` path too. Without this, callers that pass
 					// `timeout: false` (every streaming provider, to disable Bun's native ~300s
@@ -418,30 +418,42 @@ export async function fetchWithRetry(
 					let response: Response;
 					stage = "fetch";
 					const attemptStartedAt = performance.now();
+					const method = init.method ?? "GET";
 					logger.info("HTTP attempt started", {
 						...logFields(),
 						event: "http_attempt_started",
 						result: "started",
-						method: /^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE)$/i.test(init.method ?? "GET")
-							? (init.method ?? "GET").toUpperCase()
-							: "[custom]",
+						method:
+							typeof method === "string" &&
+							/^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE)$/i.test(method)
+								? method.toUpperCase()
+								: "[custom]",
 						timeout_ms: "timeout" in init ? init.timeout : undefined,
 					});
 					try {
 						response = await fetchImpl(requestUrl, init);
 					} catch (error) {
-						logger[signal?.aborted && signal.reason?.name !== "TimeoutError" ? "info" : "warn"](
+						const aborted = signal?.aborted;
+						let reason: unknown;
+						if (aborted) {
+							try {
+								reason = signal.reason;
+							} catch {
+								// An unreadable reason must not suppress the attempt diagnostic.
+							}
+						}
+						logger[aborted && logger.diagnosticError(reason).error_type !== "TimeoutError" ? "info" : "warn"](
 							"HTTP attempt failed",
 							{
 								...logFields(),
 								...logger.diagnosticError(error),
 								event: "http_attempt_failed",
-								result: signal?.aborted ? "aborted" : "failed",
-								retry_reason: signal?.aborted ? "signal_abort" : "network_error",
+								result: aborted ? "aborted" : "failed",
+								retry_reason: aborted ? "signal_abort" : "network_error",
 								attempt_elapsed_ms: performance.now() - attemptStartedAt,
 							},
 						);
-						if (signal?.aborted) throw new Error("Request was aborted");
+						if (aborted) throw new Error("Request was aborted");
 						const wrapped = wrapNetworkError(error);
 						if (attempt + 1 >= maxAttempts) throw wrapped;
 						const delayMs = resolveDefaultDelay(fixedDelayMs ?? defaultDelayMs, attempt, maxDelayMs);
@@ -460,24 +472,26 @@ export async function fetchWithRetry(
 					}
 
 					stage = "headers";
+					const status = response.status;
+					const ok = status >= 200 && status < 300;
 					logger.info("HTTP response headers received", {
 						...logFields(),
 						event: "http_response_headers",
-						result: response.ok ? "success" : "http_error",
-						status: response.status,
+						result: ok ? "success" : "http_error",
+						status,
 						attempt_elapsed_ms: performance.now() - attemptStartedAt,
 					});
 					const finish = (reason: string): Response => {
-						logger[response.ok ? "info" : "warn"]("HTTP request completed", {
+						logger[ok ? "info" : "warn"]("HTTP request completed", {
 							...logFields(),
 							event: "http_request_completed",
-							result: response.ok ? "success" : "http_error",
-							status: response.status,
+							result: ok ? "success" : "http_error",
+							status,
 							retry_reason: reason,
 						});
 						return response;
 					};
-					if (!isRetryableStatus(response.status)) return finish("not_retryable");
+					if (!isRetryableStatus(status)) return finish("not_retryable");
 					if (attempt + 1 >= maxAttempts) return finish("attempts_exhausted");
 
 					stage = "retry_response";
@@ -496,7 +510,7 @@ export async function fetchWithRetry(
 						...logFields(),
 						event: "http_request_retrying",
 						result: "retrying",
-						status: response.status,
+						status,
 						retry_reason:
 							fixedDelayMs !== undefined
 								? "fixed_delay"
@@ -513,20 +527,24 @@ export async function fetchWithRetry(
 					await waitForRetry(delayMs, signal);
 				}
 			} catch (error) {
-				const errorFields = logger.diagnosticError(error);
-				const terminalSignal = signal?.aborted ? signal : activeSignal;
-				const errorType = terminalSignal?.aborted
-					? logger.diagnosticError(terminalSignal.reason).error_type
-					: errorFields.error_type;
-				const timedOut = errorType === "TimeoutError" || errorType === "StreamTimeoutError";
-				const cancelled = terminalSignal?.aborted && !timedOut;
-				logger[cancelled ? "info" : "error"]("HTTP request terminated", {
-					...logFields(),
-					...errorFields,
-					event: cancelled ? "http_request_cancelled" : "http_request_failed",
-					result: cancelled ? "cancelled" : "failed",
-					timeout: timedOut,
-				});
+				try {
+					const errorFields = logger.diagnosticError(error);
+					const terminalSignal = signal?.aborted ? signal : activeSignal;
+					const errorType = terminalSignal?.aborted
+						? logger.diagnosticError(terminalSignal.reason).error_type
+						: errorFields.error_type;
+					const timedOut = errorType === "TimeoutError" || errorType === "StreamTimeoutError";
+					const cancelled = terminalSignal?.aborted && !timedOut;
+					logger[cancelled ? "info" : "error"]("HTTP request terminated", {
+						...logFields(),
+						...errorFields,
+						event: cancelled ? "http_request_cancelled" : "http_request_failed",
+						result: cancelled ? "cancelled" : "failed",
+						timeout: timedOut,
+					});
+				} catch {
+					// Never replace the original failure with a diagnostic getter failure.
+				}
 				throw error;
 			}
 		},

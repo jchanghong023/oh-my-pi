@@ -6,7 +6,8 @@
  * When its text disagrees with the tracking, the tracking wins — an invalid
  * recommendation is dropped here with an explicit note.
  */
-import { normalizeHtmlEntitiesForTerminal } from "@oh-my-pi/pi-tui/utils/html-entities";
+import { lexMarkdown } from "@oh-my-pi/pi-tui/text/markdown/lexer";
+import { decodeEntities } from "@oh-my-pi/pi-tui/utils/html-entities";
 import { Lexer } from "@oh-my-pi/pi-utils/marked";
 import { stripInlineMarkdown } from "../plan-mode/plan-toc";
 import type { TeamAlignmentOutput, TeamProposalRecord, TeamSynthesisOutput } from "./types";
@@ -47,11 +48,11 @@ function proposalLabel(record: TeamProposalRecord): string {
  * generated structure is assembled.
  */
 function tableCell(text: string): string {
-	return text.replace(/\r?\n/gu, " ").replace(/\|/gu, "\\|");
+	return quoteLine(text).replace(/\|/gu, "\\|");
 }
 
 function quoteLine(text: string): string {
-	return text.replace(/\r?\n/gu, " ");
+	return text.replace(/\r\n?|\n/gu, " ");
 }
 
 function statusLine(record: TeamProposalRecord): string {
@@ -112,8 +113,7 @@ function synthesisProseConflict(
 		prose.push(synthesis.recommendationReason, synthesis.recommendationPreconditions);
 	}
 	const body = prose.join("\n\n");
-	if (normalizeHtmlEntitiesForTerminal(stripInlineMarkdown(body)).includes("【推荐】"))
-		return "综合正文自行写入了【推荐】标记";
+	if (decodeEntities(stripInlineMarkdown(body)).includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
 	// Keep commas and wrapped lines: a label and its predicate may straddle
 	// either, as may an explicit adoption condition. Paragraphs isolate claims,
 	// but Markdown subsections inherit their enclosing proposal's ownership.
@@ -128,7 +128,7 @@ function synthesisProseConflict(
 			// encoded delimiter is visible text, not new Markdown syntax.
 			// Decode before sentence splitting so entity semicolons stay whole.
 			for (const paragraph of pending.split(/\r?\n\s*\r?\n/u)) {
-				const visible = normalizeHtmlEntitiesForTerminal(stripInlineMarkdown(paragraph));
+				const visible = decodeEntities(stripInlineMarkdown(paragraph));
 				for (const text of visible.split(
 					/(?:[。！？；;!?]|(?<![\p{L}\p{N}_/\\-])\.|\.(?![\p{L}\p{N}_/\\-])|但是|但|而|却)/u,
 				)) {
@@ -141,13 +141,13 @@ function synthesisProseConflict(
 			if (token.type === "heading") {
 				flushStatements();
 				while (headings.length > 0 && headings.at(-1)!.depth >= token.depth) headings.pop();
-				const heading = normalizeHtmlEntitiesForTerminal(stripInlineMarkdown(token.text)).replace(/\s+/gu, "");
+				const heading = decodeEntities(stripInlineMarkdown(token.text)).replace(/\s+/gu, "");
 				const named = [...heading.matchAll(/方案([A-Z]+)|([A-Z]+)方案/gu)]
 					.map(match => proposals.find(record => record.label === (match[1] ?? match[2])))
 					.filter((record): record is TeamProposalRecord => record !== undefined);
 				headings.push({ depth: token.depth, scope: named.length > 0 ? named : (headings.at(-1)?.scope ?? []) });
 				statements.push({
-					text: normalizeHtmlEntitiesForTerminal(stripInlineMarkdown(token.text)),
+					text: decodeEntities(stripInlineMarkdown(token.text)),
 					scope: headings.at(-1)?.scope ?? [],
 				});
 				continue;
@@ -161,6 +161,8 @@ function synthesisProseConflict(
 		// the same proposal as `方案 A` in the delivered report.
 		const positiveClaims = statement
 			.replace(/\s+/gu, "")
+			// Directness does not change whether the adoption is affirmed, negated or conditional.
+			.replace(/(?:直接|立即|马上)(?=采用|作为)/gu, "")
 			// Remove only the negated predicate, not its clause: a later
 			// affirmative endorsement must still be checked.
 			.replace(
@@ -240,6 +242,19 @@ function synthesisProseConflict(
 	return undefined;
 }
 
+/** Close a top-level fence before appending machine-generated Markdown. */
+function closeTrailingFence(markdown: string): string {
+	if (!/(?:^|[\r\n])[ \t]{0,3}(?:`{3}|~{3})/u.test(markdown)) return markdown;
+	// The terminal expands tabs to three spaces before lexing.
+	const last = lexMarkdown(markdown.replaceAll("\t", "   ")).findLast(token => token.type !== "space");
+	if (last?.type !== "code") return markdown;
+	const opener = /^ {0,3}(`{3,}|~{3,})/u.exec(last.raw)?.[1];
+	if (!opener) return markdown;
+	const closer = /\n {0,3}(`{3,}|~{3,})[ \t]*\n?$/u.exec(last.raw)?.[1];
+	if (closer && closer[0] === opener[0] && closer.length >= opener.length) return markdown;
+	return `${markdown}\n${opener}`;
+}
+
 export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResult | AssembleReportConflict {
 	const { alignment, synthesis, proposals } = args;
 	const conflict = synthesisProseConflict(synthesis, proposals);
@@ -260,7 +275,7 @@ export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResu
 		);
 	}
 
-	sections.push(synthesis.reportMarkdown.trim());
+	sections.push(closeTrailingFence(synthesis.reportMarkdown.trim()));
 
 	const statusRows = proposals.map(
 		record =>
@@ -288,12 +303,14 @@ export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResu
 			? `（前提：${synthesis.recommendationPreconditions}）`
 			: "";
 		sections.push(
-			`**【推荐】${proposalLabel(proposals.find(p => p.label === recommendedLabel)!)}** — ${synthesis.recommendationReason}${preconditions}`,
+			closeTrailingFence(
+				`**【推荐】${proposalLabel(proposals.find(p => p.label === recommendedLabel)!)}** — ${synthesis.recommendationReason}${preconditions}`,
+			),
 		);
 	} else if (recommendedLabel) {
 		droppedRecommendation = true;
 		sections.push(
-			`> 结构化追踪否决了综合子调用对“${synthesis.recommendedProposal}”的推荐：该方案不存在、不可作为最终选项或仍有未解决阻断问题，故不给出推荐标记。`,
+			`> 结构化追踪否决了综合子调用对“${quoteLine(synthesis.recommendedProposal)}”的推荐：该方案不存在、不可作为最终选项或仍有未解决阻断问题，故不给出推荐标记。`,
 		);
 	}
 

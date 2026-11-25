@@ -350,9 +350,9 @@ export class CredentialPool implements CredentialsApi {
 	 * Updates in-memory credential cache for a provider.
 	 * Removes the provider entry entirely if credentials array is empty.
 	 * A provider turned off in its auth rules (`disabled "<reason>"`) is kept
-	 * out of the cache: its stored rows stay on disk untouched, but no read,
-	 * selection, refresh, usage probe or broker snapshot sees them until it is
-	 * turned back on (see {@link CredentialPool.#syncPause}).
+	 * out of the active cache: its stored rows stay on disk untouched and
+	 * can be listed for administration, but are not used for auth until the
+	 * provider is turned back on (see {@link CredentialPool.#syncPause}).
 	 * @param provider - Provider name (e.g., "anthropic", "openai")
 	 * @param stored - Array of stored credentials to cache
 	 */
@@ -629,20 +629,23 @@ export class CredentialPool implements CredentialsApi {
 	}
 
 	/**
-	 * List stored credential rows, optionally filtered by provider.
+	 * List stored credential rows, optionally filtered by provider and including paused providers.
 	 */
-	list(provider?: string): StoredAuthCredential[] {
-		if (provider !== undefined) {
-			return this.entries(provider).map(entry => ({
-				id: entry.id,
-				provider,
-				credential: entry.credential,
-				disabledCause: null,
-			}));
-		}
+	list(provider?: string, options?: { includePaused?: boolean }): StoredAuthCredential[] {
 		this.#syncPause();
+		const data = options?.includePaused ? this.#loaded : this.#data;
+		if (provider !== undefined) {
+			return (
+				data.get(provider)?.map(entry => ({
+					id: entry.id,
+					provider,
+					credential: entry.credential,
+					disabledCause: null,
+				})) ?? []
+			);
+		}
 		const rows: StoredAuthCredential[] = [];
-		for (const [storedProvider, entries] of this.#data) {
+		for (const [storedProvider, entries] of data) {
 			for (const entry of entries) {
 				rows.push({
 					id: entry.id,
@@ -686,7 +689,9 @@ export class CredentialPool implements CredentialsApi {
 	 * Remove one stored credential for a provider.
 	 */
 	async removeById(provider: string, credentialId: number): Promise<boolean> {
-		const entries = this.entries(provider);
+		this.#syncPause();
+		const entries = this.#loaded.get(provider);
+		if (!entries) return false;
 		const index = entries.findIndex(entry => entry.id === credentialId);
 		if (index === -1) return false;
 		const remainingEntries = entries.filter((_entry, entryIndex) => entryIndex !== index);

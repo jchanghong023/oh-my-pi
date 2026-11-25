@@ -3,7 +3,7 @@
  * 执行 codecheck 本地检查，解析结果，过滤三种断言告警，通过 stdout JSON 输出
  */
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,19 +22,35 @@ function outputResult(result) {
   console.log(JSON.stringify(result, null, 2));
 }
 
-function outputError(projectDir, error, exitCode = 1) {
-  outputResult({ success: false, error: error, alarmCount: 0, alarms: [] });
-  process.exit(exitCode);
+function outputError(error) {
+  outputResult({ success: false, error, alarmCount: 0, alarms: [] });
+  process.exit(1);
 }
 
-function runCommand(cmd, options = {}) {
+function runCommand(args, cwd) {
   try {
-    const result = execSync(cmd, {
+    const commandOptions = {
       encoding: 'utf-8',
       timeout: 300000, // 5 分钟超时
-      ...options
+      cwd
+    };
+    if (process.platform !== 'win32') {
+      return execFileSync('codecheck', args, commandOptions);
+    }
+
+    // npm 在 Windows 上使用 .cmd 启动器；通过环境变量传入带引号的参数。
+    const env = { ...process.env };
+    const commandArgs = args.map((arg, index) => {
+      if (/["\r\n]/.test(arg)) {
+        throw new Error('Invalid Windows command argument');
+      }
+      const name = `OMP_CODECHECK_ARG_${index}`;
+      env[name] = arg;
+      return `"%${name}%"`;
     });
-    return result;
+    return execFileSync(process.env.ComSpec || 'cmd.exe', [
+      '/d', '/v:off', '/s', '/c', `"codecheck ${commandArgs.join(' ')}"`
+    ], { ...commandOptions, env, windowsVerbatimArguments: true });
   } catch (e) {
     return null;
   }
@@ -44,17 +60,19 @@ function filterAlarms(resultData) {
   const alarms = [];
 
   // resultData 可能是数组或包含数组的对象，兼容多种结构
-  let alarmArray = [];
+  let alarmArray;
   if (Array.isArray(resultData)) {
     alarmArray = resultData;
-  } else if (resultData && Array.isArray(resultData.diagnostics)) {
+  } else if (Array.isArray(resultData?.diagnostics)) {
     alarmArray = resultData.diagnostics;
-  } else if (resultData && Array.isArray(resultData.alarms)) {
+  } else if (Array.isArray(resultData?.alarms)) {
     alarmArray = resultData.alarms;
-  } else if (resultData && Array.isArray(resultData.defects)) {
+  } else if (Array.isArray(resultData?.defects)) {
     alarmArray = resultData.defects;
-  } else if (resultData && Array.isArray(resultData.issues)) {
+  } else if (Array.isArray(resultData?.issues)) {
     alarmArray = resultData.issues;
+  } else {
+    throw new Error('Codecheck result does not contain an alarm array');
   }
 
   for (const item of alarmArray) {
@@ -76,51 +94,42 @@ function filterAlarms(resultData) {
 
 function runCodecheck(projectDir, testFileRelativePath) {
   // Step 0: 通用初始化
-  const generalInitResult = runCommand('codecheck init', { cwd: projectDir });
+  const generalInitResult = runCommand(['init'], projectDir);
   if (generalInitResult === null) {
-    outputError(projectDir, 'codecheck init failed');
-    return;
+    outputError('codecheck init failed');
   }
 
   // Step 1: 设置指定规则集
-  const configResult = runCommand(`codecheck config rule-set-ids ${RULE_SET_ID} --type ${CHECK_TYPE}`, { cwd: projectDir });
+  const configResult = runCommand(['config', 'rule-set-ids', RULE_SET_ID, '--type', CHECK_TYPE], projectDir);
   if (configResult === null) {
-    outputError(projectDir, 'config rule-set-ids failed');
-    return;
+    outputError('config rule-set-ids failed');
   }
 
   // Step 2: 初始化指定规则集
-  const initResult = runCommand(`codecheck init --type ${CHECK_TYPE}`, { cwd: projectDir });
+  const initResult = runCommand(['init', '--type', CHECK_TYPE], projectDir);
   if (initResult === null) {
-    outputError(projectDir, 'init failed');
-    return;
+    outputError('init failed');
   }
 
   // Step 3: 执行全量检查
-  const checkResult = runCommand(`codecheck fullcheck --files ${testFileRelativePath} --compiled --type ${CHECK_TYPE}`, { cwd: projectDir });
+  const checkResult = runCommand(
+    ['fullcheck', '--files', testFileRelativePath, '--compiled', '--type', CHECK_TYPE],
+    projectDir
+  );
   if (checkResult === null) {
-    outputError(projectDir, 'fullcheck failed');
-    return;
+    outputError('fullcheck failed');
   }
 
   // Step 4: 解析结果文件
   const resultFilePath = path.join(projectDir, '.codecheckcli', 'codecheck-result.json');
-  if (!fs.existsSync(resultFilePath)) {
-    outputResult({ success: true, alarmCount: 0, alarms: [] });
-    return;
-  }
 
-  let resultData;
+  let alarms;
   try {
     const content = fs.readFileSync(resultFilePath, 'utf-8');
-    resultData = JSON.parse(content);
+    alarms = filterAlarms(JSON.parse(content));
   } catch (e) {
-    outputResult({ success: true, alarmCount: 0, alarms: [] });
-    return;
+    outputError(`Failed to load Codecheck result: ${e.message}`);
   }
-
-  // Step 5: 过滤目标告警
-  const alarms = filterAlarms(resultData);
 
   outputResult({
     success: true,
@@ -134,40 +143,26 @@ async function main() {
   const testFileRelativePath = process.argv[3];
 
   if (!projectDir) {
-    // 无法写日志，直接输出错误
-    outputResult({ success: false, error: 'projectDir is required', alarmCount: 0, alarms: [] });
-    process.exit(1);
-    return;
+    outputError('projectDir is required');
   }
 
   if (!testFileRelativePath) {
-    outputError(projectDir, 'testFileRelativePath is required');
-    return;
+    outputError('testFileRelativePath is required');
   }
 
   if (!fs.existsSync(projectDir)) {
-    outputError(projectDir, `projectDir does not exist: ${projectDir}`);
-    return;
+    outputError(`projectDir does not exist: ${projectDir}`);
   }
 
   if (path.isAbsolute(testFileRelativePath)) {
-    outputError(projectDir, 'testFileRelativePath must be a relative path, not absolute');
-    return;
+    outputError('testFileRelativePath must be a relative path, not absolute');
   }
 
   runCodecheck(projectDir, testFileRelativePath);
 }
 
 if (require.main === module) {
-  main().catch(e => {
-    const projectDir = process.argv[2];
-    if (projectDir) {
-      outputError(projectDir, e.message);
-    } else {
-      outputResult({ success: false, error: e.message, alarmCount: 0, alarms: [] });
-      process.exit(1);
-    }
-  });
+  main().catch(e => outputError(e.message));
 }
 
 module.exports = { runCodecheck, filterAlarms, TARGET_RULES, RULE_SET_ID, CHECK_TYPE };

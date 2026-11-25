@@ -618,6 +618,7 @@ export const UNAVAILABLE_ANNOTATIONS: ExtensionAnnotationsAPI = Object.freeze({
  * a hook can insert, filter, or reorder messages in the same pass.
  */
 function restoreContextHistoryIndices(previousMessages: AgentMessage[], nextMessages: AgentMessage[]): void {
+	if (nextMessages.every(message => getContextHistoryIndex(message) !== undefined)) return;
 	const claimed = new Set<number>();
 	const replacements = new Map<string, { message: AgentMessage; historyIndex?: number | null } | null>();
 	for (const message of nextMessages) {
@@ -2728,9 +2729,9 @@ export class ExtensionRunner {
 					signal,
 				);
 
-				const nextMessages = (handlerResult as ContextEventResult | undefined)?.messages;
-				if (nextMessages) restoreContextHistoryIndices(currentMessages, nextMessages);
-				currentMessages = nextMessages ?? inputMessages;
+				const nextMessages = (handlerResult as ContextEventResult | undefined)?.messages ?? inputMessages;
+				restoreContextHistoryIndices(currentMessages, nextMessages);
+				currentMessages = nextMessages;
 			}
 		}
 

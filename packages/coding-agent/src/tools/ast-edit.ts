@@ -28,13 +28,8 @@ import { type FileSnapshot, readSnapshot } from "../commit/selective/journal";
 import { createFileRecorder, formatResultPath, resultSnapshotPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 
-import {
-	parseSearchPath,
-	relativeSearchResultPath,
-	resolveTargetResultPath,
-	resolveToolSearchScope,
-} from "./path-utils";
-import { searchApprovalCacheTargets } from "./search-approval-targets";
+import { relativeSearchResultPath, resolveTargetResultPath, resolveToolSearchScope } from "./path-utils";
+import { astEditApprovalTargets } from "./search-approval-targets";
 import { capParseErrors, formatCodeFrameLine, formatParseErrors } from "../utils/render-utils";
 import { PREVIEW_PENDING_NOTICE, queueResolveHandler } from "./resolve";
 import { ToolError } from "./tool-errors";
@@ -242,14 +237,12 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 		}
 		return strictestApproval(decisions);
 	};
-	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined => {
+	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined =>
+		this.approvalRestrictionPaths(args) ?? undefined;
+	readonly approvalRestrictionPaths = (args: unknown): readonly string[] | null => {
 		const paths = isRecord(args) ? args.paths : undefined;
-		if (!Array.isArray(paths)) return undefined;
-		return searchApprovalCacheTargets(
-			paths.filter((entry): entry is string => typeof entry === "string"),
-			this.session,
-			entry => parseSearchPath(entry).basePath,
-		);
+		if (!Array.isArray(paths) || !paths.every((entry): entry is string => typeof entry === "string")) return null;
+		return astEditApprovalTargets(paths, this.session.cwd);
 	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<AstEditSchemaInfer>;

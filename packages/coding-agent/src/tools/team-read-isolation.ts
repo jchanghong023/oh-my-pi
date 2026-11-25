@@ -1,20 +1,10 @@
 import * as path from "node:path";
-import type { Tool, ToolSession } from ".";
+import type { ToolSession } from ".";
 import { InternalUrlRouter } from "../internal-urls";
-import { sessionResolveContext } from "../internal-urls/context";
 import { resolveLocalRoot } from "../internal-urls/local-protocol";
-import {
-	expandDelimitedPathEntries,
-	expandPath,
-	parseFindPattern,
-	parseSearchPathPreferringLiteral,
-	resolveReadPathAsync,
-	resolveSyscallTarget,
-	splitPathAndSelPreferringLiteral,
-} from "./path-utils";
+import type { ResolveContext } from "../internal-urls/types";
+import { resolveSyscallTarget } from "./path-utils";
 import { ToolError } from "./tool-errors";
-
-const ISOLATED_SEARCH_TOOLS: Record<string, true> = { grep: true, glob: true, ast_grep: true };
 
 function contains(root: string, target: string): boolean {
 	const relative = path.relative(root, target);
@@ -27,12 +17,7 @@ async function canonical(target: string): Promise<string> {
 	return resolved;
 }
 
-/**
- * Bound the actual filesystem scopes, not just agent:// visibility. Native
- * grep/glob/AST walkers do not follow nested symlinks; only their explicit
- * roots need canonicalizing. Ancestor scopes are refused rather than walking
- * peer material and trying to redact it after native search has read it.
- */
+/** Refuse both protected entries (including exact transcript files) and scopes that contain them. */
 async function createReadIsolationPolicy(session: ToolSession) {
 	const options = session.localProtocolOptions;
 	if (options?.allowCrossAgentReads !== false) return undefined;
@@ -76,43 +61,18 @@ export async function assertTeamReadTarget(session: ToolSession, target: string)
 	await assertAllowed?.(target);
 }
 
-/** Apply the same boundary to registered native search roots before traversal. */
-export function isolateTeamReads<T extends Tool>(tool: T, session: ToolSession): T {
-	if (session.localProtocolOptions?.allowCrossAgentReads !== false || !ISOLATED_SEARCH_TOOLS[tool.name]) return tool;
-	const execute = tool.execute;
-	tool.execute = async (id, params, signal, onUpdate, context) => {
-		const assertAllowed = await createReadIsolationPolicy(session);
-		if (!assertAllowed) return execute.call(tool, id, params, signal, onUpdate, context);
-		const requested: unknown = params.path;
-		const paths =
-			typeof requested === "string"
-				? [requested]
-				: Array.isArray(requested)
-					? requested.filter((entry): entry is string => typeof entry === "string")
-					: [];
-		const entries = await expandDelimitedPathEntries(paths.length ? paths : ["."], session.cwd, {
-			splitter: tool.name === "glob" ? parseFindPattern : undefined,
-		});
-		const router = InternalUrlRouter.instance();
-		for (const entry of entries) {
-			const split = await splitPathAndSelPreferringLiteral(entry, session.cwd);
-			const expanded = expandPath(split.path);
-			const parsed =
-				tool.name === "glob"
-					? parseFindPattern(expanded)
-					: await parseSearchPathPreferringLiteral(expanded, session.cwd);
-			const url = router.normalize(parsed.basePath);
-			if (router.canHandle(url)) {
-				const located = await router.locate(url, sessionResolveContext(session, { signal }), { localOnly: true });
-				if (located) await assertAllowed(located);
-				continue;
-			}
-			// Remote URLs have no host backing. file:// has already been
-			// expanded above and must pass the same checks as an absolute path.
-			if (/^(?:https?|ftp|ws|wss):\/\//i.test(expanded)) continue;
-			await assertAllowed(await resolveReadPathAsync(parsed.basePath, session.cwd));
+/** Check parsed native search targets before stat, materialization, or walking. */
+export async function createTeamSearchTargetCheck(session: ToolSession, context: ResolveContext) {
+	const assertAllowed = await createReadIsolationPolicy(session);
+	if (!assertAllowed) return undefined;
+	const router = InternalUrlRouter.instance();
+	return async (target: string): Promise<void> => {
+		if (!router.canHandle(target)) {
+			await assertAllowed(target);
+			return;
 		}
-		return execute.call(tool, id, params, signal, onUpdate, context);
+		// The search filesystem locates the directory form of a bare URL.
+		const backing = await router.locate(target, context, { directory: true, localOnly: true });
+		if (backing !== null) await assertAllowed(backing);
 	};
-	return tool;
 }

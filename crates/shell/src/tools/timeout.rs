@@ -7,10 +7,10 @@
 //! ([`SigTarget::Label`]); `timeout` then waits for the tree and for the
 //! externals it started (an external the tree abandoned, say a `sh` that
 //! ignores `TERM`), sends `KILL` to both after `-k`, and gives up waiting
-//! [`REAP_AFTER_KILL`] after that. Exit status: the command's when it
-//! finishes in time; 124 after the deadline; 137 once `KILL` was sent;
-//! the command's own under `--preserve-status`; 125 for timeout's own
-//! errors (bad usage, interval or signal).
+//! [`REAP_AFTER_KILL`] after that. An operand that finishes before the
+//! deadline returns its own status. On POSIX, a KILL wave takes precedence
+//! (137); otherwise a timeout returns 124 unless `--preserve-status` is set
+//! (128 for Windows in-process cancellation). Timeout's own errors exit 125.
 
 use std::time::Duration;
 
@@ -491,10 +491,10 @@ mod tests {
 		);
 	}
 
-	/// Keep an in-process operand pending across the escalation deadline.
-	/// Unlike a fast cancelling eval, this necessarily traverses the -k branch.
+	/// Keep the tree live across escalation, with or without a reported
+	/// operand status (e.g. the operand exited but left a background job).
 	#[test]
-	fn escalation_of_pending_in_process_operand_uses_platform_status() {
+	fn kill_after_takes_precedence_over_known_operand_status_on_posix() {
 		use std::sync::Arc;
 
 		use crate::{
@@ -503,7 +503,7 @@ mod tests {
 			tools::{Labels, SpawnLog, ToolConfig},
 		};
 
-		for preserve in [false, true] {
+		for (preserve, operand_status) in [(false, None), (true, None), (true, Some(7))] {
 			let mut host = FakeHost::new();
 			host.tool(
 				"timeout",
@@ -522,6 +522,7 @@ mod tests {
 				}
 			};
 			let mut timeout = Timeout::new(call);
+			timeout.child.status = operand_status;
 			let mut opts = options("timeout -k 1 1 true");
 			opts.preserve = preserve;
 			timeout.phase = Phase::Signalled { opts, kill_at: Some(10), give_up: None, recheck: 10 };
@@ -550,12 +551,14 @@ mod tests {
 			let Some(CallOutcome::Exit(status)) = timeout.advance(&mut api, &mut turn) else {
 				panic!("expired escalation must finish the timeout");
 			};
-			let expected = if cfg!(windows) {
-				if preserve { 128 } else { 124 }
-			} else {
+			let expected = if !cfg!(windows) {
 				137
+			} else if preserve {
+				operand_status.unwrap_or(128)
+			} else {
+				124
 			};
-			assert_eq!(status, expected, "preserve-status={preserve}");
+			assert_eq!(status, expected, "preserve-status={preserve}, operand={operand_status:?}");
 		}
 	}
 }

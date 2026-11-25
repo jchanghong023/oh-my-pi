@@ -188,6 +188,7 @@ for (const server of [
 		// allowlisted there or valid configs fail validation.
 		const shared = {
 			enabled: false,
+			alwaysLoad: false,
 			timeout: 120_000,
 			requestIdFormat: "string",
 			instructions: false,

@@ -10,6 +10,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { isEnoent, logger, pathIsWithin } from "@oh-my-pi/pi-utils";
 import { expandTilde } from "../../../tools/path-utils";
 import { linkPluginDirectory } from "../directory-link";
@@ -36,6 +37,7 @@ import {
 	readProjectRegistriesIndex,
 	removeInstalledPlugin,
 	removeMarketplaceEntry,
+	removeRegisteredMarketplaceCache,
 	writeInstalledPluginsRegistry,
 	writeMarketplacesRegistry,
 	writeProjectRegistriesIndex,
@@ -59,6 +61,20 @@ function assertRuntimePackageName(name: string): string {
 		throw new Error(`Invalid marketplace plugin package name: ${JSON.stringify(name)}`);
 	}
 	return name;
+}
+
+/** A previous cache root can still hold the generated catalog and its original checkout. */
+async function isCachedMarketplaceCheckout(destination: string, clonePath: string, name: string): Promise<boolean> {
+	const catalogPath = path.join(destination, "marketplace.json");
+	try {
+		if (!(await fs.lstat(path.join(destination, ".git"))).isDirectory()) return false;
+		if (!(await fs.lstat(catalogPath)).isFile()) return false;
+		const origin = await vcs.git(destination)?.configGet("remote.origin.url");
+		if (!origin || origin !== (await vcs.git(clonePath)?.configGet("remote.origin.url"))) return false;
+		return parseMarketplaceCatalog(await fs.readFile(catalogPath, "utf8"), catalogPath).name === name;
+	} catch {
+		return false;
+	}
 }
 
 /** Runtime state captured when a plugin key is removed, carried to a renamed key. */
@@ -190,14 +206,11 @@ export class MarketplaceManager {
 
 	async removeMarketplace(name: string): Promise<void> {
 		const reg = await readMarketplacesRegistry(this.#opts.marketplacesRegistryPath);
-		// removeMarketplaceEntry throws if not found — propagate to caller.
+		const entry = getMarketplaceEntry(reg, name);
 		const updated = removeMarketplaceEntry(reg, name);
 		await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updated);
 
-		await fs.rm(path.join(this.#opts.marketplacesCacheDir, name), {
-			recursive: true,
-			force: true,
-		});
+		if (entry) await removeRegisteredMarketplaceCache(entry, this.#opts.marketplacesCacheDir);
 
 		logger.debug("Marketplace removed", { name });
 	}
@@ -224,17 +237,47 @@ export class MarketplaceManager {
 			);
 		}
 
-		// Promote the temp clone to its final cache location now that drift check passed.
-		const checkoutDir = clonePath
-			? await promoteCloneToCache(clonePath, this.#opts.marketplacesCacheDir, catalog.name)
-			: undefined;
-
+		const previousCatalog = path.resolve(expandTilde(existing.catalogPath));
 		// Git catalogs must stay alongside their checkout for relative plugin sources.
+		// Refresh into the active cache without removing the checkout in the previous root.
 		// Other sources keep their registered location, including legacy home-relative entries.
-		const catalogPath = path.resolve(
-			expandTilde(checkoutDir ? path.join(checkoutDir, "marketplace.json") : existing.catalogPath),
-		);
-		await Bun.write(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+		const cacheDir = this.#opts.marketplacesCacheDir;
+		const catalogPath = clonePath
+			? path.resolve(expandTilde(path.join(cacheDir, name, "marketplace.json")))
+			: previousCatalog;
+		const relocating = path.relative(previousCatalog, catalogPath) !== "";
+		const content = `${JSON.stringify(catalog, null, 2)}\n`;
+		let createdDestination = false;
+		if (clonePath) {
+			try {
+				// Write the generated catalog before promotion, without following a
+				// repository-provided link at its reserved path.
+				const stagedCatalog = path.join(clonePath, "marketplace.json");
+				await fs.rm(stagedCatalog, { force: true });
+				await fs.writeFile(stagedCatalog, content, { flag: "wx" });
+				if (relocating) {
+					const destination = path.dirname(catalogPath);
+					const occupied = await fs.lstat(destination).catch(err => {
+						if (!isEnoent(err)) throw err;
+					});
+					if (!occupied) {
+						await fs.rename(clonePath, destination);
+						createdDestination = true;
+					} else if (occupied.isDirectory() && (await isCachedMarketplaceCheckout(destination, clonePath, name))) {
+						await promoteCloneToCache(clonePath, cacheDir, name);
+					} else {
+						throw new Error(`Marketplace cache destination already exists: ${destination}`);
+					}
+				} else {
+					await promoteCloneToCache(clonePath, cacheDir, name);
+				}
+			} catch (err) {
+				await fs.rm(clonePath, { recursive: true, force: true }).catch(() => {});
+				throw err;
+			}
+		} else {
+			await Bun.write(catalogPath, content);
+		}
 
 		const updatedEntry: MarketplaceRegistryEntry = {
 			...existing,
@@ -246,7 +289,13 @@ export class MarketplaceManager {
 			...reg,
 			marketplaces: reg.marketplaces.map(m => (m.name === name ? updatedEntry : m)),
 		};
-		await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updatedReg);
+		try {
+			await writeMarketplacesRegistry(this.#opts.marketplacesRegistryPath, updatedReg);
+		} catch (err) {
+			// Only remove an unpublished checkout if this update created its destination.
+			if (createdDestination) await fs.rm(path.dirname(catalogPath), { recursive: true, force: true }).catch(() => {});
+			throw err;
+		}
 
 		logger.debug("Marketplace updated", { name });
 		return updatedEntry;

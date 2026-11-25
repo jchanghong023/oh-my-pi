@@ -10,7 +10,7 @@
  * closing the room.
  */
 import { getProxyForUrl } from "@oh-my-pi/pi-ai/utils/proxy";
-import { asStrictBytes, logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import { open, sealSerialized } from "./crypto";
 import type { CollabFrame, EncodedFrame, RelayControlMessage } from "./protocol";
 import { packEnvelope, unpackEnvelope } from "./protocol";
@@ -515,13 +515,7 @@ export class CollabSocket {
 				const sealed = await sealSerialized(this.#opts.key, serialized);
 				if (this.#closed || generation !== this.#sendGeneration) return;
 				if (pending.cancelled) continue;
-				if (
-					(await this.#sendEnvelope(
-						pending,
-						asStrictBytes(packEnvelope(pending.targetPeer, sealed)),
-						generation,
-					)) === "stop"
-				) {
+				if ((await this.#sendEnvelope(pending, packEnvelope(pending.targetPeer, sealed), generation)) === "stop") {
 					return;
 				}
 				continue;
@@ -547,7 +541,7 @@ export class CollabSocket {
 			const sealed = await sealSerialized(this.#opts.key, serialized);
 			if (this.#closed || generation !== this.#sendGeneration) return;
 			if (pending.cancelled) continue;
-			const envelope = asStrictBytes(packEnvelope(pending.targetPeer, sealed));
+			const envelope = packEnvelope(pending.targetPeer, sealed);
 			pending.preparedEnvelope = envelope;
 			pending.onPrepared?.();
 			pending.onPrepared = undefined;
@@ -658,19 +652,24 @@ export class CollabSocket {
 		this.#retryMissingRoom = false;
 		const ws = this.#ws;
 		this.#ws = null;
-		const prepared = this.#pendingSends.flatMap(pending =>
-			pending.preparedEnvelope ? [pending.preparedEnvelope] : [],
-		);
+		const prepared =
+			ws && !this.#opts.numberedRoom
+				? this.#pendingSends.flatMap(pending => (pending.preparedEnvelope ? [pending.preparedEnvelope] : []))
+				: undefined;
 		this.#discardPendingSends();
 		if (ws) {
 			try {
-				// Closing is terminal, so backpressure no longer matters: every
-				// prepared envelope (typically a final `bye`) enters the socket buffer
-				// ahead of the close frame.
-				if (ws.readyState === WebSocket.OPEN) {
-					for (const envelope of prepared) ws.send(envelope);
+				if (this.#opts.numberedRoom) {
+					// Revocation must drop frames already buffered by Bun as well.
+					ws.terminate();
+				} else {
+					// On a graceful close, prepared envelopes (such as a final
+					// `bye`) enter the socket buffer ahead of the close frame.
+					if (prepared && ws.readyState === WebSocket.OPEN) {
+						for (const envelope of prepared) ws.send(envelope);
+					}
+					ws.close(1000);
 				}
-				ws.close(1000);
 			} catch {
 				// already closing/closed
 			}
@@ -950,7 +949,8 @@ export class CollabSocket {
 		this.#ws = null;
 		if (ws) {
 			try {
-				ws.close(1000);
+				if (this.#opts.numberedRoom) ws.terminate();
+				else ws.close(1000);
 			} catch {
 				// already closing/closed
 			}

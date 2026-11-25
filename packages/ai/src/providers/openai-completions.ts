@@ -2046,14 +2046,28 @@ export const streamOpenAICompletionsOnce = (
 			} catch {}
 			const codeAgent = model.provider === "codeagent";
 			const capturedErrorResponse = !codeAgent && error instanceof OpenAIHttpError ? error.captured : undefined;
-			const safeError = !codeAgent
-				? error
-				: abortTracker.wasCallerAbort()
-					? new AIError.AbortError("CodeAgent request cancelled")
-					: error instanceof AIError.StreamTimeoutError ||
-						  abortTracker.getLocalAbortReason() instanceof AIError.StreamTimeoutError
-						? new AIError.StreamTimeoutError("CodeAgent request timed out")
-						: new AIError.ProviderHttpError("CodeAgent request failed", AIError.status(error) ?? 502);
+			let safeError = error;
+			if (codeAgent) {
+				if (abortTracker.wasCallerAbort()) {
+					safeError = new AIError.AbortError("CodeAgent request cancelled");
+				} else if (
+					error instanceof AIError.StreamTimeoutError ||
+					abortTracker.getLocalAbortReason() instanceof AIError.StreamTimeoutError
+				) {
+					safeError = new AIError.StreamTimeoutError("CodeAgent request timed out");
+				} else {
+					const failure = new AIError.ProviderHttpError("CodeAgent request failed", AIError.status(error) ?? 502);
+					// Inspect only genuine HTTP rejections here. Keep the flag, never the body or headers.
+					if (
+						error instanceof OpenAIHttpError &&
+						(error.status === 400 || error.status === 413) &&
+						(error.code === "context_length_exceeded" || AIError.hasTokenContextOverflowEvidence(error.message))
+					) {
+						AIError.attach(failure, AIError.create(AIError.Flag.ContextOverflow));
+					}
+					safeError = failure;
+				}
+			}
 			const result = await AIError.finalize(safeError, {
 				api: model.api,
 				provider: model.provider,

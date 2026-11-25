@@ -209,7 +209,7 @@ async function extractResources(): Promise<SpecDrivenResources> {
 	const digest = crypto.createHash("md5").update(JSON.stringify(manifest)).digest("hex");
 	const cache = path.join(path.dirname(getDocumentConversionCacheDir()), "spec-driven");
 	const root = path.join(cache, digest);
-	await fs.mkdir(path.dirname(cache), { recursive: true });
+	await fs.mkdir(cache, { recursive: true });
 	await withFileLock(
 		`${cache}.update`,
 		async () => {
@@ -230,8 +230,8 @@ async function extractResources(): Promise<SpecDrivenResources> {
 					if (file.executable) await fs.chmod(target, 0o755);
 				}
 				await fs.writeFile(path.join(temporary, ".omp-complete"), digest);
-				await fs.rm(cache, { recursive: true, force: true });
-				await fs.mkdir(cache, { recursive: true });
+				// Other digests may still back resource paths held by live sessions.
+				await fs.rm(root, { recursive: true, force: true });
 				await fs.rename(temporary, root);
 			} finally {
 				await fs.rm(temporary, { recursive: true, force: true });
@@ -374,7 +374,9 @@ export async function runSuperpowersScript(
 	if (!inventory || !relativePath.startsWith("skills/"))
 		throw new Error(`Not a bundled skill script: ${relativePath}`);
 	const script = await resolveSpecDrivenResourcePath(resources.superpowersRoot, relativePath);
-	const head = (await fs.readFile(script, "utf8")).split("\n", 1)[0] ?? "";
+	const bytes = await fs.readFile(script);
+	if (crypto.createHash("sha256").update(bytes).digest("hex") !== inventory.sha256)
+		throw new Error(`Bundled resource digest mismatch: ${inventory.path}`);
 	const runtimeRoot = path.join(resources.root, "omp-runtime");
 	const env = {
 		BUN_BE_BUN: "1",
@@ -383,6 +385,8 @@ export async function runSuperpowersScript(
 		BRAINSTORM_DIR: path.join(cwd, ".superpowers", "brainstorm"),
 	};
 	if (/\.(?:c?js|mjs)$/.test(relativePath)) return run([process.execPath, script, ...args], cwd, signal, env);
+	const newline = bytes.indexOf(0x0a);
+	const head = bytes.toString("utf8", 0, newline === -1 ? bytes.length : newline);
 	if (!head.startsWith("#!") || !/\b(?:bash|sh)\b/.test(head))
 		throw new Error(`Unsupported bundled script runtime: ${relativePath}`);
 	const bash = await findBash();

@@ -25,6 +25,7 @@ export interface AvailableCommandsSession {
 	readonly mcpPromptCommands?: ReadonlyArray<LoadedCustomCommand>;
 	readonly skills: ReadonlyArray<Skill>;
 	readonly skillsSettings?: SkillsSettings;
+	readonly settings?: { getAgentDir(): string };
 	readonly effectiveExtensionRoots?: EffectiveExtensionRoots;
 	setSlashCommands(slashCommands: FileSlashCommand[]): void;
 	sessionManager: { getCwd(): string };
@@ -33,12 +34,18 @@ export interface AvailableCommandsSession {
 export async function buildAvailableSlashCommands(
 	session: AvailableCommandsSession,
 	loadFileCommands: (cwd: string) => Promise<FileSlashCommand[]> = cwd =>
-		loadSlashCommands({ cwd, extensionRoots: session.effectiveExtensionRoots }),
+		loadSlashCommands({
+			cwd,
+			agentDir: session.settings?.getAgentDir(),
+			extensionRoots: session.effectiveExtensionRoots,
+		}),
 ): Promise<InternalAvailableSlashCommand[]> {
 	const commands: InternalAvailableSlashCommand[] = [];
 	const seenNames = new Set<string>();
 	const appendCommand = (command: InternalAvailableSlashCommand): void => {
-		if (seenNames.has(command.name)) return;
+		if (seenNames.has(command.name) || (command.source !== "builtin" && isAcpBuiltinShadowedName(command.name))) {
+			return;
+		}
 		seenNames.add(command.name);
 		commands.push(command);
 	};
@@ -54,11 +61,6 @@ export async function buildAvailableSlashCommands(
 			subcommands: command.subcommands,
 			source: "builtin",
 		});
-		// ACP dispatch resolves builtin aliases before `session.prompt()` sees the
-		// input, so a custom/file command sharing an alias would be advertised but
-		// never run. Reserve aliases here too; TUI-only builtins are skipped above,
-		// so their aliases stay available.
-		for (const alias of command.aliases ?? []) seenNames.add(alias);
 	}
 
 	if (session.skillsSettings?.enableSkillCommands) {
@@ -75,7 +77,6 @@ export async function buildAvailableSlashCommands(
 	const runner = session.extensionRunner;
 	if (runner) {
 		for (const command of runner.getRegisteredCommands(ACP_BUILTIN_RESERVED_NAMES)) {
-			if (isAcpBuiltinShadowedName(command.name)) continue;
 			appendCommand({
 				name: command.name,
 				description: command.description ?? "(extension command)",
@@ -111,14 +112,9 @@ export async function buildAvailableSlashCommands(
 }
 
 export function toAcpAvailableCommands(commands: readonly InternalAvailableSlashCommand[]): AvailableCommand[] {
-	const available: AvailableCommand[] = [];
-	for (const command of commands) {
-		if (command.source !== "builtin" && isAcpBuiltinShadowedName(command.name)) continue;
-		available.push({
-			name: command.name,
-			description: command.description ?? "",
-			input: command.input,
-		});
-	}
-	return available;
+	return commands.map(command => ({
+		name: command.name,
+		description: command.description ?? "",
+		input: command.input,
+	}));
 }

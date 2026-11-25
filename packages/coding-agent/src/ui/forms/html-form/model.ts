@@ -209,7 +209,7 @@ export class HtmlFormModel {
 		this.#recommended =
 			callbacks.validateTimeoutRecommendation === true &&
 			form.fields.some((field, index) => {
-				if (!field.name || fieldError(field, this.value(index))) return false;
+				if (!field.name || !this.#isValidTimeoutValue(field, index)) return false;
 				return field.kind === "text"
 					? !!field.value.trim()
 					: field.options.some(
@@ -323,6 +323,11 @@ export class HtmlFormModel {
 		const answer = this.answer(index);
 		if (field.kind === "text") return textValue(field, answer.text.text);
 		return choiceValue(field, answer.checked, answer.otherChosen ? answer.other.text : undefined);
+	}
+
+	#isValidTimeoutValue(field: FormField, index: number): boolean {
+		if (field.kind === "choice" && field.options[0]?.placeholder && this.answer(index).checked.has(0)) return false;
+		return fieldError(field, this.value(index)) === undefined;
 	}
 
 	/** Whether field `index` holds an acceptable, non-empty answer. */
@@ -588,7 +593,7 @@ export class HtmlFormModel {
 		this.#done = true;
 		this.saveNote();
 		const valid = this.#callbacks.validateTimeoutRecommendation
-			? this.#recommended && this.fields.every((field, index) => !fieldError(field, this.value(index)))
+			? this.#recommended && this.fields.every((field, index) => this.#isValidTimeoutValue(field, index))
 			: undefined;
 		this.#callbacks.onTimeout?.(this.data(), this.notes(), valid);
 	}

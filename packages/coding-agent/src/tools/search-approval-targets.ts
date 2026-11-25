@@ -19,7 +19,13 @@ import { InternalUrlRouter } from "../internal-urls/router";
 import { approvalCacheKeyForPath, approvalDirectoryKey } from "./approval-cache";
 import { approvalTargetKey, approvalTreeSearchKey, isApprovalPublicUrl } from "./approval-targets";
 import type { ToolSession } from "./index";
-import { normalizePathLikeInput, resolveToCwd } from "./path-utils";
+import {
+	hasGlobPathChars,
+	normalizePathLikeInput,
+	parseSearchPath,
+	probeLiteralPathExistsSync,
+	resolveToCwd,
+} from "./path-utils";
 
 /** List delimiters the execution-side path parser splits a root on. */
 export const APPROVAL_ROOT_DELIMITERS = /[;,\s]+/;
@@ -76,6 +82,67 @@ export function searchApprovalCacheTargets(
 	return keys.size > 0 ? [...keys] : undefined;
 }
 
+/** A complete set of exact local files or directory trees; other inputs are resolved only at execution. */
+export function astEditApprovalTargets(roots: readonly string[], cwd: string): readonly string[] | null {
+	const keys = new Set<string>();
+	for (const input of roots) {
+		const root = normalizePathLikeInput(input);
+		const hasSpaces = root.includes(" ");
+		if (!root || /[;,]|[^\S ]/.test(root) || root.includes('"') || hasGlobPathChars(root)) return null;
+		if (hasSpaces && (roots.length !== 1 || root !== root.trim())) return null;
+		if (root.includes("://") || isReadableUrlPath(root)) return null;
+		try {
+			const basePath = parseSearchPath(root).basePath;
+			const absolute = resolveToCwd(basePath, cwd);
+			if (!path.isAbsolute(absolute) || absolute !== absolute.trim()) return null;
+			// An NTFS stream can report its base file's metadata, not its own identity.
+			if (process.platform === "win32" && absolute.slice(path.parse(absolute).root.length).includes(":"))
+				return null;
+			// A multi-target walk may turn resolved spellings into a combined glob rooted
+			// at a lexical ancestor. Only key paths that remain literal in that walk.
+			if (
+				roots.length > 1 &&
+				(hasGlobPathChars(absolute) || /[,}\]]/.test(absolute) || /(?:^|[/\\])\.\.(?:[/\\]|$)/.test(absolute))
+			) {
+				return null;
+			}
+			const stat = fs.statSync(absolute);
+			if (!stat.isFile() && (hasSpaces || !stat.isDirectory())) return null;
+			// Execution checks the unsplit spelling before parsing separators. If parsing changed it,
+			// make sure the literal probe still prevents a space-delimited list.
+			if (hasSpaces && basePath !== root && probeLiteralPathExistsSync(root, cwd) !== "exists") return null;
+			const realPath = fs.realpathSync.native(absolute);
+			if (process.platform === "win32" && !windowsApprovalPathIsUnambiguous(realPath)) return null;
+			keys.add(searchStatApprovalKey(realPath, true, stat.isDirectory()));
+		} catch {
+			return null;
+		}
+	}
+	return keys.size > 0 ? [...keys] : null;
+}
+
+/** A folded key is unsafe when a Windows path component does not resolve under alternate casing. */
+function windowsApprovalPathIsUnambiguous(realPath: string): boolean {
+	// Drive roots have known case behavior. Do not assume it for UNC shares
+	// or for names with non-ASCII folding rules.
+	if (!/^[a-z]:[\\/]/i.test(realPath) || /[^\x20-\x7e]/.test(realPath)) return false;
+	let current = realPath;
+	for (;;) {
+		const parent = path.dirname(current);
+		if (parent === current) return true;
+		const name = path.basename(current);
+		const lower = name.toLowerCase();
+		const alternate = name === lower ? name.toUpperCase() : lower;
+		if (
+			alternate !== name &&
+			(alternate.toLowerCase() !== lower || fs.realpathSync.native(path.join(parent, alternate)) !== current)
+		) {
+			return false;
+		}
+		current = parent;
+	}
+}
+
 /**
  * One cache key for a resolution-ready search root: a file reports the file key
  * a `read` of it would mint, a folder reports the folder key a folder grant
@@ -106,11 +173,15 @@ function searchRootApprovalKey(root: string, session: ToolSession, recursive: bo
 
 function searchFolderKey(absolute: string, recursive: boolean): string | undefined {
 	try {
-		if (!fs.statSync(absolute).isDirectory()) return approvalCacheKeyForPath(absolute);
-		const directoryKey = approvalDirectoryKey(absolute);
-		return recursive ? approvalTreeSearchKey(directoryKey) : directoryKey;
+		return searchStatApprovalKey(absolute, recursive, fs.statSync(absolute).isDirectory());
 	} catch {
 		// A missing path finds nothing and the search errors out.
 		return undefined;
 	}
+}
+
+function searchStatApprovalKey(absolute: string, recursive: boolean, directory: boolean): string {
+	if (!directory) return approvalCacheKeyForPath(absolute);
+	const directoryKey = approvalDirectoryKey(absolute);
+	return recursive ? approvalTreeSearchKey(directoryKey) : directoryKey;
 }

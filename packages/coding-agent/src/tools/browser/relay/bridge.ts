@@ -49,6 +49,7 @@ import {
 	isOlderOmpVersion,
 	isOmpVersion,
 	OVERLAY_PROTOCOL_VERSION,
+	parseTargetId,
 } from "./protocol";
 
 /** Transport-agnostic websocket surface the bridge writes to. */
@@ -229,13 +230,6 @@ function tabTargetIdFromKey(key: string): string {
 
 function pageTargetIdFromKey(key: string): string {
 	return `PAGE${key.replace(":", ".")}`;
-}
-
-function parseTargetId(targetId: string): { key: string; kind: "tab" | "page" } | null {
-	const match = /^(TAB|PAGE)([^.]+)\.(\d+)$/.exec(targetId);
-	if (!match) return null;
-	const kind: "tab" | "page" = match[1] === "TAB" ? "tab" : "page";
-	return { key: `${match[2]}:${match[3]}`, kind };
 }
 
 class TabState {
@@ -588,18 +582,24 @@ export class RelayBridge {
 		return undefined;
 	}
 
+	/** The target id names its browser instance even after the user closed that tab. */
+	#instanceNamedByTarget(targetId: unknown): ExtInstance | undefined {
+		const parsed = typeof targetId === "string" ? parseTargetId(targetId) : null;
+		if (!parsed) return undefined;
+		const code = parsed.key.slice(0, parsed.key.indexOf(":"));
+		for (const inst of this.#instances.values()) {
+			if (inst.code === code) return inst;
+		}
+		return undefined;
+	}
+
 	/**
 	 * The browser the caller's tabs live in: the one named by `nearTargetId` (a tab the caller drives on another
 	 * connection; omp gives every tab its own), else one holding a tab this connection drives. Offline or not.
 	 */
 	#affineInstance(conn: CdpConnection, nearTargetId: unknown): ExtInstance | undefined {
-		const near = typeof nearTargetId === "string" ? parseTargetId(nearTargetId) : null;
-		if (near) {
-			// The target id names its browser even after the user closed that tab.
-			const code = near.key.slice(0, near.key.indexOf(":"));
-			const inst = [...this.#instances.values()].find(inst => inst.code === code);
-			if (inst) return inst;
-		}
+		const near = this.#instanceNamedByTarget(nearTargetId);
+		if (near) return near;
 		const own = [...conn.claims].map(key => this.#tabs.get(key)).find(tab => tab !== undefined);
 		return own && this.#instances.get(own.instanceId);
 	}
@@ -1872,16 +1872,33 @@ export class RelayBridge {
 			case "Target.createTarget": {
 				const url =
 					typeof msg.params?.url === "string" && msg.params.url.length > 0 ? msg.params.url : "about:blank";
-				// `nearTargetId` is the relay's own parameter: open in the browser of that tab.
-				const affine = near ? undefined : this.#affineInstance(conn, msg.params?.nearTargetId);
-				// Its extension may be reconnecting: another browser can be another profile, logged in elsewhere.
-				if (affine && !affine.socket) {
-					await this.#awaitReconnect(affine);
-					if (this.#conns.get(conn.id) !== conn) return;
+				// `nearTargetId` is relay-private. A required target overrides all heuristic routing.
+				const nearTargetId = msg.params?.nearTargetId;
+				const required = msg.params?.requireNearTarget === true;
+				let inst: ExtInstance | undefined;
+				if (near && !required) {
+					inst = this.#instances.get(near.instanceId);
+				} else {
+					let affine = required
+						? this.#instanceNamedByTarget(nearTargetId)
+						: this.#affineInstance(conn, nearTargetId);
+					// Its extension may be reconnecting: another browser can be another profile, logged in elsewhere.
+					if (affine && !affine.socket) {
+						await this.#awaitReconnect(affine);
+						if (this.#conns.get(conn.id) !== conn) return;
+						// A browser restart can change the instance code during the wait.
+						if (required) affine = this.#instanceNamedByTarget(nearTargetId);
+					}
+					inst = required ? affine : this.#instanceForNewTab(affine);
 				}
-				const inst = near ? this.#instances.get(near.instanceId) : this.#instanceForNewTab(affine);
-				if (!inst || !inst.socket) {
-					this.#replyError(conn, msg, "relay extension is not connected");
+				if (!inst?.socket) {
+					this.#replyError(
+						conn,
+						msg,
+						required
+							? "relay instance for the required nearby target is unavailable"
+							: "relay extension is not connected",
+					);
 					return;
 				}
 				// CDP `background: true` creates the tab without selecting it; an extension that predates `active` ignores it.

@@ -96,6 +96,8 @@ async function probeAttempt<TApi extends Api>(
 	try {
 		const result = await run(candidate, context, {
 			apiKey: options.apiKey,
+			// Authentication provenance also inhibits raw debug on the probe's wrapped fetch.
+			requestAuth: options.requestAuth,
 			credentialId: options.credentialId,
 			oauthIdentity: options.oauthIdentity,
 			headers: options.headers,

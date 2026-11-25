@@ -7,6 +7,9 @@ describe("Team bundled guide delivery", () => {
 	it("resolves omp://team.md to substantive guide content", async () => {
 		const router = InternalUrlRouter.instance();
 		const guide = await router.resolve("omp://team.md");
-		expect(guide.content.trim().length).toBeGreaterThan(100);
+		expect(guide).toMatchObject({
+			contentType: "text/markdown",
+			content: expect.stringContaining("/team configure"),
+		});
 	});
 });

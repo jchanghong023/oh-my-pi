@@ -8,7 +8,7 @@
 - Plan approval, ACP sessions, and ordinary Goal use upstream behavior again. Fork-specific unattended orchestration remains available through `/goal-autopilot`.
 - `/goal-autopilot` handles local approval prompts without waiting, lets native forms time out after 60 seconds, and asks the model to verify deliverables before closing the goal.
 - Removed Plan-specific verification blocks and `spec_verify`; specification executors delegate approved checks through native tasks.
-- RPC slash-command discovery follows upstream; ACP still hides commands that its builtins would intercept.
+- RPC and ACP command inventories omit names their builtin dispatcher would intercept.
 - Compact mode shows the original tool diffs in completion order instead of merging writes. The preview and `Ctrl+O` controls are unchanged.
 - AST Edit is available in intranet mode; missing language grammars no longer fall back to a public download.
 - `/collab2` defaults to `10.239.93.104:9333` when `OMP_OFFLINE` is set; `OMP_COLLAB2_IP` still overrides the default.
@@ -31,6 +31,13 @@
 
 ### Fixed
 
+- CLI and ACP deliver `/team` reports without submitting attached input as a second prompt or holding up RPC input; Team checks read scopes, dispatches only selected models, and applies the parent session's cost limit.
+- TodoLoop keeps work in its originating directory, respects Esc while `/loop` is enabled, and shows complete task text in `--check`.
+- Goal Autopilot only applies its approval policy to requests bound to the submitted goal and still requires completion review after an authorized resume.
+- AST edits remember approval only for unambiguous local targets; restricted directories still require per-call confirmation.
+- Sketch confirms only after adding the PNG to the draft and accepts cancellation before attachment. Crawl keeps the entry browser profile and shares a single time limit per page without exceeding the tab limit.
+- Fork updates replace only standalone binaries and report the installed version. `update --check` does not run the target executable, and `update --stable` can switch channels without downgrading a newer local binary.
+- Project moves load the destination's plugins, and sessions from previously removed worktrees remain available to resume.
 - A broadcast from the main agent that arrives while a subagent is finishing no longer replaces that subagent's report; the subagent answers it in a separate turn, and the broadcast still interrupts a waiting subagent.
 - On Linux, `time -l` and `time -v` in the bash tool report the program's own maximum resident set size instead of at least omp's.
 

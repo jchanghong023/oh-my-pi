@@ -535,7 +535,11 @@ function isClientToolUse(content: AssistantMessage["content"][number]): content 
 	return content.type === "toolCall" && !isCursorExecResolved(content);
 }
 
-function mapStopReasonOut(reason: StopReason, hasToolUse: boolean): "end_turn" | "max_tokens" | "tool_use" {
+function mapStopReasonOut(
+	reason: StopReason,
+	message: AssistantMessage,
+): "end_turn" | "max_tokens" | "tool_use" | "model_context_window_exceeded" {
+	if (message.stopDetails?.type === "model_context_window_exceeded") return "model_context_window_exceeded";
 	switch (reason) {
 		case "length":
 			return "max_tokens";
@@ -548,7 +552,7 @@ function mapStopReasonOut(reason: StopReason, hasToolUse: boolean): "end_turn" |
 			// `tool_use`, or the canonical Anthropic loop (run tools while
 			// `stop_reason === "tool_use"`) never runs the tool it asked for.
 			// The OpenAI chat wire maps the same case to `tool_calls`.
-			return hasToolUse ? "tool_use" : "end_turn";
+			return message.content.some(isClientToolUse) ? "tool_use" : "end_turn";
 	}
 }
 
@@ -651,7 +655,7 @@ export function encodeResponse(message: AssistantMessage, requestedModelId: stri
 		role: "assistant",
 		model: requestedModelId,
 		content: encodeContentBlocks(message),
-		stop_reason: mapStopReasonOut(message.stopReason, message.content.some(isClientToolUse)),
+		stop_reason: mapStopReasonOut(message.stopReason, message),
 		// TODO: surface the matched stop sequence once pi-ai's
 		// `AssistantMessage.stopReason` carries the matched string. Intentionally
 		// `null` for now (Anthropic schema allows it).
@@ -968,7 +972,7 @@ export function encodeStream(
 										// streamed; the client still must not be told to
 										// run it, so it does not terminate the turn with
 										// `tool_use` either.
-										stop_reason: mapStopReasonOut(ev.reason, ev.message.content.some(isClientToolUse)),
+										stop_reason: mapStopReasonOut(ev.reason, ev.message),
 										stop_sequence: null,
 									},
 									...(bindingControlsRequested

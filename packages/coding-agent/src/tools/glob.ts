@@ -27,6 +27,7 @@ import {
 	searchPathTier,
 } from "./path-utils";
 import { searchApprovalCacheTargets } from "./search-approval-targets";
+import { createTeamSearchTargetCheck } from "./team-read-isolation";
 import { toPathList } from "../utils/render-utils";
 import { ToolAbortError, throwIfAborted } from "./tool-errors";
 import { ToolError } from "./tool-errors";
@@ -265,15 +266,15 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const internalRouter = InternalUrlRouter.instance();
 			// Internal URLs resolve inside the native walk, bounded by the tier this call was approved at.
-			const urlFilesystem = new InternalUrlFilesystem({
-				context: sessionResolveContext(this.session, { signal, containSkillPaths: true }),
-				tier: resolveToolTier(this, params),
-			});
+			const context = sessionResolveContext(this.session, { signal, containSkillPaths: true });
+			const urlFilesystem = new InternalUrlFilesystem({ context, tier: resolveToolTier(this, params) });
+			const assertTarget = await createTeamSearchTargetCheck(this.session, context);
 			const rawPatternInputs = this.#customOps
 				? effectivePaths
 				: await expandDelimitedPathEntries(effectivePaths, this.session.cwd, {
 						splitter: parseFindPattern,
 						mixedLocalPaths: urlFilesystem,
+						assertTarget,
 					});
 			const rawPatterns = rawPatternInputs.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
 			const aliasResolvedPatterns = this.#rootPathAlias
@@ -299,6 +300,7 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 					this.session.cwd,
 					parseFindPattern,
 					urlFilesystem,
+					assertTarget,
 				);
 				if (partition.valid.length === 0) {
 					throw new ToolError(
@@ -335,6 +337,7 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 				if (target.searchPath === "/") {
 					throw new ToolError("Searching from root directory '/' is not allowed");
 				}
+				if (normalizedPatterns.length === 1 || this.#customOps) await assertTarget?.(target.searchPath);
 			}
 
 			const effectiveLimit = limit ?? DEFAULT_LIMIT;

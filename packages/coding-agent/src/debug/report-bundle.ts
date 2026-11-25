@@ -259,8 +259,9 @@ async function collectSameDayLogs(
 ): Promise<{ tails: string; sessionLines: string }> {
 	logger.flush();
 	// Resolve after flushing: the buffered write may have selected a fallback.
-	const dirs =
-		logsDir === undefined ? [...new Set([logger.getConfiguredLogsDir(), logger.getCurrentLogsDir()])] : [logsDir];
+	const configuredDir = logsDir ?? logger.getConfiguredLogsDir();
+	const activePath = logsDir === undefined ? logger.currentLogFile() : undefined;
+	const dirs = activePath ? [...new Set([configuredDir, path.dirname(activePath)])] : [configuredDir];
 	// Log files are named with the local day (see localDay / RotatingFileSink),
 	// so match them with the local day too — the UTC key misses the live log
 	// between local midnight and UTC midnight.

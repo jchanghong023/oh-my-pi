@@ -1322,11 +1322,12 @@ export interface AgentTool<
 	bindApprovalTargets?: (args: unknown) => void;
 
 	/**
-	 * Query paths a call reads beyond its working directory, matched against restricted folders when
-	 * it reports no `approvalCacheTargets`. Never capture bindings here: this also runs before preflight.
-	 * Unlike cache targets these paths never key a remembered grant.
+	 * Query paths a call touches beyond its working directory, matched against restricted folders
+	 * when it reports no `approvalCacheTargets`. Return `null` if the complete scope is unknown
+	 * until execution and the call must not reuse approval. `undefined` keeps the cwd fallback.
+	 * These paths never key a grant. Never capture bindings here: this also runs before preflight.
 	 */
-	approvalRestrictionPaths?: (args: unknown) => readonly string[] | undefined;
+	approvalRestrictionPaths?: (args: unknown) => readonly string[] | null | undefined;
 
 	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;

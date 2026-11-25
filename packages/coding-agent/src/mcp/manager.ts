@@ -43,10 +43,8 @@ import { setGeneratedHeader } from "./host/header-policy";
 import {
 	hasMcpAuthorizationHeader,
 	lookupMcpOAuthCredential,
-	type MCPOAuthCredentialLookup,
 	refreshStoredManagedMcpOAuthCredential,
 } from "./oauth-credentials";
-import type { MCPStoredOAuthCredential } from "./oauth-flow";
 import type { McpConnectionStatusEvent } from "./startup-events";
 import { resolveMCPStartupTimeoutMs } from "./timeout";
 
@@ -2242,13 +2240,13 @@ export class MCPManager implements MCPManagerApi {
 		}
 
 		const auth = config.auth;
-		const lookup: MCPOAuthCredentialLookup | undefined =
-			opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
+		const lookup = opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
+		const requiresAuthorizationCode = opts?.oauth !== false && config.oauth?.type === "authorization_code";
 		if (
-			opts?.oauth !== false &&
-			config.oauth?.type === "authorization_code" &&
+			requiresAuthorizationCode &&
 			!lookup &&
-			!hasMcpAuthorizationHeader(config)
+			!hasMcpAuthorizationHeader(config) &&
+			!((config.type === "stdio" || config.type === undefined) && config.env?.OAUTH_ACCESS_TOKEN !== undefined)
 		) {
 			throw new Error("MCP authorization code grant requires an authenticated credential in this profile");
 		}
@@ -2256,7 +2254,6 @@ export class MCPManager implements MCPManagerApi {
 		if (lookup && authStorage) {
 			const { credentialId } = lookup;
 			try {
-				let credential: MCPStoredOAuthCredential | undefined = lookup.credential;
 				// Stop waiting on abort; a refresh already running finishes so a rotated token is stored, not lost.
 				const refreshResult = await untilAborted(signal, () =>
 					refreshStoredManagedMcpOAuthCredential(authStorage, credentialId, {
@@ -2275,9 +2272,9 @@ export class MCPManager implements MCPManagerApi {
 				if (refreshResult.removed) {
 					logger.warn("MCP OAuth refresh failed definitively; cleared credential", { credentialId });
 				}
-				credential = refreshResult.credential;
+				const { credential } = refreshResult;
 
-				if (credential) {
+				if (credential?.access.trim()) {
 					if (resolved.type === "http" || resolved.type === "sse") {
 						// Client-generated authorization wins over any configured header
 						// with the same case-insensitive name (Agent Plugins §7.2.1).
@@ -2333,6 +2330,22 @@ export class MCPManager implements MCPManagerApi {
 				}
 				resolved = { ...resolved, headers: nextHeaders };
 			}
+		}
+
+		if (requiresAuthorizationCode) {
+			if (resolved.type === "http" || resolved.type === "sse") {
+				const { headers } = resolved;
+				if (headers) {
+					for (const name in headers) {
+						if (name.toLowerCase() !== "authorization") continue;
+						const value = headers[name]?.trim();
+						if (value && !/^bearer$/i.test(value)) return resolved;
+					}
+				}
+			} else if (resolved.env?.OAUTH_ACCESS_TOKEN?.trim()) {
+				return resolved;
+			}
+			throw new Error("MCP authorization code grant requires an authenticated credential in this profile");
 		}
 
 		return resolved;

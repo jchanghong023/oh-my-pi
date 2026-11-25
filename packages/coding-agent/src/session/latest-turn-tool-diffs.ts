@@ -6,6 +6,7 @@ import { toolOutputSource } from "./live-tool-output-text";
 
 export interface TurnToolDiff {
 	readonly toolCallId: string;
+	/** Result path, which is the destination for a rename. */
 	readonly path: string;
 	readonly diff: string;
 	readonly firstChangedLine?: number;
@@ -58,27 +59,34 @@ export class LatestTurnToolDiffs {
 		const args = toolName === "bash" ? this.#bashArgs.get(toolCallId) : undefined;
 		if (toolName === "bash") this.#bashArgs.delete(toolCallId);
 		const result: ToolResult<unknown> | undefined = event.result;
-		if (event.isError || event.cancelled || result?.isError) return;
+		if (event.cancelled) return;
 		const { name, details, dispatch, shellDetails } = toolOutputSource(toolName, result, args);
-		if (!details || details.isError === true || details.cancelled === true) return;
+		if (!details || details.cancelled === true || (name === "write" && details.touchesNoFiles === true)) return;
 		if (
-			shellDetails &&
-			(dispatch?.exitCode !== 0 ||
-				shellDetails.cancelled ||
-				shellDetails.timedOut ||
-				(shellDetails.exitCode !== undefined && shellDetails.exitCode !== 0) ||
-				(shellDetails.async && shellDetails.async.state !== "completed"))
+			shellDetails?.cancelled ||
+			shellDetails?.timedOut ||
+			(shellDetails?.async && shellDetails.async.state !== "completed")
+		) {
+			return;
+		}
+
+		// Conflict writes report committed files separately from the call's failure.
+		if (name === "write" && Array.isArray(details.conflictChanges)) {
+			for (const file of details.conflictChanges) this.#append(toolCallId, file);
+			return;
+		}
+		if (
+			event.isError ||
+			result?.isError ||
+			details.isError === true ||
+			(shellDetails &&
+				(dispatch?.exitCode !== 0 || (shellDetails.exitCode !== undefined && shellDetails.exitCode !== 0)))
 		) {
 			return;
 		}
 
 		if (name === "write") {
-			if (details.touchesNoFiles === true) return;
-			if (Array.isArray(details.conflictChanges)) {
-				for (const file of details.conflictChanges) this.#append(toolCallId, file);
-			} else {
-				this.#append(toolCallId, details, details.resolvedPath);
-			}
+			this.#append(toolCallId, details, details.resolvedPath);
 		} else if (name === "edit" || name === "apply_patch") {
 			if (Array.isArray(details.perFileResults)) {
 				for (const file of details.perFileResults) this.#append(toolCallId, file);

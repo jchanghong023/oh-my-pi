@@ -1,40 +1,20 @@
-/** Decode HTML entities exactly as the terminal Markdown renderer displays them. */
-export function normalizeHtmlEntitiesForTerminal(raw: string): string {
-	const parseCodePoint = (value: number): string => {
-		if (Number.isFinite(value) && value >= 0 && value <= 0x10ffff) {
-			try {
-				return String.fromCodePoint(value);
-			} catch {
-				// Fallback to empty string or original if invalid codepoint
-			}
-		}
-		return "";
-	};
+const ENTITY: Readonly<Record<string, string>> = {
+	amp: "&",
+	lt: "<",
+	gt: ">",
+	quot: '"',
+	apos: "'",
+	nbsp: " ",
+};
 
-	return raw.replace(/&(amp|lt|gt|quot|apos|nbsp|#\d+|#x[0-9a-fA-F]+);/gi, (match, entity) => {
-		const lower = entity.toLowerCase();
-		switch (lower) {
-			case "nbsp":
-				return " ";
-			case "lt":
-				return "<";
-			case "gt":
-				return ">";
-			case "quot":
-				return '"';
-			case "apos":
-				return "'";
-			case "amp":
-				return "&";
-			default: {
-				if (lower.startsWith("#x")) {
-					return parseCodePoint(Number.parseInt(lower.slice(2), 16));
-				}
-				if (lower.startsWith("#")) {
-					return parseCodePoint(Number(lower.slice(1)));
-				}
-				return match;
-			}
+/** Decode HTML character references as drawn by the terminal Markdown renderer. */
+export function decodeEntities(text: string): string {
+	if (!text.includes("&")) return text;
+	return text.replace(/&(#\d+|#x[\da-f]+|[a-z]+);/gi, (whole, body: string) => {
+		if (body[0] === "#") {
+			const code = body[1] === "x" || body[1] === "X" ? Number.parseInt(body.slice(2), 16) : Number(body.slice(1));
+			return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
 		}
+		return ENTITY[body.toLowerCase()] ?? whole;
 	});
 }

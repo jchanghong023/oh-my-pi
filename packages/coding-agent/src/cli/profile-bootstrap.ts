@@ -33,7 +33,7 @@
  * them also activates (`omp --print --profile work`).
  */
 
-import { isSubcommand, PROFILE_FLAG_COMMANDS } from "../cli-commands";
+import { isResourceCommand, isSubcommand, LAUNCH_FLAG_COMMANDS, leadingSubcommandIndex } from "../cli-commands";
 import {
 	EXTENSION_SHADOWABLE_STRING_FLAGS,
 	isUnknownLongValueCandidate,
@@ -43,13 +43,30 @@ import {
 	STRING_VALUE_FLAGS,
 } from "./flag-tables";
 
-function needsBoundaryAfterGlobalStrip(stripped: readonly string[]): boolean {
+const OPENWIKI_VALUE_FLAGS = new Set([
+	"--language",
+	"-l",
+	"--mode",
+	"--modelId",
+	"--model-id",
+	"--planner-model",
+	"--telemetry-file",
+	"--port",
+	"--export",
+]);
+
+function preserveBoundaryAfterGlobalStrip(stripped: string[], openWikiArgv: boolean): boolean {
 	const previous = stripped[stripped.length - 1];
+	if (previous === undefined) return false;
+	if (openWikiArgv) {
+		// OpenWiki rejects flags in value positions, even after its host strips --debug or --dry-run.
+		if (OPENWIKI_VALUE_FLAGS.has(previous)) stripped.push(PROFILE_BOOTSTRAP_BOUNDARY_ARG);
+		return false;
+	}
 	return (
-		previous !== undefined &&
-		(OPTIONAL_VALUE_FLAGS.has(previous) ||
-			EXTENSION_SHADOWABLE_STRING_FLAGS.has(previous) ||
-			isUnknownLongValueCandidate(previous))
+		OPTIONAL_VALUE_FLAGS.has(previous) ||
+		EXTENSION_SHADOWABLE_STRING_FLAGS.has(previous) ||
+		isUnknownLongValueCandidate(previous)
 	);
 }
 
@@ -64,12 +81,10 @@ export interface ProfileBootstrapResult {
  * argument structure, returning the residual argv to hand to the launch parser
  * and the captured flag values.
  *
- * Global flag extraction stops only when the first residual argv token names a
- * command that owns its own flags (e.g. `grep` or `superpowers`): everything from
- * that token onward is forwarded verbatim so a subcommand's own flags and
- * positionals are never stolen (`omp grep --profile <path>` greps for
- * `--profile`; it does not select a profile). `launch`, `acp`, `dev`, and `openwiki`
- * accept profile selection after their command token, before their modules load.
+ * The first residual command owns its arguments unless it accepts profile globals.
+ * Resources also own their arguments after a leading cwd; in launch syntax those
+ * same words are prompts and do not end profile extraction. OpenWiki accepts
+ * profile globals alongside its options; only its value flags need a boundary.
  *
  * Throws when either flag is supplied without a value.
  */
@@ -77,8 +92,10 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 	const stripped: string[] = [];
 	let profile: string | undefined;
 	let aliasName: string | undefined;
+	const subcommandIndex = leadingSubcommandIndex(argv);
 	let passThrough = false;
 	let sawSubcommand = false;
+	let openWikiArgv = false;
 	let canDispatchSubcommand = true;
 	let insertBoundaryBeforeNextValue = false;
 	for (let index = 0; index < argv.length; index += 1) {
@@ -96,6 +113,15 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 			insertBoundaryBeforeNextValue = false;
 		}
 
+		if (index === subcommandIndex) {
+			openWikiArgv = arg === "openwiki";
+			if (openWikiArgv || isResourceCommand(arg)) {
+				sawSubcommand = !openWikiArgv;
+				stripped.push(arg);
+				continue;
+			}
+		}
+
 		// `--` ends option processing. Anything that follows is forwarded verbatim
 		// so users can pass arbitrary tokens (including a literal `--profile`) to
 		// downstream tools without the bootstrap stealing them.
@@ -111,7 +137,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				throw new Error(`${arg} requires a profile name`);
 			}
 			profile = value;
-			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
+			insertBoundaryBeforeNextValue = preserveBoundaryAfterGlobalStrip(stripped, openWikiArgv);
 			index += 1;
 			continue;
 		}
@@ -121,7 +147,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				throw new Error("--profile requires a profile name");
 			}
 			profile = value;
-			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
+			insertBoundaryBeforeNextValue = preserveBoundaryAfterGlobalStrip(stripped, openWikiArgv);
 			continue;
 		}
 		if (arg === "--alias") {
@@ -130,7 +156,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				throw new Error("--alias requires a command name");
 			}
 			aliasName = value;
-			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
+			insertBoundaryBeforeNextValue = preserveBoundaryAfterGlobalStrip(stripped, openWikiArgv);
 			index += 1;
 			continue;
 		}
@@ -140,7 +166,14 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 				throw new Error("--alias requires a command name");
 			}
 			aliasName = value;
-			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
+			insertBoundaryBeforeNextValue = preserveBoundaryAfterGlobalStrip(stripped, openWikiArgv);
+			continue;
+		}
+
+		// OpenWiki's own value-taking options reject flag-looking values, so
+		// none can consume a profile or alias flag. Leave the rest to OpenWiki.
+		if (openWikiArgv) {
+			stripped.push(arg);
 			continue;
 		}
 
@@ -206,22 +239,16 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 			canDispatchSubcommand = false;
 			stripped.push(arg);
 			const next = argv[index + 1];
-			if (next !== undefined && !next.startsWith("-")) {
+			if (next !== undefined && !next.startsWith("-") && index + 1 !== subcommandIndex) {
 				stripped.push(next);
 				index += 1;
 			}
 			continue;
 		}
 
-		// Only the first residual argv token can be the dispatched subcommand. Once
-		// any other token has been forwarded, later subcommand names are launch text.
-		// Profile-aware commands use this same bootstrap before loading their modules;
-		// accepting profile flags does not imply accepting the launch flag surface.
-		// `cli.ts` dispatches `superpowers` directly, outside the command table.
-		if (
-			canDispatchSubcommand &&
-			(arg === "superpowers" || (isSubcommand(arg) && PROFILE_FLAG_COMMANDS[arg] !== true))
-		) {
+		// Keep the existing profile boundary for other commands only when the
+		// name is the first residual token.
+		if (canDispatchSubcommand && isSubcommand(arg) && LAUNCH_FLAG_COMMANDS[arg] !== true) {
 			sawSubcommand = true;
 		}
 		canDispatchSubcommand = false;

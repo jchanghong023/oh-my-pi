@@ -22,10 +22,11 @@ function extractMavenConfig(projectDir) {
       const mavenProperties = extractMavenProperties(content);
       const vmOptions = extractVmOptions(content);
 
-      // 将 vmOptions 合并到 mavenProperties 中
-      const allProperties = [mavenProperties, vmOptions].filter(p => p).join(' ');
-      if (allProperties) {
-        config.mavenProperties = allProperties;
+      if (mavenProperties) {
+        config.mavenProperties = mavenProperties;
+      }
+      if (vmOptions) {
+        config.vmOptions = vmOptions;
       }
     } catch (e) {
       // 提取失败，输出空 JSON
@@ -80,12 +81,14 @@ function extractVmOptions(content) {
 }
 
 function findProjectDir(startDir) {
-  let currentDir = startDir;
-  while (currentDir !== path.parse(currentDir).root) {
+  let currentDir = path.resolve(startDir);
+  while (true) {
     if (fs.existsSync(path.join(currentDir, 'pom.xml'))) {
       return currentDir;
     }
-    currentDir = path.dirname(currentDir);
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) break;
+    currentDir = parentDir;
   }
   return null;
 }

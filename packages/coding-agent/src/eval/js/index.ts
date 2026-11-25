@@ -53,6 +53,7 @@ export default {
 			onStatus: opts.onStatus,
 			onReply: opts.onReply,
 			parentToolCallId: opts.parentToolCallId,
+			toolContext: opts.toolContext,
 			session: opts.session,
 			localRoots: resolveEvalUrlRoots(opts.session),
 		});

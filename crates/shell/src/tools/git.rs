@@ -132,16 +132,28 @@ fn finished(prepared: Prepared) -> flume::Receiver<Prepared> {
 fn prepare(call: &ToolCall, config: &ToolConfig, waker: Waker) -> flume::Receiver<Prepared> {
 	let env = &call.env;
 	let layers = GitLayers::from_env(|name| env.get(name.as_bytes()).and_then(|v| v.to_str().ok()));
-	if !layers.any() {
-		return finished(Prepared {
+	let plain = || {
+		finished(Prepared {
 			out:  Vec::new(),
 			next: Next::Git { args: call.argv[1..].to_vec(), to_stderr: false },
-		});
+		})
+	};
+	if !layers.any() {
+		return plain();
 	}
-	let args: Vec<String> = call.argv[1..]
-		.iter()
-		.map(|a| a.to_str_lossy().into_owned())
-		.collect();
+	let mut args = Vec::with_capacity(call.argv.len() - 1);
+	for arg in &call.argv[1..] {
+		match arg.to_str() {
+			Ok(arg) => args.push(arg.to_owned()),
+			Err(_) if !layers.guard => return plain(),
+			Err(_) => {
+				return finished(Prepared {
+					out:  vec![(2, b"git: the active Git layers require UTF-8 arguments\n".to_vec())],
+					next: Next::Exit(i32::from(REFUSED_EXIT)),
+				});
+			},
+		}
+	}
 	let cwd = call.cwd.to_path_lossy().into_owned();
 	let env = call.env.clone();
 	let config = config.clone();
@@ -220,15 +232,15 @@ fn args_of(args: &[String]) -> Vec<BString> {
 /// it never resolves to the tool again).
 fn git_path(call: &ToolCall) -> Option<BString> {
 	let path = call.env.get(b"PATH")?;
-	let cwd = call.cwd.to_path_lossy();
-	let rules = if cfg!(windows) {
+	if cfg!(windows) {
+		let cwd = call.cwd.to_path_lossy();
 		let pathext = call.env.get(b"PATHEXT").map(|v| v.to_os_str_lossy());
-		PathRules::Windows(Pathext::parse(pathext.as_deref()))
+		let git = find_git(path, &cwd, &PathRules::Windows(Pathext::parse(pathext.as_deref())))?;
+		Some(BString::from(git.to_string_lossy().as_bytes()))
 	} else {
-		PathRules::Unix
-	};
-	let git = find_git(path, &cwd, &rules)?;
-	Some(BString::from(git.to_string_lossy().as_bytes()))
+		let git = find_git(path, call.cwd.to_path().ok()?, &PathRules::Unix)?;
+		Some(BString::from(git.into_os_string().into_encoded_bytes()))
+	}
 }
 
 /// How a `PATH` value names executables.
@@ -247,12 +259,12 @@ fn find_git(path: &[u8], cwd: &Path, rules: &PathRules) -> Option<PathBuf> {
 		PathRules::Unix => ":",
 		PathRules::Windows(_) => ";",
 	};
-	path.split_str(separator).find_map(|dir| {
-		let git = cwd.join(dir.to_path_lossy()).join("git");
-		match rules {
-			PathRules::Unix => executable(&git).then_some(git),
-			PathRules::Windows(pathext) => pathext.resolve(git),
-		}
+	path.split_str(separator).find_map(|dir| match rules {
+		PathRules::Unix => {
+			let git = cwd.join(dir.to_path().ok()?).join("git");
+			executable(&git).then_some(git)
+		},
+		PathRules::Windows(pathext) => pathext.resolve(cwd.join(dir.to_path_lossy()).join("git")),
 	})
 }
 

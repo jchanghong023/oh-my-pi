@@ -6,8 +6,8 @@ import { encodeRawPng } from "../src/utils/png-encode";
 const PNG = encodeRawPng(Uint8Array.of(255, 0, 0, 255, 0, 0, 255, 255), 2, 1, 4);
 const servers: SketchServer[] = [];
 
-function start(): SketchServer {
-	const server = startSketchServer();
+function start(deliver: Parameters<typeof startSketchServer>[0] = async () => "attached"): SketchServer {
+	const server = startSketchServer(deliver);
 	servers.push(server);
 	return server;
 }
@@ -26,7 +26,10 @@ afterEach(() => {
 
 describe("native sketch server", () => {
 	it("listens immediately and delivers the exact PNG without losing its HTTP acknowledgement", async () => {
-		const server = start();
+		const server = start(async png => {
+			expect(png).toEqual(PNG);
+			return "attached";
+		});
 		const url = new URL(server.url);
 		expect(url.protocol).toBe("http:");
 		expect(url.hostname).toBe("127.0.0.1");

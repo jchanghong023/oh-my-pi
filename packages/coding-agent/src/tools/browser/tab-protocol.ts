@@ -67,13 +67,14 @@ export interface SessionSnapshot {
 
 /**
  * The page an attach worker drives. `create`: open and own a background tab in a
- * spawned browser, relay or CDP endpoint; `nearTargetId` selects the relay browser when given,
- * and `reload` loads a URL once the page is set up (a recycle re-creating a page that closed with
- * its old worker's connection). `owned`: an omp tab adopted after recycle. `borrowed`: a user's
- * page, never closed, and focus-emulated only in a browser the user drives (see `userDriven`).
+ * spawned browser, relay or CDP endpoint; `nearTargetId` selects the relay browser when given.
+ * `requireNearTarget` forbids falling back to another browser if that instance is unavailable.
+ * `reload` loads a URL once the page is set up (a recycle re-creating a page that closed with its
+ * old worker's connection). `owned`: an omp tab adopted after recycle. `borrowed`: a user's page,
+ * never closed, and focus-emulated only in a browser the user drives (see `userDriven`).
  */
 export type AttachPage =
-	| { kind: "create"; nearTargetId?: string; reload?: { url: string; timeoutMs: number } }
+	| { kind: "create"; nearTargetId?: string; requireNearTarget?: boolean; reload?: { url: string; timeoutMs: number } }
 	| { kind: "owned" | "borrowed"; targetId: string };
 
 /** omp created the payload's page: closing the tab closes the page. */
@@ -251,9 +252,8 @@ export type WorkerOutbound =
 	  }
 	| {
 			/**
-			 * The headless page was created (before the potentially slow post-creation CDP work such as stealth and
-			 * viewport). Lets the supervisor close exactly this target if it kills the worker during init — a killed
-			 * worker can't clean up after itself.
+			 * An owned page was created, before any further CDP work. Lets the supervisor close exactly
+			 * this target if initialization fails or the worker is killed before it can clean up.
 			 */
 			type: "page-created";
 			targetId: string;

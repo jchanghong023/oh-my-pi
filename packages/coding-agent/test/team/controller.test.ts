@@ -51,7 +51,11 @@ interface JobManagerStub {
 	registerError?: Error;
 }
 
-function stubSession(jobManager: JobManagerStub, sentMessages: { customType: string; content: string }[]) {
+function stubSession(
+	jobManager: JobManagerStub,
+	sentMessages: { customType: string; content: string }[],
+	getSessionId = () => "session-A",
+) {
 	const sessionChangeCallbacks = new Set<() => void>();
 	return {
 		model: MODEL,
@@ -82,7 +86,7 @@ function stubSession(jobManager: JobManagerStub, sentMessages: { customType: str
 		appendCustomMessage: async (payload: { customType: string; content: string }) => {
 			sentMessages.push({ customType: payload.customType, content: payload.content });
 		},
-		sessionManager: { getAdditionalDirectories: () => [], getArtifactsDir: () => null },
+		sessionManager: { getSessionId, getAdditionalDirectories: () => [], getArtifactsDir: () => null },
 		sessionFile: undefined,
 		skills: [],
 		promptTemplates: [],
@@ -291,7 +295,6 @@ describe("team controller dispatch", () => {
 			appendCustomMessage: async (payload: { customType: string }) => {
 				if (payload.customType === "team-result") await append();
 			},
-			sessionManager: { getAdditionalDirectories: () => [], getArtifactsDir: () => null },
 		} as unknown as AgentSession;
 		try {
 			const dispatched = await startTeamDiscussion("分析 X", {
@@ -411,7 +414,7 @@ describe("team controller dispatch", () => {
 			});
 			const writes: string[] = [];
 			const session = {
-				...stubSession({ registerCalls: 0, acknowledged: [] }, []),
+				...stubSession({ registerCalls: 0, acknowledged: [] }, [], () => sessionId),
 				eventBus,
 				subagentEventBus,
 				get sessionId() {
@@ -501,7 +504,7 @@ describe("team controller dispatch", () => {
 			const acknowledge = vi.spyOn(manager, "acknowledgeDeliveries");
 			const writes: string[] = [];
 			const session = {
-				...stubSession({ registerCalls: 0, acknowledged: [] }, []),
+				...stubSession({ registerCalls: 0, acknowledged: [] }, [], () => sessionId),
 				get sessionId() {
 					return sessionId;
 				},
@@ -858,6 +861,7 @@ describe("team controller dispatch", () => {
 		const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
 		const session = stubSession(jobManager, []);
 		(session as unknown as { sessionManager: unknown }).sessionManager = {
+			getSessionId: () => "session-A",
 			getArtifactsDir: () => null,
 			getAdditionalDirectories: () => ["/granted/root"],
 		};
@@ -937,7 +941,7 @@ describe("team report delivery", () => {
 		});
 		controller.abort();
 		poll.resolve();
-		expect(await delivery).toBe(false);
+		expect(await delivery).toBe("cancelled");
 		expect(sent).toEqual([]);
 	});
 
@@ -963,7 +967,7 @@ describe("team report delivery", () => {
 				undefined,
 				{ timeoutMs: 20, pollMs: 5 },
 			),
-		).toBe(false);
+		).toBe("failed");
 		expect(sent).toEqual([]);
 	});
 
@@ -998,7 +1002,7 @@ describe("team report delivery", () => {
 		);
 		streaming = false;
 		poll.resolve();
-		expect(await delivery).toBe(true);
+		expect(await delivery).toBe("completed");
 		expect(sent).toEqual(["finished"]);
 		expect(rebuilt).toEqual([true]);
 	});
@@ -1029,7 +1033,7 @@ describe("team report delivery", () => {
 		await appending.promise;
 		expect(acknowledge).not.toHaveBeenCalled();
 		committed.resolve();
-		expect(await delivery).toBe(true);
+		expect(await delivery).toBe("completed");
 		expect(acknowledge).toHaveBeenCalledTimes(1);
 	});
 
@@ -1051,23 +1055,24 @@ describe("team report delivery", () => {
 					throw new Error("rebuild exploded");
 				},
 			),
-		).toBe(true);
+		).toBe("completed");
 	});
 
 	it("does not acknowledge cancellation while a durable append resolves", async () => {
 		const controller = new AbortController();
-		const appending = Promise.withResolvers<void>();
+		const appending = Promise.withResolvers<AbortSignal | undefined>();
 		const release = Promise.withResolvers<void>();
 		const acknowledge = vi.fn();
+		const persisted: Parameters<AgentSession["appendCustomMessage"]>[0][] = [];
 		const session = {
 			isStreaming: false,
 			appendCustomMessage: async (
-				_payload: Parameters<AgentSession["appendCustomMessage"]>[0],
+				payload: Parameters<AgentSession["appendCustomMessage"]>[0],
 				options?: { signal?: AbortSignal },
 			) => {
-				appending.resolve();
+				persisted.push(payload);
+				appending.resolve(options?.signal);
 				await release.promise;
-				expect(options?.signal?.aborted).toBe(true);
 			},
 		};
 		const delivery = deliverTeamReport(
@@ -1077,10 +1082,11 @@ describe("team report delivery", () => {
 			{ jobId: "job-1", question: "question" },
 			acknowledge,
 		);
-		await appending.promise;
+		expect(await appending.promise).toBe(controller.signal);
 		controller.abort();
 		release.resolve();
-		expect(await delivery).toBe(false);
+		expect(await delivery).toBe("cancelled");
+		expect(persisted).toEqual([expect.objectContaining({ customType: "team-result", content: "finished" })]);
 		expect(acknowledge).not.toHaveBeenCalled();
 	});
 

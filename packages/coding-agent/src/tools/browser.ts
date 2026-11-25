@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { getWebKitHostPath, isRecord, logger, untilAborted } from "@oh-my-pi/pi-utils";
+import { getWebKitHostPath, isRecord, logger, untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
 import type { EvalPreludeContext, HostEvalPreludeDefinition } from "../eval/preludes";
 import type { ToolSession } from "../sdk";
 import { enforceInlineByteCap } from "./streaming-output";
@@ -43,12 +43,14 @@ import {
 	listTabs,
 	releaseAllTabs,
 	releaseTabsForOwner,
+	releaseKnownTab,
 	releaseIdleTabsForOwner,
 	releaseTab,
 	runInTab,
 	setWebKitTabsShown,
 	type TabSession,
 	type TernTabSession,
+	type WorkerTabSession,
 	ternBlocksTaken,
 } from "./browser/tab-supervisor";
 import { renderTabCall, tabCallBudgetSeconds } from "./browser/tab-call";
@@ -167,6 +169,50 @@ interface BrowserPreludeDetails {
 	viewport?: { width: number; height: number; deviceScaleFactor?: number };
 	screenshots?: ScreenshotResult[];
 	value?: unknown;
+}
+
+/** Relay routing hint independent of the lifetime of the tab that supplied it. */
+export interface CrawlBrowserRoute {
+	readonly browserKey: string;
+	readonly targetId: string;
+}
+
+/** Cleanup authority for the exact owned relay page created by an approved crawl open. */
+export interface CrawlBrowserTab {
+	readonly name: string;
+	readonly route: CrawlBrowserRoute;
+	release(): Promise<void>;
+}
+
+export type CrawlBrowserOperation =
+	| { kind: "open"; route?: CrawlBrowserRoute; onOpen: (tab: CrawlBrowserTab) => void }
+	| { kind: "run"; tab: CrawlBrowserTab };
+
+const CRAWL_CLOSE_TIMEOUT_MS = 5_000;
+const crawlBrowserTabs = new WeakMap<CrawlBrowserTab, { tab: WorkerTabSession; session: ToolSession }>();
+
+function ownCrawlTab(session: ToolSession, tab: WorkerTabSession): CrawlBrowserTab {
+	const handle: CrawlBrowserTab = {
+		name: tab.name,
+		route: { browserKey: browserKey(tab.browser.kind), targetId: tab.targetId },
+		async release() {
+			await withTimeout(
+				releaseKnownTab(tab, { timeoutMs: CRAWL_CLOSE_TIMEOUT_MS, strict: true }),
+				CRAWL_CLOSE_TIMEOUT_MS,
+				`Timed out releasing crawl tab ${JSON.stringify(tab.name)}`,
+			);
+		},
+	};
+	crawlBrowserTabs.set(handle, { tab, session });
+	return handle;
+}
+
+function requireCrawlTab(session: ToolSession, handle: CrawlBrowserTab, name: string): WorkerTabSession {
+	const owned = crawlBrowserTabs.get(handle);
+	if (!owned || owned.session !== session || owned.tab.state !== "alive" || getTab(name) !== owned.tab) {
+		throw new ToolError("The crawl's owned relay tab is no longer available.");
+	}
+	return owned.tab;
 }
 
 /**
@@ -452,10 +498,20 @@ async function invokeBrowser(
 		const timeoutMs = timeoutSeconds * 1000;
 		const name = parsed.name ?? DEFAULT_TAB_NAME;
 		const details: BrowserPreludeDetails = { action: parsed.action, name };
+		const crawl = context.crawlBrowser;
+		if (crawl && crawl.kind !== parsed.action) throw new ToolError("Invalid operation for an owned crawl tab.");
 
 		switch (parsed.action) {
 			case "open":
-				return await openBrowser(session, name, parsed, details, timeoutMs, context.signal);
+				return await openBrowser(
+					session,
+					name,
+					parsed,
+					details,
+					timeoutMs,
+					context.signal,
+					crawl?.kind === "open" ? crawl : undefined,
+				);
 			case "close":
 				return await closeBrowser(session, name, parsed, details, timeoutMs, context.signal);
 			case "tabs":
@@ -464,8 +520,10 @@ async function invokeBrowser(
 			case "targets":
 				return await listTargets(session, parsed, details, timeoutMs, context.signal);
 			case "run":
-			case "call":
-				return await runBrowser(session, name, parsed, details, timeoutMs, context.signal);
+			case "call": {
+				const expectedTab = crawl?.kind === "run" ? requireCrawlTab(session, crawl.tab, name) : undefined;
+				return await runBrowser(session, name, parsed, details, timeoutMs, context.signal, expectedTab);
+			}
 		}
 	} catch (error) {
 		if (error instanceof ToolAbortError) throw error;
@@ -534,6 +592,7 @@ async function openBrowser(
 	details: BrowserPreludeDetails,
 	timeoutMs: number,
 	signal?: AbortSignal,
+	crawl?: Extract<CrawlBrowserOperation, { kind: "open" }>,
 ): Promise<AgentToolResult<unknown>> {
 	const webkitDownloadFailure = await installWebKitForOpen(session, params, signal);
 	const resolved = resolveBrowserKind(params, session);
@@ -587,7 +646,7 @@ async function openBrowser(
 		);
 		const remainingMs = Math.max(1, timeoutMs - (performance.now() - startedAt));
 		try {
-			return await openOnKind(session, name, params, details, kind, remainingMs, notes, signal);
+			return await openOnKind(session, name, params, details, kind, remainingMs, notes, signal, crawl);
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			let next: BrowserKind;
@@ -692,12 +751,20 @@ async function openOnKind(
 	timeoutMs: number,
 	notes: readonly string[],
 	signal?: AbortSignal,
+	crawl?: Extract<CrawlBrowserOperation, { kind: "open" }>,
 ): Promise<AgentToolResult<unknown>> {
 	const downloadsPath = params.downloads === undefined ? undefined : resolveToCwd(params.downloads, session.cwd);
 	details.browser = kind.kind;
 
 	// If a tab with this name already exists on a different browser kind, fail fast — caller must close first.
 	const existing = getTab(name);
+	const route = crawl?.route;
+	if (crawl && (kind.kind !== "relay" || params.target !== undefined || existing)) {
+		throw new ToolError("A crawl must open a new owned relay tab.");
+	}
+	if (route && route.browserKey !== browserKey(kind)) {
+		throw new ToolError("The crawl's relay endpoint changed; refusing to open in another browser.");
+	}
 	if (existing && browserKey(existing.browser.kind) !== browserKey(kind)) {
 		throw new ToolError(
 			`Tab ${JSON.stringify(name)} is bound to a different browser (${describeKind(existing.browser.kind)}, not ${describeKind(kind)}). Close it first, or reopen it with the app and headed it was opened with.`,
@@ -781,13 +848,15 @@ async function openOnKind(
 				await untilAborted(openSignal, () => releaseTab(name, { kill: false, timeoutMs }));
 				stage = `opening tab ${JSON.stringify(name)}`;
 			}
-			result = await untilAborted(openSignal, () =>
-				acquireTab(name, browser, {
+			result = await untilAborted(openSignal, () => {
+				const acquisition = acquireTab(name, browser, {
 					url: params.url,
 					// Playwright's `networkidle` (no connections for 500 ms) is Puppeteer's `networkidle0`.
 					waitUntil: params.wait_until === "networkidle" ? "networkidle0" : params.wait_until,
 					viewport: params.viewport ? puppeteerViewport(params.viewport) : undefined,
 					target: params.target,
+					createOnly: crawl !== undefined,
+					nearTargetId: route?.targetId,
 					timeoutMs,
 					deadlineStartMs: deadlineStart,
 					dialogs: params.dialogs,
@@ -802,8 +871,23 @@ async function openOnKind(
 					// Omitted stays undefined: creation defaults it to false
 					// while reuse by the owner leaves a set value alone.
 					persist: params.persist,
-				}),
-			);
+				});
+				if (!crawl) return acquisition;
+				return acquisition.then(result => {
+					if (!result.created || result.tab.backend !== "worker" || !result.tab.ownsPage) {
+						throw new ToolError("Browser did not create an owned crawl tab.");
+					}
+					const owned = ownCrawlTab(session, result.tab);
+					// The caller can stop waiting just before the acquisition publishes the page.
+					// Release that page here if no crawl worker is left to take its cleanup handle.
+					if (openSignal.aborted) {
+						void owned.release().catch(error => logger.warn("Could not release an aborted crawl tab", { error }));
+					} else {
+						crawl.onOpen(owned);
+					}
+					return result;
+				});
+			});
 		} catch (error) {
 			await releaseBrowser(browser, {
 				kill: "subprocess" in browser && browser.subprocess !== undefined,
@@ -953,9 +1037,10 @@ async function runBrowser(
 	details: BrowserPreludeDetails,
 	timeoutMs: number,
 	signal?: AbortSignal,
+	expectedTab?: TabSession,
 ): Promise<AgentToolResult<unknown>> {
 	const code = resolveBrowserRunCode(params);
-	const tab = getTab(name);
+	const tab = expectedTab ?? getTab(name);
 	if (tab) {
 		details.browser = tab.browser.kind.kind;
 		details.url = tab.info.url;
@@ -966,6 +1051,7 @@ async function runBrowser(
 		timeoutMs,
 		signal,
 		session,
+		expectedTab,
 		waitsForDownload: params.action === "call" && params.chain?.[0]?.method === "waitForDownload",
 	});
 

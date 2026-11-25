@@ -1,5 +1,7 @@
+import { lstat } from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { writeFileAtomically } from "../utils/atomic-file";
 import instructions from "./agents-instructions.md" with { type: "text" };
 
 const START = "<!-- OPENWIKI:START -->";
@@ -7,10 +9,15 @@ const END = "<!-- OPENWIKI:END -->";
 
 /** Maintain only the OpenWiki-managed section of the repository's AGENTS.md. */
 export async function updateOpenWikiAgentInstructions(root: string): Promise<void> {
-	const file = Bun.file(path.join(root, "AGENTS.md"));
+	const file = path.join(root, "AGENTS.md");
+	let mode = 0o666 & ~process.umask();
+	let isLink = false;
 	let content: string;
 	try {
-		content = await file.text();
+		const stat = await lstat(file);
+		isLink = stat.isSymbolicLink();
+		mode = stat.mode & 0o777;
+		content = await Bun.file(file).text();
 	} catch (error) {
 		if (!isEnoent(error)) throw error;
 		content = "";
@@ -28,5 +35,7 @@ export async function updateOpenWikiAgentInstructions(root: string): Promise<voi
 		}
 		updated = content.slice(0, start) + instructions.trimEnd() + content.slice(end + END.length);
 	}
-	if (updated !== content) await Bun.write(file, updated);
+	if (updated === content) return;
+	if (isLink) throw new Error("Cannot update AGENTS.md: symbolic links are not supported.");
+	await writeFileAtomically(file, updated, mode);
 }

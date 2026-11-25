@@ -15,13 +15,18 @@
 > **Windows 路径处理（重要）**：`{SKILL_DIR}` 替换为 skill 加载时提供的 "Base directory" 路径。在 Windows 上该路径含反斜杠（如 `C:\Users\...\skills\fix-ut`）。**在 Bash 命令中必须将反斜杠替换为正斜杠**（如 `C:/Users/.../skills/fix-ut/scripts/java/extract-maven-config.js`），否则反斜杠被 Bash 转义导致 `Cannot find module` 错误。
 
 ```bash
-node "{SKILL_DIR}/scripts/java/extract-maven-config.js" <projectDir>
+node "{SKILL_DIR}/scripts/java/extract-maven-config.js" "{projectDir}"
 ```
 
-- **有配置时**：`mvn test -q -Dtest={ClassName} -s "{settingsPath}" {mavenProperties}`
-- **无配置时**：`mvn test -q -Dtest={ClassName}`
+- `settingsPath` 非空时传 `-s "{settingsPath}"`；`mavenProperties` 中每个 `-Dkey=value` 单独作为 Maven CLI 参数，含空格时给整个参数加引号。
+- `vmOptions` 非空时将原值存入 Bash 变量 `vmOptions`，通过命令级 `MAVEN_OPTS` 追加到已有 JVM 选项，不放入 Maven CLI。例如：
+  ```bash
+  MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }$vmOptions" mvn test -q -Dtest="{ClassName}" -s "{settingsPath}" {mavenProperties}
+  ```
+  三个字段独立可选：缺少哪个就省略对应设置。
+- **无配置时**：`mvn test -q -Dtest="{ClassName}"`
 
-脚本无输出时从目标项目的 `AGENTS.md` 或 `DT_AGENTS.md` 读取 Maven 配置段，都没有则使用默认 Maven 命令。
+脚本输出 `{}` 或无输出时，从目标项目的 `AGENTS.md` 或 `DT_AGENTS.md` 读取 Maven 配置段，都没有则使用默认 Maven 命令。
 
 ## 通用原则
 

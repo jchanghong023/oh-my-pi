@@ -22,28 +22,12 @@ function localDayBefore(base: Date, daysAgo: number): string {
 async function makeProbe(logsDir: string): Promise<string> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-logger-probe-"));
 	roots.push(root);
-	const releasePath = path.join(logsDir, ".release");
 	const probePath = path.join(root, "probe.ts");
 	await Bun.write(
 		probePath,
-		`import * as fs from "node:fs";\n` +
-			`import { info, setTransports } from ${JSON.stringify(loggerModuleUrl)};\n` +
+		`import { info, setTransports } from ${JSON.stringify(loggerModuleUrl)};\n` +
 			`setTransports({ file: ${JSON.stringify(logsDir)} });\n` +
-			`info("multiprocess probe");\n` +
-			`await new Promise<void>(resolve => setImmediate(resolve));\n` +
-			`fs.writeSync(1, "ready\\n");\n` +
-			`await new Promise<void>(resolve => {\n` +
-			`\tconst watcher = fs.watch(${JSON.stringify(logsDir)}, (_event, name) => {\n` +
-			`\t\tif (name !== ".release") return;\n` +
-			`\t\twatcher.close();\n` +
-			`\t\tresolve();\n` +
-			`\t});\n` +
-			`\tif (fs.existsSync(${JSON.stringify(releasePath)})) {\n` +
-			`\t\twatcher.close();\n` +
-			`\t\tresolve();\n` +
-			`\t}\n` +
-			`});\n` +
-			`setTransports({ file: false });\n`,
+			`info("multiprocess probe");\n`,
 	);
 	return probePath;
 }
@@ -56,14 +40,11 @@ describe("multiprocess file logging", () => {
 		// are deterministically completed rather than briefly lingering as zombies.
 		const exitedPids = [9_000_001, 9_000_002];
 
-		await Bun.write(path.join(logsDir, ".release"), "");
 		const probePath = await makeProbe(logsDir);
 		const seed = Bun.spawn([process.execPath, probePath], {
-			stdin: "pipe",
 			stdout: "ignore",
 			stderr: "pipe",
 		});
-		seed.stdin.end();
 		expect(await seed.exited).toBe(0);
 		const seedLog = (await fs.readdir(logsDir)).find(name => name.endsWith(`.${seed.pid}.log`));
 		const seedDate = seedLog?.match(/^omp\.(\d{4}-\d{2}-\d{2})\./)?.[1];
@@ -88,11 +69,9 @@ describe("multiprocess file logging", () => {
 
 		for (let restart = 0; restart < 2; restart++) {
 			const current = Bun.spawn([process.execPath, probePath], {
-				stdin: "pipe",
 				stdout: "ignore",
 				stderr: "pipe",
 			});
-			current.stdin.end();
 			expect(await current.exited).toBe(0);
 		}
 
@@ -122,13 +101,10 @@ describe("multiprocess file logging", () => {
 		const thirtyDaysAgoSec = (Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000;
 		await fs.utimes(path.join(logsDir, expired[4]!), thirtyDaysAgoSec, thirtyDaysAgoSec);
 
-		await Bun.write(path.join(logsDir, ".release"), "");
 		const probe = Bun.spawn([process.execPath, await makeProbe(logsDir)], {
-			stdin: "pipe",
 			stdout: "ignore",
 			stderr: "pipe",
 		});
-		probe.stdin.end();
 		expect(await probe.exited).toBe(0);
 
 		const entries = await fs.readdir(logsDir);

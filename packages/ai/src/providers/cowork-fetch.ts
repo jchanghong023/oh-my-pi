@@ -6,6 +6,7 @@ import * as zlib from "node:zlib";
 import { logger } from "@oh-my-pi/pi-utils";
 import { ConnectionLostBeforeResponseError } from "../error";
 import type { FetchImpl } from "../types";
+import { getInstalledWindowsProxyForUrl } from "../utils/proxy";
 
 /** `host/path` for logging; query strings can carry keys. */
 function logTarget(input: string | URL | Request): string {
@@ -305,16 +306,18 @@ async function sendCoworkRequest(
  * and Bun's shim ignores both `agent.createConnection` and
  * `options.createConnection`: a CONNECT tunnel handed to it is silently
  * discarded and the request dials the provider directly. That turned every
- * `PI_PROXY` / `HTTPS_PROXY` setting into a no-op for Anthropic inference —
- * the proxy looked configured, the traffic left on the default route, and a
- * region-blocked egress answered `403 Request not allowed`. Bun's own `fetch`
- * honors `init.proxy`, so a configured proxy wins over the Cowork profile.
+ * configured proxy into a no-op for Anthropic inference: the traffic left on
+ * the default route and a region-blocked egress answered `403 Request not allowed`.
+ * Bun's own `fetch` honors `init.proxy`, so a configured proxy wins over
+ * the Cowork profile.
  */
 export const coworkFetch: FetchImpl = async (input, init) => {
+	const unixSocket = init && "unix" in init && init.unix;
 	if (
 		init === undefined ||
 		input instanceof Request ||
 		!isHeaderRecord(init.headers) ||
+		unixSocket ||
 		("proxy" in init && Boolean(init.proxy))
 	) {
 		// Reason is logged because the switch changes both the TLS fingerprint and
@@ -326,7 +329,9 @@ export const coworkFetch: FetchImpl = async (input, init) => {
 					? "request-object-input"
 					: !isHeaderRecord(init.headers)
 						? "headers-not-record"
-						: "proxy-configured";
+						: unixSocket
+							? "unix-socket"
+							: "proxy-configured";
 		logger.debug("cowork transport bypassed", { url: logTarget(input), reason, proxy: initProxy(init) });
 		return fallbackFetch(input, init);
 	}
@@ -340,6 +345,17 @@ export const coworkFetch: FetchImpl = async (input, init) => {
 	if (url.protocol !== "https:") {
 		logger.debug("cowork transport bypassed", { url: `${url.host}${url.pathname}`, reason: "not-https" });
 		return fallbackFetch(input, init);
+	}
+	const proxy = getInstalledWindowsProxyForUrl(url);
+	if (proxy) {
+		// The direct Cowork transport returns redirects without following them.
+		const proxiedInit: CoworkRequestInit = { ...init, proxy, redirect: init.redirect ?? "manual" };
+		logger.debug("cowork transport bypassed", {
+			url: `${url.host}${url.pathname}`,
+			reason: "proxy-configured",
+			proxy: initProxy(proxiedInit),
+		});
+		return fallbackFetch(input, proxiedInit);
 	}
 	const body = resolveBody(init.body);
 	if (init.body != null && body === undefined) {

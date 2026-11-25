@@ -12,6 +12,7 @@
  */
 import type { UiNode } from "@oh-my-pi/pi-tui";
 import { type Block, type Cell, defineRolePainter, EMPTY_BLOCK, type PaintContext } from "@oh-my-pi/pi-tui/term/paint";
+import { setTerminalCompletionLayout } from "@oh-my-pi/pi-tui/term/painters/editor";
 import { visibleWidth } from "@oh-my-pi/pi-tui/text/width";
 import { fgSgr } from "@oh-my-pi/pi-tui/theme/color";
 import { type ComposerChromeContext, type ComposerStatus, caretOverflow, composerShape } from "./shapes";
@@ -68,8 +69,9 @@ function paintComposer(node: UiNode, cx: PaintContext): Block {
 	const shape = composerShape(term.shape);
 	const paddingX = term.paddingX ?? shape.paddingX;
 	const side = shape.sideWidth(paddingX);
-	const gutterWidth = shape.gutter ? Math.min(visibleWidth(shape.gutter), Math.max(0, cx.width - 2 * side)) : 0;
-	const contentWidth = Math.max(0, cx.width - 2 * side - gutterWidth);
+	const innerWidth = Math.max(0, cx.width - 2 * side);
+	const gutterWidth = shape.gutter ? Math.min(visibleWidth(shape.gutter), innerWidth) : 0;
+	const contentWidth = innerWidth - gutterWidth;
 	// A side-bordered shape without padding keeps a column for the end-of-row caret.
 	const reserve = shape.sideBorders && paddingX === 0 ? 1 : 0;
 	const wrapWidth = Math.max(1, contentWidth - reserve);
@@ -79,7 +81,7 @@ function paintComposer(node: UiNode, cx: PaintContext): Block {
 	// A status source draws for the shape's attachment at the cells inside its side chrome.
 	const status =
 		typeof term.status === "function"
-			? shape.statusAttachment && term.status(cx, shape.statusAttachment, Math.max(0, cx.width - 2 * side))
+			? shape.statusAttachment && term.status(cx, shape.statusAttachment, innerWidth)
 			: term.status;
 	const chrome: ComposerChromeContext = {
 		width: cx.width,
@@ -129,9 +131,14 @@ function paintComposer(node: UiNode, cx: PaintContext): Block {
 	const bottom = shape.bottom?.(chrome);
 	if (bottom !== undefined) rows.push(bottom);
 
+	const rowsFromCaret = rows.length - (cursor?.row ?? 0);
+	if (field && cursor) setTerminalCompletionLayout(field, cx, rowsFromCaret);
+
 	// The popup covers the transcript above the composer rather than taking room from it.
 	const popup = node.children().find(child => child.kind === "overlay");
-	const covering = popup ? cx.paint(popup, cx.width).rows : [];
+	const viewportHeight = popup && cursor ? cx.viewportHeight : undefined;
+	const popupRows = viewportHeight === undefined ? undefined : Math.max(0, viewportHeight - rowsFromCaret);
+	const covering = popup ? cx.paint(popup, cx.width, popupRows).rows : [];
 	rows.push(...covering);
 	return {
 		rows: term.faint ? rows.map(faint) : rows,

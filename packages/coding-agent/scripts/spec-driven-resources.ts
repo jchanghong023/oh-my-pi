@@ -5,7 +5,11 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { $, type BunPlugin } from "bun";
 import { parse as parseYaml } from "yaml";
 import { openWikiPackageDirectory } from "../src/openwiki/resource-dependencies";
-import { specDrivenSourceFingerprint } from "../src/spec-driven/resource-fingerprint";
+import {
+	specDrivenOpenSpecInputs,
+	specDrivenPassthroughDirectories,
+	specDrivenSourceFingerprint,
+} from "../src/spec-driven/resource-fingerprint";
 import { collectSpecDrivenResources } from "../src/spec-driven/resource-inventory";
 import { resolveSpecDrivenResourcePath } from "../src/spec-driven/resources";
 
@@ -19,29 +23,30 @@ const resources = path.join(vendor, "resources");
  */
 export async function prepareOpenSpecRuntime(): Promise<TempDir> {
 	const source = path.join(resources, "openspec");
+	const { sourceDirectory, packageManifest, dependencyLock: lockfile, runtimeEntries } = specDrivenOpenSpecInputs;
 	const runtime = await TempDir.create("@omp-openspec-runtime-");
 	try {
-		const packageJson = (await Bun.file(path.join(source, "package.json")).json()) as Record<string, unknown>;
-		const lock = await Bun.file(path.join(source, "pnpm-lock.yaml")).text();
+		const packageJson = (await Bun.file(path.join(source, packageManifest)).json()) as Record<string, unknown>;
+		const lock = await Bun.file(path.join(source, lockfile)).text();
 		const dependencyLock = parseYaml(lock) as { overrides?: Record<string, string> };
 		// Bun migrates the pnpm lock, including overrides. Keep them in the staging
 		// manifest so frozen installation cannot silently resolve a different tree.
 		await Bun.write(
-			runtime.join("package.json"),
+			runtime.join(packageManifest),
 			JSON.stringify({ ...packageJson, overrides: dependencyLock.overrides }, null, 2),
 		);
-		await Bun.write(runtime.join("pnpm-lock.yaml"), lock);
+		await Bun.write(runtime.join(lockfile), lock);
 		await $`${process.execPath} install --production --ignore-scripts --frozen-lockfile`
 			.cwd(runtime.path())
 			.env({ ...process.env, BUN_BE_BUN: "1" });
 		// Installation inputs are not runtime resources. Keep the vendor lock in
 		// source control, but do not ship it or Bun's installation metadata.
-		for (const lockfile of ["pnpm-lock.yaml", "bun.lock", "bun.lockb"]) {
-			await fs.rm(runtime.join(lockfile), { force: true });
+		for (const entry of [lockfile, "bun.lock", "bun.lockb"]) {
+			await fs.rm(runtime.join(entry), { force: true });
 		}
 
 		const transpiler = new Bun.Transpiler({ loader: "ts", target: "bun", trimUnusedImports: true });
-		const sourceRoot = path.join(source, "src");
+		const sourceRoot = path.join(source, sourceDirectory);
 		for await (const relative of new Bun.Glob("**/*").scan({ cwd: sourceRoot, onlyFiles: true })) {
 			if (relative.endsWith(".d.ts")) continue;
 			const input = Bun.file(path.join(sourceRoot, relative));
@@ -49,7 +54,7 @@ export async function prepareOpenSpecRuntime(): Promise<TempDir> {
 			await Bun.write(output, relative.endsWith(".ts") ? await transpiler.transform(await input.text()) : input);
 		}
 		// Only runtime resources: README/docs and their screenshots stay in vendor.
-		for (const entry of ["bin", "schemas", "skills", "LICENSE"]) {
+		for (const entry of runtimeEntries) {
 			await fs.cp(path.join(source, entry), runtime.join(entry), { recursive: true });
 		}
 		return runtime;
@@ -123,7 +128,7 @@ export async function buildSpecDrivenArchive(): Promise<Uint8Array> {
 	await using runtime = await prepareOpenSpecRuntime();
 	await using staging = await TempDir.create("@omp-spec-driven-staging-");
 	await fs.rename(runtime.path(), staging.join("openspec"));
-	for (const entry of ["superpowers", "jch", "omp-runtime"]) {
+	for (const entry of specDrivenPassthroughDirectories) {
 		await fs.cp(path.join(resources, entry), staging.join(entry), { recursive: true });
 	}
 	await assertOpenSpecRuntime(staging.join("openspec"));

@@ -4,8 +4,9 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 
 function getSkillDir() {
   return path.dirname(require.resolve('./decompile.js'));
@@ -15,9 +16,10 @@ function getCfrPath() {
   return path.join(getSkillDir(), '..', '..', 'assets', 'java', 'cfr-0.152.jar');
 }
 
-function getDefaultM2Repo() {
-  const home = process.env.HOME || process.env.USERPROFILE;
-  return path.join(home, '.m2', 'repository');
+function resolveInputPath(input, base = process.cwd()) {
+  return /^~(?:[/\\]|$)/.test(input)
+    ? path.resolve(path.join(os.homedir(), input.slice(2)))
+    : path.resolve(base, input);
 }
 
 function locateMavenJar(groupId, artifactId, version, m2Repo) {
@@ -89,7 +91,6 @@ function resolveVariable(variable, mavenParams) {
 
 function runMvnDependencyTree(projectDir, m2Params, settings) {
   return new Promise((resolve, reject) => {
-    const mvnCmd = process.platform === 'win32' ? 'mvn.cmd' : 'mvn';
     const args = ['dependency:tree'];
 
     if (settings) {
@@ -97,21 +98,36 @@ function runMvnDependencyTree(projectDir, m2Params, settings) {
     }
 
     if (m2Params) {
-      const params = m2Params.split(/\s+/);
-      args.push(...params);
+      args.push(...(m2Params.match(/\S+/g) || []));
     }
 
-    const useShell = process.platform === 'win32';
-    const spawnArgs = useShell ? [mvnCmd, ...args] : args;
-    const spawnCmd = useShell ? process.env.ComSpec || 'cmd.exe' : mvnCmd;
-    const spawnOpts = useShell
-      ? { cwd: projectDir, stdio: ['ignore', 'pipe', 'pipe'], windowsVerbatimArguments: true }
-      : { cwd: projectDir, stdio: ['ignore', 'pipe', 'pipe'] };
-    const child = spawn(spawnCmd, useShell ? ['/c', ...spawnArgs] : spawnArgs, spawnOpts);
+    const spawnOpts = { cwd: projectDir, stdio: ['ignore', 'pipe', 'pipe'] };
+    let child;
+    if (process.platform === 'win32') {
+      const env = { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' };
+      const quotedArgs = args.map((arg, i) => {
+        if (/["\0\r\n]/.test(arg)) {
+          throw new Error('Maven arguments on Windows cannot contain quotes, NUL, CR or LF');
+        }
+        // Expand each value once inside cmd quotes, without interpreting percent signs in it.
+        // Double trailing backslashes for the closing quote when Maven forwards argv to Java.
+        const name = `OMP_DTAGENT_MVN_ARG_${i}`;
+        env[name] = arg.replace(/\\+$/, '$&$&');
+        return `"%${name}%"`;
+      });
+      const command = `"mvn.cmd ${quotedArgs.join(' ')}"`;
+      child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/v:off', '/c', command], {
+        ...spawnOpts,
+        env,
+        windowsVerbatimArguments: true,
+      });
+    } else {
+      child = spawn('mvn', args, spawnOpts);
+    }
 
     let stdout = '', stderr = '';
-    child.stdout?.on('data', (data) => { stdout += data.toString(); });
-    child.stderr?.on('data', (data) => { stderr += data.toString(); });
+    child.stdout.on('data', (data) => { stdout += data.toString(); });
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
 
     child.on('close', (code) => {
       if (code === 0) {
@@ -125,17 +141,26 @@ function runMvnDependencyTree(projectDir, m2Params, settings) {
 }
 
 // 创建去除 mirror 的临时 settings.xml
-function createNoMirrorSettings(settingsPath) {
-  if (!settingsPath || !fs.existsSync(settingsPath)) return null;
+function createNoMirrorSettings(settingsPath, tmpDir) {
+  if (process.platform === 'win32') {
+    // Windows ignores POSIX permission bits. Restrict the empty directory before writing settings.
+    const systemDir = path.join(process.env.SystemRoot, 'System32');
+    const identity = execFileSync(path.join(systemDir, 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    const sid = /,"(S-\d+(?:-\d+)+)"\s*$/.exec(identity)?.[1];
+    if (!sid) throw new Error('无法确定 Maven 临时目录的 Windows 用户 SID');
+    const icacls = path.join(systemDir, 'icacls.exe');
+    execFileSync(icacls, [tmpDir, '/grant:r', `*${sid}:(OI)(CI)F`], { windowsHide: true });
+    execFileSync(icacls, [tmpDir, '/inheritance:r'], { windowsHide: true });
+  }
 
   const content = fs.readFileSync(settingsPath, 'utf-8');
   // Remove everything between <mirror> and </mirror> tags (including nested content)
   const noMirror = content.replace(/<mirror>[\s\S]*?<\/mirror>/g, '');
-
-  const os = require('os');
-  const tmpDir = os.tmpdir();
-  const tmpPath = path.join(tmpDir, `settings-nomirror-${Date.now()}.xml`);
-  fs.writeFileSync(tmpPath, noMirror);
+  const tmpPath = path.join(tmpDir, 'settings.xml');
+  fs.writeFileSync(tmpPath, noMirror, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
   return tmpPath;
 }
 
@@ -228,25 +253,30 @@ async function getDepsFromPom(projectDir, packagePatterns, m2Repo, m2Params, set
   } catch (firstError) {
     // 检查是否是 mirror 导致的 parent POM 解析失败
     const errMsg = firstError.message || '';
-    const isMirrorIssue = errMsg.includes('mirror') || errMsg.includes('mirrorOf') ||
+    const isMirrorIssue = errMsg.includes('mirror') ||
       (errMsg.includes('parent POM') && errMsg.includes('not found'));
 
-    if (!isMirrorIssue || !settings) {
+    if (!isMirrorIssue || !settings || !fs.existsSync(settings)) {
       return { deps: [], failed: true, error: firstError.message };
     }
 
     // 第二次尝试：去除 mirror 的 settings 重试
     console.log('检测到可能是 Maven mirror 导致的 parent POM 解析失败，尝试去除 mirror 重试...');
-    let noMirrorSettings = null;
+    let noMirrorDir;
     try {
-      noMirrorSettings = createNoMirrorSettings(settings);
+      noMirrorDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dtagent-maven-'));
+      const noMirrorSettings = createNoMirrorSettings(settings, noMirrorDir);
       const output = await runMvnDependencyTree(projectDir, m2Params, noMirrorSettings);
       return { deps: parseAndFilter(output), failed: false };
     } catch (retryError) {
       return { deps: [], failed: true, error: `原始错误: ${firstError.message}\n去mirror重试错误: ${retryError.message}` };
     } finally {
-      if (noMirrorSettings) {
-        try { fs.unlinkSync(noMirrorSettings); } catch (_) {}
+      if (noMirrorDir) {
+        try {
+          fs.rmSync(noMirrorDir, { recursive: true, force: true });
+        } catch (error) {
+          console.warn(`警告: 无法清理 Maven 临时目录: ${error.message}`);
+        }
       }
     }
   }
@@ -270,73 +300,50 @@ function decompileJar(jarPath, outputDir, cfrPath) {
 }
 
 // 生成索引
-function generateIndex(depsDir) {
-  const index = {};
-  
-  function scanDir(dir, relativePath) {
-    const items = fs.readdirSync(dir);
-    for (const item of items) {
-      const fullPath = path.join(dir, item);
-      const relPath = relativePath ? path.join(relativePath, item) : item;
-      const stat = fs.statSync(fullPath);
-      
-      if (stat.isDirectory()) {
-        scanDir(fullPath, relPath);
-      } else if (item.endsWith('.java')) {
-        const pathParts = relPath.split(/[/\\]/);
-        let packageStartIndex = -1;
-        
-        // 查找包含版本号格式的目录（如 xxx-26.555.1441），跳过它
-        for (let i = 0; i < pathParts.length; i++) {
-          const part = pathParts[i];
-          // 检测版本号格式：artifactId-version 格式（包含数字版本号）
-          if (part && /\-\d+\.\d+/.test(part)) {
-            // 找到版本号目录，包名从下一个目录开始
-            packageStartIndex = i + 1;
-            break;
-          }
-        }
-        
-        // 如果没找到版本号目录，使用原有逻辑
-        if (packageStartIndex === -1) {
-          for (let i = 0; i < pathParts.length; i++) {
-            const part = pathParts[i];
-            if (part && /^[a-z]/.test(part) && !/\-\d+\.\d+/.test(part)) {
-              packageStartIndex = i;
-              break;
-            }
-          }
-        }
-        
-        if (packageStartIndex === -1 || packageStartIndex >= pathParts.length) {
-          packageStartIndex = 0;
-        }
-        
-        const classNameParts = pathParts.slice(packageStartIndex);
-        const className = classNameParts.join('.').replace(/\.java$/, '');
-        index[className] = relPath;
+function generateIndex(depsDir, jarOutputDirs) {
+  const index = Object.create(null);
+
+  function scanDir(dir, relativePath, packagePrefix) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const relPath = path.join(relativePath, entry.name);
+      if (entry.isDirectory()) {
+        scanDir(path.join(dir, entry.name), relPath, `${packagePrefix}${entry.name}.`);
+      } else if (entry.isFile() && entry.name.endsWith('.java')) {
+        index[`${packagePrefix}${entry.name.slice(0, -5)}`] = relPath;
       }
     }
   }
-  
-  if (fs.existsSync(depsDir)) scanDir(depsDir, '');
+
+  for (const entry of fs.readdirSync(depsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(depsDir, entry.name);
+    if (!jarOutputDirs.has(dir)) scanDir(dir, entry.name, '');
+  }
+  // Current dependencies take precedence over older cached copies of the same class.
+  for (const dir of jarOutputDirs) {
+    if (fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) {
+      scanDir(dir, path.relative(depsDir, dir), '');
+    }
+  }
   return index;
 }
 
 // 主函数
 async function main(args) {
-  const { packages, m2Repo, depsDir, projectDir, m2Params, settings } = args;
+  const { packages, projectDir: inputProjectDir, m2Params } = args;
+  const m2Repo = resolveInputPath(args.m2Repo || '~/.m2/repository');
   
   console.log('开始反编译二方件...');
   console.log(`包名范围: ${packages.join(', ')}`);
   console.log(`Maven 仓库: ${m2Repo}`);
   console.log('');
   
-  if (!projectDir) {
+  if (!inputProjectDir) {
     console.log('错误: 需要提供 projectDir 参数（项目目录路径）');
     return;
   }
   
+  const projectDir = resolveInputPath(inputProjectDir);
   if (!fs.existsSync(projectDir)) {
     console.log(`错误: 项目目录不存在: ${projectDir}`);
     return;
@@ -348,6 +355,11 @@ async function main(args) {
     return;
   }
   
+  const depsDir = args.depsDir ? resolveInputPath(args.depsDir) : path.join(projectDir, '.dtagent', 'deps');
+  const settingsPath = resolveInputPath(args.settings || '~/.m2/settings.xml', projectDir);
+  // Maven permits an absent default settings file, but not an absent explicit -s file.
+  const settings = (args.settings || fs.existsSync(settingsPath)) ? settingsPath : undefined;
+
   if (!fs.existsSync(depsDir)) {
     fs.mkdirSync(depsDir, { recursive: true });
   }
@@ -383,6 +395,7 @@ async function main(args) {
   console.log('');
   
   const cfrPath = getCfrPath();
+  const jarOutputDirs = new Set();
   let success = 0, skipped = 0, failed = 0;
   
   for (let i = 0; i < jars.length; i++) {
@@ -402,9 +415,11 @@ async function main(args) {
       
       const key = `${dep.groupId}:${dep.artifactId}`;
       const currentVersion = dep.classifier ? `${dep.version}-${dep.classifier}` : dep.version;
-      if (versions[key] && versions[key].version === currentVersion && fs.existsSync(jarOutputDir)) {
+      if (versions[key]?.version === currentVersion &&
+          fs.statSync(jarOutputDir, { throwIfNoEntry: false })?.isDirectory()) {
         console.log(`  跳过 (版本未变化)`);
         skipped++;
+        jarOutputDirs.add(jarOutputDir);
         continue;
       }
       
@@ -421,6 +436,7 @@ async function main(args) {
       
       console.log(`  完成`);
       success++;
+      jarOutputDirs.add(jarOutputDir);
     } catch (error) {
       console.log(`  失败: ${error.message}`);
       failed++;
@@ -435,7 +451,7 @@ async function main(args) {
   
   console.log('');
   console.log('生成索引...');
-  const index = generateIndex(depsDir);
+  const index = generateIndex(depsDir, jarOutputDirs);
   const indexPath = path.join(depsDir, 'index.json');
   fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
   console.log(`索引已更新，共 ${Object.keys(index).length} 个类`);

@@ -8,6 +8,7 @@
  * the JavaScript bridge uses.
  */
 import { logger, postmortem } from "@oh-my-pi/pi-utils";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import type { ToolSession } from "../../tools";
 import type { RuntimeCallIdentity } from "../js/shared/runtime";
 import { bridgeValueFromToolResult, callSessionTool, type JsStatusEvent } from "../js/tool-bridge";
@@ -21,6 +22,8 @@ export interface PyToolBridgeEntry {
 	 */
 	signal?: AbortSignal;
 	parentToolCallId?: string;
+	/** Context of this cell only; never inherited from the retained kernel. */
+	toolContext?: AgentToolContext;
 	/** The cell's `timeout` in ms, the budget of a prelude call that sets none (`EvalPreludeContext.cellTimeoutMs`). */
 	cellTimeoutMs?: number;
 	/**
@@ -130,6 +133,7 @@ async function callSessionToolPromptOnAbort(
 	const call = callSessionTool(name, args, {
 		session: entry.toolSession,
 		parentToolCallId: entry.parentToolCallId,
+		toolContext: entry.toolContext,
 		signal: entry.signal,
 		cellTimeoutMs: entry.cellTimeoutMs,
 		emitStatus: entry.emitStatus,
@@ -187,11 +191,10 @@ async function startServer(): Promise<BridgeServer> {
 			if (!sessionId || !runId || !name) {
 				return Response.json({ ok: false, error: "Missing session/run/name" }, { status: 400 });
 			}
-			const registrationKey = bridgeRegistrationKey(sessionId, runId);
-			const entry = registrations.get(registrationKey) ?? registrations.get(sessionId);
+			const entry = registrations.get(bridgeRegistrationKey(sessionId, runId));
 			if (!entry) {
 				return Response.json(
-					{ ok: false, error: `No active Python tool bridge session: ${registrationKey}` },
+					{ ok: false, error: `No active Python tool bridge session: ${sessionId}:${runId}` },
 					{ status: 200 },
 				);
 			}

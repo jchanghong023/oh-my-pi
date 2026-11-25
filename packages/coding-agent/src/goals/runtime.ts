@@ -6,9 +6,18 @@ import type { Goal } from "../tools/details/goal";
 import type { GoalAutopilotRequest } from "./request-context";
 import type { GoalBudgetSteering, LocalGoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "./state";
 
+/** A budget-limited response can finish a review but has no Autopilot approval scope. */
+export class GoalAutopilotCompletionRequest {
+	constructor(
+		readonly run: GoalAutopilotRequest["run"],
+		readonly isCurrent: () => boolean,
+	) {}
+}
+
 export interface GoalRuntimeHost {
 	getState(): LocalGoalModeState | undefined;
 	setState(state: LocalGoalModeState | undefined): void;
+	onAutopilotResumed?(goalId: string, source: "explicit" | "restored"): void;
 	getCurrentUsage(): GoalTokenUsage;
 	emit(event: GoalRuntimeEvent): void | Promise<void>;
 	persist(mode: "goal" | "goal_paused" | "none", state?: LocalGoalModeState): void;
@@ -188,7 +197,12 @@ export class GoalRuntime {
 
 	async #commitState(
 		state: LocalGoalModeState | undefined,
-		options?: { persist?: "goal" | "goal_paused" | "none"; emit?: boolean; transition?: string },
+		options?: {
+			persist?: "goal" | "goal_paused" | "none";
+			emit?: boolean;
+			transition?: string;
+			resumeAutopilot?: "explicit" | "restored";
+		},
 	): Promise<void> {
 		const previous = this.#host.getState();
 		const fields =
@@ -224,6 +238,9 @@ export class GoalRuntime {
 			if (options?.persist) {
 				stage = "persist";
 				this.#host.persist(options.persist, state);
+			}
+			if (options?.resumeAutopilot && state?.autoOrchestrate === true) {
+				this.#host.onAutopilotResumed?.(state.goal.id, options.resumeAutopilot);
 			}
 			if (options?.emit !== false) {
 				stage = "emit";
@@ -354,7 +371,7 @@ export class GoalRuntime {
 		if (!state) return undefined;
 		if (options?.preserveActiveGoal && state.enabled && state.goal.status === "active") {
 			this.#markActiveAccounting(state.goal, true);
-			await this.#commitState(state, { emit: true, transition: "restore_preserved" });
+			await this.#commitState(state, { emit: true, transition: "restore_preserved", resumeAutopilot: "restored" });
 			return state;
 		}
 		if (state.goal.status === "active") {
@@ -557,11 +574,18 @@ export class GoalRuntime {
 		}, input.autoOrchestrate);
 	}
 
-	async resumeGoal(): Promise<LocalGoalModeState> {
+	async resumeGoal(source: "user" | "tool" = "user", request?: GoalAutopilotRequest): Promise<LocalGoalModeState> {
 		return await this.#withAccounting(async () => {
 			const state = this.#getStateClone();
 			if (!state?.goal) throw new Error("No paused goal.");
 			if (state.goal.status === "complete") throw new Error("Goal is already complete.");
+			if (
+				source === "tool" &&
+				state.autoOrchestrate === true &&
+				(!request?.isCurrent() || request.run.goalId !== state.goal.id)
+			) {
+				throw new Error("Goal Autopilot must be resumed by the user. Use /goal-autopilot resume.");
+			}
 			state.enabled = true;
 			state.mode = "active";
 			state.reason = undefined;
@@ -570,7 +594,11 @@ export class GoalRuntime {
 			state.goal.updatedAt = this.#now();
 			this.#budgetReportedFor = undefined;
 			this.#markActiveAccounting(state.goal);
-			await this.#commitState(state, { persist: "goal", transition: "resume" });
+			await this.#commitState(state, {
+				persist: "goal",
+				transition: "resume",
+				resumeAutopilot: source === "user" ? "explicit" : undefined,
+			});
 			return state;
 		});
 	}
@@ -644,7 +672,7 @@ export class GoalRuntime {
 		});
 	}
 
-	async completeGoalFromTool(request?: GoalAutopilotRequest): Promise<Goal> {
+	async completeGoalFromTool(request?: GoalAutopilotRequest | GoalAutopilotCompletionRequest): Promise<Goal> {
 		return await this.#withAccounting(async () => {
 			await this.#flushUsageLocked("suppressed");
 			const state = this.#getStateClone();
@@ -657,11 +685,25 @@ export class GoalRuntime {
 			if (state.goal.status === "dropped") {
 				throw new Error("cannot complete a dropped goal");
 			}
-			if (request) {
-				if (!request.isCurrent()) throw new Error("Goal Autopilot run is no longer active.");
-				if (!request.run.review || request.run.review === request) {
-					request.run.review = request;
-					return state.goal;
+			if (request && (!request.isCurrent() || request.run.goalId !== state.goal.id)) {
+				throw new Error("Goal Autopilot run is no longer active.");
+			}
+			if (state.autoOrchestrate === true) {
+				if (!request || !state.enabled) {
+					throw new Error("Goal completion requires a current Autopilot request.");
+				}
+				if (state.goal.status === "budget-limited") {
+					if (!request.run.review || request.run.review === request) {
+						throw new Error("Goal completion requires an earlier Autopilot review.");
+					}
+				} else {
+					if (state.goal.status !== "active" || request instanceof GoalAutopilotCompletionRequest) {
+						throw new Error("Goal completion requires a current Autopilot request.");
+					}
+					if (!request.run.review || request.run.review === request) {
+						request.run.review = request;
+						return state.goal;
+					}
 				}
 			}
 			state.enabled = false;

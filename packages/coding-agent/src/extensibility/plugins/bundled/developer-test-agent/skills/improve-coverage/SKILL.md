@@ -114,8 +114,8 @@ disable-model-invocation: true
     - `coverage-strategies.md`（覆盖率提升策略 6 类 + hdt-java 工具脚本）
 
 ### scripts/
-- `scripts/java/extract-maven-config.js`：Maven 配置提取脚本。Step 1 获取覆盖率数据时使用，输出 JSON（`settingsPath` + `mavenProperties`）。
-- `scripts/java/extract-jacoco-coverage.js`：JaCoCo 覆盖率提取脚本。codecovcli 失败后的备选方案，从 `jacoco.xml` 提取指定类的覆盖率数据，生成 `.codecovcli/cache/java_{className}.json`（格式与 codecovcli 一致）。
+- `scripts/java/extract-maven-config.js`：输出 `settingsPath`、Maven CLI 参数 `mavenProperties` 及 JVM 参数 `vmOptions`（用于 `MAVEN_OPTS`）。
+- `scripts/java/extract-jacoco-coverage.js`：codecovcli 失败时，从 `jacoco.xml` 将类级统计写入兼容的 `.codecovcli/cache/java_{className}.json`。源文件行列表不代表目标类的覆盖行，按 Java 规则核对后使用。
 - `scripts/go/extract-go-coverage.js`：Go 覆盖率提取脚本。从 `go test -coverprofile` 输出中提取指定文件的覆盖率数据，从 `go test -v` 输出中提取测试执行结果，生成 `.codecovcli/cache/go_{className}.json`（格式与 codecovcli 一致）。
 - `scripts/python/extract-python-coverage.js`：Python 覆盖率提取脚本。从 `coverage.json`（coverage.py 格式）中提取指定文件的覆盖率数据，从 `pytest -v` 输出中提取测试执行结果，生成 `.codecovcli/cache/python_{className}.json`（格式与 codecovcli 一致）。
 - `references/cpp/coverage-rules.md`：C/C++覆盖率规则导航索引（必读入口）。子文件按需加载：

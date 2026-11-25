@@ -11,7 +11,7 @@ import {
 	hasRecurringTariff,
 } from "@oh-my-pi/pi-catalog/models";
 import type { ModelCost } from "@oh-my-pi/pi-catalog/types";
-import { $envpos, getStatsDbPath, VERSION } from "@oh-my-pi/pi-utils";
+import { $envpos, getStatsDbPath, preparePerformanceCacheDirectory, VERSION } from "@oh-my-pi/pi-utils";
 import { ChunkedInsert } from "./chunked-insert";
 import { classifyAgentType, type ParseSessionResult, type SessionParserState } from "./parser";
 import { ensureRollupSchema, getDailyActivityFromRollup } from "./rollup";
@@ -189,7 +189,8 @@ export async function initDb(): Promise<Database> {
 	if (db) return db;
 
 	const dbPath = getStatsDbPath();
-	await fs.mkdir(path.dirname(dbPath), { recursive: true });
+	const directory = path.dirname(dbPath);
+	if (!preparePerformanceCacheDirectory(directory)) await fs.mkdir(directory, { recursive: true });
 
 	db = new Database(dbPath);
 	// Install the busy handler BEFORE any lock-taking statement. See
@@ -1419,7 +1420,9 @@ export async function getDailyActivity(days = 371): Promise<DailyActivityPoint[]
 export function readDailyActivity(days = 371): DailyActivityPoint[] | null {
 	let reader: Database;
 	try {
-		reader = new Database(getStatsDbPath(), { readwrite: true, create: false });
+		const dbPath = getStatsDbPath();
+		preparePerformanceCacheDirectory(path.dirname(dbPath), false);
+		reader = new Database(dbPath, { readwrite: true, create: false });
 	} catch {
 		// `create: false` refuses to open a database that does not exist yet.
 		return null;

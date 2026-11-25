@@ -76,7 +76,7 @@ interface MCPServerConfigBase {
 	enabled?: boolean;
 	/** MCP request timeout in milliseconds (default: 30000, 0 to disable) */
 	timeout?: number;
-	/** Keep this server's tools top-level; false uses the existing discoverable device catalog. */
+	/** True keeps tools top-level; false makes them discoverable; omitted uses normal tool routing. */
 	alwaysLoad?: boolean;
 	/**
 	 * Encoding for outgoing JSON-RPC request ids (default: `"number"`).

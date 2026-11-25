@@ -11,6 +11,7 @@ function workerThreads(): typeof WorkerThreads {
 	if (!workerThreadsCache) workerThreadsCache = require("node:worker_threads") as typeof WorkerThreads;
 	return workerThreadsCache;
 }
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { isRecord, logger, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
 import {
 	createWorkerHandle,
@@ -63,6 +64,7 @@ export { rewriteImports, wrapCode } from "./shared/rewrite-imports";
 export interface VmRunState {
 	signal?: AbortSignal;
 	parentToolCallId?: string;
+	toolContext?: AgentToolContext;
 	onText?: (chunk: string) => void;
 	onDisplay?: (output: EvalDisplayOutput) => void;
 	/** Shows the user `out://` replies of the run's bridged tool calls; absent, those calls are refused. */
@@ -77,8 +79,8 @@ export interface JsEvalWorkerHandle {
 	onError(handler: (error: Error) => void): () => void;
 	close(): Promise<boolean>;
 	/**
-	 * Stop the runtime at once. Resolves after every message it sent before it stopped has been
-	 * passed to the `onMessage` handlers, so a killed cell's last output still reaches its run.
+	 * Stop the runtime at once and deliver the output it sent before stopping.
+	 * A subprocess that does not exit within the drain budget is cleaned up on eventual exit.
 	 */
 	terminate(): Promise<void>;
 }
@@ -873,6 +875,7 @@ async function handleToolCall(session: JsSession, msg: Extract<WorkerOutbound, {
 		const value = await callSessionTool(msg.name, msg.args, {
 			session: pending.toolSession,
 			parentToolCallId: pending.runState.parentToolCallId,
+			toolContext: pending.runState.toolContext,
 			signal: ctrl.signal,
 			cellTimeoutMs: pending.cellTimeoutMs,
 			identity: msg.identity,
@@ -950,9 +953,8 @@ async function killSession(session: JsSession, error: Error, options: { force: b
 	for (const pending of session.pending.values()) {
 		for (const ctrl of pending.toolCalls.values()) ctrl.abort(error);
 	}
-	// Settle the runs only once the runtime is gone and everything it sent before has been handled:
-	// a cell's last output (often the only clue why it was killed) belongs to the cancelled run, and
-	// the caller reads that output as soon as the run settles.
+	// Preserve the runtime's last output before settling the runs, without blocking them
+	// indefinitely on a subprocess that has not exited after being killed.
 	if (options.force || !(await session.worker.close().catch(() => false))) {
 		await session.worker.terminate().catch(() => undefined);
 	}
@@ -1126,30 +1128,45 @@ function spawnJsProcess(sessionId?: string): JsEvalWorkerHandle {
 		delivered = sequence;
 		for (const listener of listeners) listener(message);
 	};
+	const drainOutput = (through = Infinity): void => {
+		try {
+			const sequences = fs
+				.readdirSync(outbox)
+				.filter(name => /^\d+\.json$/.test(name))
+				.map(name => Number(name.slice(0, -5)))
+				.sort((a, b) => a - b);
+			for (const sequence of sequences) {
+				if (sequence > through) break;
+				deliverOutput(sequence);
+			}
+		} catch (error) {
+			logger.error("Failed to drain JS eval process output", { outbox, error });
+			throw error;
+		}
+	};
 	const unsubscribe = base.onMessage(message => {
-		if (message.type === "output-ready") deliverOutput(message.sequence);
-		else for (const listener of listeners) listener(message);
+		if (message.type === "output-ready") {
+			if (message.sequence > delivered + 1) drainOutput(message.sequence);
+			else deliverOutput(message.sequence);
+		} else for (const listener of listeners) listener(message);
 	});
 	let terminating: Promise<void> | undefined;
 	const terminate = (): Promise<void> => {
 		terminating ??= (async () => {
-			try {
-				await base.terminate();
-				// Wait for the writer to stop before draining its atomically published
-				// records. Unlike IPC disconnect, this outbox survives a killed child.
-				await spawned.proc.exited;
-				const sequences = fs
-					.readdirSync(outbox)
-					.filter(name => /^\d+\.json$/.test(name))
-					.map(name => Number(name.slice(0, -5)))
-					.sort((a, b) => a - b);
-				for (const sequence of sequences) deliverOutput(sequence);
-			} catch (error) {
-				logger.error("Failed to drain JS eval process output", { outbox, error });
-				throw error;
-			} finally {
+			await base.terminate();
+			let writerStopped = false;
+			const drainOnExit = spawned.proc.exited.then(() => drainOutput()).finally(() => {
+				writerStopped = true;
 				unsubscribe();
 				cleanup();
+			});
+			try {
+				await raceWithTimeout(drainOnExit, WORKER_CLOSE_TIMEOUT_MS, "Timed out draining JS eval process output");
+			} catch (error) {
+				// Deliver already-published records before killSession drops the pending run.
+				// drainOnExit still owns any remaining output and cleanup.
+				if (!writerStopped) drainOutput();
+				throw error;
 			}
 		})();
 		return terminating;

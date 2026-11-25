@@ -63,7 +63,18 @@ const EMPTY_LOG_CONTEXT: Readonly<Record<string, unknown>> = Object.freeze({});
 
 /** Inherit correlation fields across asynchronous work; inner and explicit fields win. */
 export function withLogContext<T>(context: Record<string, unknown>, fn: () => T): T {
-	return logContextStorage.run(Object.freeze({ ...getLogContext(), ...context }), fn);
+	let merged: Readonly<Record<string, unknown>>;
+	try {
+		merged = { ...getLogContext(), ...context };
+	} catch {
+		// A throwing inherited getter must not suppress the operation's own fields.
+		try {
+			merged = { ...context };
+		} catch {
+			merged = EMPTY_LOG_CONTEXT;
+		}
+	}
+	return logContextStorage.run(Object.freeze(merged), fn);
 }
 
 /** Current operation context, or a shared immutable empty object outside an operation. */
@@ -125,10 +136,11 @@ export function diagnosticError(error: unknown): Record<string, unknown> {
 }
 
 /** Describe an HTTP(S) destination without exposing credentials or user-controlled path segments. */
-export function diagnosticUrl(value: string): Record<string, unknown> {
-	if (value.length > 8_192) return { url_type: "invalid" };
+export function diagnosticUrl(value: string | URL): Record<string, unknown> {
 	try {
-		const url = new URL(value);
+		const text = String(value);
+		if (text.length > 8_192) return { url_type: "invalid" };
+		const url = new URL(text);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return { url_type: "unsupported" };
 		return {
 			host: url.hostname,
@@ -362,9 +374,13 @@ function removeBestEffort(filePath: string): void {
 
 const scheduledPruneDirs = new Set<string>();
 
-/** Run shared retention only after logger construction has returned to the event loop. */
+/** Run shared retention only after the sink has opened a file. */
 function schedulePruneStaleProcessLogs(dir: string): void {
 	if (scheduledPruneDirs.has(dir)) return;
+	if (exiting) {
+		pruneStaleProcessLogs(dir);
+		return;
+	}
 	scheduledPruneDirs.add(dir);
 	const immediate = setImmediate(() => {
 		scheduledPruneDirs.delete(dir);
@@ -531,12 +547,14 @@ function flushOnExit(code: number): void {
 	exiting = true;
 	shutdownDiagnosticLogging(process.exitCode ?? code);
 	flush();
+	for (const dir of scheduledPruneDirs) pruneStaleProcessLogs(dir);
+	scheduledPruneDirs.clear();
 }
 
 /** Build a rotating file sink with process-local rotation and shared retention. */
 function makeFileTransport(dir?: string): RotatingFileSink {
 	const logsDir = dir ?? getLogsDir();
-	schedulePruneStaleProcessLogs(logsDir);
+	let scheduledPruneDir: string | undefined;
 	if (!exitFlushInstalled) {
 		exitFlushInstalled = true;
 		process.on("exit", flushOnExit);
@@ -548,12 +566,18 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 		maxBytes: 10 * 1024 * 1024,
 		maxFiles: 5,
 		batch: { intervalMs: FILE_FLUSH_INTERVAL_MS, maxBytes: FILE_FLUSH_BYTES },
-		// Keep the stderr guard's fd 2 on the file this sink is writing.
-		onRotate: filePath => logFileObserver?.(filePath),
+		onRotate: filePath => {
+			const directory = path.dirname(filePath);
+			if (directory !== scheduledPruneDir) {
+				scheduledPruneDir = directory;
+				schedulePruneStaleProcessLogs(directory);
+			}
+			// Keep the stderr guard's fd 2 on the file this sink is writing.
+			logFileObserver?.(filePath);
+		},
 		fallbackDirectory: () => fallbackLogsDir(logsDir),
 		onFailure: (error, stage, recoveredPath) => {
 			if (recoveredPath) {
-				if (stage !== "retention") schedulePruneStaleProcessLogs(path.dirname(recoveredPath));
 				if (isOfflineLevelFiltered("warn")) return undefined;
 				const event = stage === "retention" ? "log_retention_failed" : "log_directory_fallback";
 				return formatLogRecord(

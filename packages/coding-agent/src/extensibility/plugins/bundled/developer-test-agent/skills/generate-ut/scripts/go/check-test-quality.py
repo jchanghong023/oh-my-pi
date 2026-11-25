@@ -40,15 +40,29 @@ def check_test_quality(test_file_path):
     # Find mock injection patterns (L2/2 field assignment)
     injection_patterns = re.findall(r'(\w+)\.\w+ = mock\w+', content)
     
+    # Identify standard-library httptest constructors for both L4 and infrastructure checks.
+    imports = re.findall(r'(?m)^[ \t]*import\b[ \t]*(?:\(([^)]*)\)|([^\r\n]+))', content)
+    httptest_import = re.search(
+        r'(?m)(?:^|;)[ \t]*(?:(\w+)[ \t]+)?(?:"net/http/httptest"|`net/http/httptest`)',
+        '\n'.join(block or single for block, single in imports),
+    )
+    httptest_servers = {}
+    if httptest_import and httptest_import[1] != '_':
+        package = re.escape(httptest_import[1] or 'httptest')
+        for call in re.finditer(rf'(\.\s*)?(?<!\w){package}\s*\.\s*(New(?:TLS|Unstarted)?Server)\(', content):
+            if not call[1]:  # A preceding selector dot belongs to an object field.
+                httptest_servers[call.start(2)] = call[2]
+
     # L4 fake-server injection patterns (NOT field assignment — recognize as valid injection,
     # e.g. wires srv.Addr() into the client constructor)
     tier0_patterns = re.findall(
-        r'net\.Listen\(|httptest\.NewServer\(|httptest\.NewTLSServer\(|'
+        r'net\.Listen\(|'
         r'newFake\w*Server\(|newTest\w*(?:Client|Server)\w*\(|'
         r'\.Addr\(\)|holder\.state\.Store\(|\.state\.Store\(|'
         r'\.Commands\(\)|\.CallCount\(\)|\.WatchCallCount\(\)',
         content
     )
+    tier0_patterns.extend(httptest_servers.values())
     
     # Check if tests with mocks have injection
     if mock_structs and len(injection_patterns) < len(mock_structs) and not tier0_patterns:
@@ -139,10 +153,11 @@ def check_test_quality(test_file_path):
     
     # Check 11: Real infrastructure connections in unit tests (CRITICAL)
     # Detect factory functions that create real connections to external infrastructure
-    infra_connection_patterns = re.findall(
-        r'New\w*Client\(|New\w*Server\(|sql\.Open\(|net\.Dial\(|http\.Client\{',
-        content
-    )
+    infra_connection_patterns = [
+        match[0] for match in re.finditer(
+            r'New\w*Client\(|New\w*Server\(|sql\.Open\(|net\.Dial\(|http\.Client\{', content
+        ) if match.start() not in httptest_servers
+    ]
     
     # Determine if this is an integration test file (has build tag)
     is_integration_file = re.search(r'//go:build integration|// +build integration', content)
@@ -247,7 +262,7 @@ def check_test_quality(test_file_path):
     
     # Check 14: gomonkey supplementation reason comment [ERROR level - returns exit code 1]
     # CRITICAL for coverage-driven framework selection
-    # Every test function using gomonkey.ApplyMethod/ApplyFunc must have a
+    # Every test function using a gomonkey patch API below must have a
     # "// Supplementation reason:" comment explaining why baseline framework was insufficient
     
     # Pre-compute test function line ranges for analysis
@@ -260,13 +275,14 @@ def check_test_quality(test_file_path):
                 end += 1
             test_func_ranges.append((start, end, line))
     
-    gomonkey_import = bool(re.search(r'"github.com/agiledragon/gomonkey"', content))
+    gomonkey_import = bool(re.search(r'"github\.com/agiledragon/gomonkey(?:/v2)?"', content))
+    gomonkey_patch_call = re.compile(r'\bgomonkey\.Apply(?:PrivateMethod|Method|Func)\(')
     
     if gomonkey_import:
         gomonkey_tests_without_reason = []
         for start, end, func_line in test_func_ranges:
             func_body = '\n'.join(lines[start:end])
-            if re.search(r'gomonkey\.ApplyMethod\(|gomonkey\.ApplyFunc\(', func_body):
+            if gomonkey_patch_call.search(func_body):
                 # Check for supplementation reason comment in the function body or 3 lines above
                 comment_area = '\n'.join(lines[max(0, start - 3):end])
                 if not re.search(r'Supplementation reason:', comment_area, re.IGNORECASE):
@@ -287,7 +303,7 @@ def check_test_quality(test_file_path):
     # usage must have supplementation reason, and no test function may mix two mechanisms
     
     other_mock_imports = re.findall(
-        r'"github.com/stretchr/testify/mock"|"go.uber.org/mock"|"github.com/golang/mock"',
+        r'"(?:github\.com/stretchr/testify/mock|go\.uber\.org/mock/gomock|github\.com/golang/mock/gomock)"',
         content
     )
     
@@ -304,7 +320,7 @@ def check_test_quality(test_file_path):
         # Check: same test function mixing gomonkey + other mock mechanism
         for start, end, func_line in test_func_ranges:
             func_body = '\n'.join(lines[start:end])
-            has_gomonkey = re.search(r'gomonkey\.ApplyMethod\(|gomonkey\.ApplyFunc\(', func_body)
+            has_gomonkey = gomonkey_patch_call.search(func_body)
             has_other_mock = re.search(r'\.EXPECT\(|gomock\.NewController\(|mock\.Mock', func_body)
             if has_gomonkey and has_other_mock:
                 func_name_match = re.search(r'func (Test\w+)', func_line)

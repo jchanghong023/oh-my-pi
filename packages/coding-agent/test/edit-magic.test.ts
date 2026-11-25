@@ -664,7 +664,7 @@ describe("edit tool in magic mode", () => {
 		if (batch) {
 			expect(result.details?.perFileResults).toMatchObject([
 				{ path: "sample.ts", isError: true },
-				{ path: "sibling.ts" },
+				{ path: sibling },
 			]);
 			expect(await Bun.file(sibling).text()).toBe(SOURCE.replace("return sum;", "return sum + 1;"));
 		}

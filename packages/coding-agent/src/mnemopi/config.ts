@@ -72,12 +72,12 @@ export interface MnemopiBackendConfig {
 }
 
 /** Resolve embedding settings without probing or opening the memory database. */
-export function resolveMnemopiEmbeddingOptions(settings: Settings): Pick<
+export function resolveMnemopiEmbeddingOptions(
+	settings: Settings,
+): Pick<
 	MnemopiProviderOptions,
-	"noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey"
-> & {
-	requestMaxAttempts?: number;
-} {
+	"noEmbeddings" | "embeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey"
+> {
 	const embeddingOverride = cfgMnemopiEmbeddingModel.get(settings);
 	const embeddingVariant = cfgMnemopiEmbeddingVariant.get(settings);
 	// Avoid indexing with an untrusted config value; unknown variants use the English default.
@@ -99,7 +99,6 @@ export function resolveMnemopiEmbeddingOptions(settings: Settings): Pick<
 				? Bun.env.MNEMOPI_EMBEDDING_API_KEY || Bun.env.OPENROUTER_API_KEY || Bun.env.OPENAI_API_KEY || undefined
 				: undefined),
 		...company,
-		requestMaxAttempts: company ? 4 : undefined,
 	};
 }
 
@@ -115,7 +114,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const recallBanks =
 		scoping === "global" ? scope.recallBanks : extendRecallWithLegacyBanks(scope.recallBanks, dbPath, cwd);
 	const llmMode = cfgMnemopiLlmMode.get(settings);
-	const { requestMaxAttempts, ...embeddingOptions } = resolveMnemopiEmbeddingOptions(settings);
+	const { embeddings, ...embeddingOptions } = resolveMnemopiEmbeddingOptions(settings);
 	return {
 		dbPath,
 		baseBank: scope.baseBank,
@@ -139,10 +138,10 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 			...embeddingOptions,
 			debug: cfgMnemopiDebug.get(settings),
 			embeddings: {
+				...embeddings,
 				// A blank prefix is unset; a set one keeps its whitespace (`query: `).
 				queryPrefix: cfgMnemopiEmbeddingQueryPrefix.get(settings) || undefined,
 				inputType: cfgMnemopiEmbeddingInputType.get(settings),
-				requestMaxAttempts,
 			},
 			llm:
 				llmMode === "remote"

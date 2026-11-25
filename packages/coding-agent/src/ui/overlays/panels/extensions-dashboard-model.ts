@@ -44,6 +44,10 @@ export interface ProviderTabView {
 
 export interface ExtensionDashboardOptions {
 	readonly runtime: ExtensionDashboardRuntime;
+	/** Match live MCP sources, not inventory rows that might shadow them. */
+	readonly mcpServersForProvider?: (providerId: string, userSourceOnly: boolean) => readonly string[];
+	/** Rediscover and connect eligible servers for the enabled switch. */
+	readonly connectMcpForProvider?: (providerId: string, userSourceOnly: boolean) => Promise<void>;
 	readonly terminal: {
 		readonly theme: Accessor<Theme>;
 		readonly size: Accessor<{ readonly columns: number; readonly rows: number }>;
@@ -80,6 +84,7 @@ export class ExtensionDashboardModel {
 	readonly expandGlyph: string;
 	#listIndex = 0;
 	#refresh = 0;
+	#providerMcpChanges = Promise.resolve();
 	#unsubscribers: (() => void)[] = [];
 	#rev = 0;
 
@@ -196,31 +201,28 @@ export class ExtensionDashboardModel {
 	// ─── Toggles ────────────────────────────────────────────────────────────
 
 	#toggleProvider(providerId: string): void {
-		const enabling = this.tabs.find(tab => tab.id === providerId)?.enabled === false;
-		this.runtime.toggleProvider(providerId);
-		if (!enabling) void this.#disconnectMcp(providerId);
-		else void this.#reload();
+		this.#syncProviderMcp(providerId, false, this.runtime.toggleProvider(providerId));
 	}
 
 	#toggleUserSource(providerId: string): void {
-		if (!this.runtime.toggleUserSource(providerId)) void this.#disconnectMcp(providerId, "user");
-		else void this.#reload();
+		this.#syncProviderMcp(providerId, true, this.runtime.toggleUserSource(providerId));
 	}
 
-	/** A disabled provider's MCP servers leave the session (its configs stay as they are). */
-	async #disconnectMcp(providerId: string, level?: "user" | "project"): Promise<void> {
-		const names = new Set(
-			this.extensions
-				.filter(
-					ext =>
-						ext.kind === "mcp" &&
-						ext.source.provider === providerId &&
-						(level === undefined || ext.source.level === level) &&
-						!isShadowedExtension(ext),
-				)
-				.map(ext => ext.name),
+	#syncProviderMcp(providerId: string, userSourceOnly: boolean, enabled: boolean): void {
+		const change = this.#providerMcpChanges.then(() =>
+			enabled
+				? this.options.connectMcpForProvider?.(providerId, userSourceOnly)
+				: this.#disconnectMcp(providerId, userSourceOnly),
 		);
-		for (const name of names) {
+		this.#providerMcpChanges = change.catch(error => {
+			logger.warn("Failed to apply provider switch to live MCP servers", { providerId, enabled, error: String(error) });
+		});
+		void this.#providerMcpChanges.then(() => this.#reload());
+	}
+
+	/** Servers gated by the switch leave the session without changing their configs. */
+	async #disconnectMcp(providerId: string, userSourceOnly: boolean): Promise<void> {
+		for (const name of this.options.mcpServersForProvider?.(providerId, userSourceOnly) ?? []) {
 			try {
 				await this.runtime.applyMcpToggle(name, false);
 			} catch (error) {
@@ -231,7 +233,6 @@ export class ExtensionDashboardModel {
 				});
 			}
 		}
-		await this.#reload();
 	}
 
 	#toggleExtension(id: string, enabled: boolean): void {
@@ -249,7 +250,7 @@ export class ExtensionDashboardModel {
 			disabled.push(id);
 			this.runtime.setDisabledExtensions(disabled);
 		}
-		this.#applyDisabled(disabled);
+		if (!id.startsWith("skill:")) this.#applyDisabled(disabled);
 		void this.#reload();
 	}
 
@@ -284,7 +285,9 @@ export class ExtensionDashboardModel {
 	#applyDisabled(ids: string[]): void {
 		const disabled = new Set(ids);
 		const providers = this.runtime.getProviders();
-		const update = (ext: Extension) => withDisabledIds(ext, disabled, providers);
+		// A skill toggle can affect several resolved names. The catalog reload
+		// recomputes their effective state instead of guessing from individual ids.
+		const update = (ext: Extension) => (ext.kind === "skill" ? ext : withDisabledIds(ext, disabled, providers));
 		this.extensions = this.extensions.map(update);
 		this.tabFiltered = this.tabFiltered.map(update);
 		this.searchFiltered = this.searchFiltered.map(update);

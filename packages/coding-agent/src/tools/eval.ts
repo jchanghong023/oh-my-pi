@@ -38,7 +38,7 @@ import { webpExclusionForModel } from "../utils/image-input";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
-import { type EvalBackendsAllowance, resolveAdvertisedEvalBackends, resolveEvalBackends } from "./eval-backends";
+import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends";
 import { recordStatusEvent, type StatusEventLog } from "./details/eval";
 import { formatOutputNotice } from "./output-meta-format";
 import { resolveOutputMaxColumns, resolveOutputSinkArtifactMaxBytes, resolveOutputSinkHeadBytes } from "./output-meta";
@@ -83,7 +83,7 @@ function describeLanguageField(langs: readonly EvalLanguageToken[]): string {
 	return langs.map(lang => EVAL_LANGUAGE_RUNTIME[lang]).join("; ");
 }
 
-/** One-line discovery summary listing the runtimes available this session. */
+/** One-line discovery summary listing the configured runtimes. */
 function summarizeEvalLanguages(langs: readonly EvalLanguageToken[]): string {
 	const names = langs.map(lang => EVAL_LANGUAGE_NAME[lang]);
 	return names.length > 0
@@ -135,11 +135,9 @@ export type EvalToolParams = typeof evalSchema.infer;
 export type EvalCellInput = EvalToolParams;
 
 /**
- * Build a session-scoped copy of the eval schema whose `language` enum and field
- * descriptions advertise only the runtimes enabled for this session. Disabled
- * backends never reach the model: the wire schema, BM25 discovery corpus, and
- * tool description stay in lockstep with {@link resolveAdvertisedEvalBackends}. The static
- * {@link evalSchema} (full union) remains the type-level source of truth.
+ * Build a session-scoped schema with only configured runtimes. Availability is
+ * checked at execution so a failed probe never prevents a later retry.
+ * The static {@link evalSchema} (full union) is the type-level source of truth.
  */
 function buildEvalSchema(langs: readonly EvalLanguageToken[], maxTimeout?: number): typeof evalSchema {
 	const schema = type({
@@ -308,7 +306,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	#descriptionOptions(): EvalToolDescriptionOptions {
 		const session = this.session;
 		if (!session) return {};
-		const backends = resolveAdvertisedEvalBackends(session);
+		const backends = resolveEvalBackends(session);
 		const depthAllowsSpawning = canSpawnAtDepth(
 			cfgTaskMaxRecursionDepth.get(session.settings),
 			session.taskDepth ?? 0,
@@ -406,12 +404,11 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly #environmentModes: Partial<Record<EvalLanguage, "managed" | "project">> = {};
 
 	/**
-	 * Languages enabled for this session, in display order. Detached tools (no
-	 * session) fall back to the shipped defaults (py/js). Synchronous reads use
-	 * only definitive memoized probes, never blocking runtime discovery.
+	 * Configured languages in display order. Detached tools (no session) fall
+	 * back to the shipped schema (py/js).
 	 */
 	#enabledLanguages(): EvalLanguageToken[] {
-		return this.session ? enabledEvalLanguages(resolveAdvertisedEvalBackends(this.session)) : ["py", "js"];
+		return this.session ? enabledEvalLanguages(resolveEvalBackends(this.session)) : ["py", "js"];
 	}
 
 	constructor(
@@ -539,6 +536,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				this.#runCells({
 					session,
 					parentToolCallId: _toolCallId,
+					toolContext: ctx,
 					cells,
 					languages,
 					notice,
@@ -747,6 +745,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	async #runCells(options: {
 		session: ToolSession;
 		parentToolCallId: string;
+		toolContext?: AgentToolContext;
 		cells: ResolvedEvalCell[];
 		languages: EvalLanguage[];
 		notice: string | undefined;
@@ -904,6 +903,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						cwd: session.cwd,
 						sessionId,
 						parentToolCallId: options.parentToolCallId,
+						toolContext: options.toolContext,
 						sessionFile: sessionFile ?? undefined,
 						kernelOwnerId,
 						signal: combinedSignal,

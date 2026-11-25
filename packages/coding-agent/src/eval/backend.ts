@@ -1,3 +1,4 @@
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { buildEvalUrlRoots, LocalProtocolHandler } from "../internal-urls";
 import { contextLocalProtocolOptions } from "../internal-urls/context";
 import type { OutputArtifactError } from "../tools/streaming-output";
@@ -12,6 +13,7 @@ export interface ExecutorBackendExecOptions {
 	sessionId: string;
 	/** ID of the eval invocation, not the session or its reusable kernel. */
 	parentToolCallId?: string;
+	toolContext?: AgentToolContext;
 	sessionFile: string | undefined;
 	kernelOwnerId: string | undefined;
 	signal?: AbortSignal;

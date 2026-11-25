@@ -124,7 +124,7 @@ codecovcli analyze --scenario codecovJobId --codecovid "{jobId}"
 | `branchInfo.language` | language | 语言 |
 | `branchInfo.jobId` | jobId | 任务 ID |
 | `branchInfo.codeBranch` | sourceBranch | 代码分支 |
-| （无对应字段） | targetBranch | 留空 |
+| （无对应字段） | targetBranch | 修复前通过 `ask` 获取该报告实际使用的增量对比目标分支 |
 | `branchInfo.codeRepository` | gitPath | 代码仓地址 |
 | `diffCoverage.coverage` | incrementalCoverage | 增量覆盖率 |
 | `diffCoverage.total` | totalLines | 增量总行数 |
@@ -209,6 +209,8 @@ Job ID: {jobId}
 
 若覆盖率已达标且无失败用例，输出提示并**终止执行**。
 
+若 CodeCov 报告需要修复，进入 Step 3 前必须用 `ask` 获取该报告实际用于增量对比的目标分支名，并保存为 `targetBranch`，后续修复任务及本地检查均使用此值。不得使用空值、远端默认分支或推测值；用户无法提供时终止流程并说明原因。
+
 ### Step 3: 创建修复任务队列
 
 根据步骤 2 的问题清单，为每个需要修复的文件创建独立任务。
@@ -279,18 +281,18 @@ Job ID: {jobId}
 
 检查本地分支与源分支是否一致，并获取远端跟踪分支信息。
 
-执行 `node "{{pluginRoot}}/scripts/local-gitbranch.js" "{sourceBranch}" "{targetBranch}" "{gitPath}"`，解析输出中的检查结果：
+使用 `bash` 执行 `node q({{pluginRoot}}/scripts/local-gitbranch.js) q(sourceBranch) q(targetBranch) q(gitPath)`，解析输出中的检查结果。`q(...)` 表示需替换为经 Bash 单参数编码的完整值：外层加单引号，值中的每个单引号用 `'\''` 替代。逐值编码后再构造命令，不得直接将外部值插入双引号或未加引号的命令中，也不得重新解释参数。
 
 - 如果输出 `ok: true`，记录 `remoteTracking` 字段用于 Step 5.3 的 `--targetbranch` 参数，继续执行
-- 如果输出 `ok: false`，根据 `reason` 使用 `ask` 提醒用户操作，用户处理完后重新执行脚本，循环直到 `ok: true`
+- 如果输出 `ok: false`，根据 `reason` 使用 `ask` 收集正确参数或提示用户处理；处理完后重新执行脚本。若无法修正，不得继续增量验证。
 
 | reason | 含义 | 提醒用户操作 |
 |--------|------|-------------|
-| `BRANCH_MISMATCH` | 当前分支与源分支不一致 | 提示用户执行 `git checkout {sourceBranch}` |
-| `NO_REMOTE` | 未找到代码仓对应的远端配置 | 提示用户执行 `git remote add <name> {gitPath}` |
-| `NO_REMOTE_BRANCH` | 远端分支不存在 | 提示用户执行 `git fetch {remoteName}` |
-| `GIT_ERROR` | 无法获取当前分支 | 提示用户确认当前目录是否为 Git 仓库 |
-| `INVALID_ARGS` | 脚本参数错误 | 提示用户检查参数 |
+| `BRANCH_MISMATCH` | 当前分支与源分支不一致 | 提示用户执行 `git checkout q(sourceBranch)` |
+| `NO_REMOTE` | 未找到代码仓对应的远端配置 | 提示用户执行 `git remote add <name> q(gitPath)` |
+| `NO_REMOTE_BRANCH` | 合法的目标分支名对应的远端跟踪引用不存在 | 提示用户执行 `git fetch q(remoteName)` |
+| `GIT_ERROR` | 无法执行 Git 分支检查 | 提示用户确认当前目录及 Git 仓库状态 |
+| `INVALID_ARGS` | 参数缺失或目标分支名无效 | 用 `ask` 获取正确参数，尤其是报告实际使用的目标分支，不要提示 `git fetch` |
 
 不可跳过分支检查直接执行增量覆盖率分析。
 
@@ -301,17 +303,18 @@ Job ID: {jobId}
 #### Step 5.3: 执行增量覆盖率分析
 
 **Maven 配置提取**：
-- 执行 `node "{{pluginRoot}}/skills/fix-ut/scripts/java/extract-maven-config.js" <projectDir>` 获取 Maven 配置
-- 脚本无输出时从 AGENTS.md/DT_AGENTS.md 读取，都没有则使用默认配置
+- 执行 `node q({{pluginRoot}}/skills/fix-ut/scripts/java/extract-maven-config.js) q(projectDir)` 获取 Maven 配置（`settingsPath`、`mavenProperties`、`vmOptions`）；脚本无输出时从 AGENTS.md/DT_AGENTS.md 读取，都没有则使用默认命令。
+- 下列命令的动态参数同样按 Step 5.1 的 `q(...)` 规则编码。仅在相应字段非空时使用 `--settings` 或 `--param`；`--param` 只传 `mavenProperties`。
+- 有 `vmOptions` 时，在 `codecovcli` 命令前加 `MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }"q(vmOptions)`，让其启动的 Maven 从环境继承 JVM 选项，并保留已有 `MAVEN_OPTS`；否则不设置该变量。
 
 **有 Maven 配置时**：
 ```bash
-codecovcli analyze --tests "{testClasses}" --scenario incremental --targetbranch "{remoteTracking}" --settings "{settingsPath}" --param "{mavenProperties}"
+codecovcli analyze --tests q(testClasses) --scenario incremental --targetbranch q(remoteTracking) --settings q(settingsPath) --param q(mavenProperties)
 ```
 
 **无 Maven 配置时（默认）**：
 ```bash
-codecovcli analyze --tests "{testClasses}" --scenario incremental --targetbranch "{remoteTracking}"
+codecovcli analyze --tests q(testClasses) --scenario incremental --targetbranch q(remoteTracking)
 ```
 
 #### Step 5.4: 判断是否达标
@@ -500,7 +503,7 @@ taskUrl: {url}
 5. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
 6. 任务由主 Agent 按创建顺序串行调度，无需设置 blockedBy 依赖链
 7. 循环验证最多 3 轮，避免无限循环
-8. 增量覆盖率验证时，必须通过 `local-gitbranch.js` 脚本检查本地分支状态，循环调用直到 `ok: true`
+8. 增量覆盖率验证前，必须通过 `local-gitbranch.js` 脚本检查本地分支状态；只有得到 `ok: true` 才能继续
 9. Maven 配置获取优先级：extract-maven-config.js 脚本 → 目标项目 AGENTS.md → 默认命令
 10. codecovcli 命令执行超时设为 20 分钟（1200000ms）
 11. codecovcli 如果失败禁止使用jacoco执行代码覆盖率，如果codecovcli执行失败了要引导用户去处理

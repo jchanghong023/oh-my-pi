@@ -87,7 +87,8 @@ export function galleryStatusFacts(overrides: Partial<StatusFacts> = {}): Status
 		cwd: "/workspace/oh-my-pi",
 		git: {
 			branch: "gallery/reference",
-			status: [0, 2, 3, 0, 1, 0, 0, 0],
+			// Two staged, three unstaged and one untracked path, all distinct.
+			status: [0, 2, 3, 5, 1, 3, 4, 6],
 			pr: { number: 1842, url: "https://github.com/can1357/oh-my-pi/pull/1842" },
 		},
 		hostname: "gallery-host",

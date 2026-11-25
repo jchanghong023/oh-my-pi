@@ -200,6 +200,16 @@ export const mnemopiBackend: MemoryBackend = {
 		await removeDbFiles(getMnemopiScopedDbPaths(config));
 		if (!session?.sessionId || previous?.aliasOf || cfgMemoryBackend.get(session.settings) !== "mnemopi") return;
 		try {
+			if (!previous) {
+				config.providerOptions = await resolveMnemopiProviderOptions(
+					config,
+					session.settings,
+					session.modelRegistry,
+					session.sessionId,
+					session.sessionManager,
+					session,
+				);
+			}
 			await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 			await installMnemopiState(session, config);
 		} catch (error) {
@@ -532,16 +542,18 @@ async function resolveMnemopiProviderOptions(
 	usageLedger: Partial<ModelUsageLedger>,
 	session: AgentSession,
 ): Promise<MnemopiProviderOptions> {
+	const configuredEmbeddings = config.providerOptions.embeddings || undefined;
 	const base: MnemopiProviderOptions = {
 		noEmbeddings: config.providerOptions.noEmbeddings,
 		embeddings: {
-			...(config.providerOptions.embeddings || undefined),
+			...configuredEmbeddings,
 			onRequestFailed: embeddingFailureNotifier(session),
 			allowLocal: () => !cfgOffline.get(settings) || session.model?.api === "local-inference",
 			// Initializing fastembed can download missing or corrupt files, even when
 			// the cache initially appears complete. Reuse only an already loaded model.
 			allowLocalLoad: () => !cfgOffline.get(settings),
 			allowRemote: baseUrl => {
+				if (configuredEmbeddings?.allowRemote?.(baseUrl) === false) return false;
 				if (!cfgOffline.get(settings)) return true;
 				const model = session.model;
 				if (!model?.provider || !model.baseUrl) return false;
@@ -556,6 +568,8 @@ async function resolveMnemopiProviderOptions(
 					return false;
 				}
 			},
+			// A redirect could replay the POST body outside the approved origin.
+			requestRedirect: () => (cfgOffline.get(settings) ? "error" : configuredEmbeddings?.requestRedirect?.()),
 		},
 		embeddingModel: config.providerOptions.embeddingModel,
 		embeddingApiUrl: config.providerOptions.embeddingApiUrl,

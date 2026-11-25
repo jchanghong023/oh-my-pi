@@ -605,11 +605,22 @@ describe("applyForkNetworkDefaults", () => {
 		expect(Bun.env.GIT_SSL_NO_VERIFY).toBe("true");
 	});
 
-	it("keeps an explicit GIT_SSL_NO_VERIFY", () => {
-		Bun.env.GIT_SSL_NO_VERIFY = "false";
-		applyForkNetworkDefaults();
-		expect(Bun.env.GIT_SSL_NO_VERIFY).toBe("false");
-		expect(Bun.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe("0");
+	it("honors an explicit GIT_SSL_NO_VERIFY=false without changing the TLS default", () => {
+		// Run in a child so the remembered Git opt-in doesn't affect other tests.
+		const proxyModule = import.meta.resolve("@oh-my-pi/pi-ai/utils/proxy");
+		const script = `
+			import assert from "node:assert/strict";
+			import { fileURLToPath } from "node:url";
+			const { applyForkNetworkDefaults } = await import(fileURLToPath(${JSON.stringify(proxyModule)}));
+			applyForkNetworkDefaults();
+			assert.equal(Bun.env.GIT_SSL_NO_VERIFY, undefined);
+			assert.equal(Bun.env.NODE_TLS_REJECT_UNAUTHORIZED, "0");
+		`;
+		const child = Bun.spawnSync([process.execPath, "--no-install", "--no-env-file", "--eval", script], {
+			env: { ...process.env, GIT_SSL_NO_VERIFY: "false" },
+			stderr: "pipe",
+		});
+		if (child.exitCode !== 0) throw new Error(child.stderr.toString());
 	});
 });
 

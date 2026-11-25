@@ -61,6 +61,7 @@ import {
 	approvalRootCandidates,
 	searchApprovalCacheTargets,
 } from "./search-approval-targets";
+import { createTeamSearchTargetCheck } from "./team-read-isolation";
 import { type LineRange, parseLineRanges, selectorLineRanges } from "./line-ranges";
 import { isReadableUrlPath, splitPathAndSel } from "./details/read";
 import { toPathList } from "../utils/render-utils";
@@ -293,6 +294,7 @@ function mergeRangesInto(map: Map<string, LineRange[]>, absKey: string, ranges: 
 async function resolveArchiveSearchPaths(
 	pathSpecs: readonly GrepPathSpec[],
 	cwd: string,
+	assertTarget?: (target: string) => Promise<void>,
 ): Promise<{
 	resolvedPaths: string[];
 	displayMap: Map<string, string>;
@@ -306,6 +308,7 @@ async function resolveArchiveSearchPaths(
 	const unreadable: string[] = [];
 	let tempDir: string | undefined;
 	const archiveCache = new Map<string, ArchiveReader>();
+	const members: { idx: number; entry: string; archiveAbs: string; subPath: string }[] = [];
 
 	for (let idx = 0; idx < pathSpecs.length; idx++) {
 		const spec = pathSpecs[idx];
@@ -316,6 +319,11 @@ async function resolveArchiveSearchPaths(
 		if (!member) continue;
 
 		const archiveAbs = resolveReadPath(member.archivePath, cwd);
+		await assertTarget?.(archiveAbs);
+		members.push({ idx, entry, archiveAbs, subPath: member.subPath });
+	}
+
+	for (const { idx, entry, archiveAbs, subPath } of members) {
 		let archive = archiveCache.get(archiveAbs);
 		if (!archive) {
 			try {
@@ -329,7 +337,7 @@ async function resolveArchiveSearchPaths(
 
 		let extracted: ExtractedArchiveFile;
 		try {
-			extracted = await archive.readFile(member.subPath);
+			extracted = await archive.readFile(subPath);
 		} catch (err) {
 			unreadable.push(`${entry} (${(err as Error).message})`);
 			continue;
@@ -352,7 +360,7 @@ async function resolveArchiveSearchPaths(
 		}
 		// Per-entry filename keeps the scratch path unique even when two selectors
 		// resolve to members with the same basename.
-		const safeBase = path.basename(member.subPath).replace(/[^\w.-]+/g, "_") || "entry";
+		const safeBase = path.basename(subPath).replace(/[^\w.-]+/g, "_") || "entry";
 		const tempPath = path.join(tempDir, `${idx}-${safeBase}`);
 		await writeFile(tempPath, text);
 		resolvedPaths[idx] = tempPath;
@@ -682,9 +690,11 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				context: resolveContext,
 				tier: resolveToolTier(this, params),
 			});
+			const assertTarget = await createTeamSearchTargetCheck(this.session, resolveContext);
 			const expandedEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd, {
 				exclusionParts: true,
 				mixedLocalPaths: urlFilesystem,
+				assertTarget,
 			});
 			// `!glob` entries exclude; the rest are what to search (all of cwd when only exclusions were given).
 			// A file or folder whose name really starts with `!` is still searched.
@@ -720,7 +730,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				displaySet: archiveDisplaySet,
 				unreadable: archiveUnreadable,
 				cleanup: cleanupArchiveScratch,
-			} = await resolveArchiveSearchPaths(pathSpecs, this.session.cwd);
+			} = await resolveArchiveSearchPaths(pathSpecs, this.session.cwd, assertTarget);
 			try {
 				const rangesByAbsPath = new Map<string, LineRange[]>();
 
@@ -746,6 +756,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					cwd: this.session.cwd,
 					internalUrlAction: "search",
 					filesystem: urlFilesystem,
+					assertTarget,
 					resolveExternalUrl: materializeExternalUrlForSearch,
 					trackImmutableSources: true,
 					surfaceExactFilePaths: true,
@@ -773,6 +784,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						const absKey = router.canHandle(resolved)
 							? resolved
 							: path.resolve(resolveReadPath(resolved, this.session.cwd));
+						await assertTarget?.(absKey);
 						const stats = await urlFilesystem.stat(absKey).catch(() => null);
 						if (!stats) {
 							throw new ToolError(`Path not found for line-range selector: ${spec.original}`);

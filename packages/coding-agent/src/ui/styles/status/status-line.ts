@@ -195,7 +195,10 @@ function paintBar(node: UiNode, cx: PaintContext): Block {
 	const props = node.props() as { term?: StatusBarLook };
 	const groups = props.term?.groups ?? "both";
 	const segs = (props.term?.segs ?? node.children()).filter(child => child.kind === "seg");
-	const chip = groups === "left" ? new Set(fitRuleChip(cx, segs).right.map(seg => seg.node)) : undefined;
+	const chip =
+		groups === "left"
+			? new Set(fitRuleChip(cx, segs, props.term?.topChipInset).right.map(seg => seg.node))
+			: undefined;
 	const shown = chip ? segs.filter(seg => !chip.has(seg)) : segs;
 	const mark = separator(cx.theme);
 	const fit = fitStatus(cx, shown, { separatorWidth: visibleWidth(mark), reclaim: true });

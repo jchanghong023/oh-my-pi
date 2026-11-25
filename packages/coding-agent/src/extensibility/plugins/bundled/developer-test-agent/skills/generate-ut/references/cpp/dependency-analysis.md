@@ -37,9 +37,9 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `source_file` | 位置参数 | 是 | 源文件路径 (.cpp 文件，不能用 .h 文件) |
+| `source_file` | 位置参数 | 是 | 被分析翻译单元的源文件（如 `.c`、`.cpp`） |
 | `-l` | int | 是 | 函数定义所在行号 |
-| `-c` | string | 是 | compile_commands.json 文件路径，用于获取编译参数。**注意**：虽然标记为必填，但脚本代码中无该参数时会直接报错退出，实际为必填 |
+| `-c` | string | 是 | `compile_commands.json` 路径，用于获取该文件的编译参数 |
 
 **调用示例**:
 
@@ -68,7 +68,7 @@ function_name /path/to/header.h:78 (外部依赖)
 
 ### 脚本关键约束
 
-- **必须先查找函数位置再调用脚本** - 脚本需要文件路径和行号，不能直接用函数名, 不能用头文件作为文件路径，脚本会报错
+- **MUST 先定位再调用脚本**：传入源文件路径和函数定义行号
 - **内部依赖才递归** - 外部依赖直接标记停止
 - **避免重复处理** - 用 set 记录已处理的函数，避免循环
 - **关注 `[需查找实现位置]` 标记** - 有此标记的内部依赖需要查找函数实现，如果查找不到，停止递归处理
@@ -91,7 +91,17 @@ libclang不可用时，通过阅读源代码人工分析调用关系。标注：
 
 ### 上下文提取脚本
 
-使用 `node "{SKILL_DIR}/scripts/cpp/ut_code_analysis.js"` 提取上下文到临时工作目录（Windows 下路径反斜杠须改为正斜杠）。脚本不可用时手动读取，但必须遵循探索范围约束。
+使用与调用链脚本相同的 Python 3、`clang.cindex` 和 libclang 环境。MUST 优先传入已定位的源文件；只在尚未定位文件时传入明确的最小目录。Windows 下脚本路径使用正斜杠。
+
+```bash
+node "{SKILL_DIR}/scripts/cpp/ut_code_analysis.js" -i "<source_file>" -o "<temporary_dir>" -f "<target_function>" -p "<compile_commands.json>"
+```
+
+无编译数据库且无需额外编译参数时可省略 `-p`。同名定义用源文件、限定函数名或 `-l <line>` 区分；用 `-L <path>` 指定 libclang 库。
+
+读取临时目录中的 `target_function_body.md`（目标函数体）、`callee_function_body.md`（当前翻译单元里的直接内部调用函数体）、`global_var_decl.md`（全局变量）、`code_context.md`（相关类型和宏）及 `io_paragraph.md`（参数和返回类型）。
+
+传递 Mock 需求按下节逐项补查。脚本不可用时，按同一范围手动读取。
 
 ## 传递依赖分析
 

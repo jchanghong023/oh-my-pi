@@ -526,7 +526,7 @@ export class TranscriptPresenter {
 					}
 					call.setRenderContext({ settledBashJobs });
 				}
-				call.updateResult(result, partial);
+				batch(() => call.updateResult(result, partial));
 				settleIfFinal(result, partial);
 			},
 			setArgsComplete: () => call.setArgsComplete(),

@@ -126,6 +126,7 @@ import {
 	hasPositiveMovedProjectEvidence,
 	readTerminalBreadcrumbEntry,
 	resolveManagedSessionRoot,
+	sessionDirForCwd,
 	worktreeSessionDirs,
 	writeTerminalBreadcrumb,
 } from "./session-paths";
@@ -172,6 +173,19 @@ export class SessionMoveRefusedError extends Error {
 		super(message);
 		this.name = "SessionMoveRefusedError";
 	}
+}
+
+/** A candidate could not be claimed by this runtime. */
+class SessionRuntimeOwnershipError extends Error {
+	constructor(sessionFile: string) {
+		super(`Cannot host session "${sessionFile}": another live omp process owns it.`);
+	}
+}
+
+function invalidSessionHeaderError(sessionFile: string): Error {
+	return new Error(
+		`Cannot resume session "${sessionFile}": the session header is missing or malformed. The file was not modified.`,
+	);
 }
 
 function nowIso(): string {
@@ -1034,6 +1048,8 @@ export class SessionManager {
 	#additionalDirectories: string[] = [];
 	#fallbackRuntimeOnly = false;
 	#sessionDir: string;
+	/** Local artifacts resolve here even when a storage backend uses relative keys. */
+	readonly #artifactBaseDir: string;
 	readonly #persist: boolean;
 	readonly #storage: SessionStorage;
 	readonly #blobs: BlobStore;
@@ -1169,8 +1185,15 @@ export class SessionManager {
 	 */
 	#pendingArtifactCopy: { sessionFile: string; done: Promise<void> } | undefined;
 
-	private constructor(cwd: string, sessionDir: string, persist: boolean, storage: SessionStorage) {
+	private constructor(
+		cwd: string,
+		sessionDir: string,
+		persist: boolean,
+		storage: SessionStorage,
+		artifactBaseDir = process.cwd(),
+	) {
 		this.#cwd = cwd;
+		this.#artifactBaseDir = artifactBaseDir;
 		// File-backed paths remain valid after a command changes directory; other
 		// storage backends use the directory as an opaque key.
 		const resolvedSessionDir =
@@ -1323,7 +1346,7 @@ export class SessionManager {
 					? retained.release
 					: this.#storage.claimSession(sessionId, sessionFile, this);
 			if (!release) {
-				throw new Error(`Cannot host session "${sessionFile}": another live omp process owns it.`);
+				throw new SessionRuntimeOwnershipError(sessionFile);
 			}
 			if (current !== retained) current?.release?.();
 			this.#sessionClaim =
@@ -1492,9 +1515,11 @@ export class SessionManager {
 		const from = this.#sessionFile as string;
 		const previousSessionId = this.#sessionId;
 		const timestamp = nowIso();
-		this.#sessionId = mintSessionId();
+		const sessionId = mintSessionId();
+		const to = path.join(path.dirname(from), `${fileSafeTimestamp(timestamp)}_${sessionId}.jsonl`);
+		this.#transitionSessionClaim(sessionId, to);
+		this.#sessionId = sessionId;
 		this.#taskSiblingCandidate = undefined;
-		const to = path.join(path.dirname(from), `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
 		// The marker goes before the carried-over fields: the session listing
 		// reads only the first 4 KB of a file, and a header grows with them.
 		const {
@@ -1521,7 +1546,10 @@ export class SessionManager {
 		this.#rewriteRequired = true;
 		this.#artifactManager = null;
 		this.#artifactManagerLocalRoot = null;
-		this.#pendingArtifactCopy = { sessionFile: to, done: copySessionArtifacts(from, to) };
+		this.#pendingArtifactCopy = {
+			sessionFile: to,
+			done: copySessionArtifacts(path.resolve(this.#artifactBaseDir, from), path.resolve(this.#artifactBaseDir, to)),
+		};
 		this.#rememberBreadcrumb(this.#cwd, to);
 		this.#claimSession();
 		this.#notifyPersistenceNotice({ reason, from, to });
@@ -2242,20 +2270,22 @@ export class SessionManager {
 	}
 
 	#resetToNewSession(options?: NewSessionOptions, forcedSessionFile?: string): string | undefined {
-		this.#diskTail = Promise.resolve();
-		this.#clearDiskError();
-		this.#expectedDiskSize = null;
-		this.#reconcileSessionDirForFallback();
-		if (options?.sessionDir && this.#persist) {
-			this.#sessionDir = path.resolve(options.sessionDir);
-			this.#storage.ensureDirSync(this.#sessionDir);
-		}
+		const requestedDir = this.#persist ? options?.sessionDir || undefined : undefined;
+		const explicitDir =
+			requestedDir && this.#storage instanceof FileSessionStorage ? path.resolve(requestedDir) : requestedDir;
+		const sessionDir = explicitDir ?? this.#sessionDirForNewSession();
+		if (explicitDir) this.#storage.ensureDirSync(explicitDir);
 		const sessionId = mintSessionId();
 		const timestamp = nowIso();
 		const sessionFile = this.#persist
-			? (forcedSessionFile ?? path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${sessionId}.jsonl`))
+			? (forcedSessionFile ?? path.join(sessionDir, `${fileSafeTimestamp(timestamp)}_${sessionId}.jsonl`))
 			: undefined;
 		this.#transitionSessionClaim(sessionId, sessionFile);
+		this.#diskTail = Promise.resolve();
+		this.#clearDiskError();
+		this.#expectedDiskSize = null;
+		this.#sessionDir = sessionDir;
+		this.#fallbackRuntimeOnly = false;
 		this.#sessionId = sessionId;
 		this.#taskSiblingCandidate = undefined;
 		this.#sessionName = undefined;
@@ -2380,14 +2410,20 @@ export class SessionManager {
 		this.#index.setLeaf(restoredLeaf && this.#index.has(restoredLeaf) ? restoredLeaf : null);
 	}
 
+	#draftSidecarPath(name: string): string | null {
+		// Draft sidecars belong to the storage backend, not the local spill path.
+		const dir = this.#adoptedArtifactManager
+			? this.#adoptedArtifactManager.sessionDir
+			: artifactsDirectoryFor(this.#sessionFile);
+		return dir ? path.join(dir, name) : null;
+	}
+
 	#draftPath(): string | null {
-		const artifactsDir = this.getArtifactsDir();
-		return artifactsDir ? path.join(artifactsDir, "draft.txt") : null;
+		return this.#draftSidecarPath("draft.txt");
 	}
 
 	#draftOnlySessionMarkerPath(): string | null {
-		const artifactsDir = this.getArtifactsDir();
-		return artifactsDir ? path.join(artifactsDir, DRAFT_ONLY_SESSION_MARKER) : null;
+		return this.#draftSidecarPath(DRAFT_ONLY_SESSION_MARKER);
 	}
 
 	#hasDraftOnlySessionMarker(): boolean {
@@ -2420,7 +2456,7 @@ export class SessionManager {
 		if (this.#adoptedArtifactManager) return this.#adoptedArtifactManager;
 
 		const sessionFile = this.#sessionFile;
-		const sessionDir = artifactsDirectoryFor(sessionFile);
+		const sessionDir = this.getArtifactsDir();
 		const localRoot = resolveLocalRoot({ getArtifactsDir: () => sessionDir, getSessionId: () => this.#sessionId });
 		if (this.#artifactManager && this.#artifactManagerLocalRoot === localRoot) return this.#artifactManager;
 
@@ -2494,7 +2530,7 @@ export class SessionManager {
 	 */
 	cloneCurrentSession(options?: { persist?: boolean }): SessionManager {
 		const persist = options?.persist ?? this.#persist;
-		const clone = new SessionManager(this.#cwd, this.#sessionDir, persist, this.#storage);
+		const clone = new SessionManager(this.#cwd, this.#sessionDir, persist, this.#storage, this.#artifactBaseDir);
 		clone.#suppressBreadcrumb = true;
 		clone.restoreState(this.captureState());
 		if (!persist) {
@@ -2587,8 +2623,6 @@ export class SessionManager {
 		options?: { throwIfMissing?: boolean; newSession?: NewSessionOptions },
 	): Promise<void> {
 		await this.#drainAndCloseWriter();
-		this.#clearDiskError();
-		this.#draftOnlySessionCleanupArmed = false;
 
 		const resolvedSessionFile = this.#storage instanceof FileSessionStorage ? path.resolve(sessionFile) : sessionFile;
 		const loaded = loadedSession ?? (await loadSessionFile(resolvedSessionFile, this.#storage));
@@ -2598,11 +2632,7 @@ export class SessionManager {
 				: this.#storage.existsSync(resolvedSessionFile)
 					? this.#storage.statSync(resolvedSessionFile).size
 					: null;
-		if (loaded.invalidHeader) {
-			throw new Error(
-				`Cannot resume session "${resolvedSessionFile}": the session header is missing or malformed. The file was not modified.`,
-			);
-		}
+		if (loaded.invalidHeader) throw invalidSessionHeaderError(resolvedSessionFile);
 
 		const { entries: fileEntries, titleSlot } = loaded;
 		if (fileEntries.length === 0) {
@@ -2628,6 +2658,8 @@ export class SessionManager {
 		const adoptHeaderCwd =
 			headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryIsEnterable(headerCwd));
 		this.#transitionSessionClaim(header.id, resolvedSessionFile);
+		this.#clearDiskError();
+		this.#draftOnlySessionCleanupArmed = false;
 		const migrated = migrateToCurrentVersion(fileEntries);
 		this.#sessionFile = resolvedSessionFile;
 		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
@@ -2709,13 +2741,15 @@ export class SessionManager {
 		const oldSessionFile = this.#sessionFile;
 		const parentSessionId = this.#sessionId;
 		await this.#drainAndCloseWriter();
-		this.#clearDiskError();
-		this.#reconcileSessionDirForFallback();
+		const sessionDir = this.#sessionDirForNewSession();
 
 		const timestamp = nowIso();
 		const sessionId = mintSessionId();
-		const sessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${sessionId}.jsonl`);
+		const sessionFile = path.join(sessionDir, `${fileSafeTimestamp(timestamp)}_${sessionId}.jsonl`);
 		this.#transitionSessionClaim(sessionId, sessionFile);
+		this.#clearDiskError();
+		this.#sessionDir = sessionDir;
+		this.#fallbackRuntimeOnly = false;
 		this.#sessionId = sessionId;
 		this.#sessionFile = sessionFile;
 		this.#taskSiblingCandidate = undefined;
@@ -2783,7 +2817,8 @@ export class SessionManager {
 		const claimDestination = async (file: string): Promise<void> => {
 			const id = await readSessionHeaderId(file);
 			if (id === undefined || id === destination?.id) return;
-			const release = this.#storage.claimSession?.(id, file);
+			const owner = id === this.#sessionId && this.#runtimeOwnership ? this : undefined;
+			const release = this.#storage.claimSession?.(id, file, owner);
 			if (release === null) {
 				throw new SessionMoveRefusedError(
 					`Cannot move session to "${file}": another live omp process writes the session there. Nothing was moved.`,
@@ -2838,8 +2873,8 @@ export class SessionManager {
 
 				const oldSessionFile = this.#sessionFile;
 				const newSessionFile = path.join(nextSessionDir, path.basename(oldSessionFile));
-				const oldArtifactsDir = artifactsDirectoryFor(oldSessionFile);
-				const newArtifactsDir = artifactsDirectoryFor(newSessionFile);
+				const oldArtifactsDir = this.#localArtifactsDirectoryFor(oldSessionFile);
+				const newArtifactsDir = this.#localArtifactsDirectoryFor(newSessionFile);
 				const sessionPathChanged = path.resolve(oldSessionFile) !== path.resolve(newSessionFile);
 				const artifactPathChanged =
 					oldArtifactsDir !== null &&
@@ -3351,11 +3386,10 @@ export class SessionManager {
 	 * should recompute sessionDir. Workspace-dir mutations must not clear
 	 * it early.
 	 */
-	#reconcileSessionDirForFallback(): void {
-		if (this.#fallbackRuntimeOnly) {
-			this.#sessionDir = computeDefaultSessionDir(this.#cwd, this.#storage);
-			this.#fallbackRuntimeOnly = false;
-		}
+	#sessionDirForNewSession(): string {
+		return this.#fallbackRuntimeOnly && this.#persist
+			? computeDefaultSessionDir(this.#cwd, this.#storage)
+			: this.#sessionDir;
 	}
 
 	/** Additional workspace directories beyond cwd (multi-root), absolute and normalized. */
@@ -3523,9 +3557,14 @@ export class SessionManager {
 		return this.#sessionOwnedElsewhere();
 	}
 
+	#localArtifactsDirectoryFor(sessionFile: string | undefined): string | null {
+		const dir = artifactsDirectoryFor(sessionFile);
+		return dir && !path.isAbsolute(dir) ? path.resolve(this.#artifactBaseDir, dir) : dir;
+	}
+
 	getArtifactsDir(): string | null {
 		if (this.#adoptedArtifactManager) return this.#adoptedArtifactManager.sessionDir;
-		return artifactsDirectoryFor(this.#sessionFile);
+		return this.#localArtifactsDirectoryFor(this.#sessionFile);
 	}
 
 	adoptArtifactManager(manager: ArtifactManagerApi): void {
@@ -4432,8 +4471,8 @@ export class SessionManager {
 
 		const timestamp = nowIso();
 		const newSessionId = mintSessionId();
-		this.#reconcileSessionDirForFallback();
-		const newSessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${newSessionId}.jsonl`);
+		const sessionDir = this.#sessionDirForNewSession();
+		const newSessionFile = path.join(sessionDir, `${fileSafeTimestamp(timestamp)}_${newSessionId}.jsonl`);
 		const header: SessionHeader = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
@@ -4464,6 +4503,8 @@ export class SessionManager {
 		}
 
 		this.#transitionSessionClaim(newSessionId, this.#persist ? newSessionFile : undefined);
+		this.#sessionDir = sessionDir;
+		this.#fallbackRuntimeOnly = false;
 		this.#header = header;
 		this.#entries = [...entriesToKeep, ...labels];
 		this.#sessionId = newSessionId;
@@ -4488,7 +4529,10 @@ export class SessionManager {
 		if (options?.copyArtifacts && sourceSessionFile) {
 			this.#pendingArtifactCopy = {
 				sessionFile: newSessionFile,
-				done: copySessionArtifacts(sourceSessionFile, newSessionFile),
+				done: copySessionArtifacts(
+					path.resolve(this.#artifactBaseDir, sourceSessionFile),
+					path.resolve(this.#artifactBaseDir, newSessionFile),
+				),
 			};
 		}
 		this.#expectedDiskSize = null;
@@ -4593,7 +4637,7 @@ export class SessionManager {
 			while (entry) {
 				if (visited.has(entry.id)) throw new Error("Cycle in fork source history");
 				visited.add(entry.id);
-				branch.push(entry);
+				branch.push(entry.activeLeafId === undefined ? entry : { ...entry, activeLeafId: undefined });
 				entry = entry.parentId === null ? undefined : byId.get(entry.parentId);
 			}
 			history.splice(0, history.length, ...branch.reverse());
@@ -4626,7 +4670,10 @@ export class SessionManager {
 		manager.#forceFileCreation = true;
 		await manager.#rewriteAtomically();
 		if (options?.copyArtifacts !== false) {
-			await copySessionArtifacts(sourcePath, manager.#sessionFile!);
+			await copySessionArtifacts(
+				path.resolve(manager.#artifactBaseDir, sourcePath),
+				path.resolve(manager.#artifactBaseDir, manager.#sessionFile!),
+			);
 		}
 		return manager;
 	}
@@ -4723,7 +4770,9 @@ export class SessionManager {
 		const dir =
 			sessionDir ??
 			(recordedCwd && !recordedCwdUsable
-				? SessionManager.getDefaultSessionDir(cwd, undefined, storage)
+				? options?.readOnly
+					? sessionDirForCwd(cwd)
+					: SessionManager.getDefaultSessionDir(cwd, undefined, storage)
 				: path.dirname(storage instanceof FileSessionStorage ? path.resolve(filePath) : filePath));
 		const manager = new SessionManager(cwd, dir, !options?.readOnly, storage);
 		manager.#suppressBreadcrumb = options?.readOnly === true || options?.suppressBreadcrumb === true;
@@ -4836,11 +4885,9 @@ export class SessionManager {
 		};
 	}
 	/**
-	 * Continue the most recent session, or create a new one if none exists.
-	 * A session another live omp process writes
-	 * ({@link SessionStorage.isSessionOwnedElsewhere}) is passed over for the
-	 * newest one in the directory nobody else writes; resuming it would
-	 * duplicate the running conversation into a sibling on the first write.
+	 * Continue the most recent session we can claim, or create a new one.
+	 * Claimed journals are read under the lease, which remains held until the
+	 * runtime closes or switches sessions. Busy candidates are passed over.
 	 *
 	 * When the chosen session's conversation went on in another file (it moved
 	 * off its file; see `findSessionContinuation`), this opens the copy to
@@ -4862,6 +4909,54 @@ export class SessionManager {
 		const resolvedCwd = path.resolve(cwd);
 		const breadcrumb = await readTerminalBreadcrumbEntry();
 		let chosenSession: string | null | undefined;
+		const openCandidate = async (
+			file: string,
+			candidateCwd: string = cwd,
+			candidateDir: string = dir,
+		): Promise<SessionManager | undefined> => {
+			// Read the actual snapshot after taking the lease. A normal journal
+			// only needs a prefix read to find the id before we can claim it.
+			let sessionId: string | undefined;
+			if (storage.claimSession) {
+				if (storage instanceof FileSessionStorage) sessionId = await readSessionHeaderId(file);
+				if (!sessionId && storage.existsSync(file)) {
+					const loaded = await loadSessionFile(file, storage);
+					if (loaded.invalidHeader) {
+						throw invalidSessionHeaderError(storage instanceof FileSessionStorage ? path.resolve(file) : file);
+					}
+					sessionId = loaded.entries[0]?.id;
+				}
+				if (!sessionId) return undefined;
+			}
+			const manager = new SessionManager(candidateCwd, candidateDir, true, storage);
+			manager.#runtimeOwnership = true;
+			let adopted = false;
+			try {
+				if (sessionId) manager.#transitionSessionClaim(sessionId, file);
+				const loaded = await loadSessionFile(file, storage, { throwIfMissing: true });
+				const header = loaded.entries[0] as SessionHeader | undefined;
+				if (!loaded.invalidHeader && (!header || (sessionId && header.id !== sessionId))) return undefined;
+				await manager.#setSessionFile(file, loaded, { throwIfMissing: true });
+				adopted = true;
+				return manager;
+			} catch (error) {
+				if (error instanceof SessionRuntimeOwnershipError) {
+					logger.debug("Not continuing a session another omp process writes", { sessionFile: file });
+				} else if (!isEnoent(error) && !isEnotdir(error)) {
+					throw error;
+				}
+				return undefined;
+			} finally {
+				if (!adopted) await manager.close();
+			}
+		};
+
+		const createFresh = (): SessionManager => {
+			const manager = new SessionManager(cwd, dir, true, storage);
+			manager.#runtimeOwnership = true;
+			manager.#resetToNewSession();
+			return manager;
+		};
 
 		if (breadcrumb?.fresh && !breadcrumb.exists) {
 			// A lazy fresh-session boundary whose JSONL was never materialized
@@ -4876,9 +4971,7 @@ export class SessionManager {
 				path.resolve(breadcrumb.cwd) === resolvedCwd &&
 				(!sessionDir || pathIsWithin(dir, path.dirname(breadcrumb.sessionFile)))
 			) {
-				const manager = new SessionManager(cwd, dir, true, storage);
-				manager.#resetToNewSession();
-				return manager;
+				return createFresh();
 			}
 		} else if (breadcrumb) {
 			// Recover stale crumbs: a subagent open (pre-fix) may have pointed this
@@ -4932,26 +5025,21 @@ export class SessionManager {
 					// recorded cwd, which would no-op moveTo when it equals `cwd`.
 					// The breadcrumb names this session, as a file named to `--resume` is named.
 					const continuation = await findSessionContinuation(breadcrumb.sessionFile, storage);
-					const manager = await SessionManager.open(
-						continuation?.session.path ?? breadcrumb.sessionFile,
-						undefined,
-						storage,
-						{ initialCwd: breadcrumbCwd },
-					);
-					try {
-						await manager.moveTo(cwd, sessionDir);
-						if (continuation) options.onSessionContinuation?.(continuation);
-						return manager;
-					} catch (err) {
-						if (!(err instanceof SessionMoveRefusedError)) throw err;
-						// Another live omp process still writes the session (the
-						// project was renamed under it): leave it there and continue
-						// as if no move were possible.
-						logger.warn("Not re-rooting moved session: it is open in another omp process", {
-							from: breadcrumbCwd,
-							to: resolvedCwd,
-						});
-						await manager.close();
+					const candidate = continuation?.session.path ?? breadcrumb.sessionFile;
+					const manager = await openCandidate(candidate, breadcrumbCwd, path.dirname(candidate));
+					if (manager) {
+						try {
+							await manager.moveTo(cwd, sessionDir);
+							if (continuation) options.onSessionContinuation?.(continuation);
+							return manager;
+						} catch (err) {
+							await manager.close();
+							if (!(err instanceof SessionMoveRefusedError)) throw err;
+							logger.warn("Not re-rooting moved session: the move was refused", {
+								from: breadcrumbCwd,
+								to: resolvedCwd,
+							});
+						}
 					}
 				} else if (candidateForMove) {
 					logger.warn(
@@ -4964,19 +5052,22 @@ export class SessionManager {
 			}
 		}
 
-		/** The copy of `picked` to resume, or undefined while another omp process writes it. */
-		const resumableCopy = async (picked: string): Promise<string | undefined> => {
+		/** The claimed copy of `picked` to resume, or undefined if it cannot be claimed. */
+		const resumableCopy = async (picked: string): Promise<SessionManager | undefined> => {
 			const fromBreadcrumb = !!breadcrumb && path.resolve(picked) === path.resolve(breadcrumb.sessionFile);
 			const continuation = fromBreadcrumb
 				? await findSessionContinuation(picked, storage)
 				: await findRecentSessionContinuation(picked, storage);
-			const resumable = continuation?.session.path ?? picked;
-			if (storage.isSessionOwnedElsewhere?.(resumable)) {
-				logger.debug("Not continuing a session another omp process writes", { sessionFile: resumable });
-				return undefined;
+			const manager = await openCandidate(continuation?.session.path ?? picked);
+			if (manager && continuation) {
+				try {
+					options.onSessionContinuation?.(continuation);
+				} catch (error) {
+					await manager.close();
+					throw error;
+				}
 			}
-			if (continuation) options.onSessionContinuation?.(continuation);
-			return resumable;
+			return manager;
 		};
 
 		let resumed = chosenSession ? await resumableCopy(chosenSession) : undefined;
@@ -4991,10 +5082,7 @@ export class SessionManager {
 			}
 		}
 
-		const manager = new SessionManager(cwd, dir, true, storage);
-		if (resumed) await manager.setSessionFile(resumed);
-		else manager.#resetToNewSession();
-		return manager;
+		return resumed ?? createFresh();
 	}
 
 	/** Create an in-memory session (no file persistence). */

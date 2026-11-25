@@ -2464,7 +2464,7 @@ fn checkout_tree(
 	opts.overwrite_existing = true;
 	let progress = gix::progress::Discard;
 	let interrupt = std::sync::atomic::AtomicBool::new(false);
-	gix::worktree::state::checkout(
+	let outcome = gix::worktree::state::checkout(
 		&mut target,
 		owner.root(),
 		repo
@@ -2478,6 +2478,16 @@ fn checkout_tree(
 		opts,
 	)
 	.map_err(|e| Error::backend("git checkout", with_causes(&e)))?;
+	if !outcome.collisions.is_empty() || !outcome.errors.is_empty() {
+		return Err(Error::backend(
+			"git checkout",
+			format!(
+				"checkout reported {} collisions and {} errors",
+				outcome.collisions.len(),
+				outcome.errors.len()
+			),
+		));
+	}
 	target
 		.write(INDEX_WRITE)
 		.map_err(|e| Error::backend("git checkout", e))
@@ -4150,15 +4160,10 @@ mod tests {
 		let (temp, repo) = fixture();
 		let linked_dir = tempfile::tempdir().unwrap();
 		let linked = linked_dir.path().to_path_buf();
-		repo
-			.worktree_add(&linked, "main", WorktreeAddOptions {
-				detach:       true,
-				clone:        WorktreeClone::Off,
-				keep_changes: false,
-			})
-			.unwrap();
+		let id = resolve_commit(&repo.gix().unwrap(), "main").unwrap();
+		let admin =
+			register_worktree(&linked, &repo.info().common_dir, &id.to_hex().to_string()).unwrap();
 
-		let admin = registered_admin(&linked.join(".git")).unwrap().unwrap();
 		assert_eq!(
 			fs::read_to_string(linked.join(".git")).unwrap(),
 			format!("gitdir: {}\n", git_metadata_path(&admin))

@@ -67,7 +67,7 @@ import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "../../session/session-listing";
 import { probeSessionLeases } from "../../session/session-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
-import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
+import { executeAcpBuiltinSlashCommand, isTuiOnlyTodoLoopCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
 import { cfgSttEnabled } from "../../stt/settings";
@@ -2166,8 +2166,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					notifyConfigChanged: async () => {
 						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
 					},
+				}).finally(() => {
+					if (!backgroundedBuiltin) builtinCommandAborts.delete(builtinAbort);
 				});
-				if (!backgroundedBuiltin) builtinCommandAborts.delete(builtinAbort);
 				if (!isCurrent()) return "cancelled";
 				if (builtinResult !== false) {
 					if (!("prompt" in builtinResult)) {
@@ -2186,6 +2187,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 					}
 					text = builtinResult.prompt;
 				}
+			} else if (isTuiOnlyTodoLoopCommand(text)) {
+				// Replacement text bypasses builtin dispatch, but TodoLoop is TUI-only.
+				output({ type: "command_output", text: "/todoloop is only supported in the TUI." });
+				return "local";
 			}
 			if (!isCurrent() || !ticket) return "cancelled";
 			await watchAndReportPromptResult({

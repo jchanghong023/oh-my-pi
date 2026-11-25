@@ -15,7 +15,7 @@ import { resolveSttModelSpec, type SttModelKey } from "./models";
 import { evaluateSubmitTrigger } from "./submit-trigger";
 import { encodePcm16Wav, floatToPcm16 } from "./wav";
 
-import { cfgSttLanguage, cfgSttSubmitTrigger } from "./settings";
+import { cfgSttLanguage, cfgSttSubmitTrigger, sttLanguageHint } from "./settings";
 
 export type SttState = "idle" | "recording" | "transcribing";
 
@@ -78,6 +78,7 @@ export class STTController {
 	#streamCommitted = false;
 	#streamAbort: AbortController | null = null;
 	#streamUtterance = "";
+	#streamLanguage: string | undefined;
 
 	// Buffered cloud capture.
 	#cloudModel: Model<Api> | null = null;
@@ -355,11 +356,11 @@ export class STTController {
 
 		let failed = false;
 		let finalText = "";
+		let language = normalizeSttLanguage(sttLanguageHint(this.#settings));
 		try {
 			if (cfgOffline.get(this.#settings) && model.provider !== this.#getSessionProvider?.()) {
 				throw new Error("Dictation is unavailable: the active session provider changed in offline mode.");
 			}
-			const language = normalizeSttLanguage(cfgSttLanguage.get(this.#settings));
 			const result = await transcribeAudio(
 				model,
 				{
@@ -375,6 +376,7 @@ export class STTController {
 				},
 			);
 			finalText = result.text.trim();
+			language = result.language?.trim() || language;
 		} catch (err) {
 			failed = true;
 			if (!this.#disposed) {
@@ -388,7 +390,7 @@ export class STTController {
 			return;
 		}
 
-		this.#finishTranscript(finalText, failed, options);
+		this.#finishTranscript(finalText, failed, options, language);
 		this.#cleanupCloud();
 		this.#setState("idle", options);
 	}
@@ -415,14 +417,16 @@ export class STTController {
 	}
 
 	async #startStreaming(editor: SttTarget, options: SttCallbacks, modelKey: SttModelKey): Promise<void> {
-		const language = cfgSttLanguage.get(this.#settings);
+		const language = sttLanguageHint(this.#settings);
+		const spec = resolveSttModelSpec(modelKey);
+		this.#streamLanguage = spec.englishOnly ? "en" : spec.engine === "transformers" ? language : undefined;
 		this.#streamEditor = editor;
 		this.#streamCallbacks = options;
 		this.#streamCommitted = false;
 		this.#streamUtterance = "";
 		this.#streamAbort = new AbortController();
 		const stream = sttClient.startStream(modelKey, {
-			language: language || undefined,
+			language,
 			signal: this.#streamAbort.signal,
 			onPartial: text => {
 				if (this.#disposed || this.#state !== "recording") return;
@@ -513,7 +517,7 @@ export class STTController {
 			this.#cleanupStream();
 			return;
 		}
-		this.#finishTranscript(finalText, failed, options);
+		this.#finishTranscript(finalText, failed, options, this.#streamLanguage);
 		this.#cleanupStream();
 		this.#setState("idle", options);
 	}
@@ -526,9 +530,10 @@ export class STTController {
 		this.#streamCommitted = false;
 		this.#streamAbort = null;
 		this.#streamUtterance = "";
+		this.#streamLanguage = undefined;
 	}
 
-	#finishTranscript(finalText: string, failed: boolean, options: SttCallbacks): void {
+	#finishTranscript(finalText: string, failed: boolean, options: SttCallbacks, language: string | undefined): void {
 		if (!this.#streamCommitted && finalText) {
 			const prefixed = this.#prefixed(finalText);
 			this.#streamEditor?.commitVolatileText(prefixed);
@@ -541,7 +546,7 @@ export class STTController {
 
 		if (!options.manualSubmit && this.#streamCommitted && !failed && this.#streamEditor) {
 			const trigger = cfgSttSubmitTrigger.get(this.#settings);
-			const { submit, trimTrailing } = evaluateSubmitTrigger(this.#streamUtterance, trigger);
+			const { submit, trimTrailing } = evaluateSubmitTrigger(this.#streamUtterance, trigger, language);
 			if (trimTrailing > 0) {
 				this.#streamEditor.deleteBeforeCursor(trimTrailing);
 			}

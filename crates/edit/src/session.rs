@@ -457,15 +457,15 @@ impl Session {
 				&& source_parses(&file.before, &file.display)
 				&& !source_parses(&file.after, &file.display);
 
-			let old_text = if file.op == FileOp::Create {
-				None
-			} else {
-				file.before_raw.clone()
-			};
 			let new_text = match file.op {
 				FileOp::Delete => None,
 				FileOp::Noop => file.before_raw.clone(),
-				_ => Some(response.written.clone()),
+				_ => Some(response.written),
+			};
+			let old_text = if file.op == FileOp::Create {
+				None
+			} else {
+				file.before_raw.take()
 			};
 			let (old_text, new_text, snapshots_pruned) = prune_snapshots(old_text, new_text);
 

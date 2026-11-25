@@ -25,6 +25,11 @@ function fileAction(change: TurnToolDiff): string {
 	return change.op === "create" ? "新增" : change.op === "delete" ? "删除" : "修改";
 }
 
+function filePathLabel(cwd: string, change: TurnToolDiff): string {
+	const origin = displayPath(cwd, change.sourcePath ?? change.path);
+	return change.move ? `${origin} → ${displayPath(cwd, change.move)}` : origin;
+}
+
 /** Editor chrome: its rows can never be retired into terminal history. */
 export class CompactFileDiff {
 	#offset = 0;
@@ -191,13 +196,14 @@ export class CompactFileDiff {
 							.join("\n"),
 					},
 				];
+		const origin = file.sourcePath ?? file.path;
 		const card: EditCard = {
 			kind: inline ? "inline" : "card",
 			title: fileAction(file),
-			path: displayPath(cwd, file.path),
+			path: displayPath(cwd, origin),
 			rename: file.move ? displayPath(cwd, file.move) : undefined,
 			link: {
-				path: path.resolve(cwd, file.path),
+				path: path.resolve(cwd, origin),
 				rename: file.move ? path.resolve(cwd, file.move) : undefined,
 				line: file.firstChangedLine,
 			},
@@ -245,7 +251,7 @@ export class CompactFileDiff {
 			const preview = this.#previewRows(latest, cwd, bodyWidth, maxRows);
 			return preview.length
 				? preview.map(line => left + line)
-				: [left + theme.fg("accent", truncate(displayPath(cwd, latest.path), bodyWidth))];
+				: [left + theme.fg("accent", truncate(filePathLabel(cwd, latest), bodyWidth))];
 		}
 		let entry = this.#expandedRows;
 		if (
@@ -258,9 +264,7 @@ export class CompactFileDiff {
 		) {
 			const rows: string[] = [];
 			for (const change of source) {
-				const target = displayPath(cwd, change.path);
-				const destination = change.move ? ` → ${displayPath(cwd, change.move)}` : "";
-				rows.push(theme.fg("accent", truncate(`${fileAction(change)} ${target}${destination}`, bodyWidth)));
+				rows.push(theme.fg("accent", truncate(`${fileAction(change)} ${filePathLabel(cwd, change)}`, bodyWidth)));
 				for (const line of this.#rows(change)) rows.push(...wrapDiffRow(line, bodyWidth));
 			}
 			entry = { source, count: source.length, width: bodyWidth, cwd, theme, rows };
