@@ -4960,10 +4960,6 @@ export class SessionMaintenance {
 	 * → after amounts.
 	 */
 	#projectCompactedContextTokens(args: CompactionProjectionArgs, goalRestoreNotice?: CustomMessage): number {
-		return this.#projectCompactionContextTokens(args, goalRestoreNotice);
-	}
-
-	#projectCompactionContextTokens(args: CompactionProjectionArgs, goalRestoreNotice?: CustomMessage): number {
 		const nonMessageTokens = this.#estimateRequestOverheadTokens();
 		const branch = this.#host.sessionManager.getBranch();
 		const leaf = branch.at(-1);
@@ -5041,7 +5037,7 @@ export class SessionMaintenance {
 
 	/**
 	 * Current branch context tokens in the same `buildSessionContext` +
-	 * {@link #countProjectedMessages} domain as {@link #projectCompactionContextTokens}.
+	 * {@link #countProjectedMessages} domain as {@link #projectCompactedContextTokens}.
 	 */
 	#projectCurrentBranchContextTokens(branch: SessionEntry[] = this.#host.sessionManager.getBranch()): number {
 		const nonMessageTokens = computeNonMessageTokens(
@@ -5110,7 +5106,7 @@ export class SessionMaintenance {
 		args: CompactionProjectionArgs,
 		goalRestoreNotice?: CustomMessage,
 	): number {
-		return this.#projectCompactionContextTokens(
+		return this.#projectCompactedContextTokens(
 			{ ...args, details: { kind: "experimental-context-rollover", version: 1 } },
 			goalRestoreNotice,
 		);

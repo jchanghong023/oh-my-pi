@@ -760,14 +760,13 @@ export function resolveTableRowLookup(db: Database, table: string, context: "rea
 		const column = primaryKeyColumns[0]!;
 		return { kind: "pk", column: column.name, type: column.type };
 	}
+	const guidance = context === "read" ? "; use '?where=' instead" : "; row-key writes are not supported";
 	if (primaryKeyColumns.length > 1) {
-		const guidance = context === "read" ? "; use '?where=' instead" : "; row-key writes are not supported";
 		throw new ToolError(`SQLite table '${table}' has a composite primary key${guidance}`);
 	}
 
 	const schema = getTableSchema(db, table);
 	if (/\bWITHOUT\s+ROWID\b/i.test(schema)) {
-		const guidance = context === "read" ? "; use '?where=' instead" : "; row-key writes are not supported";
 		throw new ToolError(`SQLite table '${table}' does not expose ROWID${guidance}`);
 	}
 

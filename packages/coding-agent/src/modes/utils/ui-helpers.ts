@@ -1316,37 +1316,19 @@ export class UiHelpers {
 		};
 
 		try {
-			if (options?.willRetry) {
-				for (let i = 0; i < queuedMessages.length; i++) {
-					const message = queuedMessages[i];
-					const consumed = await this.#deliverQueuedMessage(message, onDelivered, isOwnerVisible);
-					if (!isOwnerVisible()) {
-						if (consumed) completedCommands.add(message);
-						parkRemaining(queuedMessages.slice(i + 1));
-						return;
-					}
-				}
-				this.ctx.updatePendingMessagesDisplay();
-				return;
-			}
-
-			let firstPromptIndex = -1;
-			for (let i = 0; i < queuedMessages.length; i++) {
-				if (!this.ctx.isKnownSlashCommand(queuedMessages[i].text)) {
-					firstPromptIndex = i;
-					break;
+			const firstPromptIndex = options?.willRetry
+				? -1
+				: queuedMessages.findIndex(message => !this.ctx.isKnownSlashCommand(message.text));
+			const prefixLength = firstPromptIndex === -1 ? queuedMessages.length : firstPromptIndex;
+			for (let i = 0; i < prefixLength; i++) {
+				await this.#deliverQueuedMessage(queuedMessages[i], onDelivered, isOwnerVisible);
+				if (!isOwnerVisible()) {
+					parkRemaining(queuedMessages.slice(i + 1));
+					return;
 				}
 			}
 			if (firstPromptIndex === -1) {
-				for (let i = 0; i < queuedMessages.length; i++) {
-					const message = queuedMessages[i];
-					const consumed = await this.#deliverQueuedMessage(message, onDelivered, isOwnerVisible);
-					if (!isOwnerVisible()) {
-						if (consumed) completedCommands.add(message);
-						parkRemaining(queuedMessages.slice(i + 1));
-						return;
-					}
-				}
+				if (options?.willRetry) this.ctx.updatePendingMessagesDisplay();
 				return;
 			}
 
@@ -1354,16 +1336,6 @@ export class UiHelpers {
 			const first = queuedMessages[firstPromptIndex];
 			firstPrompt = first;
 			const rest = queuedMessages.slice(firstPromptIndex + 1);
-
-			for (let i = 0; i < preCommands.length; i++) {
-				const message = preCommands[i];
-				const consumed = await this.#deliverQueuedMessage(message, onDelivered, isOwnerVisible);
-				if (!isOwnerVisible()) {
-					if (consumed) completedCommands.add(message);
-					parkRemaining(queuedMessages.slice(i + 1));
-					return;
-				}
-			}
 
 			const firstAdmission =
 				this.ctx.loopModeEnabled && this.ctx.loopPrompt === first.text ? Promise.withResolvers<void>() : undefined;

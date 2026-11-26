@@ -1,4 +1,3 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
@@ -34,7 +33,6 @@ type SkillPromptOptions = {
 
 interface InvokeSkillCommandOptions {
 	propagateErrors?: boolean;
-	queueOnly?: boolean;
 	goalAutoOrchestrateInitialId?: string;
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
@@ -46,10 +44,8 @@ interface InvokeSkillCommandOptions {
 	optimistic?: boolean;
 	/** After the session accepts the skill, with the outcome of forwarding it to the agent. */
 	onPromptAdmitted?: (pending: Promise<boolean>) => void;
-	/** With `queueOnly`: called with the messages the skill prompt pushed onto a queue (see `PromptOptions.onPromptQueued`). */
-	onPromptQueued?: (queued: readonly AgentMessage[]) => void;
 	/**
-	 * Without `queueOnly`: prompts that must run after the skill, in order (see `PromptOptions.followUps`).
+	 * Prompts that must run after the skill, in order (see `PromptOptions.followUps`).
 	 * If the skill fails before reaching the session, it goes back to the editor with them as one list.
 	 */
 	followUps?: string[];
@@ -111,22 +107,14 @@ export async function invokeSkillCommandFromText(
 			restoreUndeliveredList(ctx, text, options);
 			return false;
 		}
-		const promptOptions: SkillPromptOptions &
-			Pick<
-				InvokeSkillCommandOptions,
-				"queueOnly" | "goalAutoOrchestrateInitialId" | "onPromptQueued" | "followUps"
-			> = {
+		const promptOptions = {
 			...built.options,
+			followUps: options?.followUps,
+			...(options?.goalAutoOrchestrateInitialId
+				? { goalAutoOrchestrateInitialId: options.goalAutoOrchestrateInitialId }
+				: {}),
 		};
-		if (options?.queueOnly) {
-			promptOptions.queueOnly = true;
-			promptOptions.onPromptQueued = options.onPromptQueued;
-		} else {
-			promptOptions.followUps = options?.followUps;
-		}
-		if (options?.goalAutoOrchestrateInitialId)
-			promptOptions.goalAutoOrchestrateInitialId = options.goalAutoOrchestrateInitialId;
-		optimistic = options?.optimistic === true && !options?.queueOnly && !ctx.session.isStreaming;
+		optimistic = options?.optimistic === true && !ctx.session.isStreaming;
 		if (optimistic) {
 			ctx.renderOptimisticSkillMessage(
 				{ role: "custom", ...built.message, timestamp: Date.now() },

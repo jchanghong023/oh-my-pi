@@ -733,6 +733,11 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	const backends = resolveEvalBackends(session);
 	const allowEval = backends.python || backends.js;
 
+	// Checkpoint and rewind are a pair: listing one without the other strands
+	// the agent (it can checkpoint but not rewind, or vice versa). Auto-include
+	// the sister tool so a one-sided frontmatter `tools:` entry still works.
+	// Unlike the AST/auto-learn convenience auto-includes below, this is a
+	// safety pairing — it applies to restricted sessions too.
 	if (requestedTools && cfgCheckpointEnabled.get(session.settings)) {
 		if (requestedTools.includes("checkpoint") && !requestedTools.includes("rewind")) {
 			requestedTools.push("rewind");
@@ -918,8 +923,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {
 			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, session);
-			if (!tool) return null;
-			return wrapToolWithMetaNotice(tool);
+			return tool ? wrapToolWithMetaNotice(tool) : null;
 		}),
 	);
 	let tools = baseResults.filter((r): r is Tool => r !== null);

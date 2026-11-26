@@ -306,10 +306,11 @@ function textJudgeRoleChain(chain: RoleChainCandidate[]): RoleChainCandidate[] {
  * enabledModels 时保持原池不变。会话自身模型(withSessionFallback 追加)仍可用。
  */
 function scopedJudgeCandidatePool(settings: Settings, registry: ModelRegistry): Model[] {
-	const pool = roleCandidatePool("judge", settings, registry);
-	const patterns = cfgEnabledModels.get(settings);
-	if (!patterns || patterns.length === 0) return pool;
-	return filterAvailableModelsByEnabledPatterns(pool, patterns, settings);
+	return filterAvailableModelsByEnabledPatterns(
+		roleCandidatePool("judge", settings, registry),
+		cfgEnabledModels.get(settings),
+		settings,
+	);
 }
 
 /**

@@ -1383,6 +1383,33 @@ export class FileSessionStorage implements SessionStorage {
 		};
 	}
 
+	#sessionDeletionLogContext(sessionPath: string) {
+		return {
+			operation_id: logger.getLogContext().operation_id ?? `session-delete-${crypto.randomUUID()}`,
+			call_id: `session-delete-${crypto.randomUUID()}`,
+			session_path_hash: `hash-${Bun.hash(sessionPath).toString(36)}`,
+		};
+	}
+
+	#sessionDeletionLogFields(progress: SessionDeletionDiagnostic, started: number, reportPrimaryState = false) {
+		const { stage, primaryDeleted, backupFailureCount, artifactsRemoved } = progress;
+		return {
+			component: "session_storage",
+			stage,
+			primary_deleted: primaryDeleted,
+			// A rejected unlink does not establish whether its mutation committed.
+			...(reportPrimaryState ? { primary_delete_state: primaryDeleted ? "committed" : "unknown" } : undefined),
+			backup_failure_count: backupFailureCount,
+			artifacts_removed: artifactsRemoved,
+			partial: primaryDeleted && (backupFailureCount > 0 || !artifactsRemoved),
+			elapsed_ms: performance.now() - started,
+		};
+	}
+
+	#logSessionDeletionStage(message: string, fields: object, result: "started" | "completed"): void {
+		logger.info(message, { ...fields, event: "session_storage_delete_stage", result });
+	}
+
 	/**
 	 * Conditionally delete under the same cross-process lock used by the first
 	 * durable append to a draft-only session.
@@ -1393,11 +1420,7 @@ export class FileSessionStorage implements SessionStorage {
 		diagnostic?: SessionDeletionDiagnostic,
 	): Promise<boolean> {
 		return logger.withLogContext(
-			{
-				operation_id: logger.getLogContext().operation_id ?? `session-delete-${crypto.randomUUID()}`,
-				call_id: `session-delete-${crypto.randomUUID()}`,
-				session_path_hash: `hash-${Bun.hash(sessionPath).toString(36)}`,
-			},
+			this.#sessionDeletionLogContext(sessionPath),
 			() => {
 				const started = performance.now();
 				const progress = diagnostic ?? {
@@ -1410,15 +1433,7 @@ export class FileSessionStorage implements SessionStorage {
 				progress.primaryDeleted = false;
 				progress.backupFailureCount = 0;
 				progress.artifactsRemoved = false;
-				const fields = () => ({
-					component: "session_storage",
-					stage: progress.stage,
-					primary_deleted: progress.primaryDeleted,
-					backup_failure_count: progress.backupFailureCount,
-					artifacts_removed: progress.artifactsRemoved,
-					partial: progress.primaryDeleted && (progress.backupFailureCount > 0 || !progress.artifactsRemoved),
-					elapsed_ms: performance.now() - started,
-				});
+				const fields = () => this.#sessionDeletionLogFields(progress, started);
 				logger.info("Guarded session deletion started", {
 					...fields(),
 					event: "session_storage_delete",
@@ -1431,21 +1446,13 @@ export class FileSessionStorage implements SessionStorage {
 
 						fs.unlinkSync(sessionPath);
 						progress.primaryDeleted = true;
-						logger.info("Guarded session deletion stage completed", {
-							...fields(),
-							event: "session_storage_delete_stage",
-							result: "completed",
-						});
+						this.#logSessionDeletionStage("Guarded session deletion stage completed", fields(), "completed");
 						// Remove EPERM-rewrite leftovers (`<name>.jsonl.<snowflake>.bak`) for
 						// the same reason as deleteSessionWithArtifacts (#11499): the picker
 						// scan would otherwise resurrect the deleted session from the newest
 						// stale backup. Best-effort; synchronous to stay inside the lock.
 						progress.stage = "backup_cleanup";
-						logger.info("Guarded session deletion stage started", {
-							...fields(),
-							event: "session_storage_delete_stage",
-							result: "started",
-						});
+						this.#logSessionDeletionStage("Guarded session deletion stage started", fields(), "started");
 						const base = path.basename(sessionPath);
 						for (const bak of this.listFilesSync(path.dirname(sessionPath), "*.bak")) {
 							if (sessionBackupPrimaryName(path.basename(bak)) !== base) continue;
@@ -1471,11 +1478,7 @@ export class FileSessionStorage implements SessionStorage {
 						else logger.info("Guarded session backup cleanup completed", backupFields);
 
 						progress.stage = "artifact_cleanup";
-						logger.info("Guarded session deletion stage started", {
-							...fields(),
-							event: "session_storage_delete_stage",
-							result: "started",
-						});
+						this.#logSessionDeletionStage("Guarded session deletion stage started", fields(), "started");
 						const artifactsDir = sessionPath.slice(0, -6);
 						try {
 							fs.rmSync(artifactsDir, { recursive: true, force: true });
@@ -1487,11 +1490,7 @@ export class FileSessionStorage implements SessionStorage {
 							);
 						}
 						progress.artifactsRemoved = true;
-						logger.info("Guarded session deletion stage completed", {
-							...fields(),
-							event: "session_storage_delete_stage",
-							result: "completed",
-						});
+						this.#logSessionDeletionStage("Guarded session deletion stage completed", fields(), "completed");
 						progress.stage = "completed";
 						return true;
 					});
@@ -1527,30 +1526,18 @@ export class FileSessionStorage implements SessionStorage {
 		options?: { historyDbPath?: string; statsDbPath?: string },
 	): Promise<void> {
 		return logger.withLogContext(
-			{
-				operation_id: logger.getLogContext().operation_id ?? `session-delete-${crypto.randomUUID()}`,
-				call_id: `session-delete-${crypto.randomUUID()}`,
-				session_path_hash: `hash-${Bun.hash(sessionPath).toString(36)}`,
-			},
+			this.#sessionDeletionLogContext(sessionPath),
 			async () => {
 				// Capture the id before unlink, but preserve database rows if unlink fails.
 				const sessionId = readSessionHeaderIdSync(sessionPath);
 				const started = performance.now();
-				let stage = "primary_delete";
-				let primaryDeleted = false;
-				let backupFailureCount = 0;
-				let artifactsRemoved = false;
-				const fields = () => ({
-					component: "session_storage",
-					stage,
-					primary_deleted: primaryDeleted,
-					// A rejected unlink does not establish whether its mutation committed.
-					primary_delete_state: primaryDeleted ? "committed" : "unknown",
-					backup_failure_count: backupFailureCount,
-					artifacts_removed: artifactsRemoved,
-					partial: primaryDeleted && (backupFailureCount > 0 || !artifactsRemoved),
-					elapsed_ms: performance.now() - started,
-				});
+				const progress: SessionDeletionDiagnostic = {
+					stage: "primary_delete",
+					primaryDeleted: false,
+					backupFailureCount: 0,
+					artifactsRemoved: false,
+				};
+				const fields = () => this.#sessionDeletionLogFields(progress, started, true);
 				logger.info("Session deletion started", {
 					...fields(),
 					event: "session_storage_delete",
@@ -1562,7 +1549,7 @@ export class FileSessionStorage implements SessionStorage {
 					let alreadyGone: unknown;
 					try {
 						await this.unlink(sessionPath);
-						primaryDeleted = true;
+						progress.primaryDeleted = true;
 					} catch (error) {
 						if (!isEnoent(error)) throw error;
 						alreadyGone = error;
@@ -1570,18 +1557,10 @@ export class FileSessionStorage implements SessionStorage {
 					// Best-effort: a busy dashboard store never fails the deletion itself.
 					purgeDeletedSessionRows(sessionPath, { ...options, sessionId });
 					if (alreadyGone) throw alreadyGone;
-					logger.info("Session deletion stage completed", {
-						...fields(),
-						event: "session_storage_delete_stage",
-						result: "completed",
-					});
+					this.#logSessionDeletionStage("Session deletion stage completed", fields(), "completed");
 
-					stage = "artifact_cleanup";
-					logger.info("Session deletion stage started", {
-						...fields(),
-						event: "session_storage_delete_stage",
-						result: "started",
-					});
+					progress.stage = "artifact_cleanup";
+					this.#logSessionDeletionStage("Session deletion stage started", fields(), "started");
 					// Compute artifacts directory: /path/to/session.jsonl -> /path/to/session
 					const artifactsDir = sessionPath.slice(0, -6);
 					// Missing directories are fine; real cleanup failures still propagate.
@@ -1600,29 +1579,21 @@ export class FileSessionStorage implements SessionStorage {
 							{ cause: error },
 						);
 					}
-					artifactsRemoved = true;
-					logger.info("Session deletion stage completed", {
-						...fields(),
-						event: "session_storage_delete_stage",
-						result: "completed",
-					});
+					progress.artifactsRemoved = true;
+					this.#logSessionDeletionStage("Session deletion stage completed", fields(), "completed");
 
 					// Remove EPERM-rewrite leftovers (`<name>.jsonl.<snowflake>.bak`):
 					// the picker scan could otherwise resurrect a deleted session (#11499).
 					// Best-effort: a locked backup must not fail the requested deletion.
-					stage = "backup_cleanup";
-					logger.info("Session deletion stage started", {
-						...fields(),
-						event: "session_storage_delete_stage",
-						result: "started",
-					});
+					progress.stage = "backup_cleanup";
+					this.#logSessionDeletionStage("Session deletion stage started", fields(), "started");
 					const base = path.basename(sessionPath);
 					for (const bak of this.listFilesSync(path.dirname(sessionPath), "*.bak")) {
 						if (sessionBackupPrimaryName(path.basename(bak)) !== base) continue;
 						try {
 							await fsp.unlink(bak);
 						} catch (err) {
-							backupFailureCount++;
+							progress.backupFailureCount++;
 							logger.warn("Failed to remove stale session backup during delete", {
 								...fields(),
 								event: "session_storage_delete_stage",
@@ -1634,24 +1605,24 @@ export class FileSessionStorage implements SessionStorage {
 					const backupFields = {
 						...fields(),
 						event: "session_storage_delete_stage",
-						result: backupFailureCount > 0 ? "partial" : "completed",
+						result: progress.backupFailureCount > 0 ? "partial" : "completed",
 					};
-					if (backupFailureCount > 0) logger.warn("Session backup cleanup partial", backupFields);
+					if (progress.backupFailureCount > 0) logger.warn("Session backup cleanup partial", backupFields);
 					else logger.info("Session backup cleanup completed", backupFields);
-					stage = "completed";
+					progress.stage = "completed";
 					const terminalFields = {
 						...fields(),
 						event: "session_storage_delete",
-						result: backupFailureCount > 0 ? "partial" : "completed",
+						result: progress.backupFailureCount > 0 ? "partial" : "completed",
 					};
-					if (backupFailureCount > 0) logger.warn("Session deletion partial", terminalFields);
+					if (progress.backupFailureCount > 0) logger.warn("Session deletion partial", terminalFields);
 					else logger.info("Session deletion completed", terminalFields);
 				} catch (error) {
 					logger.error("Session deletion failed", {
 						...fields(),
 						event: "session_storage_delete",
-						result: primaryDeleted ? "partial" : "failed",
-						partial: primaryDeleted,
+						result: progress.primaryDeleted ? "partial" : "failed",
+						partial: progress.primaryDeleted,
 						...logger.diagnosticError(error),
 					});
 					throw error;

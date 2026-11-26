@@ -40,7 +40,7 @@ export const cfgSkillsEnableSkillCommands = register({
 	},
 });
 
-export const cfgSkillsEnableCodexUser = register({ id: "skills.enableCodexUser", type: "boolean", default: true });
+export const cfgSkillsEnableCodexUser = register({ id: "skills.enableCodexUser", type: "boolean", default: false });
 
 export const cfgSkillsEnableClaudeUser = register({ id: "skills.enableClaudeUser", type: "boolean", default: false });
 

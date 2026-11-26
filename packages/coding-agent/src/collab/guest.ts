@@ -902,22 +902,21 @@ export class CollabGuestLink {
 		if (this.#readOnly || this.#pendingUiRequests.has(request.reqId)) return;
 		const abort = new AbortController();
 		this.#pendingUiRequests.set(request.reqId, abort);
-		const dialogOptions =
-			request.kind === "select"
-				? {
-						signal: abort.signal,
-						initialIndex: request.initialIndex,
-						selectionMarker: request.selectionMarker,
-						checkedIndices: request.checkedIndices,
-						markableCount: request.markableCount,
-						helpText: request.helpText,
-					}
-				: undefined;
 		const dialog =
 			request.kind === "select"
-				? this.#ctx.showHookSelector(request.title, request.options, dialogOptions, {
-						kind: request.approval ? "permission" : "question",
-					})
+				? this.#ctx.showHookSelector(
+						request.title,
+						request.options,
+						{
+							signal: abort.signal,
+							initialIndex: request.initialIndex,
+							selectionMarker: request.selectionMarker,
+							checkedIndices: request.checkedIndices,
+							markableCount: request.markableCount,
+							helpText: request.helpText,
+						},
+						{ kind: request.approval ? "permission" : "question" },
+					)
 				: this.#ctx.showHookEditor(request.title, request.prefill, { signal: abort.signal });
 		dialog
 			.then(value => {

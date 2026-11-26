@@ -752,7 +752,7 @@ export const cfgArchiveEnabled = register({
 export const cfgCommitEnabled = register({
 	id: "commit.enabled",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "tools",
 		group: "Available Tools",
@@ -1106,7 +1106,7 @@ export const cfgAsyncMaxJobs = register({
 	id: "async.maxJobs",
 	protocolDefault: ["rpc"],
 	type: "number",
-	default: 32,
+	default: 100,
 });
 
 // Print mode is single-shot by default: it disposes after the last prompt, cancelling the

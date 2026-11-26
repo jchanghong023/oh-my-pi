@@ -68,7 +68,7 @@ export const cfgMnemopiEmbeddingVariant = register({
 	id: "mnemopi.embeddingVariant",
 	type: "enum",
 	values: ["en", "multilingual"] as const,
-	default: "multilingual",
+	default: "en",
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",

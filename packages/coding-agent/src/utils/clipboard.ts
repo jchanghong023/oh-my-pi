@@ -6,10 +6,9 @@ import {
 } from "@oh-my-pi/pi-natives/clipboard";
 import { isSsh } from "@oh-my-pi/pi-tui/driver/mux/detect";
 import { writeTerminalSequence } from "@oh-my-pi/pi-tui/driver/session";
-import { isWsl } from "@oh-my-pi/pi-utils";
+import { isWsl, offlineFromEnv } from "@oh-my-pi/pi-utils";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { SUPPORTED_IMAGE_MIME_TYPES } from "@oh-my-pi/pi-utils/mime";
-import { offlineFromEnv } from "../cli/args";
 import MAC_FILE_URL_SCRIPT from "./mac-file-urls.applescript" with { type: "text" };
 
 type SpawnCaptureOptions = { input?: string; timeoutMs?: number; env?: Record<string, string | undefined> };

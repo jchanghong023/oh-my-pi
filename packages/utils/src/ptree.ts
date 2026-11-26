@@ -617,10 +617,9 @@ export class ChildProcess<In extends InMask = InMask> {
 		return bytes;
 	}
 
-	#trackStdout(): boolean {
-		if (this.#stdoutStream || this.#stdoutDone) return true;
+	#trackStdout(): void {
 		// Do not lock a stream reference already exposed to a caller.
-		if (this.#stdoutExposed || this.proc.stdout.locked) return false;
+		if (this.#stdoutStream || this.#stdoutDone || this.#stdoutExposed || this.proc.stdout.locked) return;
 
 		const reader = this.proc.stdout.getReader();
 		this.#pipeReaders.add(reader);
@@ -681,7 +680,6 @@ export class ChildProcess<In extends InMask = InMask> {
 			},
 			{ highWaterMark: 0 },
 		);
-		return true;
 	}
 
 	#markStdoutDone(): void {

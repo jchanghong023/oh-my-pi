@@ -190,6 +190,22 @@ interface StrictRelease {
 	promise?: Promise<boolean>;
 }
 
+/** Prefer the current generation unless the caller provided an exact ref or live session. */
+function findRelease<T extends OrdinaryRelease | StrictRelease>(
+	releases: ReadonlyMap<AgentRef, T>,
+	id: string,
+	expected: AgentRefExpectation | undefined,
+	current?: AgentRef,
+): T | undefined {
+	if (expected === undefined && current) return releases.get(current);
+	for (const entry of releases.values()) {
+		if (entry.ref.id === id && (expected === undefined || expected === entry.ref || expected === entry.cleanup.live)) {
+			return entry;
+		}
+	}
+	return undefined;
+}
+
 /** Public surface of the process-global agent lifecycle, implemented locally on main and by a proxy in workers. */
 export interface AgentLifecycleApi {
 	/** Install the factory used to cold-revive `parked` refs restored from disk. */
@@ -324,12 +340,10 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		let ref = this.#registry.get(id);
 		let releasing = ref ? this.#strictReleases.get(ref) : undefined;
 		if (expected !== undefined && (!ref || (ref !== expected && ref.session !== expected))) {
-			for (const pending of this.#strictReleases.values()) {
-				if (pending.ref.id === id && (pending.ref === expected || pending.cleanup.live === expected)) {
-					ref = pending.ref;
-					releasing = pending;
-					break;
-				}
+			const pending = findRelease(this.#strictReleases, id, expected);
+			if (pending) {
+				ref = pending.ref;
+				releasing = pending;
 			}
 		}
 		if (
@@ -460,7 +474,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			(park &&
 				!park.cancelled &&
 				(expected === undefined || park.ref === expected || park.ref.session === expected)) ||
-			this.#findOrdinaryRelease(id, expected, this.#registry.get(id)),
+			findRelease(this.#releasing, id, expected, this.#registry.get(id)),
 		);
 	}
 
@@ -799,7 +813,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		const current = this.#registry.get(id);
 		const matches = (ref: AgentRef, live = ref.session): boolean =>
 			expected === undefined || ref === expected || live === expected;
-		const pending = this.#findOrdinaryRelease(id, expected, current);
+		const pending = findRelease(this.#releasing, id, expected, current);
 		const ref =
 			pending?.ref ??
 			(current && matches(current) ? current : adopted && matches(adopted.ref) ? adopted.ref : undefined);
@@ -843,23 +857,6 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			},
 		);
 		return promise;
-	}
-
-	#findOrdinaryRelease(
-		id: string,
-		expected: AgentRefExpectation | undefined,
-		current: AgentRef | undefined,
-	): OrdinaryRelease | undefined {
-		if (expected === undefined && current) return this.#releasing.get(current);
-		for (const entry of this.#releasing.values()) {
-			if (
-				entry.ref.id === id &&
-				(expected === undefined || expected === entry.ref || expected === entry.cleanup.live)
-			) {
-				return entry;
-			}
-		}
-		return undefined;
 	}
 
 	#markKilled(ref: AgentRef): void {
@@ -1036,15 +1033,10 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		const adopted = this.#adopted.get(id);
 		const matches = (ref: AgentRef, live = ref.session): boolean =>
 			expected === undefined || ref === expected || live === expected;
-		const pending = [...this.#strictReleases.values()].find(
-			entry =>
-				entry.ref.id === id &&
-				matches(entry.ref, entry.cleanup.live) &&
-				(expected !== undefined || !current || entry.ref === current),
-		);
+		const pending = findRelease(this.#strictReleases, id, expected, current);
 		const ref =
 			pending?.ref ??
-			this.#findOrdinaryRelease(id, expected, current)?.ref ??
+			findRelease(this.#releasing, id, expected, current)?.ref ??
 			(current && matches(current) ? current : adopted && matches(adopted.ref) ? adopted.ref : undefined);
 		if (!ref) return false;
 		return this.#releaseStrictRef(pending ?? this.#retainStrictRelease(ref, options), options.dispose);

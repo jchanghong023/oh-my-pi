@@ -145,13 +145,11 @@ export const snowflakeTransport: ProviderTransport = {
 		}
 		return {
 			model: baseUrl === model.baseUrl ? model : { ...model, baseUrl },
-			options: credential
-				? {
-						...options,
-						apiKey: credential.token,
-						...(options.requestAuth !== undefined ? { requestAuthPrepared: true } : {}),
-					}
-				: { ...options, apiKey: undefined, requestAuthPrepared: true },
+			options: {
+				...options,
+				apiKey: credential?.token,
+				...(options.requestAuth !== undefined ? { requestAuthPrepared: true } : {}),
+			},
 		};
 	},
 };

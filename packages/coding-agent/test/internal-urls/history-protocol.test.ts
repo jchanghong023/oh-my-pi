@@ -247,6 +247,11 @@ describe("history:// protocol", () => {
 		await expect(InternalUrlRouter.instance().resolve("history://", isolated)).rejects.toThrow(
 			"Cross-agent history lookups are disabled",
 		);
+		const router = InternalUrlRouter.instance();
+		expect(await router.locate("history://current", isolated)).toBeNull();
+		await expect(router.locate("history://peer", isolated)).rejects.toThrow(
+			"Cross-agent history lookups are disabled",
+		);
 	});
 
 	it("renders full execution output and metadata in current-branch history", () => {

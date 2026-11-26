@@ -15,79 +15,12 @@ import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/h
 import { stampNativeVersion } from "../../../scripts/stamp-native-version";
 import { ensureWindowsBuildTools } from "../../../scripts/windows-build-tools";
 import { generateEnumExports } from "./gen-enums";
-import { matchesInstalledFile } from "./installed-file";
+import { installFile } from "./installed-file";
 
 const repoRoot = path.join(import.meta.dir, "../../..");
 const rustDir = path.join(repoRoot, "crates/natives");
 const nativeDir = path.join(import.meta.dir, "../native");
 const packageJsonPath = path.join(import.meta.dir, "../package.json");
-
-async function cleanupStaleTemps(dir: string): Promise<void> {
-	try {
-		const entries = await fs.readdir(dir);
-		for (const entry of entries) {
-			if (entry.includes(".tmp.") || entry.includes(".old.") || entry.includes(".new.")) {
-				await fs.unlink(path.join(dir, entry)).catch(() => {});
-			}
-		}
-	} catch {
-		// Directory might not exist yet
-	}
-}
-
-export async function installBinary(src: string, dest: string): Promise<void> {
-	if (await matchesInstalledFile(src, dest)) return;
-
-	const tempPath = `${dest}.tmp.${process.pid}`;
-
-	await fs.copyFile(src, tempPath);
-	await fs.chmod(tempPath, 0o644);
-
-	try {
-		// Atomic rename - works even if dest is loaded on Linux/macOS (old inode stays valid)
-		await fs.rename(tempPath, dest);
-	} catch {
-		// On Windows, loaded DLLs cannot be overwritten or deleted, but they can
-		// be renamed: move the loaded image aside so the new addon takes its
-		// place. The holding process keeps running on the renamed image.
-		const backupPath = `${dest}.old.${process.pid}`;
-		let renamedAside = false;
-		try {
-			await fs.rename(dest, backupPath);
-			renamedAside = true;
-		} catch {
-			// Delete-then-rename as fallback (dest not held by a live loader)
-			try {
-				await fs.unlink(dest);
-			} catch (unlinkErr) {
-				if ((unlinkErr as NodeJS.ErrnoException).code !== "ENOENT") {
-					await fs.unlink(tempPath).catch(() => {});
-					const isWindows = process.platform === "win32";
-					throw new Error(
-						`Cannot replace ${path.basename(dest)}${isWindows ? " (file may be in use - close any running processes)" : ""}: ${(unlinkErr as Error).message}`,
-					);
-				}
-			}
-		}
-		try {
-			await fs.rename(tempPath, dest);
-		} catch (finalErr) {
-			if (renamedAside) {
-				try {
-					await fs.rename(backupPath, dest);
-				} catch (rollbackErr) {
-					throw new Error(
-						`Failed to install ${path.basename(dest)} and restore the previous addon: ${(rollbackErr as Error).message}. Recovery files retained at ${backupPath} and ${tempPath}.`,
-						{ cause: finalErr },
-					);
-				}
-			}
-			await fs.unlink(tempPath).catch(() => {});
-			throw new Error(`Failed to install ${path.basename(dest)}: ${(finalErr as Error).message}`);
-		}
-		if (renamedAside) await fs.unlink(backupPath).catch(() => {});
-	}
-}
 
 async function resolveBuiltAddonPath(outputDir: string, canonicalFilename: string): Promise<string> {
 	// napi-rs 3.x emits `${binaryName}.${platformArchABI}.node` where
@@ -125,7 +58,7 @@ async function installGeneratedBindings(outputDir: string): Promise<void> {
 		const sourcePath = path.join(outputDir, filename);
 		const destPath = path.join(nativeDir, filename);
 		try {
-			await installBinary(sourcePath, destPath);
+			await installFile(sourcePath, destPath, { allowUnlinkFallback: true });
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			throw new Error(`Failed to install generated ${filename}: ${message}`);
@@ -163,7 +96,6 @@ export async function buildBindings(): Promise<void> {
 	console.log(`Building omp-natives bindings for ${process.platform}-${process.arch}${variantSuffix} (local)…`);
 
 	await fs.mkdir(nativeDir, { recursive: true });
-	await cleanupStaleTemps(nativeDir);
 	await fs.mkdir(path.join(nativeDir, ".build"), { recursive: true });
 	const buildOutputDir = await fs.mkdtemp(
 		path.join(nativeDir, ".build", `${process.platform}-${process.arch}-${effectiveVariant ?? "default"}-local-`),
@@ -233,7 +165,7 @@ export async function buildBindings(): Promise<void> {
 		await stampNativeVersion(builtAddonPath, version);
 		if (builtAddonPath !== canonicalAddonPath) {
 			console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
-			await installBinary(builtAddonPath, canonicalAddonPath);
+			await installFile(builtAddonPath, canonicalAddonPath, { allowUnlinkFallback: true });
 		}
 		// Finalize outside nativeDir so comparisons see only the final bytes.
 		await generateEnumExports(buildOutputDir);

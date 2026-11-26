@@ -52,8 +52,13 @@ describe("native artifact install recovery through the real CLI", () => {
 					new Response(child.stderr).text(),
 				]);
 				const aside = `${target}.old.${child.pid}`;
-				const temporary = `${target}.tmp.${child.pid}`;
 				const operations = await fs.readFile(trace, "utf8");
+				const swapSuffix = ` -> ${target}`;
+				const swap = operations
+					.split("\n")
+					.find(line => line.startsWith(`rename ${target}.tmp.`) && line.endsWith(swapSuffix));
+				expect(swap).toBeDefined();
+				const temporary = swap!.slice("rename ".length, -swapSuffix.length);
 				expect(operations).toContain(`rename ${target} -> ${aside}`);
 				if (mode === "success" || mode === "cleanup-locked") {
 					expect(code, stderr).toBe(0);
@@ -68,6 +73,7 @@ describe("native artifact install recovery through the real CLI", () => {
 					if (mode === "swap-failed") {
 						expect(await fs.readFile(target, "utf8")).toBe("previous native artifact");
 						expect(await Bun.file(aside).exists()).toBe(false);
+						expect(await Bun.file(temporary).exists()).toBe(false);
 					} else {
 						expect(await Bun.file(target).exists()).toBe(false);
 						expect(await fs.readFile(aside, "utf8")).toBe("previous native artifact");

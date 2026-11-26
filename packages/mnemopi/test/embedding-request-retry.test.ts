@@ -18,7 +18,7 @@ function mockFetch(implementation: (...args: Parameters<typeof fetch>) => Promis
 	return track(vi.spyOn(globalThis, "fetch")).mockImplementation(Object.assign(implementation, { preconnect }));
 }
 
-function embed(signal: AbortSignal) {
+function embed(signal: AbortSignal, texts = ["section"]) {
 	return withMnemopiRuntimeOptions(
 		{
 			embeddings: {
@@ -34,7 +34,7 @@ function embed(signal: AbortSignal) {
 				signal,
 			},
 		},
-		() => embedConfiguredApi(["section"]),
+		() => embedConfiguredApi(texts),
 	);
 }
 
@@ -63,10 +63,19 @@ describe("embedding request timeout recovery", () => {
 				timers[0]!.abort(new DOMException("request deadline", "TimeoutError"));
 				throw timers[0]!.signal.reason;
 			}
-			return reply();
+			return Response.json({
+				model: "fixture-embedding",
+				data: [
+					{ index: 1, embedding: [3, 4] },
+					{ index: 0, embedding: [1, 2] },
+				],
+			});
 		});
 
-		expect(await embed(caller.signal)).toEqual([new Float32Array([1, 2])]);
+		expect(await embed(caller.signal, ["first", "second"])).toEqual([
+			new Float32Array([1, 2]),
+			new Float32Array([3, 4]),
+		]);
 		expect(calls).toBe(2);
 		expect(timers).toHaveLength(2);
 		expect(timers[1]!.signal.aborted).toBe(false);

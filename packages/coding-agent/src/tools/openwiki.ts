@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { Static, TSchema } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { prettifyError, type ZodError } from "zod";
 import { getOpenWikiConfigDirectory } from "../openwiki/home";
@@ -11,6 +12,7 @@ import readDescription from "../prompts/tools/openwiki-read.md" with { type: "te
 import workspacesDescription from "../prompts/tools/openwiki-list-workspaces.md" with { type: "text" };
 import wikisDescription from "../prompts/tools/openwiki-list-wikis.md" with { type: "text" };
 import type { ToolSession } from ".";
+import { BUILTIN_TOOL_HELP, type OpenWikiQueryName } from "./builtin-names";
 import { ToolError } from "./tool-errors";
 
 const searchSchema = type({
@@ -60,19 +62,14 @@ async function runQuery(session: ToolSession, query: Query, signal?: AbortSignal
 	const root = await resolveRepositoryRoot(path.resolve(session.cwd));
 	signal?.throwIfAborted();
 	if (query.kind === "search" || query.kind === "read") {
-		try {
-			if (!(await stat(path.join(root, "openwiki"))).isDirectory()) {
-				throw new ToolError(
-					"invalid_state: This repository has no OpenWiki directory. Run `omp openwiki --init` to generate one.",
-				);
-			}
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-				throw new ToolError(
-					"invalid_state: This repository has no OpenWiki directory. Run `omp openwiki --init` to generate one.",
-				);
-			}
-			throw error;
+		const wiki = await stat(path.join(root, "openwiki")).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+			return undefined;
+		});
+		if (!wiki?.isDirectory()) {
+			throw new ToolError(
+				"invalid_state: This repository has no OpenWiki directory. Run `omp openwiki --init` to generate one.",
+			);
 		}
 	}
 	let result: unknown;
@@ -139,86 +136,69 @@ async function executeQuery(session: ToolSession, query: Query, signal?: AbortSi
 	}
 }
 
-export class OpenWikiSearchTool implements AgentTool<typeof searchSchema> {
-	readonly name = "openwiki_search";
-	readonly label = "OpenWiki Search";
+abstract class OpenWikiQueryTool<T extends TSchema, Name extends OpenWikiQueryName> implements AgentTool<T> {
 	readonly approval = "read" as const;
 	readonly loadMode = "discoverable" as const;
-	readonly summary = "Search existing repository OpenWiki sections";
-	readonly description = prompt.render(searchDescription);
-	readonly parameters = searchSchema;
 	readonly strict = true;
-	constructor(private readonly session: ToolSession) {}
+	readonly summary: string;
+	readonly description: string;
+
+	constructor(
+		private readonly session: ToolSession,
+		readonly name: Name,
+		readonly label: string,
+		readonly parameters: T,
+		description: string,
+	) {
+		this.summary = BUILTIN_TOOL_HELP[name].summary;
+		this.description = prompt.render(description);
+	}
+
+	protected abstract query(params: Static<T>): Query;
+
 	async execute(
 		_id: string,
-		params: typeof searchSchema.infer,
+		params: Static<T>,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	) {
-		return executeQuery(this.session, { kind: "search", params }, signal);
+		return executeQuery(this.session, this.query(params), signal);
 	}
 }
 
-export class OpenWikiReadTool implements AgentTool<typeof readSchema> {
-	readonly name = "openwiki_read";
-	readonly label = "OpenWiki Read";
-	readonly approval = "read" as const;
-	readonly loadMode = "discoverable" as const;
-	readonly summary = "Read complete sections from a repository OpenWiki";
-	readonly description = prompt.render(readDescription);
-	readonly parameters = readSchema;
-	readonly strict = true;
-	constructor(private readonly session: ToolSession) {}
-	async execute(
-		_id: string,
-		params: typeof readSchema.infer,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback,
-		_context?: AgentToolContext,
-	) {
-		return executeQuery(this.session, { kind: "read", params }, signal);
+export class OpenWikiSearchTool extends OpenWikiQueryTool<typeof searchSchema, "openwiki_search"> {
+	constructor(session: ToolSession) {
+		super(session, "openwiki_search", "OpenWiki Search", searchSchema, searchDescription);
+	}
+	protected query(params: typeof searchSchema.infer): Query {
+		return { kind: "search", params };
 	}
 }
 
-export class OpenWikiListWorkspacesTool implements AgentTool<typeof workspacesSchema> {
-	readonly name = "openwiki_list_workspaces";
-	readonly label = "OpenWiki Workspaces";
-	readonly approval = "read" as const;
-	readonly loadMode = "discoverable" as const;
-	readonly summary = "List workspaces containing a repository OpenWiki";
-	readonly description = prompt.render(workspacesDescription);
-	readonly parameters = workspacesSchema;
-	readonly strict = true;
-	constructor(private readonly session: ToolSession) {}
-	async execute(
-		_id: string,
-		params: typeof workspacesSchema.infer,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback,
-		_context?: AgentToolContext,
-	) {
-		return executeQuery(this.session, { kind: "workspaces", params }, signal);
+export class OpenWikiReadTool extends OpenWikiQueryTool<typeof readSchema, "openwiki_read"> {
+	constructor(session: ToolSession) {
+		super(session, "openwiki_read", "OpenWiki Read", readSchema, readDescription);
+	}
+	protected query(params: typeof readSchema.infer): Query {
+		return { kind: "read", params };
 	}
 }
 
-export class OpenWikiListWikisTool implements AgentTool<typeof wikisSchema> {
-	readonly name = "openwiki_list_wikis";
-	readonly label = "OpenWiki Wikis";
-	readonly approval = "read" as const;
-	readonly loadMode = "discoverable" as const;
-	readonly summary = "List repository wikis in an OpenWiki workspace";
-	readonly description = prompt.render(wikisDescription);
-	readonly parameters = wikisSchema;
-	readonly strict = true;
-	constructor(private readonly session: ToolSession) {}
-	async execute(
-		_id: string,
-		params: typeof wikisSchema.infer,
-		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback,
-		_context?: AgentToolContext,
-	) {
-		return executeQuery(this.session, { kind: "wikis", params }, signal);
+export class OpenWikiListWorkspacesTool extends OpenWikiQueryTool<typeof workspacesSchema, "openwiki_list_workspaces"> {
+	constructor(session: ToolSession) {
+		super(session, "openwiki_list_workspaces", "OpenWiki Workspaces", workspacesSchema, workspacesDescription);
+	}
+	protected query(params: typeof workspacesSchema.infer): Query {
+		return { kind: "workspaces", params };
+	}
+}
+
+export class OpenWikiListWikisTool extends OpenWikiQueryTool<typeof wikisSchema, "openwiki_list_wikis"> {
+	constructor(session: ToolSession) {
+		super(session, "openwiki_list_wikis", "OpenWiki Wikis", wikisSchema, wikisDescription);
+	}
+	protected query(params: typeof wikisSchema.infer): Query {
+		return { kind: "wikis", params };
 	}
 }

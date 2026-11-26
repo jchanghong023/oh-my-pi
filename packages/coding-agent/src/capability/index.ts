@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 
 import type { Settings } from "../config/settings";
-import { findSettingsContext, getActiveSettings, withActiveSettings } from "../config/settings-context";
+import { findSettingsContext, withActiveSettings } from "../config/settings-context";
 import { clearCache as clearFsCache, findRepoRoot, cacheStats as fsCacheStats, invalidate as invalidateFs } from "./fs";
 import type {
 	Capability,
@@ -126,7 +126,7 @@ export function boundSettings(): Settings | undefined {
 
 /** SDK/session callers bind exact identity; path lookup is only for unbound discovery. */
 function scopedSettings(ctx?: LoadContext): Settings | undefined {
-	return getActiveSettings() ?? (ctx ? findSettingsContext(ctx.cwd, ctx.agentDir) : undefined) ?? boundSettings();
+	return findSettingsContext(ctx?.cwd, ctx?.agentDir) ?? boundSettings();
 }
 
 /** Disabled provider IDs in effect for this discovery/session, else the unbound set. */

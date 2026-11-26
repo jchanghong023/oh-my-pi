@@ -20,6 +20,7 @@ import {
 	isEnoent,
 	logger,
 	pathIsWithinLexical,
+	SEMVER_RE,
 	VERSION,
 	WhichCachePolicy,
 } from "@oh-my-pi/pi-utils";
@@ -67,15 +68,10 @@ const HOMEBREW_FORMULA = "can1357/tap/omp";
 const MISE_TOOL = "github:can1357/oh-my-pi";
 const NIX_STORE_DIR = "/nix/store";
 const RELEASE_METADATA_TIMEOUT_MS = 30_000;
+const UPDATE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 function diagnosticVersion(version: string | undefined): string | undefined {
-	return version &&
-		version.length <= 128 &&
-		/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(
-			version,
-		)
-		? version
-		: undefined;
+	return version && version.length <= 128 && SEMVER_RE.test(version) ? version : undefined;
 }
 
 function updateEvent(
@@ -295,6 +291,7 @@ export async function resolveGitHubTokenForTest(
 ): Promise<string | undefined> {
 	return resolveGitHubToken(options);
 }
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
@@ -1505,7 +1502,7 @@ async function fetchLatestGitHubRelease(
 			const tag = isRecord(data) && typeof data.tag_name === "string" ? data.tag_name : "";
 			const version = tag.startsWith("v") ? tag.slice(1) : "";
 			fields.failure_stage = "release_tag_validation";
-			if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+			if (!UPDATE_VERSION_RE.test(version)) {
 				throw new Error(`Malformed GitHub release response for ${repository}: invalid tag_name`);
 			}
 			updateEvent("release_selected", "completed", {
@@ -1870,7 +1867,7 @@ function resolveOmpPath(): string | undefined {
 export function parseReportedVersion(output: string): string | undefined {
 	if (!output.startsWith(`${APP_NAME}/`)) return undefined;
 	const reported = output.slice(APP_NAME.length + 1);
-	return reported.match(/^(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/)?.[1];
+	return UPDATE_VERSION_RE.test(reported) ? reported : undefined;
 }
 
 async function reportedVersionAtPath(binaryPath: string): Promise<string | undefined> {
@@ -3689,31 +3686,24 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 				if (channel === "canary") console.log(chalk.dim("Current channel: canary"));
 
 				if (!fork) {
-					let binaryTarget: UpdateTarget | undefined;
-					let targetError: unknown;
-					try {
-						binaryTarget = await resolveUpdateTarget({ allowPackageManagers: true });
-					} catch (error) {
-						targetError = error;
-					}
-					if (binaryTarget?.method === "binary" || (!binaryTarget && isCompiledBinary())) {
-						return await runBinaryUpdate(binaryTarget, targetError, {
-							force: opts.force,
-							check: opts.check,
-							channel,
-							isChannelSwitch,
-							persistChannel: opts.channel !== undefined,
-							onProgress: opts.onProgress,
-						});
-					}
-					return await runManagedUpdate(binaryTarget, targetError, {
+					const request: UpdateRequest = {
 						force: opts.force,
 						check: opts.check,
 						channel,
 						isChannelSwitch,
 						persistChannel: opts.channel !== undefined,
 						onProgress: opts.onProgress,
-					});
+					};
+					let target: UpdateTarget | undefined;
+					let targetError: unknown;
+					try {
+						target = await resolveUpdateTarget({ allowPackageManagers: true });
+					} catch (error) {
+						targetError = error;
+					}
+					if (target?.method === "binary") return await runBinaryUpdate(target, targetError, request);
+					if (!target && isCompiledBinary()) return await runBinaryUpdate(undefined, targetError, request);
+					return await runManagedUpdate(target, targetError, request);
 				}
 
 				let failureStage: "install" | "release_check" = "install";

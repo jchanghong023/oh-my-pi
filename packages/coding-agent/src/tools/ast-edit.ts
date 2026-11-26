@@ -14,6 +14,7 @@ import { $envpos, formatCount, isRecord, logger, prompt, untilAborted } from "@o
 import { getEditStore } from "../edit/store";
 import { normalizeToLF } from "../edit/normalize";
 import { InternalUrlRouter, sessionResolveContext } from "../internal-urls";
+import type { ResolveContext } from "../internal-urls/types";
 import { InternalUrlFilesystem } from "../internal-urls/url-filesystem";
 import { formatHashlineHeader } from "./hashline-format";
 
@@ -68,6 +69,56 @@ interface AstEditAggregatedResult {
 	limitReached: boolean;
 	parseErrors?: string[];
 	missingGrammars?: string[];
+}
+
+function statAstEditTargets(
+	targets: readonly { basePath: string; glob?: string }[],
+	filesystem: InternalUrlFilesystem,
+) {
+	return Promise.all(
+		targets.map(async target => ({
+			...target,
+			isDirectory: (await filesystem.stat(target.basePath)).type === "directory",
+		})),
+	);
+}
+
+/** Record hashline tags for mutable files; leave missing snapshots out of the output. */
+async function recordAstEditSnapshots(
+	session: ToolSession,
+	files: readonly string[],
+	context: ResolveContext,
+	stage: "preview_snapshot" | "apply_snapshot",
+	record: (relativePath: string, tag: string) => void,
+): Promise<void> {
+	const snapshotStore = getEditStore(session);
+	let failureCount = 0;
+	let firstFailure: Record<string, unknown> | undefined;
+	for (const relativePath of files) {
+		const snapshotPath = await resultSnapshotPath(relativePath, session.cwd, context);
+		if (snapshotPath === undefined) continue;
+		try {
+			const fullText = normalizeToLF(await Bun.file(snapshotPath).text());
+			record(relativePath, snapshotStore.recordSnapshot(snapshotPath, fullText));
+		} catch (error) {
+			failureCount++;
+			firstFailure ??= logger.diagnosticError(error);
+		}
+	}
+	if (failureCount) {
+		logger.warn(
+			stage === "preview_snapshot" ? "AST edit preview snapshot unavailable" : "AST edit applied snapshot unavailable",
+			{
+				component: "ast_edit",
+				event: "ast_edit_snapshot_degraded",
+				stage,
+				result: "degraded",
+				candidate_count: files.length,
+				failed_snapshot_count: failureCount,
+				...firstFailure,
+			},
+		);
+	}
 }
 
 async function runNativeAstEdit(
@@ -380,14 +431,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					},
 				});
 				const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
-				const targets = multiTargets
-					? await Promise.all(
-							multiTargets.map(async target => ({
-								...target,
-								isDirectory: (await urlFilesystem.stat(target.basePath)).type === "directory",
-							})),
-						)
-					: undefined;
+				const targets = multiTargets ? await statAstEditTargets(multiTargets, urlFilesystem) : undefined;
 
 				previewStage = "native_preview";
 				// Dry run, so a re-run after installing missing grammars cannot double-apply.
@@ -459,36 +503,17 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				}
 
 				const useHashLines = resolveFileDisplayMode(this.session).hashLines;
-				const hashContexts = new Map<string, { tag: string }>();
-				let previewSnapshotFailureCount = 0;
-				let previewSnapshotFailure: Record<string, unknown> | undefined;
+				const hashContexts = new Map<string, string>();
 				if (useHashLines) {
-					const snapshotStore = getEditStore(this.session);
-					for (const relativePath of fileList) {
-						// A `local://` result binds to its backing file.
-						const snapshotPath = await resultSnapshotPath(relativePath, this.session.cwd, resolveContext);
-						if (snapshotPath === undefined) continue;
-						try {
-							const fullText = normalizeToLF(await Bun.file(snapshotPath).text());
-							const tag = snapshotStore.recordSnapshot(snapshotPath, fullText);
-							hashContexts.set(relativePath, { tag });
-						} catch (error) {
-							// Best-effort: if a file disappears between ast-edit and rendering, emit plain line output.
-							previewSnapshotFailureCount++;
-							previewSnapshotFailure ??= logger.diagnosticError(error);
-						}
-					}
-				}
-				if (previewSnapshotFailureCount) {
-					logger.warn("AST edit preview snapshot unavailable", {
-						component: "ast_edit",
-						event: "ast_edit_snapshot_degraded",
-						stage: "preview_snapshot",
-						result: "degraded",
-						candidate_count: fileList.length,
-						failed_snapshot_count: previewSnapshotFailureCount,
-						...previewSnapshotFailure,
-					});
+					await recordAstEditSnapshots(
+						this.session,
+						fileList,
+						resolveContext,
+						"preview_snapshot",
+						(file, tag) => {
+							hashContexts.set(file, tag);
+						},
+					);
 				}
 				const outputLines: string[] = [];
 				const displayLines: string[] = [];
@@ -496,7 +521,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					const modelOut: string[] = [];
 					const displayOut: string[] = [];
 					const fileChanges = changesByFile.get(relativePath) ?? [];
-					const hashContext = hashContexts.get(relativePath);
+					const hashline = hashContexts.has(relativePath);
 					const lineNumberWidth = fileChanges.reduce(
 						(width, change) => Math.max(width, String(change.startLine).length),
 						0,
@@ -506,11 +531,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 						const afterFirstLine = change.after.split("\n", 1)[0] ?? "";
 						const beforeLine = beforeFirstLine.slice(0, 120);
 						const afterLine = afterFirstLine.slice(0, 120);
-						const beforeRef = hashContext ? `${change.startLine}` : `${change.startLine}:${change.startColumn}`;
-						const afterRef = hashContext ? `${change.startLine}` : `${change.startLine}:${change.startColumn}`;
-						const lineSeparator = hashContext ? ":" : " ";
-						modelOut.push(`-${beforeRef}${lineSeparator}${beforeLine}`);
-						modelOut.push(`+${afterRef}${lineSeparator}${afterLine}`);
+						const ref = hashline ? `${change.startLine}:` : `${change.startLine}:${change.startColumn} `;
+						modelOut.push(`-${ref}${beforeLine}`);
+						modelOut.push(`+${ref}${afterLine}`);
 						displayOut.push(formatCodeFrameLine("-", change.startLine, beforeLine, lineNumberWidth));
 						displayOut.push(formatCodeFrameLine("+", change.startLine, afterLine, lineNumberWidth));
 					}
@@ -521,8 +544,8 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					const grouped = formatGroupedFiles(fileList, relativePath => {
 						const rendered = renderChangesForFile(relativePath);
 						const count = fileReplacementCounts.get(relativePath) ?? 0;
-						const hashContext = hashContexts.get(relativePath);
-						const hashSuffix = hashContext ? `#${hashContext.tag}` : "";
+						const tag = hashContexts.get(relativePath);
+						const hashSuffix = tag === undefined ? "" : `#${tag}`;
 						return {
 							headerSuffix: `${hashSuffix} (${formatCount("replacement", count)})`,
 							modelLines: rendered.model,
@@ -540,9 +563,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 							outputLines.push("");
 							displayLines.push("");
 						}
-						const hashContext = hashContexts.get(relativePath);
-						if (hashContext) {
-							outputLines.push(formatHashlineHeader(relativePath, hashContext.tag));
+						const tag = hashContexts.get(relativePath);
+						if (tag !== undefined) {
+							outputLines.push(formatHashlineHeader(relativePath, tag));
 						}
 						outputLines.push(...rendered.model);
 						displayLines.push(...rendered.display);
@@ -600,13 +623,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 										const applyIsDirectory =
 											(await applyFilesystem.stat(resolvedSearchPath)).type === "directory";
 										const applyTargets = targets
-											? await Promise.all(
-													targets.map(async target => ({
-														...target,
-														isDirectory:
-															(await applyFilesystem.stat(target.basePath)).type === "directory",
-													})),
-												)
+											? await statAstEditTargets(targets, applyFilesystem)
 											: undefined;
 										applyStage = "prepare_apply";
 										const journaled: Array<{ path: string; before: FileSnapshot }> = [];
@@ -682,38 +699,16 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 										// invalidated them. Re-record post-apply snapshots (canonical keys)
 										// so the model's next hashline edit anchors against fresh tags.
 										const freshTagLines: string[] = [];
-										let applySnapshotFailureCount = 0;
-										let applySnapshotFailure: Record<string, unknown> | undefined;
 										if (useHashLines) {
-											const snapshotStore = getEditStore(this.session);
-											for (const relativePath of appliedFileList) {
-												const appliedPath = await resultSnapshotPath(
-													relativePath,
-													this.session.cwd,
-													applyContext,
-												);
-												if (appliedPath === undefined) continue;
-												try {
-													const fullText = normalizeToLF(await Bun.file(appliedPath).text());
-													const freshTag = snapshotStore.recordSnapshot(appliedPath, fullText);
-													freshTagLines.push(formatHashlineHeader(relativePath, freshTag));
-												} catch (error) {
-													// File disappeared between apply and re-read; skip its tag.
-													applySnapshotFailureCount++;
-													applySnapshotFailure ??= logger.diagnosticError(error);
-												}
-											}
-										}
-										if (applySnapshotFailureCount) {
-											logger.warn("AST edit applied snapshot unavailable", {
-												component: "ast_edit",
-												event: "ast_edit_snapshot_degraded",
-												stage: "apply_snapshot",
-												result: "degraded",
-												candidate_count: appliedFileList.length,
-												failed_snapshot_count: applySnapshotFailureCount,
-												...applySnapshotFailure,
-											});
+											await recordAstEditSnapshots(
+												this.session,
+												appliedFileList,
+												applyContext,
+												"apply_snapshot",
+												(file, tag) => {
+													freshTagLines.push(formatHashlineHeader(file, tag));
+												},
+											);
 										}
 										const appliedFileReplacements = appliedFileList.map(filePath => ({
 											path: filePath,

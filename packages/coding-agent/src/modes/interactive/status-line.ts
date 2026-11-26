@@ -27,6 +27,7 @@ import type { ModelCost } from "@oh-my-pi/pi-catalog/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { type Accessor, computed, type Signal, signal } from "@oh-my-pi/pi-tui";
 import { getActiveProfile, getProjectDir } from "@oh-my-pi/pi-utils";
+import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
 import type { AgentViewSession } from "../../session/agent-session-handle";
 import { latestJobWidget } from "../../tools/details/job-widget";
 import { BRAND_FADE_MS, type StatusFacts, type StatusLineSettings } from "../../ui/status/facts";
@@ -44,7 +45,6 @@ import { codexResetSnapshot, quotaFromReports } from "./status-quota";
 const VCS_READ_INTERVAL_MS = 10_000;
 /** Offline Linux checkouts may be on slow shared storage. */
 const OFFLINE_VCS_READ_INTERVAL_MS = 60_000;
-const OFFLINE_LINUX = /^(1|true|yes|on)$/i;
 /** Usage reports are fetched at most this often. */
 const USAGE_TTL_MS = 5 * 60_000;
 /** First usage fetch waits this long so startup paints first. */
@@ -137,9 +137,7 @@ export class SessionStatusLine implements StatusLineModel {
 	readonly #autoCompact = signal(true);
 	readonly #vcs = signal<VcsSnapshot | undefined>(undefined);
 	readonly #vcsReadIntervalMs =
-		process.platform === "linux" && OFFLINE_LINUX.test(process.env.OMP_OFFLINE?.trim() ?? "")
-			? OFFLINE_VCS_READ_INTERVAL_MS
-			: VCS_READ_INTERVAL_MS;
+		process.platform === "linux" && offlineFromEnv() ? OFFLINE_VCS_READ_INTERVAL_MS : VCS_READ_INTERVAL_MS;
 	readonly #quota = signal<StatusFacts["quota"]>(undefined);
 
 	#session: StatusSession;

@@ -981,6 +981,7 @@ async function runStage1Job(options: {
 		return { kind: "failed", reason: String(error) };
 	}
 }
+
 async function syncPhase2Artifacts(memoryRoot: string, outputs: Stage1OutputRow[]): Promise<void> {
 	const summariesDir = path.join(memoryRoot, "rollout_summaries");
 	await fs.mkdir(summariesDir, { recursive: true });

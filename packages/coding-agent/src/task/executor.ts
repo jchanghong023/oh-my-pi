@@ -147,6 +147,7 @@ import { recordStepsSent, type StepProgress, type StepReportRoute, sendStepRepor
 import type { WorkPoolYieldItem } from "./workpool-yield";
 import {
 	type AgentDefinition,
+	applyNativeSubagentOverrides,
 	MAX_OUTPUT_BYTES,
 	MAX_OUTPUT_LINES,
 	TASK_SUBAGENT_EVENT_CHANNEL,
@@ -4586,25 +4587,7 @@ async function configureNativeSubagentSession(
 	const resolvedOptions = { ...options, cwd: options.sessionManager?.getCwd() ?? options.cwd };
 	const overrides = await spec.hooks.configureSession(spec.request, Object.freeze(resolvedOptions));
 	const configured = { ...resolvedOptions };
-	const keys = [
-		"toolNames",
-		"customTools",
-		"systemPrompt",
-		"skills",
-		"rules",
-		"restrictToolNames",
-		"allowRestrictedCustomTools",
-		"enableMCP",
-		"enableLsp",
-		"lspReadOnly",
-		"enableIrc",
-		"subagentHooks",
-		"preloadedPreparedExtensions",
-		"deferHintCompression",
-	] as const;
-	for (const key of keys) {
-		if (Object.hasOwn(overrides, key)) Object.assign(configured, { [key]: overrides[key] });
-	}
+	applyNativeSubagentOverrides(configured, overrides);
 	if (configured.enableMCP === false || configured.restrictToolNames === true) {
 		configured.mcpTools = undefined;
 	}

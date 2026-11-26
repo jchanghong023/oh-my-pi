@@ -2013,6 +2013,25 @@ const streamAnthropicOnce = (
 			remote_request_id: remoteRequestId,
 			elapsed_ms: performance.now() - startTime,
 		});
+		const logResponseHeaders = (response: Response, requestId: string | null): void => {
+			stage = "headers";
+			responseStatus = response.status;
+			remoteRequestId = requestId && /^[A-Za-z0-9_.:-]{1,160}$/.test(requestId) ? requestId : undefined;
+			logger.info("Anthropic response headers received", {
+				...diagnosticFields(),
+				event: "anthropic_response_headers",
+				result: response.ok ? "success" : "http_error",
+				attempt_elapsed_ms: performance.now() - attemptStartedAt,
+			});
+		};
+		const logCompatRetry = (message: string, reason: string, fields?: Record<string, unknown>): void =>
+			logger.warn(message, {
+				...diagnosticFields(),
+				event: "anthropic_compat_retry",
+				result: "retrying",
+				retry_reason: reason,
+				...fields,
+			});
 		logger.info("Anthropic request started", {
 			...diagnosticFields(),
 			event: "anthropic_request_started",
@@ -2962,16 +2981,7 @@ const streamAnthropicOnce = (
 							? client.beta.messages.create(prewarmBody, requestOptions)
 							: client.messages.create(prewarmBody, requestOptions);
 					const prewarmed = await getAnthropicMessageResponse(prewarmRequest);
-					stage = "headers";
-					responseStatus = prewarmed.response.status;
-					const requestId = prewarmed.requestId;
-					remoteRequestId = requestId && /^[A-Za-z0-9_.:-]{1,160}$/.test(requestId) ? requestId : undefined;
-					logger.info("Anthropic response headers received", {
-						...diagnosticFields(),
-						event: "anthropic_response_headers",
-						result: prewarmed.response.ok ? "success" : "http_error",
-						attempt_elapsed_ms: performance.now() - attemptStartedAt,
-					});
+					logResponseHeaders(prewarmed.response, prewarmed.requestId);
 					await notifyProviderResponse(options, prewarmed.response, sourceModel, prewarmed.requestId);
 					applyAnthropicPrewarmResponse(output, prewarmed.message, sourceModel);
 					// Zero output tokens always stop at the cap (`stop_reason: "max_tokens"`).
@@ -3020,15 +3030,7 @@ const streamAnthropicOnce = (
 					} finally {
 						if (requestTimeout !== undefined) clearTimeout(requestTimeout);
 					}
-					stage = "headers";
-					responseStatus = response.status;
-					remoteRequestId = requestId && /^[A-Za-z0-9_.:-]{1,160}$/.test(requestId) ? requestId : undefined;
-					logger.info("Anthropic response headers received", {
-						...diagnosticFields(),
-						event: "anthropic_response_headers",
-						result: response.ok ? "success" : "http_error",
-						attempt_elapsed_ms: performance.now() - attemptStartedAt,
-					});
+					logResponseHeaders(response, requestId);
 					output.requestId = requestId ?? undefined;
 					await notifyProviderResponse(options, response, sourceModel, requestId);
 					stage = "stream";
@@ -3627,17 +3629,12 @@ const streamAnthropicOnce = (
 					if (transport) throw streamFailure;
 					const threadRecovery = firstTokenTime === undefined ? threadTurn?.recover(streamFailure) : undefined;
 					if (threadRecovery) {
-						logger.warn(
+						logCompatRetry(
 							threadRecovery === "replay"
 								? "anthropic: thread continue refused, replaying the full conversation"
 								: "anthropic: thread refused, resending without thread",
-							{
-								...diagnosticFields(),
-								...logger.diagnosticError(streamFailure),
-								event: "anthropic_compat_retry",
-								result: "retrying",
-								retry_reason: threadRecovery === "replay" ? "thread_replay" : "thread_unsupported",
-							},
+							threadRecovery === "replay" ? "thread_replay" : "thread_unsupported",
+							logger.diagnosticError(streamFailure),
 						);
 						resetStreamOutputState();
 						continue;
@@ -3650,15 +3647,11 @@ const streamAnthropicOnce = (
 					) {
 						// Log-only: the retried turn must not carry an errorMessage on
 						// success (consumers treat its presence as failure).
-						logger.warn("anthropic: strict tools rejected, retrying without strict tools", {
-							...diagnosticFields(),
-							event: "anthropic_compat_retry",
-							result: "retrying",
-							retry_reason: "strict_tools_rejected",
-							backoff_ms: 0,
-							next_attempt: wireAttempt + 1,
-							...logger.diagnosticError(streamFailure),
-						});
+						logCompatRetry(
+							"anthropic: strict tools rejected, retrying without strict tools",
+							"strict_tools_rejected",
+							{ backoff_ms: 0, next_attempt: wireAttempt + 1, ...logger.diagnosticError(streamFailure) },
+						);
 						if (providerSessionState) {
 							providerSessionState.strictToolsDisabled = true;
 						}
@@ -3678,15 +3671,12 @@ const streamAnthropicOnce = (
 						if (errMessage.includes("redemption temporarily unavailable")) {
 							if (Date.now() < redemption.expiresAt && fallbackCreditTransientRetries < 2) {
 								fallbackCreditTransientRetries++;
-								logger.warn(
+								logCompatRetry(
 									"anthropic: fallback credit redemption temporarily unavailable, retrying same shape",
+									"fallback_credit_unavailable",
 									{
 										next_attempt: wireAttempt + 1,
-										...diagnosticFields(),
-										event: "anthropic_compat_retry",
 										stage: "backoff",
-										result: "retrying",
-										retry_reason: "fallback_credit_unavailable",
 										backoff_ms: 500,
 										credit_retry_attempt: fallbackCreditTransientRetries,
 									},
@@ -3699,17 +3689,10 @@ const streamAnthropicOnce = (
 							throw streamFailure;
 						}
 						if (fallbackCreditShape === "continuation") {
-							logger.warn(
+							logCompatRetry(
 								"anthropic: fallback credit continuation shape rejected, retrying with unchanged body",
-								{
-									...diagnosticFields(),
-									event: "anthropic_compat_retry",
-									result: "retrying",
-									retry_reason: "fallback_credit_shape",
-									backoff_ms: 0,
-									next_attempt: wireAttempt + 1,
-									...logger.diagnosticError(streamFailure),
-								},
+								"fallback_credit_shape",
+								{ backoff_ms: 0, next_attempt: wireAttempt + 1, ...logger.diagnosticError(streamFailure) },
 							);
 							fallbackCreditShape = "unchanged";
 							params = fallbackCreditRequestBody(
@@ -3722,17 +3705,10 @@ const streamAnthropicOnce = (
 						}
 						if (errMessage.includes("fallback_credit_token")) {
 							forfeitFallbackCredit(streamFailure);
-							logger.warn(
+							logCompatRetry(
 								"anthropic: fallback credit token rejected, falling back to standard request without token",
-								{
-									...diagnosticFields(),
-									event: "anthropic_compat_retry",
-									result: "retrying",
-									retry_reason: "fallback_credit_rejected",
-									backoff_ms: 0,
-									next_attempt: wireAttempt + 1,
-									...logger.diagnosticError(streamFailure),
-								},
+								"fallback_credit_rejected",
+								{ backoff_ms: 0, next_attempt: wireAttempt + 1, ...logger.diagnosticError(streamFailure) },
 							);
 							dropAllThinking = true;
 							params = await prepareParams();
@@ -3748,14 +3724,11 @@ const streamAnthropicOnce = (
 						firstTokenTime === undefined &&
 						adoptRequiredClaudeCodeVersion(streamFailure, sentClaudeCodeVersion)
 					) {
-						logger.warn("anthropic: Claude Code version rejected as too old, retrying with required version", {
-							...diagnosticFields(),
-							event: "anthropic_compat_retry",
-							result: "retrying",
-							retry_reason: "claude_code_version",
-							backoff_ms: 0,
-							next_attempt: wireAttempt + 1,
-						});
+						logCompatRetry(
+							"anthropic: Claude Code version rejected as too old, retrying with required version",
+							"claude_code_version",
+							{ backoff_ms: 0, next_attempt: wireAttempt + 1 },
+						);
 						sentClaudeCodeVersion = getClaudeCodeVersion();
 						client = createClient(model, { ...clientArgs, disableStrictTools }).client;
 						// The version only changes client headers; a redemption keeps its frozen body.
@@ -3779,15 +3752,11 @@ const streamAnthropicOnce = (
 						!streamedReplayUnsafeContent &&
 						isThinkingPrefixBindingError(streamFailureMessage)
 					) {
-						logger.warn("anthropic: thinking prefix changed, stripping bound thinking and retrying", {
-							...diagnosticFields(),
-							event: "anthropic_compat_retry",
-							result: "retrying",
-							retry_reason: "thinking_prefix",
-							backoff_ms: 0,
-							next_attempt: wireAttempt + 1,
-							...logger.diagnosticUrl(baseUrl),
-						});
+						logCompatRetry(
+							"anthropic: thinking prefix changed, stripping bound thinking and retrying",
+							"thinking_prefix",
+							{ backoff_ms: 0, next_attempt: wireAttempt + 1, ...logger.diagnosticUrl(baseUrl) },
+						);
 						prefixBindingRetryAttempted = true;
 						prefixMismatchBehavior = undefined;
 						dropAllThinking = !rememberPrefixBindingFailure(params, streamFailureMessage, providerSessionState);
@@ -3819,13 +3788,10 @@ const streamAnthropicOnce = (
 						// the same prefix; without session state, drop every block instead.
 						const keys = latestAssistantTurnThinkingKeys(params);
 						if (keys.length > 0) {
-							logger.warn(
+							logCompatRetry(
 								"anthropic: latest assistant turn's thinking rejected as modified, dropping it and retrying",
+								"immutable_latest_thinking",
 								{
-									...diagnosticFields(),
-									event: "anthropic_compat_retry",
-									result: "retrying",
-									retry_reason: "immutable_latest_thinking",
 									backoff_ms: 0,
 									next_attempt: wireAttempt + 1,
 									...logger.diagnosticUrl(baseUrl),
@@ -3860,13 +3826,10 @@ const streamAnthropicOnce = (
 						!isThinkingPrefixBindingError(streamFailureMessage) &&
 						isInvalidThinkingSignatureError(streamFailureMessage)
 					) {
-						logger.warn(
+						logCompatRetry(
 							"anthropic: signing proxy detected (thinking signature rejected), demoting unsigned thinking and retrying",
+							"thinking_signature",
 							{
-								...diagnosticFields(),
-								event: "anthropic_compat_retry",
-								result: "retrying",
-								retry_reason: "thinking_signature",
 								backoff_ms: 0,
 								next_attempt: wireAttempt + 1,
 								...logger.diagnosticUrl(baseUrl),
@@ -3905,13 +3868,10 @@ const streamAnthropicOnce = (
 						// Escalate: drop all replayed thinking — prior-turn reasoning
 						// is optional context — and retry once. Stored history keeps
 						// its thinking blocks; only the wire payload changes.
-						logger.warn(
+						logCompatRetry(
 							"anthropic: thinking signatures still rejected after unsigned demotion, dropping replayed thinking and retrying",
+							"thinking_signature_drop_all",
 							{
-								...diagnosticFields(),
-								event: "anthropic_compat_retry",
-								result: "retrying",
-								retry_reason: "thinking_signature_drop_all",
 								backoff_ms: 0,
 								next_attempt: wireAttempt + 1,
 								...logger.diagnosticUrl(baseUrl),
@@ -3942,13 +3902,9 @@ const streamAnthropicOnce = (
 						firstTokenTime === undefined &&
 						AIError.isFastModeUnsupported(streamFailure)
 					) {
-						logger.warn("anthropic: fast mode unsupported, retrying without speed", {
-							...diagnosticFields(),
+						logCompatRetry("anthropic: fast mode unsupported, retrying without speed", "fast_mode_unsupported", {
 							...logger.diagnosticError(streamFailure),
-							event: "anthropic_compat_retry",
 							stage: "build",
-							result: "retrying",
-							retry_reason: "fast_mode_unsupported",
 						});
 						if (providerSessionState) {
 							providerSessionState.fastModeDisabled = true;
@@ -3981,16 +3937,10 @@ const streamAnthropicOnce = (
 						AIError.isCacheControlUnsupported(streamFailure) &&
 						requestCarriesCacheControlOptions()
 					) {
-						logger.warn(
+						logCompatRetry(
 							"anthropic: endpoint rejected cache_control, retrying with breakpoints but no ttl/scope",
-							{
-								...diagnosticFields(),
-								...logger.diagnosticError(streamFailure),
-								event: "anthropic_compat_retry",
-								stage: "build",
-								result: "retrying",
-								retry_reason: "cache_control_options_unsupported",
-							},
+							"cache_control_options_unsupported",
+							{ ...logger.diagnosticError(streamFailure), stage: "build" },
 						);
 						cacheControlOptionRejectionReplayed = true;
 						dropCacheControlOptions = true;
@@ -4055,14 +4005,11 @@ const streamAnthropicOnce = (
 						firstTokenTime === undefined &&
 						AIError.isCacheControlUnsupported(streamFailure)
 					) {
-						logger.warn("anthropic: endpoint rejected cache_control, retrying without prompt-cache breakpoints", {
-							...diagnosticFields(),
-							...logger.diagnosticError(streamFailure),
-							event: "anthropic_compat_retry",
-							stage: "build",
-							result: "retrying",
-							retry_reason: "cache_control_unsupported",
-						});
+						logCompatRetry(
+							"anthropic: endpoint rejected cache_control, retrying without prompt-cache breakpoints",
+							"cache_control_unsupported",
+							{ ...logger.diagnosticError(streamFailure), stage: "build" },
+						);
 						cacheControlRejectionReplayed = true;
 						dropCacheControl = true;
 						// Rebuild the client too: the retry must stop advertising the
@@ -4083,13 +4030,11 @@ const streamAnthropicOnce = (
 					// Undocumented thread rejections arrive as plain 400s; resend once
 					// without the thread before surfacing it.
 					if (firstTokenTime === undefined && threadTurn?.dropAfterUnexplained400(streamFailure)) {
-						logger.warn("anthropic: 400 on a thread request, resending without thread", {
-							...diagnosticFields(),
-							...logger.diagnosticError(streamFailure),
-							event: "anthropic_compat_retry",
-							result: "retrying",
-							retry_reason: "thread_unexplained_400",
-						});
+						logCompatRetry(
+							"anthropic: 400 on a thread request, resending without thread",
+							"thread_unexplained_400",
+							logger.diagnosticError(streamFailure),
+						);
 						resetStreamOutputState();
 						continue;
 					}

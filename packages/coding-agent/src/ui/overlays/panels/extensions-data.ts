@@ -32,6 +32,7 @@ import {
 	type ExtensionState,
 	isShadowedExtension,
 } from "../../../extensibility/inventory/types";
+import type { SkillCatalogEntry } from "../../../extensibility/skills";
 
 export type { ExtensionInspectorSource, LiveToolRecord };
 
@@ -506,14 +507,31 @@ export function contentData(ext: Extension): { content: string; applyTo?: string
 	return { content: field(raw, "content") ?? "", applyTo: field(raw, "applyTo") };
 }
 
+export const ENABLEMENT_LOOK = {
+	active: { glyph: "status.enabled", tone: "success" },
+	disabled: { glyph: "status.disabled", tone: "dim" },
+	shadowed: { glyph: "status.shadowed", tone: "warning" },
+} as const satisfies Record<ExtensionState, { glyph: string; tone: string }>;
+
+/** Why a disabled skill must be enabled somewhere other than its row switch. */
+export function skillToggleBlock(ext: Extension): string | undefined {
+	if (ext.kind !== "skill" || ext.state !== "disabled") return undefined;
+	const skill = ext.raw as Pick<SkillCatalogEntry, "toggleBlocked"> | null | undefined;
+	if (skill?.toggleBlocked) return sanitizeDisplayLine(skill.toggleBlocked);
+	if (ext.disabledReason === "provider-disabled") return "Provider disabled";
+	if (ext.disabledReason === "user-opt-in") return "Skill source not enabled";
+	return undefined;
+}
+
 /** `Active`, `Disabled (why)`, `Shadowed by …`. */
-export function enablementLabel(state: ExtensionState, reason?: string, shadowedBy?: string, blocked?: string): string {
+export function enablementLabel(ext: Extension): string {
+	const { state, disabledReason: reason, shadowedBy } = ext;
 	switch (state) {
 		case "active":
 			return "Active";
 		case "disabled": {
 			const detail =
-				sanitizeDisplayLineField(blocked) ??
+				sanitizeDisplayLineField(skillToggleBlock(ext)) ??
 				(reason === "provider-disabled"
 					? "provider disabled"
 					: reason === "user-opt-in"

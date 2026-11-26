@@ -8,6 +8,10 @@ import { SkillProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/sk
 import { InternalUrlFilesystem } from "@oh-my-pi/pi-coding-agent/internal-urls/url-filesystem";
 import { ShellFsOp, type ShellFsResponse } from "@oh-my-pi/pi-natives";
 
+// File symlinks require Windows Developer Mode or elevation; skip both fixtures and tests there.
+const isWindows = process.platform === "win32";
+const posixIt = it.skipIf(isWindows);
+
 let tempDir: string;
 let pluginRoot: string;
 let skillDir: string;
@@ -38,9 +42,7 @@ beforeAll(async () => {
 	// A secret OUTSIDE the plugin root.
 	outsideFile = path.join(tempDir, "secret.md");
 	await fs.writeFile(outsideFile, "outside contents\n");
-	// File symlinks require Developer Mode on Windows; the symlink-dependent
-	// tests below are skipped there.
-	if (process.platform !== "win32") {
+	if (!isWindows) {
 		// Symlinked resources shipped by the skill.
 		await fs.symlink(path.join(pluginRoot, "shared", "inside.md"), path.join(skillDir, "references", "ok.md"));
 		await fs.symlink(outsideFile, path.join(skillDir, "references", "leak.md"));
@@ -80,16 +82,14 @@ describe("shell filesystem skill:// containment", () => {
 		expect(response.error?.message).toContain("resolves outside the plugin root");
 	});
 
-	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
-	it.skipIf(process.platform === "win32")("opens in-root symlinks at their canonical target, read-only", async () => {
+	posixIt("opens in-root symlinks at their canonical target, read-only", async () => {
 		await expect(openRead(pluginSkill(), "skill://docs/references/ok.md")).resolves.toEqual({
 			local: path.join(pluginRoot, "shared", "inside.md"),
 			readonly: true,
 		});
 	});
 
-	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
-	it.skipIf(process.platform === "win32")("refuses symlinks escaping the plugin root", async () => {
+	posixIt("refuses symlinks escaping the plugin root", async () => {
 		// §4.1: the package boundary applies to every file the client reads or
 		// executes, including skill resources opened by the shell.
 		const response = await openRead(pluginSkill(), "skill://docs/references/leak.md");
@@ -98,21 +98,17 @@ describe("shell filesystem skill:// containment", () => {
 		expect(response.error?.message).toContain("resolves outside the plugin root");
 	});
 
-	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
-	it.skipIf(process.platform === "win32")(
-		"reports dangling symlinks as missing and never writes through them",
-		async () => {
-			expect((await openRead(pluginSkill(), "skill://docs/references/dangle.md")).error?.code).toBe("ENOENT");
+	posixIt("reports dangling symlinks as missing and never writes through them", async () => {
+		expect((await openRead(pluginSkill(), "skill://docs/references/dangle.md")).error?.code).toBe("ENOENT");
 
-			const write = await shellFs(pluginSkill()).handle({
-				op: ShellFsOp.Open,
-				path: "skill://docs/references/dangle.md",
-				open: { ...readOpen, read: false, write: true, create: true, truncate: true },
-			});
-			expect(write.error?.code).toBe("EROFS");
-			await expect(fs.lstat(path.join(tempDir, "not-created.md"))).rejects.toThrow();
-		},
-	);
+		const write = await shellFs(pluginSkill()).handle({
+			op: ShellFsOp.Open,
+			path: "skill://docs/references/dangle.md",
+			open: { ...readOpen, read: false, write: true, create: true, truncate: true },
+		});
+		expect(write.error?.code).toBe("EROFS");
+		await expect(fs.lstat(path.join(tempDir, "not-created.md"))).rejects.toThrow();
+	});
 
 	it("keeps skill packages read-only, creating nothing", async () => {
 		const local: Skill = { ...pluginSkill(), containRoot: undefined };
@@ -126,8 +122,7 @@ describe("shell filesystem skill:// containment", () => {
 		await expect(fs.stat(path.join(skillDir, "new-dir"))).rejects.toThrow();
 	});
 
-	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
-	it.skipIf(process.platform === "win32")("leaves uncontained (non-plugin) skills unrestricted", async () => {
+	posixIt("leaves uncontained (non-plugin) skills unrestricted", async () => {
 		const local: Skill = { ...pluginSkill(), containRoot: undefined };
 
 		await expect(openRead(local, "skill://docs/references/leak.md")).resolves.toEqual({
@@ -140,29 +135,25 @@ describe("shell filesystem skill:// containment", () => {
 describe("skill:// read containment", () => {
 	const handler = new SkillProtocolHandler();
 
-	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
-	it.skipIf(process.platform === "win32")("reads in-root symlinked resources", async () => {
+	posixIt("reads in-root symlinked resources", async () => {
 		const resource = await handler.resolve(parseInternalUrl("skill://docs/references/ok.md"), {
 			skills: [pluginSkill()],
 		});
 		expect(resource.content).toBe("inside contents\n");
 	});
 
-	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
-	it.skipIf(process.platform === "win32")("refuses to read escaping symlinked resources", async () => {
+	posixIt("refuses to read escaping symlinked resources", async () => {
 		await expect(
 			handler.resolve(parseInternalUrl("skill://docs/references/leak.md"), { skills: [pluginSkill()] }),
 		).rejects.toThrow("resolves outside the plugin root");
 	});
 
-	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
-	it.skipIf(process.platform === "win32")("fails closed on dangling symlinks", async () => {
+	posixIt("fails closed on dangling symlinks", async () => {
 		await expect(
 			handler.resolve(parseInternalUrl("skill://docs/references/dangle.md"), { skills: [pluginSkill()] }),
 		).rejects.toThrow("File not found");
 	});
-	// File symlinks require Developer Mode on Windows; the fixture cannot be built.
-	it.skipIf(process.platform === "win32")("keeps reading escaping paths for uncontained skills", async () => {
+	posixIt("keeps reading escaping paths for uncontained skills", async () => {
 		const local: Skill = { ...pluginSkill(), containRoot: undefined };
 		const resource = await handler.resolve(parseInternalUrl("skill://docs/references/leak.md"), {
 			skills: [local],

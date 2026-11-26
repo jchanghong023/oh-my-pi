@@ -18,21 +18,13 @@
 - `/collab2` defaults to `10.239.93.104:9333` when `OMP_OFFLINE` is set; `OMP_COLLAB2_IP` still overrides the default.
 - Offline mode defaults terminal program status (OSC 7501) to off so incompatible terminals do not insert status text into the composer. Explicit settings still take precedence.
 
-### Breaking Changes
 ### Changed
 
 - Built-in TUI navigation, settings, pickers, prompts, and status labels use English again. The startup tips, Tip and New badges, and font reminder remain in Chinese. User, model, and tool content and the default dictation language are unchanged.
 - JavaScript Eval and archive queries are enabled by default again, binary analysis defaults to automatic backend selection, and offline sessions honor `fetch.enabled` for URL reads.
 - The `debug` tool is enabled by default again.
 - OpenWiki query tools are off by default and can be enabled together with `openwiki.tools.enabled`.
-- Extensions, hooks and custom tools now render with the reactive `@oh-my-pi/pi-tui` API instead of its old component API. `renderCall`, `renderResult`, message and thinking renderers, `ctx.ui.custom`, `setWidget`, `setHeader` and `setFooter` return JSX nodes or `{ render(width): string[] }` rows objects. UI factories receive a `ui` host instead of the `TUI`. See [Migrating from pi-tui](../../docs/extensions.md#migrating-from-pi-tui).
-- The host supplies `@oh-my-pi/pi-tui`, including in compiled binaries. Imports of `@mariozechner/pi-tui` or `@earendil-works/pi-tui` show a migration error.
-- `ctx.ui.setEditorComponent`/`getEditorComponent` are removed: use the `ctx.ui.composer` hooks (`addKeyHandler`, `addDecorator`, `setSubmitTransform`, `setShape`).
-- `registerComposerShape` takes a `ComposerShape` (`id`, `label`, `row`, `sideWidth`, optional `top`/`bottom` and layout facts) instead of `{ label, style: ComposerStyle }`.
-- Tool `describeCall`/`describeResult` are removed; return nodes from `renderCall`/`renderResult`, which Tern draws natively.
-- `ctx.ui.custom` options drop the pi-tui `overlayOptions` (anchors, sizes, margins); `fullscreen` is now an option of its own; `onHandle` receives `{ closed, close() }`.
-- `--no-tools` now gives the model only the built-in tools named in `--tools`, and subagents inherit that limit. MCP, extension, custom, memory and auto-learn tools no longer reach it, and memory is neither recalled nor saved. Extensions (including their model providers) and LSP don't load, goal and plan mode are unavailable, and `-e`/`--hook`/`--trusted-extension` are rejected alongside it ([#20354](https://github.com/can1357/oh-my-pi/pull/20354) by [@materemias](https://github.com/materemias))
-- The package root no longer re-exports pi-tui components and helpers (`Text`, `Container`, `Markdown`, `Spacer`, the `modes/components` classes, `formTheme`, `styledSpans`, `compactText`, `rowsText`, `getSettingsListTheme`, …); it exports `ansiSpans` and the theme service instead.
+- The `--no-tools` restrictions introduced in [19.2.0](#1920---2026-11-25) came from [#20354](https://github.com/can1357/oh-my-pi/pull/20354) by [@materemias](https://github.com/materemias).
 - `/fast` and `/fast ultra` now route to an account or stored API key that offers the tier, without pinning one by hand; once it hits its limits the other accounts serve as usual at standard speed, and the fast one takes over again when it recovers.
 - A refused Claude fast-mode request no longer turns `/fast` off when another credential can still be tried; run `/fast` again to re-check an account after enabling usage credits.
 - `history://<id>` renders through the same transcript view as `archive.transcript`: turns are numbered, back-to-back reads and searches group, and `?budget=`, `?detail=`, and `?turns=` compact or narrow the transcript.
@@ -40,8 +32,6 @@
 - Dictation now works with xAI speech-to-text models such as `xai-oauth/grok-voice-transcribe-2.0` ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
 - `/fast` now switches Devin models onto their fast lanes, replacing the separate Devin Fast model entries; set `tier.devin: priority` to start every session in fast mode
 - The glob tool's header shows the globs a call searches, a separate `pattern` included, with wildcards, character classes and `{a,b}` alternations highlighted like grep's regex ([#20616](https://github.com/can1357/oh-my-pi/pull/20616) by [@JustasMasiulis](https://github.com/JustasMasiulis))
-
-### Changed
 
 - Bash loads approved `.envrc` and opt-in `.env` files without a `direnv` executable on `PATH`, using the exact file contents checked for approval.
 - URL reads keep cookies across redirects, follow meta refresh, and can fall back to a headless browser when enabled and plain fetch is blocked.

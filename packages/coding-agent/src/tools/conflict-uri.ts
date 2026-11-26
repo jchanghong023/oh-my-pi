@@ -398,7 +398,6 @@ async function resolveAllConflicts(
 			});
 			continue;
 		}
-		const originalText = text;
 		for (const entry of fileEntries) {
 			try {
 				const expanded = expandContentTokens(contentFor(entry), entry);
@@ -420,7 +419,7 @@ async function resolveAllConflicts(
 			continue;
 		}
 
-		const change: EditToolPerFileResult = { path: absolutePath, ...editDiffString(originalText, text, absolutePath) };
+		const change: EditToolPerFileResult = { path: absolutePath, ...editDiffString(original, text, absolutePath) };
 		await writethroughNoop(absolutePath, bom + text, signal);
 		conflictChanges.push(change);
 		session.bumpFileMutationVersion?.(absolutePath);

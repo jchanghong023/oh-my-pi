@@ -20,7 +20,6 @@ import {
 	type ExtensionProvider,
 	isShadowedExtension,
 } from "../../../extensibility/inventory/types";
-import type { SkillCatalogEntry } from "../../../extensibility/skills";
 import { fuzzyHits } from "../../../utils/fuzzy";
 import { stableKey } from "../pickers/format";
 import {
@@ -30,6 +29,7 @@ import {
 	kindLabel,
 	rowHint,
 	snapshotTools,
+	skillToggleBlock,
 	type ToolRuntimeSource,
 } from "./extensions-data";
 import { selectKeyId } from "../../../config/keybindings/matchers";
@@ -67,16 +67,6 @@ export type ListRow =
 export interface ListSwitch {
 	readonly on: boolean;
 	readonly blocked?: string;
-}
-
-/** Why a disabled skill must be enabled somewhere other than its row switch. */
-export function skillToggleBlock(ext: Extension): string | undefined {
-	if (ext.kind !== "skill" || ext.state !== "disabled") return undefined;
-	const skill = ext.raw as Pick<SkillCatalogEntry, "toggleBlocked"> | null | undefined;
-	if (skill?.toggleBlocked) return sanitizeDisplayLine(skill.toggleBlocked);
-	if (ext.disabledReason === "provider-disabled") return "Provider disabled";
-	if (ext.disabledReason === "user-opt-in") return "Skill source not enabled";
-	return undefined;
 }
 
 const DEFAULT_MAX_VISIBLE = 15;

@@ -6,7 +6,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { installBinary } from "../packages/natives/scripts/build-bindings";
+import { installFile } from "../packages/natives/scripts/installed-file";
 import { nativesPackageVersion, stampNativeVersion } from "./stamp-native-version";
 import { ensureWindowsBuildTools } from "./windows-build-tools";
 
@@ -136,17 +136,14 @@ export async function buildReleaseNative(): Promise<string> {
 	// original: changing its bytes would corrupt Cargo's reusable build output.
 	const compiled = path.join(targetDir, target, "local", linux ? "libpi_natives.so" : "pi_natives.dll");
 	await fs.mkdir(outputDir, { recursive: true });
-	const stagingDir = await fs.mkdtemp(path.join(outputDir, ".release-native-"));
-	const staged = path.join(stagingDir, filename);
 	const destination = path.join(outputDir, filename);
-	try {
-		await fs.copyFile(compiled, staged);
-		if (linux) await inspectLinuxAbi(staged, env);
-		await stampNativeVersion(staged, await nativesPackageVersion());
-		await installBinary(staged, destination);
-	} finally {
-		await fs.rm(stagingDir, { recursive: true, force: true });
-	}
+	await installFile(compiled, destination, {
+		allowUnlinkFallback: true,
+		prepare: async staged => {
+			if (linux) await inspectLinuxAbi(staged, env);
+			await stampNativeVersion(staged, await nativesPackageVersion());
+		},
+	});
 	console.log(`Native release complete: ${destination} (${((performance.now() - start) / 1000).toFixed(1)}s)`);
 	return destination;
 }

@@ -8,7 +8,7 @@ import { register } from "../config/registry";
 export const cfgLspEnabled = register({
 	id: "lsp.enabled",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "files",
 		group: "LSP",

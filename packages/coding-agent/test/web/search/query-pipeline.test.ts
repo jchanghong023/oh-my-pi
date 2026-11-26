@@ -71,7 +71,7 @@ describe("web search directive pipeline", () => {
 		expect(seen?.model.id).toBe("brave");
 		expect(seen?.parsedQuery?.sites).toEqual(["docs.example.com"]);
 		expect(seen?.parsedQuery?.text).toBe("guide");
-		expect(result.details?.response.sources.map(source => source.url)).toEqual(["https://docs.example.com/guide"]);
+		expect(result.details.response.sources.map(source => source.url)).toEqual(["https://docs.example.com/guide"]);
 		expect(result.content[0]?.text).not.toContain("Note:");
 	});
 
@@ -80,8 +80,8 @@ describe("web search directive pipeline", () => {
 
 		const result = await runSearchQuery({ query: "guide site:nowhere.example" }, context);
 
-		expect(result.details?.error).toBeUndefined();
-		expect(result.details?.response.sources).toEqual([]);
+		expect(result.details.error).toBeUndefined();
+		expect(result.details.response.sources).toEqual([]);
 		expect(result.content[0]?.text).toBe("No results from brave matched `site:nowhere.example`.");
 	});
 
@@ -90,7 +90,7 @@ describe("web search directive pipeline", () => {
 
 		const result = await runSearchQuery({ query: "guide intitle:nowhere" }, context);
 
-		expect(result.details?.response.sources).toHaveLength(SOURCES.length);
+		expect(result.details.response.sources).toHaveLength(SOURCES.length);
 		expect(result.content[0]?.text).toStartWith(
 			"Note: no results matched `intitle:nowhere`; the constraint was relaxed",
 		);
@@ -113,7 +113,7 @@ describe("web search directive pipeline", () => {
 
 		const result = await runSearchQuery({ query }, context);
 
-		expect(result.details?.response.provider).toBe(expectedProvider);
+		expect(result.details.response.provider).toBe(expectedProvider);
 	});
 
 	it.each<[string, SearchQueryParams, SearchProviderId]>([
@@ -208,7 +208,7 @@ describe("web search directive pipeline", () => {
 
 		const result = await runSearchQuery({ query: "override", model: "web/exa" }, context);
 
-		expect(result.details?.response.provider).toBe("exa");
-		expect(result.details?.response.sources[0]?.title).toBe("exa");
+		expect(result.details.response.provider).toBe("exa");
+		expect(result.details.response.sources[0]?.title).toBe("exa");
 	});
 });

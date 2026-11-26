@@ -20,7 +20,7 @@
  * the disk record and the network refresh; so does running under `bun test`.
  */
 import * as fs from "node:fs";
-import { getCodexClientVersionPath, logger } from "@oh-my-pi/pi-utils";
+import { getCodexClientVersionPath, logger, offlineFromEnv } from "@oh-my-pi/pi-utils";
 import { CODEX_CLIENT_VERSION } from "./codex";
 
 const NPM_LATEST_URL = "https://registry.npmjs.org/@openai/codex/latest";
@@ -112,7 +112,7 @@ export function getCodexClientVersion(options?: { refresh?: boolean }): string {
 	if (
 		options?.refresh !== false &&
 		!refreshStarted &&
-		!/^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "") &&
+		!offlineFromEnv() &&
 		(recordCheckedAt === undefined || Date.now() - recordCheckedAt > REFRESH_INTERVAL_MS)
 	) {
 		refreshStarted = true;

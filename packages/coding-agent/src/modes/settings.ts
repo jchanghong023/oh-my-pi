@@ -130,7 +130,7 @@ effect(cfgColorBlindMode, setColorBlindMode);
 export const cfgComposerShape = register({
 	id: "composer.shape",
 	type: "string",
-	default: "box",
+	default: "band",
 	ui: {
 		tab: "appearance",
 		group: "Composer",
@@ -261,7 +261,7 @@ export const cfgStatusLineTransparent = register({
 export const cfgStatusLineCompactThinkingLevel = register({
 	id: "statusLine.compactThinkingLevel",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "appearance",
 		group: "Status Line",
@@ -835,7 +835,7 @@ export const cfgDisplayShowTokenUsage = register({
 export const cfgDisplayShowTurnTime = register({
 	id: "display.showTurnTime",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "appearance",
 		group: "Display",
@@ -1358,7 +1358,7 @@ export const cfgStartupShowSplash = register({
 export const cfgStartupSetupWizard = register({
 	id: "startup.setupWizard",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
@@ -1370,7 +1370,7 @@ export const cfgStartupSetupWizard = register({
 export const cfgStartupCheckUpdate = register({
 	id: "startup.checkUpdate",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
@@ -1400,7 +1400,7 @@ export const cfgMarketplaceAutoUpdate = register({
 	id: "marketplace.autoUpdate",
 	type: "enum",
 	values: ["off", "notify", "auto"] as const,
-	default: "off",
+	default: "notify",
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
@@ -1559,7 +1559,7 @@ export const cfgPtyNotify = register({
 export const cfgRecapEnabled = register({
 	id: "recap.enabled",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "interaction",
 		group: "Notifications",

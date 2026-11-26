@@ -61,7 +61,7 @@ export function normalizeEmbeddedTarMetadata(bytes: Uint8Array): void {
 export async function buildEmbeddedArchive(files: ReadonlyMap<string, Uint8Array>): Promise<string> {
 	const sorted: Record<string, Uint8Array> = {};
 	for (const name of [...files.keys()].sort()) sorted[name] = files.get(name)!;
-	const tar = new Uint8Array(await new Bun.Archive(sorted).bytes());
+	const tar = await new Bun.Archive(sorted).bytes();
 	normalizeEmbeddedTarMetadata(tar);
 	return Buffer.from(Bun.gzipSync(tar, { level: 9 })).toString("base64");
 }
@@ -75,7 +75,7 @@ export function hasEmbeddedArchive(text: string): boolean {
 export function decodeEmbeddedArchive(text: string): Uint8Array | null {
 	if (!hasEmbeddedArchive(text)) return null;
 	const normalized = text.replaceAll(/\s+/g, "");
-	if (!normalized || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) return null;
+	if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) return null;
 	const archive = Buffer.from(normalized, "base64");
 	if (archive[0] !== 0x1f || archive[1] !== 0x8b) return null;
 	return archive;

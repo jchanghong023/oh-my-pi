@@ -446,6 +446,17 @@ function prepareProviderRequest(model: Model<Api>, options: StreamOptions): Prep
 	return definition?.prepareRequest?.(requestModel, options) ?? { model: requestModel, options };
 }
 
+/** Explicit credentials replace the ordinary API key and override matching caller headers. */
+function withExplicitRequestAuth<T extends Pick<SimpleStreamOptions, "apiKey" | "headers" | "requestAuth">>(
+	provider: string,
+	options: T,
+): T {
+	const auth = options.requestAuth;
+	if (auth === undefined) return options;
+	if (!hasRequestAuthMaterial(auth)) throw new AIError.MissingApiKeyError(provider);
+	return { ...options, apiKey: auth.apiKey, headers: mergeHeaders(options.headers, auth.headers) };
+}
+
 function streamDispatch<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
@@ -455,17 +466,9 @@ function streamDispatch<TApi extends Api>(
 	// A provider turned off in its auth rules is never called, even with a key passed in directly.
 	assertProviderEnabled(model.provider);
 	context = perturbContext(model, context);
-	if (options?.requestAuth !== undefined) {
-		if (!hasRequestAuthMaterial(options.requestAuth)) throw new AIError.MissingApiKeyError(model.provider);
-		options = {
-			...options,
-			apiKey: options.requestAuth.apiKey,
-			headers: mergeHeaders(options.headers, options.requestAuth.headers),
-		};
-	}
 	const requestOptions = withSupportedSamplingParams(
 		model,
-		withTransportFetch(model, (options || {}) as StreamOptions),
+		withTransportFetch(model, withExplicitRequestAuth(model.provider, (options || {}) as StreamOptions)),
 	) as OptionsForApi<TApi>;
 	assertExplicitOpenAIResponsesPromptCacheSupport(model, requestOptions);
 
@@ -489,7 +492,7 @@ function streamDispatch<TApi extends Api>(
 		return customApiProvider.stream(model, context, { ...requestOptions, waitForTerminalDrain: limited });
 	}
 
-	if (model.provider === "gitlab-duo") {
+	if (model.provider === "gitlab-duo" || model.api === "gitlab-duo-agent") {
 		const apiKey =
 			requestOptions.requestAuth !== undefined
 				? requestOptions.requestAuth.apiKey
@@ -497,20 +500,12 @@ function streamDispatch<TApi extends Api>(
 		if (!apiKey) {
 			throw new AIError.MissingApiKeyError(model.provider);
 		}
-		return streamGitLabDuo(model, context, {
-			...(requestOptions as SimpleStreamOptions),
-			apiKey,
-			waitForTerminalDrain: limited,
-		});
-	}
-
-	if (model.api === "gitlab-duo-agent") {
-		const apiKey =
-			requestOptions.requestAuth !== undefined
-				? requestOptions.requestAuth.apiKey
-				: requestOptions.apiKey || getEnvApiKey(model.provider);
-		if (!apiKey) {
-			throw new AIError.MissingApiKeyError(model.provider);
+		if (model.provider === "gitlab-duo") {
+			return streamGitLabDuo(model, context, {
+				...(requestOptions as SimpleStreamOptions),
+				apiKey,
+				waitForTerminalDrain: limited,
+			});
 		}
 		return streamGitLabDuoWorkflow(model as Model<"gitlab-duo-agent">, context, {
 			...(requestOptions as StreamOptions | undefined),
@@ -865,17 +860,9 @@ function streamSimpleRequest<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-	if (options?.requestAuth !== undefined) {
-		if (!hasRequestAuthMaterial(options.requestAuth)) throw new AIError.MissingApiKeyError(model.provider);
-		options = {
-			...options,
-			apiKey: options.requestAuth.apiKey,
-			headers: mergeHeaders(options.headers, options.requestAuth.headers),
-		};
-	}
 	const requestOptions = withSupportedSamplingParams(
 		model,
-		withTransportFetch(model, (options || {}) as SimpleStreamOptions),
+		withTransportFetch(model, withExplicitRequestAuth(model.provider, (options || {}) as SimpleStreamOptions)),
 	);
 
 	// CodeAgent owns its credential refresh and does not use generic rotation.

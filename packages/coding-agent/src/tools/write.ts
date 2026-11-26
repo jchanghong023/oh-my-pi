@@ -88,6 +88,29 @@ import {
 const EXECUTABLE_NOTICE = "[Notice: Made executable via chmod +x]";
 const URI_LIKE_WRITE_PATH_RE = /^([a-z][a-z0-9+.-]*):\/{1,2}(.*)$/i;
 
+function writeReceipt(
+	resolvedPath: string,
+	displayPath: string,
+	bytes: number,
+	header: string | undefined,
+	stripped: boolean,
+	madeExecutable: boolean,
+	conventionNote?: string,
+	diagnostics?: WriteToolDetails["diagnostics"],
+): AgentToolResult<WriteToolDetails> {
+	const writeLine = `Successfully wrote ${bytes} bytes to ${displayPath}`;
+	let text = header ? `${header}\n${writeLine}` : writeLine;
+	if (stripped) text += "\nNote: auto-stripped hashline display prefixes from content before writing.";
+	if (conventionNote) text += `\n${conventionNote}`;
+	if (madeExecutable) text += `\n${EXECUTABLE_NOTICE}`;
+
+	const details: WriteToolDetails = { resolvedPath };
+	if (diagnostics) details.diagnostics = diagnostics;
+	details.madeExecutable = madeExecutable || undefined;
+	if (diagnostics) details.meta = outputMeta().diagnostics(diagnostics.summary, diagnostics.messages ?? []).get();
+	return { content: [{ type: "text", text }], details };
+}
+
 function assertWriteTargetAddressable(target: string, router: InternalUrlRouter): void {
 	const trimmed = target.trim();
 	if (path.win32.isAbsolute(trimmed) || router.canHandle(trimmed)) return;
@@ -1118,18 +1141,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						// hands back a tag that matches what's actually on disk.
 						const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, bridgeWrite.text);
 						const header = maybeWriteSnapshotHeader(this.session, absolutePath, bridgeWrite.text, displayPath);
-						const writeLine = `Successfully wrote ${cleanBytes} bytes to ${displayPath}`;
-						let resultText = header ? `${header}\n${writeLine}` : writeLine;
-						if (stripped) {
-							resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
-						}
-						if (madeExecutable) {
-							resultText += `\n${EXECUTABLE_NOTICE}`;
-						}
-						return {
-							content: [{ type: "text", text: resultText }],
-							details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
-						};
+						return writeReceipt(absolutePath, displayPath, cleanBytes, header, stripped, madeExecutable);
 					}
 
 					const { writethrough, deferred } = this.#lspWritethrough();
@@ -1159,41 +1171,19 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 					const header = maybeWriteSnapshotHeader(this.session, absolutePath, finalContent, displayPath);
 					const finalBytes = finalContent === writeContent ? writeBytes : Buffer.byteLength(finalContent, "utf8");
-					const writeLine = `Successfully wrote ${finalBytes} bytes to ${displayPath}`;
-					let resultText = header ? `${header}\n${writeLine}` : writeLine;
-					if (stripped) {
-						resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
-					}
 					// A non-final batch entry returns before the batch's formatter runs: claim nothing yet.
 					const conventionNote =
 						batchRequest?.flush === false ? undefined : textFileConventionNote(applied, finalContent);
-					if (conventionNote) {
-						resultText += `\n${conventionNote}`;
-					}
-					if (madeExecutable) {
-						resultText += `\n${EXECUTABLE_NOTICE}`;
-					}
-					if (!diagnostics.diagnostics) {
-						return {
-							content: [{ type: "text", text: resultText }],
-							details: {
-								resolvedPath: absolutePath,
-								madeExecutable: madeExecutable || undefined,
-							},
-						};
-					}
-
-					return {
-						content: [{ type: "text", text: resultText }],
-						details: {
-							resolvedPath: absolutePath,
-							diagnostics: diagnostics.diagnostics,
-							madeExecutable: madeExecutable || undefined,
-							meta: outputMeta()
-								.diagnostics(diagnostics.diagnostics.summary, diagnostics.diagnostics.messages ?? [])
-								.get(),
-						},
-					};
+					return writeReceipt(
+						absolutePath,
+						displayPath,
+						finalBytes,
+						header,
+						stripped,
+						madeExecutable,
+						conventionNote,
+						diagnostics.diagnostics,
+					);
 				},
 			);
 		});

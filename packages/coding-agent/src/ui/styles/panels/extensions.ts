@@ -26,7 +26,6 @@ import {
 	type ExtensionListModel,
 	type ListRow,
 	scrollToShow,
-	skillToggleBlock,
 } from "../../overlays/panels/extension-list-model";
 import type { ExtensionInspectorModel } from "../../overlays/panels/extension-inspector-model";
 import {
@@ -35,6 +34,7 @@ import {
 	commandData,
 	contentData,
 	DESCRIPTION_LINES,
+	ENABLEMENT_LOOK,
 	enablementLabel,
 	hookData,
 	INLINE_ARGS,
@@ -82,11 +82,8 @@ function scrolled(
 // ─── List ───────────────────────────────────────────────────────────────────
 
 function stateIcon(theme: Theme, state: ExtensionState, masterOff: boolean): string {
-	const status = (key: string) => theme.symbols.symbol(`status.${key}`);
-	if (masterOff) return theme.fg("dim", status("disabled"));
-	if (state === "active") return theme.fg("success", status("enabled"));
-	if (state === "disabled") return theme.fg("dim", status("disabled"));
-	return theme.fg("warning", status("shadowed"));
+	const { glyph, tone } = ENABLEMENT_LOOK[masterOff ? "disabled" : state];
+	return theme.fg(tone, theme.symbols.symbol(glyph));
 }
 
 function healthIcon(theme: Theme, health: MCPConnectionHealth, masterOff: boolean): string {
@@ -244,21 +241,8 @@ function section(theme: Theme, title: string, body: string[], width: number): st
 }
 
 function statusBadge(theme: Theme, ext: Extension): string {
-	const status = (key: string) => theme.symbols.symbol(`status.${key}`);
-	switch (ext.state) {
-		case "active":
-			return theme.fg("success", `${status("enabled")} ${enablementLabel(ext.state)}`);
-		case "disabled":
-			return theme.fg(
-				"dim",
-				`${status("disabled")} ${enablementLabel(ext.state, ext.disabledReason, undefined, skillToggleBlock(ext))}`,
-			);
-		case "shadowed":
-			return theme.fg(
-				"warning",
-				`${status("shadowed")} ${enablementLabel(ext.state, ext.disabledReason, ext.shadowedBy)}`,
-			);
-	}
+	const { glyph, tone } = ENABLEMENT_LOOK[ext.state];
+	return theme.fg(tone, `${theme.symbols.symbol(glyph)} ${enablementLabel(ext)}`);
 }
 
 function params(lines: string[], theme: Theme, list: ToolParam[], width: number, indent: string): void {

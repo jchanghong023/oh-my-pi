@@ -20,25 +20,36 @@ export interface NativeSpawnOverrides {
 }
 
 /** Capability-only overrides: native identity, models and ownership remain host-owned. */
-export type NativeSubagentOverrides = Pick<
-	CreateAgentSessionOptions,
-	| "toolNames"
-	| "customTools"
-	| "systemPrompt"
-	| "skills"
-	| "rules"
-	| "restrictToolNames"
-	| "allowRestrictedCustomTools"
-	| "enableMCP"
-	| "enableLsp"
-	| "lspReadOnly"
-	| "enableIrc"
-	| "subagentHooks"
-	| "preloadedPreparedExtensions"
-	| "deferHintCompression"
-> & {
+const nativeSubagentOverrideKeys = [
+	"toolNames",
+	"customTools",
+	"systemPrompt",
+	"skills",
+	"rules",
+	"restrictToolNames",
+	"allowRestrictedCustomTools",
+	"enableMCP",
+	"enableLsp",
+	"lspReadOnly",
+	"enableIrc",
+	"subagentHooks",
+	"preloadedPreparedExtensions",
+	"deferHintCompression",
+] as const satisfies readonly (keyof CreateAgentSessionOptions)[];
+
+export type NativeSubagentOverrides = Pick<CreateAgentSessionOptions, (typeof nativeSubagentOverrideKeys)[number]> & {
 	onSessionCreated?: (session: AgentSession) => void | (() => void);
 };
+
+/** Copy only declared capability fields, including own properties explicitly set to undefined. */
+export function applyNativeSubagentOverrides(
+	options: CreateAgentSessionOptions,
+	overrides: NativeSubagentOverrides,
+): void {
+	for (const key of nativeSubagentOverrideKeys) {
+		if (Object.hasOwn(overrides, key)) Object.assign(options, { [key]: overrides[key] });
+	}
+}
 
 /** Optional live-host callbacks, independently bound for every native child. */
 export interface NativeSubagentHooks {

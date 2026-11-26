@@ -1,6 +1,9 @@
 /** @jsxImportSource @oh-my-pi/pi-tui */
-import { signal, type UiEvent } from "@oh-my-pi/pi-tui";
-import { corpusEnvironment } from "@oh-my-pi/pi-tui/testing/corpus";
+import { expect, test } from "bun:test";
+import { createRoot, signal, type UiEvent, type UiNode } from "@oh-my-pi/pi-tui";
+import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
+import { corpusEnvironment, describeTree } from "@oh-my-pi/pi-tui/testing/corpus";
+import { PLAIN_THEME } from "@oh-my-pi/pi-tui/theme/plain";
 import type { ExtensionDashboardRuntime } from "../../../../src/extensibility/inventory/extension-dashboard";
 import type {
 	MCPConnectionDisplay,
@@ -8,6 +11,7 @@ import type {
 	MCPServerDisplay,
 } from "../../../../src/extensibility/inventory/mcp-runtime";
 import type { Extension, ExtensionProvider } from "../../../../src/extensibility/inventory/types";
+import { inspectorRows } from "../../../../src/ui/styles/panels/extensions";
 import { ExtensionInspectorModel } from "../../../../src/ui/overlays/panels/extension-inspector-model";
 import { ExtensionListModel } from "../../../../src/ui/overlays/panels/extension-list-model";
 import type { ToolRuntimeSource } from "../../../../src/ui/overlays/panels/extensions-data";
@@ -15,6 +19,7 @@ import {
 	ExtensionDashboard,
 	ExtensionInspectorView,
 	ExtensionListView,
+	inspectorPreview,
 } from "../../../../src/ui/overlays/panels/extensions-dashboard";
 import { ExtensionDashboardModel } from "../../../../src/ui/overlays/panels/extensions-dashboard-model";
 import { type Driver, type Mounted, panelSuite } from "./harness";
@@ -492,4 +497,22 @@ panelSuite({
 		return mountDashboard(caseName, corpusCase.widths);
 	},
 	nativeOnly: () => false,
+});
+
+test("the inspector preserves the blocked skill badge in ANSI and native", () => {
+	const inspector = new ExtensionInspectorModel();
+	inspector.setExtension({ ...extensions()[1]!, raw: { toggleBlocked: "Enable the workspace source" } });
+	const label = "Disabled (Enable the workspace source)";
+	const glyph = PLAIN_THEME.symbols.symbol("status.disabled");
+	expect(Bun.stripANSI(inspectorRows(inspector, 100, PLAIN_THEME).join("\n"))).toContain(`${glyph} ${label}`);
+	createRoot(dispose => {
+		try {
+			const root = <col>{inspectorPreview(inspector, "", key => key)}</col> as UiNode;
+			expect(JSON.stringify(describeTree(root, staticEnvironment(PLAIN_THEME)))).toContain(
+				`"s":"dim","t":"status.disabled ${label}"`,
+			);
+		} finally {
+			dispose();
+		}
+	});
 });

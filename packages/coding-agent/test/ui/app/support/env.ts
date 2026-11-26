@@ -57,11 +57,11 @@ export function resetAppRoot(): void {
 		path.join(APP_PROJECT, "src", "greet.ts"),
 		[
 			"export function greet(name: string): string {",
-			`\treturn \`Hello, \${name}\`;`,
+			"\treturn `Hello, ${name}`;",
 			"}",
 			"",
 			"export function farewell(name: string): string {",
-			`\treturn \`Goodbye, \${name}\`;`,
+			"\treturn `Goodbye, ${name}`;",
 			"}",
 			"",
 		].join("\n"),

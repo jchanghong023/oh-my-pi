@@ -204,12 +204,7 @@ export function copyPerCallContextMessage(
 	target: PerCallContextMessageCarrier,
 	source: PerCallContextMessageCarrier,
 ): void {
-	if (source[kPerCallContextMessage] === true) {
-		target[kPerCallContextMessage] = true;
-		const historyOrigin = source[kPerCallContextHistoryOrigin];
-		if (historyOrigin) target[kPerCallContextHistoryOrigin] = historyOrigin;
-		else delete target[kPerCallContextHistoryOrigin];
-	}
+	if (source[kPerCallContextMessage] === true) markPerCallContextMessage(target, source[kPerCallContextHistoryOrigin]);
 }
 
 /** True when a message was synthesized for the current provider call. */

@@ -22,7 +22,7 @@ import { shortenPath } from "../../../utils/render-utils";
 import "../../styles/panels/extensions";
 import { stableKey } from "../pickers/format";
 import type { ExtensionInspectorModel } from "./extension-inspector-model";
-import { type ExtensionListModel, skillToggleBlock } from "./extension-list-model";
+import type { ExtensionListModel } from "./extension-list-model";
 import type { ExtensionDashboardModel, InspectorScrollRequest } from "./extensions-dashboard-model";
 import {
 	CATALOG_ITEMS,
@@ -30,6 +30,7 @@ import {
 	commandData,
 	contentData,
 	DESCRIPTION_LINES,
+	ENABLEMENT_LOOK,
 	enablementLabel,
 	hookData,
 	INLINE_ARGS,
@@ -383,24 +384,8 @@ export function inspectorPreview(
 }
 
 function status(ext: Extension, glyph: (key: string) => string): TspSpan[] {
-	switch (ext.state) {
-		case "active":
-			return [{ s: "success", t: `${glyph("status.enabled")} ${enablementLabel(ext.state)}` }];
-		case "disabled":
-			return [
-				{
-					s: "dim",
-					t: `${glyph("status.disabled")} ${enablementLabel(ext.state, ext.disabledReason, undefined, skillToggleBlock(ext))}`,
-				},
-			];
-		case "shadowed":
-			return [
-				{
-					s: "warning",
-					t: `${glyph("status.shadowed")} ${enablementLabel(ext.state, ext.disabledReason, ext.shadowedBy)}`,
-				},
-			];
-	}
+	const look = ENABLEMENT_LOOK[ext.state];
+	return [{ s: look.tone, t: `${glyph(look.glyph)} ${enablementLabel(ext)}` }];
 }
 
 /** Up to two initials of a provider label, for its scope mark. */

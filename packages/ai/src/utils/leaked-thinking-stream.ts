@@ -38,7 +38,6 @@ import { ThinkingInbandScanner } from "../dialect/thinking";
 import type { InbandScanEvent, InbandScanner } from "../dialect/types";
 import { isAnthropicServerToolHistoryBlock } from "../providers/anthropic-wire";
 import type {
-	AnthropicServerToolContent,
 	AssistantMessage,
 	ImageContent,
 	StopReason,
@@ -580,9 +579,14 @@ class LeakedThinkingProjector {
 
 	#mergeServerToolHistory(message: AssistantMessage): AssistantMessage["content"] {
 		const pendingCalls = new Map<string, number>();
-		const pairedIndexes = new Set<number>();
+		const preservedIndexes = new Set<number>();
 		for (let srcIndex = 0; srcIndex < message.content.length; srcIndex++) {
 			const content = message.content[srcIndex];
+			// Opaque thinking has no delta events; preserve it verbatim at its source index.
+			if (content?.type === "redactedThinking") {
+				preservedIndexes.add(srcIndex);
+				continue;
+			}
 			if (content?.type !== "anthropicServerTool" || !isAnthropicServerToolHistoryBlock(content.block)) continue;
 			if (content.block.type === "server_tool_use") {
 				pendingCalls.set(content.block.id, srcIndex);
@@ -590,8 +594,8 @@ class LeakedThinkingProjector {
 			}
 			const callIndex = pendingCalls.get(content.block.tool_use_id);
 			if (callIndex === undefined) continue;
-			pairedIndexes.add(callIndex);
-			pairedIndexes.add(srcIndex);
+			preservedIndexes.add(callIndex);
+			preservedIndexes.add(srcIndex);
 			pendingCalls.delete(content.block.tool_use_id);
 		}
 
@@ -600,24 +604,14 @@ class LeakedThinkingProjector {
 			sourceIndex: this.#sourceAnchors.get(block) ?? message.content.length + order,
 			order,
 		}));
-		for (const srcIndex of pairedIndexes) {
+		for (const srcIndex of preservedIndexes) {
 			const content = message.content[srcIndex];
-			if (content?.type !== "anthropicServerTool") continue;
-			const cloned: AnthropicServerToolContent = {
-				type: "anthropicServerTool",
-				block: structuredClone(content.block),
-			};
-			anchored.push({ block: cloned, sourceIndex: srcIndex, order: srcIndex });
-		}
-		// 缺陷 I70(anthropic-redacted-block-lost-before-journal): 非官方端点的
-		// provider 流都会经过本投影器,而 redacted_thinking 只有 content_block_start/
-		// stop、没有任何 delta 事件,重建 content 时被静默丢弃,持久化 assistant 与
-		// 后续 live 请求都缺该块。opaque bytes 原样透传:不伪造签名、不改写数据,
-		// 与 server-tool history 一样按源位置锚定合并。
-		for (let srcIndex = 0; srcIndex < message.content.length; srcIndex++) {
-			const content = message.content[srcIndex];
-			if (content?.type !== "redactedThinking") continue;
-			anchored.push({ block: { ...content }, sourceIndex: srcIndex, order: srcIndex });
+			if (content?.type === "redactedThinking") {
+				anchored.push({ block: { ...content }, sourceIndex: srcIndex, order: srcIndex });
+			} else if (content?.type === "anthropicServerTool") {
+				const block = { type: "anthropicServerTool" as const, block: structuredClone(content.block) };
+				anchored.push({ block, sourceIndex: srcIndex, order: srcIndex });
+			}
 		}
 		anchored.sort((left, right) => left.sourceIndex - right.sourceIndex || left.order - right.order);
 		return anchored.map(({ block }) => block);

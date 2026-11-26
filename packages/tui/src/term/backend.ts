@@ -19,6 +19,7 @@
  * focused kind's widget (an editor turns them into `edit` events); clicks
  * resolve through the last frame's hit regions.
  */
+import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
 import type { FramePlan, InputEvent, MouseEvent, TerminalCapabilities, TerminalDriver } from "../driver/contract";
 import { dropCutImages } from "../driver/images/anchor";
 import { DEFAULT_CELL } from "../driver/images/fit";
@@ -310,8 +311,7 @@ export class TermBackend {
 	readonly #hyperlinks: Signal<boolean>;
 	readonly #textSizing: Signal<boolean>;
 	readonly #viewportHeight = signal(1);
-	readonly #offlineLinux =
-		process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
+	readonly #offlineLinux = process.platform === "linux" && offlineFromEnv();
 	#tick: Timer | undefined;
 	#tickDelay = 0;
 	#inTick = false;

@@ -154,14 +154,18 @@ interface RefLookup {
 }
 
 /**
- * `full` for `history://current/full`, `bare` for `history://current` (which
- * means the same unless an agent is named `current`), undefined for any other
- * id; throws for any other `current/<path>`.
+ * `full` for `history://current/full`, or also `history://current` in an
+ * isolated session. Otherwise the bare route may refer to an agent named
+ * `current`; other ids defer to lookup only if peer reads are permitted.
  */
-function currentRoute(url: InternalUrl): "full" | "bare" | undefined {
+function currentRoute(url: InternalUrl, context?: ResolveContext): "full" | "bare" | undefined {
 	const agentId = url.rawHost || url.hostname;
-	if (agentId.toLowerCase() !== "current") return undefined;
-	if (!url.pathname || url.pathname === "/") return "bare";
+	const isolated = context?.localProtocolOptions?.allowCrossAgentReads === false;
+	if (agentId.toLowerCase() !== "current") {
+		if (isolated) throw new Error("Cross-agent history lookups are disabled in this session.");
+		return undefined;
+	}
+	if (!url.pathname || url.pathname === "/") return isolated ? "full" : "bare";
 	if (url.pathname !== "/full" || url.search || url.hash) {
 		throw new Error("Invalid history://current route; use exactly history://current/full (selectors may follow it)");
 	}
@@ -403,12 +407,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	 * do live agents without a session file and unknown ids.
 	 */
 	async locate(url: InternalUrl, context?: ResolveContext): Promise<string | null> {
-		const current = currentRoute(url);
-		if (current === "full" || (current === "bare" && context?.localProtocolOptions?.allowCrossAgentReads === false))
-			return null;
-		if (context?.localProtocolOptions?.allowCrossAgentReads === false) {
-			throw new Error("Cross-agent history lookups are disabled in this session.");
-		}
+		const current = currentRoute(url, context);
+		if (current === "full") return null;
 		const agentId = url.rawHost || url.hostname;
 		if (!agentId) return null;
 		const { ref, preferredArtifactDir } = await this.#lookup(agentId, context);
@@ -479,12 +479,8 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		};
 	}
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
-		const current = currentRoute(url);
-		if (current === "full" || (current === "bare" && context?.localProtocolOptions?.allowCrossAgentReads === false))
-			return this.#resolveCurrentFull(url, context);
-		if (context?.localProtocolOptions?.allowCrossAgentReads === false) {
-			throw new Error("Cross-agent history lookups are disabled in this session.");
-		}
+		const current = currentRoute(url, context);
+		if (current === "full") return this.#resolveCurrentFull(url, context);
 		const agentId = url.rawHost || url.hostname;
 		if (!agentId) {
 			const { visible, preferredArtifactDir } = await this.#roster(context);

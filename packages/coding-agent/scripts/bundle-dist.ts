@@ -3,17 +3,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import {
-	buildDeveloperTestAgentResources,
-	createDeveloperTestAgentArchivePlugin,
-} from "./developer-test-agent-resources";
+import { createBundlePlugins } from "./bundle-plugins";
 import { embeddedRelayExtensionFiles } from "./embed-relay-extension";
 import { buildDocsIndexPayload } from "./generate-docs-index";
-import { createJsonParsePlugin } from "./json-parse-plugin";
-import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
-import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
-import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
 
 const packageDir = path.join(import.meta.dir, "..");
 const defaultOutDir = path.join(packageDir, "dist");
@@ -118,10 +111,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 	try {
 		const openWikiResources = await buildOpenWikiResources();
 		resets.push(resetOpenWikiResources);
-		await writeOpenWikiResources(openWikiResources);
-		const openWikiText = await Bun.file(
-			path.join(packageDir, "src/openwiki/openwiki-resources.generated.txt"),
-		).text();
+		const openWikiText = await writeOpenWikiResources(openWikiResources);
 		await cleanBundleOutputs(outDir);
 		// The npm bundle ships no stats dashboard sources, so embed the dashboard
 		// archive the same way compiled binaries do (scripts/build-binary.ts). Reset
@@ -156,8 +146,11 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		if (!vendorBundle.success) {
 			throw new Error(`OpenWiki vendor bundle failed:\n${vendorBundle.logs.map(log => log.message).join("\n")}`);
 		}
-		const specDrivenArchive = await buildSpecDrivenArchive();
 		const docsPayload = await buildDocsIndexPayload();
+		// Also refreshes `src/.../extension.generated.json`, which SDK consumers of `src` read.
+		const files = await embeddedRelayExtensionFiles();
+		const { plugins, specDrivenArchive } = await createBundlePlugins();
+		plugins.push(inlineNativeNoticesPlugin);
 		// Build in-process: the docs embed payload is far larger than Linux's
 		// 128KiB per-argv-string cap, so it can never be passed as a CLI
 		// `--define` (posix_spawn fails with E2BIG).
@@ -165,16 +158,8 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			entrypoints: [path.join(packageDir, "src/cli.ts")],
 			outdir: outDir,
 			target: "bun",
-			// Also refreshes `src/.../extension.generated.json`, which SDK consumers of `src` read.
-			files: await embeddedRelayExtensionFiles(),
-			plugins: [
-				createJsonParsePlugin(),
-				createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),
-				createOpenWikiVendorLoaderPlugin(),
-				await createLegacyPiVirtualModulePlugin(),
-				await createSpecDrivenArchivePlugin(specDrivenArchive),
-				inlineNativeNoticesPlugin,
-			],
+			files,
+			plugins,
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
 			define: {
 				"process.env.PI_BUNDLED": JSON.stringify("true"),

@@ -2,17 +2,10 @@
 // absent on cross-compiling release runners.
 import { USER_AGENT } from "@oh-my-pi/pi-utils/dirs";
 import { embeddedAddonFiles, type EmbedOptions } from "../../natives/scripts/embed-native";
-import {
-	buildDeveloperTestAgentResources,
-	createDeveloperTestAgentArchivePlugin,
-} from "./developer-test-agent-resources";
-import { buildDocsIndexPayload } from "./generate-docs-index";
+import { createBundlePlugins } from "./bundle-plugins";
 import { embeddedRelayExtensionFiles } from "./embed-relay-extension";
-import { createJsonParsePlugin } from "./json-parse-plugin";
-import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
+import { buildDocsIndexPayload } from "./generate-docs-index";
 import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
-import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
-import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
 
 /**
  * Optional packages resolved at runtime rather than embedded. Ink loads
@@ -96,13 +89,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				identifiers: options.minifyIdentifiers ?? false,
 				keepNames: true,
 			},
-			plugins: [
-				createJsonParsePlugin(),
-				createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),
-				createOpenWikiVendorLoaderPlugin(),
-				await createLegacyPiVirtualModulePlugin(),
-				await createSpecDrivenArchivePlugin(await buildSpecDrivenArchive()),
-			],
+			plugins: (await createBundlePlugins()).plugins,
 			compile: {
 				// Bun's process-wide fetch User-Agent default. Any explicit
 				// provider fingerprint (Anthropic/Codex OAuth) still wins.

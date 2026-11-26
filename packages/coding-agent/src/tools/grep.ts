@@ -278,6 +278,12 @@ function mergeRangesInto(map: Map<string, LineRange[]>, absKey: string, ranges: 
 	}
 }
 
+/** Keep router URL identity; normalize native path separators for local matches. */
+function matchPathKey(router: InternalUrlRouter, base: string, matchPath: string): string {
+	const resolved = resolveSearchResultPath(base, matchPath);
+	return router.canHandle(resolved) ? resolved : path.resolve(resolved);
+}
+
 /**
  * Pre-resolve any `paths` entries that point at a member inside an archive
  * (e.g. `bundle.zip:src/foo.ts`, `release.tar.gz:notes.md`). Native grep
@@ -895,8 +901,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 							totalMatches += targetResult.totalMatches;
 							filesSearched += targetResult.filesSearched;
 							for (const match of targetResult.matches) {
-								const resolved = resolveSearchResultPath(target.basePath, match.path);
-								const absolute = router.canHandle(resolved) ? resolved : path.resolve(resolved);
+								const absolute = matchPathKey(router, target.basePath, match.path);
 								// Overlapping targets (a directory plus a file nested
 								// inside it) surface the same physical line twice;
 								// keep the first occurrence.
@@ -1033,12 +1038,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				if (rangesByAbsPath.size > 0) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
-						const resolved = resolveSearchResultPath(searchPath, match.path);
-						// Router-owned paths keep their raw form; everything else canonicalizes
-						// to a `path.resolve` key, which also normalizes the forward slashes
-						// the native search reports for absolute matches on Windows.
-						const abs = router.canHandle(resolved) ? resolved : path.resolve(resolved);
-						const ranges = rangesByAbsPath.get(abs);
+						const ranges = rangesByAbsPath.get(matchPathKey(router, searchPath, match.path));
 						if (!ranges) {
 							// Path has no line-range constraint (e.g. a peer entry without `:N-M`).
 							filteredMatches.push(match);
@@ -1067,8 +1067,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				}
 				if (archiveDisplayMap.size > 0) {
 					for (const match of result.matches) {
-						const resolved = resolveSearchResultPath(searchPath, match.path);
-						const display = archiveDisplayMap.get(router.canHandle(resolved) ? resolved : path.resolve(resolved));
+						const display = archiveDisplayMap.get(matchPathKey(router, searchPath, match.path));
 						if (display) match.path = display;
 					}
 				}

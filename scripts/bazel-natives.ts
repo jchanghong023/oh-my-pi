@@ -40,7 +40,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { matchesInstalledFile } from "../packages/natives/scripts/installed-file";
+import { installFile } from "../packages/natives/scripts/installed-file";
 import { detectHostAvx2Support, detectHostMusl, resolveLocalHostAddon } from "./host-detect";
 import { hasVersionStampSlot, nativesPackageVersion, stampNativeVersion } from "./stamp-native-version";
 
@@ -259,53 +259,6 @@ async function runBazel(
 	return { exitCode, stdout: stdoutText, stderrTail: tail };
 }
 
-/** Both files remain recovery inputs when restoring the previous addon fails. */
-class AddonRollbackError extends Error {
-	constructor(
-		readonly backupPath: string,
-		readonly tempPath: string,
-		installError: unknown,
-		rollbackError: unknown,
-	) {
-		super(
-			`Cannot restore previous addon at ${backupPath}: ${String(rollbackError)}; new addon retained at ${tempPath}`,
-			{ cause: installError },
-		);
-		this.name = "AddonRollbackError";
-	}
-}
-
-/** Replace even a mapped Windows addon, retaining the previous image on install failure. */
-async function atomicInstallAddon(tempPath: string, destPath: string): Promise<void> {
-	try {
-		await fs.rename(tempPath, destPath);
-		return;
-	} catch (error) {
-		if (process.platform !== "win32") throw error;
-	}
-	const backupPath = `${destPath}.old.${process.pid}`;
-	let renamedAside = false;
-	try {
-		await fs.rename(destPath, backupPath);
-		renamedAside = true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	}
-	try {
-		await fs.rename(tempPath, destPath);
-	} catch (error) {
-		if (renamedAside) {
-			try {
-				await fs.rename(backupPath, destPath);
-			} catch (rollbackError) {
-				throw new AddonRollbackError(backupPath, tempPath, error, rollbackError);
-			}
-		}
-		throw error;
-	}
-	if (renamedAside) await fs.unlink(backupPath).catch(() => {});
-}
-
 /**
  * Copy an addon into place, stamping `version` into the copy before the atomic
  * rename. Returns whether the copy was stamped.
@@ -322,20 +275,14 @@ async function installAddon(
 	version: string,
 	allowUnstamped: boolean,
 ): Promise<boolean> {
-	const realSource = await fs.realpath(sourcePath); // bazel-bin outputs are symlink-reachable; copy the real bytes
-	const tempPath = `${destPath}.tmp.${process.pid}`;
-	try {
-		await fs.copyFile(realSource, tempPath);
-		await fs.chmod(tempPath, 0o644);
-		const stamp = !allowUnstamped || hasVersionStampSlot(await fs.readFile(tempPath));
-		if (stamp) await stampNativeVersion(tempPath, version);
-		if (await matchesInstalledFile(tempPath, destPath)) await fs.unlink(tempPath);
-		else await atomicInstallAddon(tempPath, destPath);
-		return stamp;
-	} catch (err) {
-		if (!(err instanceof AddonRollbackError)) await fs.unlink(tempPath).catch(() => {});
-		throw err;
-	}
+	// copyFile follows Bazel output symlinks without stamping the original.
+	return installFile(sourcePath, destPath, {
+		prepare: async tempPath => {
+			const stamp = !allowUnstamped || hasVersionStampSlot(await fs.readFile(tempPath));
+			if (stamp) await stampNativeVersion(tempPath, version);
+			return stamp;
+		},
+	});
 }
 
 /** Trailing sentence of a probe failure; the loader's own output precedes it. */
@@ -529,7 +476,7 @@ async function buildLocalHostAddon(host: HostInfo, destDir: string, skipLoadProb
 	const builtPath = path.join(repoRoot, "packages/natives/native", filename);
 	if (path.dirname(builtPath) !== destDir) {
 		await fs.mkdir(destDir, { recursive: true });
-		await installAddon(builtPath, path.join(destDir, filename), await nativesPackageVersion(), false);
+		await installFile(builtPath, path.join(destDir, filename));
 	}
 	console.log(`installed ${filename} → ${path.join(destDir, filename)}`);
 	if (!skipLoadProbe) {

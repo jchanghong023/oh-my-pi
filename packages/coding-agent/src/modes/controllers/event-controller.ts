@@ -5,6 +5,7 @@ import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { batch, isSettled, type Signal, signal } from "@oh-my-pi/pi-tui";
 import { notifyTerminal } from "@oh-my-pi/pi-tui/driver/session";
 import { formatDuration, isRecord, logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
 import { INTENT_FIELD, toolIntentLabel } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
@@ -424,7 +425,7 @@ export class EventController {
 	// keeps working — the WeakSet makes the coalesced path speak each delta exactly
 	// once instead of twice.
 	#vocalizedMessageUpdates = new WeakSet<object>();
-	readonly #messageUpdateCoalesceMs = /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "") ? 100 : 50;
+	readonly #messageUpdateCoalesceMs = offlineFromEnv() ? 100 : 50;
 
 	constructor(
 		private ctx: InteractiveModeContext,

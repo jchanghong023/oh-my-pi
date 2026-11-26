@@ -102,8 +102,8 @@ export async function buildOpenWikiResources(): Promise<OpenWikiResources> {
 	return { files, sourceFingerprint: fingerprint };
 }
 
-/** Publish the archive text in one rename, never a partially written file. */
-export async function writeOpenWikiResources(resources: OpenWikiResources): Promise<void> {
+/** Publish the archive in one rename and return the text written. */
+export async function writeOpenWikiResources(resources: OpenWikiResources): Promise<string> {
 	const archive = await buildEmbeddedArchive(resources.files);
 	await mkdir(path.dirname(generatedFile), { recursive: true });
 	const temporary = `${generatedFile}.${randomUUID()}.tmp`;
@@ -113,6 +113,7 @@ export async function writeOpenWikiResources(resources: OpenWikiResources): Prom
 	} finally {
 		await rm(temporary, { force: true });
 	}
+	return archive;
 }
 
 /** Restore the checked-in placeholder so stale resources cannot masquerade as current. */

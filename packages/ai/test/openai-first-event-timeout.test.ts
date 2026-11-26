@@ -6,7 +6,7 @@ import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Context, FetchImpl, Model, TextContent } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { waitForDelayOrAbort } from "./helpers";
+import { waitForDelayOrAbort, withEnv } from "./helpers";
 
 const openAIResponsesModel = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
 const openAICompletionsModel = {
@@ -942,40 +942,30 @@ describe("OpenAI-family first-event timeouts", () => {
 				}),
 			);
 		};
-		const previousOpenAIFirstEventTimeout = Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
-		const previousGenericFirstEventTimeout = Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		await withEnv(
+			{ PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS: undefined, PI_STREAM_FIRST_EVENT_TIMEOUT_MS: undefined },
+			async () => {
+				vi.useFakeTimers();
+				try {
+					const resultPromise = streamOpenAIResponses(localResponsesModel, baseContext(), {
+						apiKey: "test-key",
+						fetch: fetchMock,
+					}).result();
+					await bodyRead.promise;
+					for (let i = 0; i < 10; i++) await Promise.resolve();
 
-		try {
-			delete Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
-			delete Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
-			vi.useFakeTimers();
-			const resultPromise = streamOpenAIResponses(localResponsesModel, baseContext(), {
-				apiKey: "test-key",
-				fetch: fetchMock,
-			}).result();
-			await bodyRead.promise;
-			for (let i = 0; i < 10; i++) await Promise.resolve();
-
-			// A local disable must survive a silent body longer than the idle budget.
-			// Other subsystems may legitimately own timers in the same process.
-			vi.advanceTimersByTime(100);
-			releaseBody.resolve();
-			const result = await resultPromise;
-			expect(result.stopReason).toBe("stop");
-			expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
-		} finally {
-			releaseBody.resolve();
-			vi.useRealTimers();
-			if (previousOpenAIFirstEventTimeout === undefined) {
-				delete Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
-			} else {
-				Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = previousOpenAIFirstEventTimeout;
-			}
-			if (previousGenericFirstEventTimeout === undefined) {
-				delete Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
-			} else {
-				Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = previousGenericFirstEventTimeout;
-			}
-		}
+					// A local disable must survive a silent body longer than the idle budget.
+					// Other subsystems may legitimately own timers in the same process.
+					vi.advanceTimersByTime(100);
+					releaseBody.resolve();
+					const result = await resultPromise;
+					expect(result.stopReason).toBe("stop");
+					expect(getFirstTextContent(result)).toMatchObject({ type: "text", text: "Hello delayed" });
+				} finally {
+					releaseBody.resolve();
+					vi.useRealTimers();
+				}
+			},
+		);
 	});
 });

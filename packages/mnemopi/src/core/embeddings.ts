@@ -17,7 +17,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { EmbeddingModel } from "fastembed";
-import { DEFAULT_EMBEDDING_API_URL, isOpenRouterEmbeddingUrl } from "../config";
+import { DEFAULT_EMBEDDING_API_URL, embeddingApiUrl, isOpenRouterEmbeddingUrl } from "../config";
 import { loadFastembed, withEmbedSessionBudget } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
@@ -247,7 +247,7 @@ function embeddingBaseUrl(): string {
 	if (active?.apiUrl !== undefined) {
 		return active.apiUrl;
 	}
-	return $env.MNEMOPI_EMBEDDING_API_URL || $env.OPENROUTER_BASE_URL || DEFAULT_EMBEDDING_API_URL;
+	return embeddingApiUrl($env);
 }
 
 function defaultModel(): string {
@@ -634,7 +634,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 					data?: Array<{ index?: unknown; embedding: number[] }>;
 				};
 				return withLoopPhase("mnemopi.embed", () => {
-					const { data: rows } = data;
+					let { data: rows } = data;
 					stage = "response_schema";
 					if (rows === undefined) {
 						return degraded("missing_data", undefined, "the response did not carry one embedding per input");
@@ -645,7 +645,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 					}
 					if (strict) {
 						if (data.model !== undefined && data.model !== model) return degraded("model_mismatch");
-						if (!Array.isArray(rows) || rows.length !== texts.length) return degraded("row_count");
+						if (!Array.isArray(rows)) return degraded("row_count");
 						const indexed: typeof rows = [];
 						for (const row of rows) {
 							if (
@@ -669,7 +669,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 							)
 						)
 							return degraded("invalid_vector");
-						rows.splice(0, rows.length, ...indexed);
+						rows = indexed;
 					}
 					logger.info("Embedding API schema received", {
 						...fields,

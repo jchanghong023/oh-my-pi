@@ -10,13 +10,7 @@ const WINDOWS_RESERVED_BASENAME_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\
 export function normalizeProfileName(profile) {
 	const normalized = profile?.trim();
 	if (!normalized || normalized === "default") return undefined;
-	if (
-		normalized === "." ||
-		normalized === ".." ||
-		normalized.endsWith(".") ||
-		!PROFILE_NAME_RE.test(normalized) ||
-		WINDOWS_RESERVED_BASENAME_RE.test(normalized)
-	) {
+	if (normalized.endsWith(".") || !PROFILE_NAME_RE.test(normalized) || WINDOWS_RESERVED_BASENAME_RE.test(normalized)) {
 		throw new Error(
 			`Invalid OMP profile "${profile}". Profile names must match ${PROFILE_NAME_RE.source}, ` +
 				`cannot be "." or "..", cannot end with ".", and cannot be a Windows reserved device name ` +
@@ -32,11 +26,10 @@ function isFullyQualifiedDir(dir) {
 	return path.isAbsolute(dir) && (process.platform !== "win32" || path.parse(dir).root.length > 1);
 }
 
-function expandDirectory(value) {
-	let dir = value?.trim();
+function expandDirectory(value, home) {
+	const dir = value?.trim();
 	if (!dir) return undefined;
-	if (dir === "~") dir = os.homedir();
-	else if (dir.startsWith("~/") || dir.startsWith("~\\")) dir = os.homedir() + dir.slice(1);
+	if (dir === "~" || dir.startsWith("~/") || dir.startsWith("~\\")) return (home ?? os.homedir()) + dir.slice(1);
 	return dir;
 }
 
@@ -73,9 +66,7 @@ function normalizePersistentRoot(root) {
 export function resolvePersistentRoot(env = process.env) {
 	const homeKey = process.platform === "win32" ? "USERPROFILE" : "HOME";
 	const home = env === process.env ? os.homedir() : (env[homeKey] || os.userInfo().homedir);
-	let override = env.OMP_CONFIG_ROOT?.trim();
-	if (override === "~") override = home;
-	else if (override?.startsWith("~/") || override?.startsWith("~\\")) override = home + override.slice(1);
+	const override = expandDirectory(env.OMP_CONFIG_ROOT, home);
 	if (override && isFullyQualifiedDir(override)) return normalizePersistentRoot(override);
 	return normalizePersistentRoot(path.join(home, env.PI_CONFIG_DIR || DEFAULT_CONFIG_DIR_NAME));
 }

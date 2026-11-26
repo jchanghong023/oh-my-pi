@@ -1,11 +1,14 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 
-export const OPENWIKI_QUERY_TOOL_NAMES: readonly string[] = [
+const OPENWIKI_QUERY_NAMES = [
 	"openwiki_search",
 	"openwiki_read",
 	"openwiki_list_workspaces",
 	"openwiki_list_wikis",
-];
+] as const;
+
+export type OpenWikiQueryName = (typeof OPENWIKI_QUERY_NAMES)[number];
+export const OPENWIKI_QUERY_TOOL_NAMES: readonly string[] = OPENWIKI_QUERY_NAMES;
 
 export const BUILTIN_TOOL_NAMES = [
 	"read",
@@ -21,10 +24,7 @@ export const BUILTIN_TOOL_NAMES = [
 	"grep",
 	"find",
 	"lsp",
-	"openwiki_search",
-	"openwiki_read",
-	"openwiki_list_workspaces",
-	"openwiki_list_wikis",
+	...OPENWIKI_QUERY_NAMES,
 	"checkpoint",
 	"rewind",
 	"context_notes",

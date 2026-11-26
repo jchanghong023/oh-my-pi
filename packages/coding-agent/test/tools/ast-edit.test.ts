@@ -29,6 +29,22 @@ function createTestSession(cwd = "/tmp/test", overrides: Partial<ToolSession> = 
 	};
 }
 
+async function createPendingTestTool(cwd: string, overrides: Partial<ToolSession> = {}) {
+	const queue = new ToolChoiceQueue();
+	const tools = await createTools(
+		createTestSession(cwd, {
+			getToolChoiceQueue: () => queue,
+			buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
+			steer: () => {},
+			...overrides,
+		}),
+		["ast_edit"],
+	);
+	const tool = tools.find(entry => entry.name === "ast_edit");
+	if (!tool) throw new Error("Missing ast_edit tool");
+	return { tool, queue };
+}
+
 function asSchemaObject(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw new Error("Expected object schema");
@@ -102,18 +118,8 @@ describe("ast_edit tool schema", () => {
 				const filePath = path.join(tempDir, "legacy.ts");
 				const source = "legacyWrap(x, value)\n";
 				await Bun.write(filePath, source);
-				const queue = new ToolChoiceQueue();
-
-				const tools = await createTools(
-					createTestSession(tempDir, {
-						getToolChoiceQueue: () => queue,
-						buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
-						steer: () => {},
-					}),
-					["ast_edit"],
-				);
-				const tool = tools.find(entry => entry.name === "ast_edit");
-				const previewResult = await tool!.execute("ast-edit-preview", {
+				const { tool, queue } = await createPendingTestTool(tempDir);
+				const previewResult = await tool.execute("ast-edit-preview", {
 					ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
 					paths: [scope === "directory" ? tempDir : filePath],
 				});
@@ -155,16 +161,7 @@ describe("ast_edit tool schema", () => {
 			else await writeDirectory();
 			const stablePath = path.join(cwd, "stable.py");
 			if (multipleTargets) await Bun.write(stablePath, source);
-			const queue = new ToolChoiceQueue();
-			const tools = await createTools(
-				createTestSession(cwd, {
-					getToolChoiceQueue: () => queue,
-					buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
-					steer: () => {},
-				}),
-				["ast_edit"],
-			);
-			const tool = tools.find(entry => entry.name === "ast_edit")!;
+			const { tool, queue } = await createPendingTestTool(cwd);
 			const preview = await tool.execute("ast-edit-target-type-preview", {
 				ops: [{ pat: "legacy_call($A)", out: "modern_call($A)" }],
 				paths: multipleTargets ? [targetPath, stablePath] : [targetPath],
@@ -210,16 +207,7 @@ describe("ast_edit tool schema", () => {
 		try {
 			const filePath = path.join(tempDir, "legacy.ts");
 			await Bun.write(filePath, "legacyWrap(x, value)\n");
-			const queue = new ToolChoiceQueue();
-			const tools = await createTools(
-				createTestSession(tempDir, {
-					getToolChoiceQueue: () => queue,
-					buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
-					steer: () => {},
-				}),
-				["ast_edit"],
-			);
-			const tool = tools.find(entry => entry.name === "ast_edit")!;
+			const { tool, queue } = await createPendingTestTool(tempDir);
 			const preview = await tool.execute("ast-edit-preview-failure", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
 				paths: [filePath],
@@ -243,16 +231,7 @@ describe("ast_edit tool schema", () => {
 			const second = path.join(tempDir, "client.ts");
 			await Bun.write(first, "legacyWrap(a, b)\n");
 			await Bun.write(second, "legacyWrap(c, d)\n");
-			const queue = new ToolChoiceQueue();
-			const tools = await createTools(
-				createTestSession(tempDir, {
-					getToolChoiceQueue: () => queue,
-					buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
-					steer: () => {},
-				}),
-				["ast_edit"],
-			);
-			const tool = tools.find(entry => entry.name === "ast_edit")!;
+			const { tool, queue } = await createPendingTestTool(tempDir);
 
 			const previewResult = await tool.execute("ast-edit-files", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
@@ -278,20 +257,8 @@ describe("ast_edit tool schema", () => {
 		try {
 			const filePath = path.join(tempDir, "legacy.ts");
 			await Bun.write(filePath, "legacyWrap(x, value)\n");
-			const queue = new ToolChoiceQueue();
-
-			const tools = await createTools(
-				createTestSession(tempDir, {
-					getToolChoiceQueue: () => queue,
-					buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
-					steer: () => {},
-				}),
-				["ast_edit"],
-			);
-			const tool = tools.find(entry => entry.name === "ast_edit");
-			expect(tool).toBeDefined();
-
-			const previewResult = await tool!.execute("ast-edit-preview", {
+			const { tool, queue } = await createPendingTestTool(tempDir);
+			const previewResult = await tool.execute("ast-edit-preview", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
 				paths: [filePath],
 			});
@@ -328,20 +295,8 @@ describe("ast_edit tool schema", () => {
 			await Bun.write(path.join(nestedDir, "child.ts"), "legacyWrap(childValue, childArg)\n");
 			await Bun.write(path.join(sourceDir, "ignore.js"), "legacyWrap(ignoreValue, ignoreArg)\n");
 			await Bun.write(path.join(tempDir, "outside.ts"), "legacyWrap(outsideValue, outsideArg)\n");
-			const queue = new ToolChoiceQueue();
-
-			const tools = await createTools(
-				createTestSession(tempDir, {
-					getToolChoiceQueue: () => queue,
-					buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
-					steer: () => {},
-				}),
-				["ast_edit"],
-			);
-			const tool = tools.find(entry => entry.name === "ast_edit");
-			expect(tool).toBeDefined();
-
-			const previewResult = await tool!.execute("ast-edit-glob", {
+			const { tool, queue } = await createPendingTestTool(tempDir);
+			const previewResult = await tool.execute("ast-edit-glob", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
 				paths: [`${packagesDir}/pkg-*/src/**/*.ts`],
 			});
@@ -390,20 +345,8 @@ describe("ast_edit tool schema", () => {
 					filePath,
 					`---- MODULE Spec ----\nVARIABLE x\n\nInit == x = 0\n\nNext == x' = x + 1\n====\n`,
 				);
-				const queue = new ToolChoiceQueue();
-
-				const tools = await createTools(
-					createTestSession(tempDir, {
-						getToolChoiceQueue: () => queue,
-						buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
-						steer: () => {},
-					}),
-					["ast_edit"],
-				);
-				const tool = tools.find(entry => entry.name === "ast_edit");
-				expect(tool).toBeDefined();
-
-				const previewResult = await tool!.execute("ast-edit-tlaplus", {
+				const { tool, queue } = await createPendingTestTool(tempDir);
+				const previewResult = await tool.execute("ast-edit-tlaplus", {
 					ops: [{ pat: "Init", out: "Start" }],
 					paths: [filePath],
 				});
@@ -439,25 +382,16 @@ describe("ast_edit tool schema", () => {
 			await Bun.write(childPath, "legacyWrap(nested, other)\n");
 			await Bun.write(localNotePath, "legacyWrap(note, other)\n");
 			await Bun.write(localDirChildPath, "legacyWrap(dirChild, other)\n");
-			const queue = new ToolChoiceQueue();
 			const journaled: Array<{ path: string; before: string | null; after: string | null }> = [];
-			const tools = await createTools(
-				createTestSession(tempDir, {
-					getArtifactsDir: () => artifactsDir,
-					getSessionId: () => "ast-edit-files",
-					getToolChoiceQueue: () => queue,
-					buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
-					steer: () => {},
-					recordFileChange: change => {
-						journaled.push({ path: change.path, before: change.before, after: change.after });
-					},
-				}),
-				["ast_edit"],
-			);
-			const tool = tools.find(entry => entry.name === "ast_edit");
-			expect(tool).toBeDefined();
+			const { tool, queue } = await createPendingTestTool(tempDir, {
+				getArtifactsDir: () => artifactsDir,
+				getSessionId: () => "ast-edit-files",
+				recordFileChange: change => {
+					journaled.push({ path: change.path, before: change.before, after: change.after });
+				},
+			});
 
-			const previewResult = await tool!.execute("ast-edit-sibling-files", {
+			const previewResult = await tool.execute("ast-edit-sibling-files", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
 				paths: [examplePath, otherPath, localNoteUrl, path.join(tempDir, "c"), "local://dir"],
 			});

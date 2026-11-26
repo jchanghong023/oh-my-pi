@@ -20,7 +20,7 @@ export const cfgSttEnabled = register({
 	},
 });
 
-export const cfgSttLanguage = register({ id: "stt.language", type: "string", default: "zh-CN" });
+export const cfgSttLanguage = register({ id: "stt.language", type: "string", default: "en" });
 
 /** Auto detection is requested by omitting the source language. */
 export function sttLanguageHint(settings: ScopeLike): string | undefined {
