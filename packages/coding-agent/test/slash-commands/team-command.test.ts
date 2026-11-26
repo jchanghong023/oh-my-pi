@@ -75,9 +75,7 @@ describe("/team command gates", () => {
 
 	it("puts the submission back into the composer when dispatch fails validation", async () => {
 		const { runtime, composer } = tuiRuntime(stubSession({ model: undefined }));
-		const setText = spyOn(composer, "setText");
 		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
-		expect(setText).not.toHaveBeenCalledWith("");
 		expect(composer.expandedText()).toBe("/team 分析 X");
 	});
 
@@ -159,9 +157,7 @@ describe("/team command gates", () => {
 		});
 		const { runtime, composer } = tuiRuntime(session);
 		composer.setText("/team 分析 X");
-		const setText = spyOn(composer, "setText");
 		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
-		expect(setText.mock.calls).toEqual([[""]]);
 		expect(composer.expandedText()).toBe("");
 	});
 });

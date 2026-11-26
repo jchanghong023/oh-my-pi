@@ -14,18 +14,14 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 function displayPreferences(settings: Settings) {
-	return {
-		hideThinkingBlock: cfgHideThinkingBlock.get(settings),
-		hideToolActivity: cfgDisplayMode.get(settings) !== "detailed",
-		compactToolActivity: cfgDisplayMode.get(settings) === "compact",
-	};
+	return { mode: cfgDisplayMode.get(settings), hideThinkingBlock: cfgHideThinkingBlock.get(settings) };
 }
 
 const presets = {
-	clean: { hideThinkingBlock: true, hideToolActivity: true, compactToolActivity: false },
-	compact: { hideThinkingBlock: false, hideToolActivity: true, compactToolActivity: true },
-	detailed: { hideThinkingBlock: false, hideToolActivity: false, compactToolActivity: false },
-};
+	clean: { mode: "clean", hideThinkingBlock: true },
+	compact: { mode: "compact", hideThinkingBlock: false },
+	detailed: { mode: "detailed", hideThinkingBlock: false },
+} as const;
 
 function createRuntime(settings = Settings.isolated()) {
 	const showStatus = vi.fn();
@@ -66,7 +62,7 @@ describe("/display slash command", () => {
 		tempDir = undefined;
 	});
 
-	it("consumes explicit presets and reapplies all three preferences without invoking the model", async () => {
+	it("consumes explicit presets without invoking the model", async () => {
 		const h = createRuntime();
 		for (const mode of ["clean", "detailed", "compact"] as const) {
 			cfgHideThinkingBlock.set(h.settings, false);
@@ -98,11 +94,8 @@ describe("/display slash command", () => {
 		});
 		const h = createRuntime(settings);
 		expect(lookup("display.compactToolActivity")).toBeUndefined();
-		expect(displayPreferences(settings)).toEqual(presets.compact);
 		for (const mode of ["clean", "compact", "detailed"] as const) {
 			await executeBuiltinSlashCommand(`/display ${mode}`, h.runtime);
-			expect(cfgDisplayMode.get(settings)).toBe(mode);
-			expect(displayPreferences(settings)).toEqual(presets[mode]);
 			expect(lookup("terminal.showImages")?.get(settings)).toBe(false);
 			expect(lookup("images.autoResize")?.get(settings)).toBe(false);
 			expect(lookup("images.blockImages")?.get(settings)).toBe(true);
@@ -145,9 +138,8 @@ describe("/display slash command", () => {
 		for (const mode of ["compact", "detailed"] as const) {
 			await executeBuiltinSlashCommand(`/display ${mode}`, h.runtime);
 			expect(displayPreferences(h.settings)).toEqual({
+				mode: "clean",
 				hideThinkingBlock: true,
-				hideToolActivity: true,
-				compactToolActivity: false,
 			});
 			expect(h.settings.getGlobalSettings()).toMatchObject({
 				hideThinkingBlock: false,
@@ -174,9 +166,8 @@ describe("/display slash command", () => {
 		const h = createRuntime(settings);
 		await executeBuiltinSlashCommand("/display compact", h.runtime);
 		expect(displayPreferences(settings)).toEqual({
+			mode: "compact",
 			hideThinkingBlock: true,
-			hideToolActivity: true,
-			compactToolActivity: true,
 		});
 		expect(settings.getGlobalSettings()).toMatchObject({
 			hideThinkingBlock: false,

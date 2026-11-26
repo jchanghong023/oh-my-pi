@@ -74,10 +74,8 @@ For a normal local subagent, `Enter` or click focuses the main TUI on that agent
 
 1. Read its live transcript and tool activity.
 2. Type a message and press `Enter` to steer a running turn or prompt an idle agent.
-3. Change its model with `Ctrl+T`, `/switch`, or `Ctrl+P`, or change its thinking level with `Alt+E` or `/effort`. These switches are session-only and leave the main session alone. `/model` and `Alt+M` open the same session-only picker, because role assignments configure the main session.
+3. Change its model or thinking level with `Alt+P`, `/switch`, `Ctrl+P`, `Shift+Tab`, or `/effort`. These switches are session-only and leave the main session alone. `/model` and `Alt+M` open the same session-only picker, because role assignments configure the main session.
 4. Press `Esc` with an empty editor, or double-tap `←`, to return to the main session.
-
-The status line identifies the focused subagent. Switching views manually does not add a transcript notice.
 
 Steering uses the normal prompt path, so the message and response are written to the subagent's persisted session history. While a subagent is focused, `Esc` returns to the main session; it does not interrupt the subagent.
 
@@ -114,7 +112,7 @@ Agent Hub is the human-facing live session view. Adjacent commands and internal 
 
 `/agents` is a separate agent-definition/settings hub, not the live roster. It manages discovered agents, enable/disable state, model overrides, prewalk, and advisor selection.
 
-- `/jobs` shows running and recently settled asynchronous tool jobs as a text snapshot in ANSI terminals and a live, interactive panel in native terminals. Use `/jobs full` for the full command text or `/jobs kill <id>|all` to cancel running jobs where permitted.
+- `/jobs` prints a snapshot of running and recently settled asynchronous tool jobs. It does not replace the per-agent transcript or control view. `/jobs kill <id>|all` cancels running jobs from the command line.
 - `history://<id>` gives the coding agent a concise transcript for a live/parked subagent or a retained on-disk transcript.
 - `agent://<id>` resolves a subagent's saved final output artifact; it is not the live transcript. Before that artifact exists, a registered agent resolves to its status, the `yield` payloads it has submitted so far, and its latest assistant text.
 - `write agent://<id>` steers or follows up with a normal subagent; `agent://all` broadcasts to visible live peers (main agent only; a subagent's broadcast is refused). Messaging a parked or killed subagent revives it. `read history://` lists registered agents and retained on-disk transcripts, refreshing the caller root's persisted roster first, the same as `history://<id>` lookups.

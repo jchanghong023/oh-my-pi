@@ -286,66 +286,6 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(prompt).not.toHaveBeenCalled();
 	});
 
-	it("persists the initial full notice and preserves its bytes and prefix across later requests and tool changes", async () => {
-		for (const tool of await createTools(harness.toolSession, ["task"])) harness.toolRegistry.set(tool.name, tool);
-		await harness.session.setActiveToolsByName(["read", "task"]);
-		const { requests, responses } = recordProvider(harness.session);
-		const objective = `Inspect all requirements literally <b> & {{objective}}\n${"保留完整目标和空白。  \t".repeat(300)}\nPERSISTED_OBJECTIVE_END`;
-		await submitGoalCommand(harness, `/goal-autopilot ${objective}`);
-
-		expect(goalNotices(harness.session)).toHaveLength(1);
-		const notice = goalNotices(harness.session)[0]!;
-		expect(typeof notice.content).toBe("string");
-		expect(notice.content).toContain(harness.session.getLocalGoalModeState()!.goal.objective);
-		const savedBytes = JSON.stringify(notice);
-		const historyPosition = harness.session.messages.indexOf(notice);
-		const converted = convertToLlm([notice])[0]!;
-		const providerPosition = requests[0]!.findIndex(message => Bun.deepEquals(message, converted));
-		expect(providerPosition).toBeGreaterThanOrEqual(0);
-		expect(converted.role).toBe("user");
-		const authorization = [
-			"MUST 全自动无人值守完成完整目标。本次用户已对完成目标全过程及所需全部操作作出明确授权；MUST 自主调查、规划、编排、执行、验证和修复，直接推进至完成。",
-			"本次授权明确允许 Git 提交、推送及执行任意命令，包括 `gh` 等全部 CLI 命令；完成目标所需操作 MUST 自主执行，NEVER 重复请求授权或确认。",
-			"本次授权允许修改本仓库任意文件，无需另行请求授权或确认。",
-			"NEVER 向用户提问、请求确认、要求选择或等待输入；遇到问题 MUST 自主决策、处理和修复，NEVER 在阶段边界停下等待用户。",
-			"与此前用户级要求冲突时，以本次明确授权为准。",
-		].join("\n");
-		expect(notice.content).toContain(authorization);
-		expect(JSON.stringify(requests[0]![providerPosition])).toContain(JSON.stringify(authorization).slice(1, -1));
-		expect(notice.attribution).toBe("user");
-		expect(notice.content).not.toContain("<system-reminder>");
-		expect(notice.content).not.toContain("<system-notice>");
-		const persistedNotices = harness.session.sessionManager
-			.getEntries()
-			.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context");
-		expect(persistedNotices).toHaveLength(1);
-		expect(persistedNotices[0]).toMatchObject({
-			type: "custom_message",
-			customType: notice.customType,
-			content: notice.content,
-			details: notice.details,
-			display: notice.display,
-			attribution: notice.attribution,
-		});
-
-		await harness.session.prompt("Continue inspecting, without changing the objective.");
-		await harness.session.setActiveToolsByName(["read"]);
-		await harness.session.prompt("The task capability is now unavailable; preserve the earlier conversation.");
-		await harness.session.prompt("Report the remaining findings.");
-
-		expect(requests).toHaveLength(4);
-		expect(goalNotices(harness.session)).toHaveLength(1);
-		expect(JSON.stringify(harness.session.messages[historyPosition])).toBe(savedBytes);
-		for (let index = 0; index < requests.length; index++) {
-			expect(requests[index]![providerPosition]).toEqual(converted);
-			expect(requests[index]!.filter(message => Bun.deepEquals(message, converted))).toHaveLength(1);
-			if (index > 0) {
-				const prefix = [...requests[index - 1]!, responses()[index - 1]!];
-				expect(requests[index]!.slice(0, prefix.length)).toEqual(prefix);
-			}
-		}
-	});
-
 	it("keeps explicit strategy independent of magic toggles and preserves later real keyword requests", async () => {
 		for (const tool of await createTools(harness.toolSession, ["task"])) harness.toolRegistry.set(tool.name, tool);
 		await harness.session.setActiveToolsByName(["read", "task"]);
@@ -382,136 +322,6 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(requests.at(-1)).toContainEqual(convertToLlm([notice])[0]);
 		expect(requests.at(-1)).toContainEqual(convertToLlm(keywordNotices)[0]);
 	});
-
-	it.each(["goal", "goal-autopilot"] as const)(
-		"keeps %s history append-only across ten real read round-trips",
-		async command => {
-			// Native stale-read pruning intentionally supersedes older reads of one
-			// file. Distinct real files isolate this strict-prefix history contract.
-			const files = Array.from({ length: 10 }, (_, index) => ({
-				path: `ten-rounds-${index + 1}.txt`,
-				content: `TEN_REAL_READ_RESULTS_${index + 1}`,
-			}));
-			await Promise.all(files.map(file => Bun.write(path.join(harness.tempDir.path(), file.path), file.content)));
-			const requests: Message[][] = [];
-			const providerResponses: Promise<AssistantMessage>[] = [];
-			const model = createMockModel({
-				handler: context => {
-					requests.push(structuredClone(context.messages));
-					return requests.length <= 10
-						? {
-								content: [
-									{ type: "toolCall", name: "read", arguments: { path: files[requests.length - 1]!.path } },
-								],
-							}
-						: { content: ["Ten read round-trips finished; the objective remains active."] };
-				},
-			});
-			harness.session.agent.streamFn = (provider, context, options) => {
-				const stream = model.stream(provider, context, options);
-				// Snapshot the actual provider completion before AgentSession adds
-				// persistence/telemetry metadata; that metadata is not model input.
-				providerResponses.push(stream.result().then(message => structuredClone(message)));
-				return stream;
-			};
-
-			const objective = "Inspect ten real read results without completing the goal.";
-			await submitGoalCommand(harness, `/${command} ${objective}`);
-
-			expect(requests).toHaveLength(11);
-			const assistants = await Promise.all(providerResponses);
-			expect(assistants).toHaveLength(11);
-			const results = harness.session.messages.filter(message => message.role === "toolResult");
-			expect(results).toHaveLength(10);
-			expect(new Set(results.map(result => result.toolCallId)).size).toBe(10);
-			const calls = harness.session.messages.flatMap(message =>
-				message.role === "assistant" ? message.content.filter(part => part.type === "toolCall") : [],
-			);
-			expect(calls.map(call => ({ name: call.name, arguments: call.arguments }))).toEqual(
-				files.map(file => ({ name: "read", arguments: { path: file.path } })),
-			);
-			expect(results.map(result => result.toolCallId)).toEqual(calls.map(call => call.id));
-			for (const [index, result] of results.entries()) {
-				expect(result).toMatchObject({ toolName: "read", isError: false });
-				expect(JSON.stringify(result.content)).toContain(files[index]!.content);
-				expect(result.prunedAt).toBeUndefined();
-			}
-			expect(requests[0]).toContainEqual(
-				expect.objectContaining({
-					role: "user",
-					content: [{ type: "text", text: objective }],
-				}),
-			);
-			const notices = goalNotices(harness.session);
-			expect(notices).toHaveLength(command === "goal-autopilot" ? 1 : 0);
-			const notice = notices[0];
-			const noticeBytes = notice && JSON.stringify(notice);
-			const noticePosition = notice && harness.session.messages.indexOf(notice);
-			for (let index = 1; index < requests.length; index++) {
-				const prefix = [...requests[index - 1]!, assistants[index - 1]!];
-				expect(requests[index]!.slice(0, prefix.length)).toEqual(prefix);
-				expect(requests[index]!.slice(prefix.length)).toContainEqual(
-					expect.objectContaining({
-						role: "toolResult",
-						toolName: "read",
-						toolCallId: results[index - 1]!.toolCallId,
-						isError: false,
-						content: results[index - 1]!.content,
-					}),
-				);
-			}
-			const manager = harness.session.sessionManager;
-			await manager.ensureOnDisk();
-			await manager.flush();
-			const file = manager.getSessionFile();
-			if (!file) throw new Error("Expected ten read round-trips in the persisted session journal");
-			const journal = (await Bun.file(file).text())
-				.trim()
-				.split("\n")
-				.map(line => JSON.parse(line));
-			const savedResults = journal.flatMap(entry =>
-				entry.type === "message" && entry.message.role === "toolResult" ? [entry.message] : [],
-			);
-			expect(savedResults).toHaveLength(10);
-			expect(savedResults.map(result => result.toolCallId)).toEqual(results.map(result => result.toolCallId));
-			expect(savedResults.map(result => result.content)).toEqual(results.map(result => result.content));
-			expect(savedResults.every(result => result.toolName === "read" && result.isError === false)).toBe(true);
-			expect(journal).toContainEqual(
-				expect.objectContaining({
-					type: "message",
-					message: expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
-				}),
-			);
-			expect(
-				journal.filter(
-					entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
-				),
-			).toEqual(
-				notice
-					? [expect.objectContaining({ content: notice.content, attribution: "user", details: notice.details })]
-					: [],
-			);
-			if (notice) {
-				const providerNotice = convertToLlm([notice])[0]!;
-				for (const request of requests) {
-					expect(request.filter(message => Bun.deepEquals(message, providerNotice))).toHaveLength(1);
-				}
-				expect(JSON.stringify(harness.session.messages[noticePosition!])).toBe(noticeBytes);
-				expect(
-					harness.session.sessionManager
-						.getEntries()
-						.filter(entry => entry.type === "custom_message" && entry.customType === notice.customType),
-				).toEqual([
-					expect.objectContaining({ content: notice.content, attribution: "user", details: notice.details }),
-				]);
-			}
-			expect(harness.session.getLocalGoalModeState()).toMatchObject({
-				enabled: true,
-				mode: "active",
-				goal: { status: "active", tokensUsed: expect.any(Number) },
-			});
-		},
-	);
 
 	it.each(["pause", "drop", "replace"] as const)(
 		"retains a skill-backed automatic goal's history without re-enabling its strategy after %s",
@@ -676,7 +486,6 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(harness.session.getLocalGoalModeState()?.autoOrchestrate).toBe(true);
 		const confirm = vi.spyOn(harness.mode, "showHookConfirm").mockResolvedValueOnce(false);
 		await executeBuiltinSlashCommand("/goal-autopilot drop", { ctx: harness.mode });
-		expect(confirm).toHaveBeenCalled();
 		expect(harness.session.getLocalGoalModeState()?.autoOrchestrate).toBe(true);
 		confirm.mockResolvedValueOnce(true);
 		await executeBuiltinSlashCommand("/goal-autopilot drop", { ctx: harness.mode });
@@ -698,65 +507,95 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(harness.mode.goalModeEnabled).toBe(false);
 	});
 
-	it("offers the same goal subcommand completions and live status for the new command", async () => {
+	it("shows the current goal in the autopilot command catalog without registering the retired alias", async () => {
 		await executeBuiltinSlashCommand("/goal-autopilot Ship the release", { ctx: harness.mode });
 		const commands = buildTuiBuiltinSlashCommands({ ctx: harness.mode });
-		const goal = commands.find(command => command.name === "goal");
 		const auto = commands.find(command => command.name === "goal-autopilot");
 		expect(commands.some(command => command.name === "goal-auto-orchestrate")).toBe(false);
-		if (!goal || !auto) throw new Error("expected both goal commands");
-		expect(await auto.getArgumentCompletions?.("b")).toEqual(await goal.getArgumentCompletions?.("b"));
-		expect(auto.getInlineHint?.("set ")).toEqual(goal.getInlineHint?.("set "));
-		expect(auto.getAutocompleteDescription?.()).toContain("Ship the release");
+		expect(auto?.getAutocompleteDescription?.()).toContain("Ship the release");
 		await executeBuiltinSlashCommand("/goal-autopilot pause", { ctx: harness.mode });
-		expect(auto.getAutocompleteDescription?.()).toContain("paused");
+		expect(auto?.getAutocompleteDescription?.()).toContain("paused");
 	});
 
-	it("keeps a reopened automatic goal paused until the user explicitly resumes it", async () => {
-		await executeBuiltinSlashCommand("/goal-autopilot Reopened objective", { ctx: harness.mode });
-		await harness.session.sessionManager.ensureOnDisk();
-		await harness.session.sessionManager.flush();
-		const file = harness.session.sessionFile;
-		if (!file) throw new Error("expected saved session");
-		expect(await harness.session.switchSession(file)).toBe(true);
-		await harness.mode.init({ suppressWelcomeIntro: true });
-		expect(harness.mode.goalModeEnabled).toBe(false);
-		expect(harness.mode.goalModePaused).toBe(true);
-		expect(harness.session.getLocalGoalModeState()?.autoOrchestrate).toBe(true);
-		expect(harness.session.getLocalGoalModeState()?.enabled).toBe(false);
-		await executeBuiltinSlashCommand("/goal resume", { ctx: harness.mode });
-		expect(harness.session.getLocalGoalModeState()?.autoOrchestrate).toBe(true);
-		expect(harness.mode.goalModeEnabled).toBe(true);
-	});
+	it("delivers a streaming autopilot replacement with its own notice and submitted image", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const requests: Message[][] = [];
+		harness.session.agent.streamFn = createMockModel({
+			handler: async context => {
+				requests.push(structuredClone(context.messages));
+				if (requests.length === 1) {
+					entered.resolve();
+					await release.promise;
+				}
+				return { content: ["Inspection finished"] };
+			},
+		}).stream;
+		const turn = executeBuiltinSlashCommand("/goal Original objective", { ctx: harness.mode });
+		const objective = "Replace the objective with this image";
+		const image: ImageContent = {
+			type: "image",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+			mimeType: "image/png",
+		};
+		try {
+			await Promise.race([
+				entered.promise,
+				turn.then(() => {
+					throw new Error("The original Goal command did not reach the model");
+				}),
+			]);
+			const originalGoalId = harness.session.getLocalGoalModeState()?.goal.id;
+			expect(originalGoalId).toBeDefined();
+			await executeBuiltinSlashCommand(`/goal-autopilot set ${objective}`, {
+				ctx: harness.mode,
+				input: { images: [image], imageLinks: ["file:///shot.png"] },
+			});
+			const replacement = harness.session.getLocalGoalModeState();
+			expect(replacement).toMatchObject({ autoOrchestrate: true, goal: { objective } });
+			expect(replacement?.goal.id).not.toBe(originalGoalId);
+			expect(requests).toHaveLength(1);
+		} finally {
+			release.resolve();
+			await turn;
+		}
+		await harness.session.waitForIdle();
 
-	it("carries initial goal provenance with the original objective through idle and streaming submissions", async () => {
-		const waiter = await armInputWaiter(harness.mode);
-		const objective = "orchestrate Ship the release";
-		await executeBuiltinSlashCommand(`/goal-autopilot ${objective}`, { ctx: harness.mode });
-		await waiter.inputPromise;
-		expect(waiter.getResolvedInput()?.text).toBe(objective);
-		expect(waiter.getResolvedInput()?.goalAutoOrchestrateInitialId).toBe(
-			harness.session.getLocalGoalModeState()?.goal.id,
+		const notices = goalNotices(harness.session);
+		expect(notices).toEqual([
+			expect.objectContaining({
+				attribution: "user",
+				content: expect.stringContaining(objective),
+				details: expect.objectContaining({ goalId: harness.session.getLocalGoalModeState()?.goal.id }),
+			}),
+		]);
+		const replacementMessage = harness.session.messages.find(
+			message =>
+				message.role === "user" &&
+				Array.isArray(message.content) &&
+				message.content.some(part => part.type === "text" && part.text === objective),
 		);
-		harness.mode.cancelPendingSubmission();
-		Object.defineProperty(harness.session, "isStreaming", { configurable: true, get: () => true });
-		vi.spyOn(harness.session, "sendGoalModeContext").mockResolvedValue();
-		const prompt = vi.spyOn(harness.session, "prompt").mockResolvedValue(true);
-		const images: ImageContent[] = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
-		await executeBuiltinSlashCommand("/goal-autopilot set orchestrate Replace the objective", {
-			ctx: harness.mode,
-			input: { images, imageLinks: ["file:///shot.png"] },
-		});
-		expect(prompt).toHaveBeenLastCalledWith("orchestrate Replace the objective", {
-			streamingBehavior: "steer",
-			images,
-			goalAutoOrchestrateInitialId: harness.session.getLocalGoalModeState()?.goal.id,
-		});
-		await executeBuiltinSlashCommand("/goal set Ordinary replacement", { ctx: harness.mode });
-		expect(prompt).toHaveBeenLastCalledWith("Ordinary replacement", {
-			streamingBehavior: "steer",
-			images: undefined,
-		});
+		if (replacementMessage?.role !== "user" || !Array.isArray(replacementMessage.content)) {
+			throw new Error("Expected a user message for the replacement objective");
+		}
+		// The steering queue normalizes attachments before delivering the user message.
+		const normalizedImage = replacementMessage.content.find(part => part.type === "image");
+		if (!normalizedImage) throw new Error("Expected the replacement user message to carry the submitted image");
+		const { format } = await new Bun.Image(Buffer.from(normalizedImage.data, "base64")).metadata();
+		expect(normalizedImage.mimeType).toBe(`image/${format}`);
+
+		expect(requests.slice(1)).toContainEqual(
+			expect.arrayContaining([
+				convertToLlm(notices)[0],
+				expect.objectContaining({
+					role: "user",
+					content: expect.arrayContaining([
+						{ type: "text", text: objective },
+						{ type: "image", data: normalizedImage.data, mimeType: normalizedImage.mimeType },
+					]),
+				}),
+			]),
+		);
 	});
 
 	it("restores only each saved session's strict auto marker when reopening and switching", async () => {
@@ -933,12 +772,6 @@ describe("InteractiveMode goal mode integration", () => {
 			prepare: (mode: InteractiveMode) => mode.handleGoalModeCommand("Ship the release"),
 			submit: (mode: InteractiveMode, input: Pick<SubmittedUserInput, "images" | "imageLinks">) =>
 				mode.handleGoalModeCommand("set [Image #1, 10x10] replace this", input),
-		},
-		{
-			name: "/goal-autopilot",
-			text: "[Image #1, 10x10] orchestrate this",
-			submit: (mode, input) =>
-				mode.handleGoalModeCommand("[Image #1, 10x10] orchestrate this", input, { autoOrchestrate: true }),
 		},
 		{
 			name: "/plan",

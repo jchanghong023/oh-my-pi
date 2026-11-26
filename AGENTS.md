@@ -351,7 +351,7 @@ Fork releases require explicit user authorization and use the manual CI workflow
 
 - [已批准需求](openspec/specs/)是 fork 的权威需求目录；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-product-scope/spec.md)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证门禁](openspec/specs/fork-verification-gates/spec.md)和[上游基线](openspec/specs/fork-upstream-baseline/spec.md)分别维护相关约束；适用的 fork 约束优先于上游通用约定。
 - 每次功能性改动都 MUST 核对[内网快速指南](docs-zh-CN/quick-start-intranet.md)，在同一变更中更新受影响的现有说明，使其与实际代码一致。指南面向用户快速上手，不要求覆盖所有功能，不要求更新提交数和上游 PR数；新增内容只写上手所需的用法与注意事项，完整需求以 `openspec/specs/` 为准。
-- `ask` 完整回归上游 HTML 表单协议与默认行为，不再定制 Goal 超时答复或保留 `questions[]` 工具兼容层；全部宿主与测试同步使用原生链路，详见 [上游继承边界](openspec/specs/fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。
+- `ask` 沿用上游 HTML 表单及宿主协议，不保留 `questions[]` 兼容层；活跃 `/goal-autopilot` 的静默超时例外见 [上游继承边界](openspec/specs/fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。
 - OpenSpec 2.0 随 OMP 内置全部 12 项 Skill；任意目录原生发现／补全，使用 `/skill:<name>` 调用及 `skill://<name>` 按需读取，MUST 保留项目／用户同名覆盖机制及 Superpowers／JCH 原有规则。所有执行入口 MUST 使用 `omp openspec ...`，NEVER 要求独立安装 OpenSpec／Node。
 - `omp openspec init` MUST 只初始化项目目录与配置，默认 `spec-driven`；未初始化项目 MUST 先取得显式初始化授权。NEVER 安装、更新或清理用户 Skill、其他 Agent 配置或旧命令；资源仅随 OMP 升级。CLI `update` 与 `opsx` 文件命令已删除，`openspec-update-change` 是保留的变更材料 Skill。
 - 旧 `mini`／`omp-spec` 自定义 schema MUST 由用户显式迁移，NEVER 恢复包内别名或私有 bridge。缺少 `design.md`／`tasks.md` MUST 如实记录待完成，NEVER 仅改 schema 名称宣称完成；历史归档不批量改写。

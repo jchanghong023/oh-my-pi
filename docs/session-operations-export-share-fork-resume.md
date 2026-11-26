@@ -518,7 +518,7 @@ its own for the current session.
 4. A matching-cwd breadcrumb is used when it lies within an explicitly supplied session directory, if any. Otherwise discovery chooses the newest session with resumable content, skipping untitled, prompt-less zero-turn stubs.
 5. For a different, missing recorded cwd, automatic re-rooting additionally requires the current directory's device/inode to match the breadcrumb's recorded directory identity and no genuine current-project session to take precedence. A deleted/unmounted path, legacy breadcrumb without identity, or cross-filesystem move is not enough evidence to relocate history.
 6. When the chosen session's conversation went on in another file of the same directory (its header names the chosen session in `continuationOf`), chooses that copy instead and reports it to the `onSessionContinuation` option (the CLI prints a notice); step 5 re-roots that copy, not the file the breadcrumb names. A session the breadcrumb names is kept when it has turns its continuation lacks, as with `--resume`; a pick by write time takes the linked copy with the newest turn in either direction.
-7. Opens the chosen session or creates a new one when no candidate exists. An existing chosen transcript with a malformed header reports the error rather than silently opening another conversation.
+7. Opens the chosen session, or creates a new one when no candidate exists.
 
 For compatibility, `--continue <full-UUID>` is normalized to `--resume <UUID>` when the UUID is the sole positional message. The `autoResume` setting invokes the same `continueRecent` behavior when no explicit session flag/session directory is supplied, and restores session model/thinking state when a prior transcript was found.
 

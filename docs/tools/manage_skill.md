@@ -69,7 +69,7 @@
 ## Errors
 
 - Invalid names throw `Invalid skill name "<raw>"...`.
-- Schema validation rejects create/update if `description` or `body` is omitted. The execution guard also rejects missing or empty values before writing a file, with `"<action>" requires both "description" and "body".`
+- Create/update without both `description` and `body` is rejected by schema validation; the execute-time defensive error is `"<action>" requires both "description" and "body".`
 - Empty sanitized descriptions throw `Managed skill "<name>" needs a non-empty description.`
 - Empty trimmed bodies throw `Managed skill "<name>" needs a non-empty body.`
 - Oversized final files throw `Managed skill is <bytes> bytes; the limit is 64000.`

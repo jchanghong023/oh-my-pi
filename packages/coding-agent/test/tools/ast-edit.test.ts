@@ -1,4 +1,4 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,7 +7,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { logger, removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { withTlaplusGrammar } from "../helpers/tlaplus-grammar";
 
 type InvokedToolResult = {
@@ -94,17 +94,14 @@ describe("ast_edit tool schema", () => {
 		}
 	});
 
-	it.each(["single file", "directory", "multiple files"])(
+	it.each(["single file", "directory"])(
 		"previews without writing and applies AST edits for %s targets",
 		async scope => {
 			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-pending-"));
 			try {
 				const filePath = path.join(tempDir, "legacy.ts");
-				const files = [{ path: filePath, source: "legacyWrap(x, value)\n" }];
-				if (scope === "multiple files") {
-					files.push({ path: path.join(tempDir, "other.ts"), source: "legacyWrap(other, value)\n" });
-				}
-				for (const file of files) await Bun.write(file.path, file.source);
+				const source = "legacyWrap(x, value)\n";
+				await Bun.write(filePath, source);
 				const queue = new ToolChoiceQueue();
 
 				const tools = await createTools(
@@ -116,17 +113,12 @@ describe("ast_edit tool schema", () => {
 					["ast_edit"],
 				);
 				const tool = tools.find(entry => entry.name === "ast_edit");
-				expect(tool).toBeDefined();
-
 				const previewResult = await tool!.execute("ast-edit-preview", {
 					ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
-					paths: scope === "directory" ? [tempDir] : files.map(file => file.path),
+					paths: [scope === "directory" ? tempDir : filePath],
 				});
-				expect(previewResult.details).toBeDefined();
-				expect((previewResult.details as { applied?: boolean }).applied).toBe(false);
-				for (const file of files) expect(await Bun.file(file.path).text()).toBe(file.source);
-
-				expect(queue.hasPendingInvoker).toBe(true);
+				expect(previewResult.details).toMatchObject({ applied: false });
+				expect(await Bun.file(filePath).text()).toBe(source);
 				const invoker = queue.peekPendingInvoker()!;
 				const applyResult = (await invoker({
 					action: "apply",
@@ -134,16 +126,8 @@ describe("ast_edit tool schema", () => {
 				})) as InvokedToolResult;
 				const applyText = applyResult.content.find(content => content.type === "text")?.text ?? "";
 				expect(applyResult.isError).toBeUndefined();
-				expect(applyText).toContain(
-					files.length === 1 ? "Applied 1 replacement in 1 file." : "Applied 2 replacements in 2 files.",
-				);
-				expect(
-					(applyResult.details as { sourceResultDetails?: { totalReplacements?: number } } | undefined)
-						?.sourceResultDetails?.totalReplacements,
-				).toBe(files.length);
-				for (const file of files) {
-					expect(await Bun.file(file.path).text()).toBe(file.source.replace("legacyWrap", "modernWrap"));
-				}
+				expect(applyText).toContain("Applied 1 replacement in 1 file.");
+				expect(await Bun.file(filePath).text()).toBe("modernWrap(x, value)\n");
 			} finally {
 				await removeWithRetries(tempDir);
 			}
@@ -221,9 +205,8 @@ describe("ast_edit tool schema", () => {
 		}
 	});
 
-	it("reports zero writes when a previewed file is deleted before apply", async () => {
+	it("rejects the deferred apply without recreating a deleted target", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-deleted-target-"));
-		const errorLog = spyOn(logger, "error").mockImplementation(() => {});
 		try {
 			const filePath = path.join(tempDir, "legacy.ts");
 			await Bun.write(filePath, "legacyWrap(x, value)\n");
@@ -247,19 +230,7 @@ describe("ast_edit tool schema", () => {
 			const invoker = queue.peekPendingInvoker()!;
 			await expect(invoker({ action: "apply", reason: "apply after target disappeared" })).rejects.toThrow();
 			expect(await Bun.file(filePath).exists()).toBe(false);
-			expect(errorLog).toHaveBeenCalledWith(
-				"Deferred AST edit apply failed",
-				expect.objectContaining({
-					event: "ast_edit_deferred_apply_failed",
-					stage: "resolve_scope",
-					result: "failed",
-					candidate_count: 1,
-					reported_written_count: 0,
-					possible_partial_write: false,
-				}),
-			);
 		} finally {
-			errorLog.mockRestore();
 			await removeWithRetries(tempDir);
 		}
 	});

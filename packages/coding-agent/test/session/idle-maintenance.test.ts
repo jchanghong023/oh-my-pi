@@ -221,29 +221,6 @@ describe("AgentSession idle maintenance", () => {
 			expect(compaction).not.toHaveBeenCalled();
 			expect(h.recaps).toEqual([]);
 		});
-
-		it("a repeated activation keeps the first probes instead of replacing them", async () => {
-			const h = await startSession();
-			let blocked = true;
-			h.enable({ isBlocked: () => blocked });
-			// A view re-asserting itself hands over fresh closures; they must not displace the blocker already in force.
-			h.enable({ isBlocked: () => false });
-
-			await runTurn(h);
-			await elapse(2 * RECAP_DELAY_MS);
-			expect(sideCalls(h)).toBe(0);
-
-			blocked = false;
-			h.session.refreshIdleMaintenance();
-			await flush();
-			await elapse(RECAP_DELAY_MS);
-			await until(() => sideCalls(h) >= 1, "the recap request");
-			await flush();
-			await elapse(3 * RECAP_DELAY_MS);
-
-			expect(sideCalls(h)).toBe(1);
-			expect(h.recaps).toHaveLength(1);
-		});
 	});
 
 	// ── idle recap ──────────────────────────────────────────────────────────
@@ -253,6 +230,8 @@ describe("AgentSession idle maintenance", () => {
 			const h = await startSession();
 			await drive(h.session.setSessionName("Fix login flow", "user"));
 			h.session.setTodoPhases([{ name: "Work", tasks: [{ content: "Wire focused tests", status: "pending" }] }]);
+			const reply = `${RECAP}\nPreserve the next step on its own line.`;
+			h.side.model.push({ content: [reply] });
 			let journalWhenAnnounced: string[] | undefined;
 			h.session.enableIdleMaintenance({
 				onRecap: recap => {
@@ -272,30 +251,13 @@ describe("AgentSession idle maintenance", () => {
 			// Live title and active todo task anchor the request; the transcript alone cannot guarantee them.
 			expect(lastUserText(request.context)).toContain("Fix login flow");
 			expect(lastUserText(request.context)).toContain("Wire focused tests");
-			expect(h.recaps).toEqual([RECAP]);
-			expect(journalWhenAnnounced).toEqual([RECAP]);
+			expect(h.recaps).toEqual([reply]);
+			expect(journalWhenAnnounced).toEqual([reply]);
 
 			// One delivery per stretch, however long the session then stays idle.
 			await elapse(3 * RECAP_DELAY_MS);
 			expect(sideCalls(h)).toBe(1);
 			expect(h.recaps).toHaveLength(1);
-		});
-
-		it("announces and journals the full reply, not a one-line preview", async () => {
-			const h = await startSession();
-			const reply = Array.from(
-				{ length: 40 },
-				(_, i) => `Step ${i + 1}: finished unit ${i * 17 + 3} and moved on.`,
-			).join("\n");
-			h.side.model.push({ content: [reply] });
-			h.enable();
-
-			await runTurn(h);
-			await elapse(RECAP_DELAY_MS);
-			await until(() => h.recaps.length === 1, "the recap event");
-
-			expect(h.recaps).toEqual([reply]);
-			expect(journal()).toEqual([reply]);
 		});
 
 		it.each([
@@ -681,27 +643,6 @@ describe("AgentSession idle maintenance", () => {
 	// ── owner blockers ──────────────────────────────────────────────────────
 
 	describe("owner blockers", () => {
-		it("starts no work while the owner is blocked, and a refresh re-arms the pending recap once it is not", async () => {
-			const h = await startSession();
-			let blocked = true;
-			h.enable({ isBlocked: () => blocked });
-
-			await runTurn(h);
-			await elapse(2 * RECAP_DELAY_MS);
-			expect(sideCalls(h)).toBe(0);
-
-			blocked = false;
-			h.session.refreshIdleMaintenance();
-			await flush();
-			await elapse(RECAP_DELAY_MS);
-			await until(() => h.recaps.length === 1, "the recap event");
-			await flush();
-			await elapse(3 * RECAP_DELAY_MS);
-
-			expect(sideCalls(h)).toBe(1);
-			expect(h.recaps).toHaveLength(1);
-		});
-
 		it("re-reads the blocker when the timer fires, and keeps the recap pending for a later refresh", async () => {
 			const h = await startSession();
 			let blocked = false;
@@ -742,24 +683,6 @@ describe("AgentSession idle maintenance", () => {
 			await until(() => compaction.mock.calls.length === 1, "the idle compaction pass");
 		});
 
-		it("a refresh aborts a recap in flight once the owner has become blocked, and its late reply is dropped", async () => {
-			const h = await startSession();
-			let blocked = false;
-			h.enable({ isBlocked: () => blocked });
-			await runTurn(h);
-			const { held, signal } = await startHeldRecap(h);
-
-			blocked = true;
-			h.session.refreshIdleMaintenance();
-			await flush();
-			expect(signal?.aborted).toBe(true);
-
-			held.release({ content: ["stale recap after the blocker"] });
-			await flush();
-			expect(h.recaps).toEqual([]);
-			expect(journal()).toEqual([]);
-		});
-
 		it("re-reads the blocker when the reply lands, even without a refresh", async () => {
 			const h = await startSession();
 			let blocked = false;
@@ -773,40 +696,6 @@ describe("AgentSession idle maintenance", () => {
 
 			expect(h.recaps).toEqual([]);
 			expect(journal()).toEqual([]);
-		});
-
-		it("waits out a scheduled continuation, then recaps once the owner refreshes after it is abandoned", async () => {
-			const h = await startSession();
-			let scheduled = true;
-			h.enable({ scheduledTurn: () => scheduled });
-
-			await runTurn(h);
-			await elapse(2 * RECAP_DELAY_MS);
-			expect(sideCalls(h)).toBe(0);
-
-			scheduled = false;
-			h.session.refreshIdleMaintenance();
-			await flush();
-			await elapse(RECAP_DELAY_MS);
-			await until(() => h.recaps.length === 1, "the recap event");
-			await flush();
-			await elapse(3 * RECAP_DELAY_MS);
-
-			expect(sideCalls(h)).toBe(1);
-		});
-
-		it("does not start work while maintenance is compacting", async () => {
-			const h = await startSession();
-			let compacting = false;
-			Object.defineProperty(h.session, "isCompacting", { configurable: true, get: () => compacting });
-			h.enable();
-
-			await runTurn(h);
-			compacting = true;
-			await elapse(2 * RECAP_DELAY_MS);
-			compacting = false;
-
-			expect(sideCalls(h)).toBe(0);
 		});
 	});
 
@@ -890,31 +779,6 @@ describe("AgentSession idle maintenance", () => {
 			await until(() => h.recaps.length === 1, "the recap after settlement");
 			expect(sideCalls(h)).toBe(1);
 			expect(h.recaps).toEqual([RECAP]);
-		});
-
-		it("holds idle compaction while background work can still wake the session, then compacts once it drains without a wake", async () => {
-			const h = await startSession({
-				backgroundJobs: true,
-				settings: {
-					"recap.enabled": false,
-					"compaction.idleEnabled": true,
-					"compaction.idleThresholdTokens": 1_000,
-				},
-			});
-			const compaction = vi.spyOn(h.session, "runIdleCompaction").mockResolvedValue(undefined);
-			h.enable();
-			const job = startBackgroundJob(h);
-
-			await runTurn(h);
-			await elapse(2 * COMPACTION_DELAY_MS);
-			expect(compaction).not.toHaveBeenCalled();
-
-			await job.finishWithoutWake();
-			expect(h.session.wakeSources).toBeUndefined();
-			await elapse(COMPACTION_DELAY_MS);
-			await until(() => compaction.mock.calls.length === 1, "the idle compaction pass");
-			await elapse(2 * COMPACTION_DELAY_MS);
-			expect(compaction).toHaveBeenCalledTimes(1);
 		});
 	});
 

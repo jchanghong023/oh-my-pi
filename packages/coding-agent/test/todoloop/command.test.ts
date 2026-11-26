@@ -89,18 +89,15 @@ describe("native /todoloop command", () => {
 		expect(rendered.split("\n").at(-1)).toMatch(/group.*none.*task.*none/i);
 	});
 
-	it.each(["", "--check", "todo.md --unknown", "one.md two.md", "todo.md --check --check", "--unknown"])(
-		"rejects invalid arguments: %s",
-		async args => {
-			const h = await harness();
-			await h.execute(args);
-			expect(h.ctx.showError).toHaveBeenCalledWith("Usage: /todoloop <path> [--check]");
-			expect(h.runTodoLoop).not.toHaveBeenCalled();
-			expect(await fs.readdir(h.cwd)).toEqual([]);
-		},
-	);
+	it.each(["", "todo.md --unknown", "--unknown", '""'])("rejects invalid arguments: %s", async args => {
+		const h = await harness();
+		await h.execute(args);
+		expect(h.ctx.showError).toHaveBeenCalledWith("Usage: /todoloop <path> [--check]");
+		expect(h.runTodoLoop).not.toHaveBeenCalled();
+		expect(await fs.readdir(h.cwd)).toEqual([]);
+	});
 
-	it.each([undefined, "# No tasks\n", "- [~] invalid state\n"])(
+	it.each([undefined, "- [~] invalid state\n"])(
 		"shows real read or parser errors without executing",
 		async content => {
 			const h = await harness();

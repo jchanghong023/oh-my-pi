@@ -2,8 +2,6 @@
 
 This guide explains how to configure language servers for the OMP coding agent.
 
-LSP is disabled by default in normal and `OMP_OFFLINE` CLI sessions. Set `lsp.enabled: true` to enable it; pass `--no-lsp` to disable it for one run. SDK sessions must also allow LSP at the session level; see the [SDK guide](./sdk.md#required-vs-optional-inputs).
-
 Source of truth in code:
 
 - Server config type: `packages/coding-agent/src/lsp/types.ts` (`ServerConfig`)
@@ -12,12 +10,12 @@ Source of truth in code:
 
 ## Auto-detection
 
-When LSP integration is enabled, OMP starts from the built-in server definitions, applies config overrides, then keeps enabled servers that meet both conditions:
+OMP starts from the built-in server definitions, applies config overrides, then keeps enabled servers that meet both conditions:
 
 1. The current working directory contains at least one of the server's `rootMarkers`.
 2. The server binary is available — checked in supported project-local bin directories first (for example `node_modules/.bin/`, Python virtual environments, Ruby binstubs, and project `bin/` for Go), then `$PATH`.
 
-Root-marker detection at startup is cwd-only; it does not search parent directories. Wildcard markers such as `*.cabal` match entries directly inside the cwd and do not recurse. Common setups need no server-specific overrides; see [`defaults.json`](../packages/coding-agent/src/lsp/defaults.json) for the full built-in set.
+Root-marker detection at startup is cwd-only; it does not search parent directories. Wildcard markers such as `*.cabal` match entries directly inside the cwd and do not recurse. No configuration is required for common setups; see [`defaults.json`](../packages/coding-agent/src/lsp/defaults.json) for the full built-in set.
 
 ## Config file locations
 

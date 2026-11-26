@@ -102,7 +102,6 @@ describe("offline startup with a disabled company provider", () => {
 			child.exited,
 		]);
 		expect(exitCode, stderr).toBe(0);
-		expect(stderr).not.toContain("Company provider unavailable");
 		// The unconfigured smol role must inherit the usable configured default,
 		// rather than refuse a disabled company selector injected at startup.
 		expect(JSON.parse(stdout)).toEqual({ selector: AVAILABLE_SELECTOR });

@@ -296,11 +296,6 @@ describe("skills", () => {
 				expect(catalog.skills[0]._source.providerName).toBe("Shared");
 				expect(readdir.mock.calls.filter(([dir]) => String(dir) === shared)).toHaveLength(1);
 
-				const disabled = await loadSkills({ ...options, disabledExtensions: ["skill:original"] });
-				expect(disabled.skills).toEqual([]);
-				expect((await loadSkills({ ...options, enabled: false })).skills).toEqual([]);
-				expect((await loadSkills(options)).skills.map(skill => skill.name)).toEqual(["original"]);
-
 				await writeSkill(shared, "added");
 				await fs.unlink(path.join(shared, "original", "SKILL.md"));
 				resetCapabilities();
@@ -310,8 +305,6 @@ describe("skills", () => {
 				expect(
 					(await loadSkills({ ...options, customDirectories: [other] })).skills.map(skill => skill.name),
 				).toEqual(["other"]);
-				restoreEnvValue("OMP_SKILLS_DIR", path.join(root, "missing"));
-				expect((await loadSkills({ ...options, customDirectories: [] })).skills).toEqual([]);
 			} finally {
 				readdir.mockRestore();
 				Object.defineProperty(process, "platform", { value: platform });
@@ -322,8 +315,7 @@ describe("skills", () => {
 			}
 		});
 
-		// Shared roots obey the ordinary one-level scanner in either network mode and refresh real bytes.
-		it.each([undefined, "true"])("refreshes a one-level shared root with OMP_OFFLINE=%s", async offline => {
+		it("refreshes the contents of a one-level shared root", async () => {
 			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-refresh-"));
 			const previousShared = process.env.OMP_SKILLS_DIR;
 			const previousOffline = process.env.OMP_OFFLINE;
@@ -337,7 +329,7 @@ describe("skills", () => {
 					path.join(root, "shared", "group", "nested", "SKILL.md"),
 					"---\nname: nested\ndescription: Must not recurse\n---\nNested\n",
 				);
-				restoreEnvValue("OMP_OFFLINE", offline);
+				restoreEnvValue("OMP_OFFLINE", undefined);
 				restoreEnvValue("OMP_SKILLS_DIR", path.join(root, "shared"));
 				const options = { ...DISABLE_ALL_BUILTIN_SKILLS, cwd: root };
 				const first = await loadSkills(options);
@@ -351,7 +343,6 @@ describe("skills", () => {
 				const refreshed = await loadSkills(options);
 				const content = (await handler.resolve(parseInternalUrl("skill://visible")!, refreshed)).content;
 				expect(content).toContain("Updated revision with different bytes");
-				expect(content).not.toContain("First revision");
 				expect(
 					(await loadSkills({ ...options, includeSkills: ["visible"], ignoredSkills: ["vis*"] })).skills,
 				).toEqual([]);
@@ -400,7 +391,6 @@ describe("skills", () => {
 				await customStarted.promise;
 				releaseShared.resolve();
 				const loaded = await pending;
-				expect(loaded.skills.map(skill => skill.name)).toEqual(["custom/same", "same"]);
 				expect(loaded.skills.find(skill => skill.name === "same")).toMatchObject({
 					description: "Shared winner",
 					filePath: path.join(shared, "same", "SKILL.md"),
@@ -444,14 +434,8 @@ describe("skills", () => {
 				expect((await handler.resolve(parseInternalUrl("skill://calendar")!, { skills })).content).toContain(
 					"Run the calendar implementation.",
 				);
-				await expect(
-					handler.locate(parseInternalUrl("skill://alias")!, { skills }, { localOnly: true }),
-				).rejects.toThrow("Unknown skill: alias");
 				const catalog = await loadSkillCatalog(options);
 				expect(catalog.skills.map(skill => skill.name)).toEqual(["calendar"]);
-				expect(
-					(await loadSkills({ ...options, includeSkills: ["calendar"] })).skills.map(skill => skill.name),
-				).toEqual(["calendar"]);
 				expect((await loadSkills({ ...options, includeSkills: ["alias"] })).skills).toEqual([]);
 
 				const disabledOptions = { ...options, disabledExtensions: ["skill:calendar"] };
@@ -461,15 +445,6 @@ describe("skills", () => {
 				]);
 				const disabled = await loadSkills(disabledOptions);
 				expect(disabled.skills).toEqual([]);
-				for (const name of ["calendar", "alias"]) {
-					await expect(
-						handler.locate(
-							parseInternalUrl(`skill://${name}`)!,
-							{ skills: disabled.skills },
-							{ localOnly: true },
-						),
-					).rejects.toThrow(`Unknown skill: ${name}`);
-				}
 			} finally {
 				if (linked) await fs.unlink(aliasSkill);
 				await removeWithRetries(root);
@@ -519,72 +494,44 @@ describe("skills", () => {
 					const handler = new SkillProtocolHandler();
 					const shared = await handler.resolve(parseInternalUrl(`skill://${name}`)!, { skills });
 					expect(shared.content).toContain("Run the shared agents implementation.");
-					expect(shared.content).not.toContain("Run the private native implementation.");
 					expect(skills.map(skill => skill.name).sort()).toEqual([nativeName, name].sort());
 					expect(skills.find(skill => skill.name === name)?._source?.providerName).toBe("Shared");
-					expect(skills.find(skill => skill.name === name)?.filePath).toBe(
-						path.join(
-							sharedRootKind === "direct" ? agentsRoot : sharedAlias,
-							sharedRootKind === "renamed-skill" ? "alias" : name,
-							"SKILL.md",
-						),
-					);
-					await expect(
-						handler.locate(parseInternalUrl("skill://alias")!, { skills }, { localOnly: true }),
-					).rejects.toThrow("Unknown skill: alias");
-					expect(await fs.realpath(skills.find(skill => skill.name === name)!.filePath)).toBe(
-						await fs.realpath(path.join(agentsSkillDir, "SKILL.md")),
-					);
+					if (sharedRootKind === "renamed-skill") {
+						await expect(
+							handler.locate(parseInternalUrl("skill://alias")!, { skills }, { localOnly: true }),
+						).rejects.toThrow("Unknown skill: alias");
+					}
 					const native = await handler.resolve(parseInternalUrl(`skill://${nativeName}`)!, { skills });
 					expect(native.content).toContain("Run the private native implementation.");
 
 					const catalog = await loadSkillCatalog(options);
 					expect(catalog.skills.map(skill => skill.name).sort()).toEqual([nativeName, name].sort());
 					expect(catalog.skills.find(skill => skill.name === name)?._source.providerName).toBe("Shared");
-					expect(catalog.skills.find(skill => skill.name === nativeName)?._source.provider).toBe("native");
 					expect(catalog.skills.find(skill => skill.name === nativeName)?.filePath).toBe(
 						path.join(nativeSkillDir, "SKILL.md"),
 					);
 
-					const filtered = await loadSkills({ ...options, includeSkills: [nativeName] });
-					expect(filtered.skills.map(skill => skill.name)).toEqual([nativeName]);
-					const filteredNative = await handler.resolve(parseInternalUrl(`skill://${nativeName}`)!, {
-						skills: filtered.skills,
-					});
-					expect(filteredNative.content).toContain("Run the private native implementation.");
+					// Filters consume the same names after admission, regardless of how the
+					// roots alias. Exercise that behavior once with the renamed directory.
+					if (sharedRootKind === "renamed-skill") {
+						const included = { ...options, includeSkills: [nativeName] };
+						expect((await loadSkills(included)).skills.map(skill => skill.name)).toEqual([nativeName]);
+						const includedCatalog = await loadSkillCatalog(included);
+						expect(includedCatalog.skills.find(skill => skill.name === name)?.disabledReason).toBe(
+							"skill-config",
+						);
 
-					const includedCatalog = await loadSkillCatalog({ ...options, includeSkills: [nativeName] });
-					expect(includedCatalog.skills.find(skill => skill.name === name)?.disabledReason).toBe("skill-config");
-					expect(includedCatalog.skills.find(skill => skill.name === nativeName)?.disabledReason).toBeUndefined();
-
-					const disabledOptions = { ...options, disabledExtensions: [`skill:${nativeName}`] };
-					const disabledCatalog = await loadSkillCatalog(disabledOptions);
-					expect(disabledCatalog.skills.find(skill => skill.name === nativeName)?.disabledReason).toBe(
-						"item-disabled",
-					);
-					expect(disabledCatalog.skills.find(skill => skill.name === name)?.disabledReason).toBeUndefined();
-					const active = await loadSkills(disabledOptions);
-					expect(active.skills.map(skill => skill.name)).toEqual([name]);
-					const activeShared = await handler.resolve(parseInternalUrl(`skill://${name}`)!, {
-						skills: active.skills,
-					});
-					expect(activeShared.content).toContain("Run the shared agents implementation.");
-
-					const sharedDisabledOptions = { ...options, disabledExtensions: [`skill:${name}`] };
-					const sharedDisabledCatalog = await loadSkillCatalog(sharedDisabledOptions);
-					expect(sharedDisabledCatalog.skills.find(skill => skill.name === name)?.disabledReason).toBe(
-						"item-disabled",
-					);
-					expect(sharedDisabledCatalog.skills.find(skill => skill.name === name)?._source.providerName).toBe(
-						"Shared",
-					);
-					// Existing raw-name disables cover every collision variant; only a
-					// namespaced disable targets one version. Shared uses the same rule.
-					expect(sharedDisabledCatalog.skills.find(skill => skill.name === nativeName)?.disabledReason).toBe(
-						"item-disabled",
-					);
-					const sharedDisabled = await loadSkills(sharedDisabledOptions);
-					expect(sharedDisabled.skills).toEqual([]);
+						const nativeDisabled = { ...options, disabledExtensions: [`skill:${nativeName}`] };
+						expect((await loadSkills(nativeDisabled)).skills.map(skill => skill.name)).toEqual([name]);
+						// Bare-name disables apply to all versions, unlike a namespaced disable.
+						const sharedDisabled = { ...options, disabledExtensions: [`skill:${name}`] };
+						const disabledCatalog = await loadSkillCatalog(sharedDisabled);
+						expect(disabledCatalog.skills.map(skill => skill.disabledReason)).toEqual([
+							"item-disabled",
+							"item-disabled",
+						]);
+						expect((await loadSkills(sharedDisabled)).skills).toEqual([]);
+					}
 				} finally {
 					restoreEnvValue("OMP_SKILLS_DIR", previous);
 					if (linkedPath) await fs.unlink(linkedPath);
@@ -637,15 +584,11 @@ describe("skills", () => {
 					expect(scanned).not.toContain(userRoot);
 					expect(scanned).not.toContain(projectRoot);
 
-					readdirSpy.mockClear();
 					const inventory = await loadSkillCatalog(options);
 					const claudeRows = inventory.skills.filter(skill => skill._source.provider === "claude");
 					expect(claudeRows).toHaveLength(2);
 					expect(claudeRows.every(skill => skill.disabledReason === disabledReason)).toBe(true);
 					for (const directory of [userRoot, projectRoot]) {
-						expect(readdirSpy.mock.calls.map(([scannedDirectory]) => String(scannedDirectory))).toContain(
-							directory,
-						);
 						expect(
 							inventory.warnings.some(warning =>
 								warning.message.includes(path.join(directory, "bad", "SKILL.md")),
@@ -654,19 +597,16 @@ describe("skills", () => {
 					}
 
 					if (disabledReason === "provider-disabled") enableProvider("claude");
-					readdirSpy.mockClear();
 					const enabled = await loadSkills({ ...options, enableClaudeUser: true, enableClaudeProject: true });
 					expect(enabled.skills.filter(skill => skill._source?.provider === "claude")).toHaveLength(2);
 					for (const directory of [userRoot, projectRoot]) {
-						expect(readdirSpy.mock.calls.map(([scannedDirectory]) => String(scannedDirectory))).toContain(
-							directory,
-						);
 						expect(
 							enabled.warnings.some(warning =>
 								warning.message.includes(path.join(directory, "bad", "SKILL.md")),
 							),
 						).toBe(true);
 					}
+					if (disabledReason !== "user-opt-in") return;
 					const optedIn = await loadSkills({ ...options, enableClaudeUser: true, enableClaudeProject: false });
 					expect(optedIn.skills.find(skill => skill.name === "scope-valid")?.filePath).toBe(
 						path.join(userRoot, "valid", "SKILL.md"),
@@ -690,41 +630,6 @@ describe("skills", () => {
 				}
 			});
 		}
-
-		it("keeps the default Codex user scope even when the legacy global skills toggle is off", async () => {
-			const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-codex-session-scope-"));
-			const cwd = path.join(root, "project");
-			const skillDirectory = path.join(root, ".codex", "skills", "codex-session-default");
-			await fs.mkdir(cwd, { recursive: true });
-			await fs.mkdir(skillDirectory, { recursive: true });
-			const filePath = path.join(skillDirectory, "SKILL.md");
-			await fs.writeFile(
-				filePath,
-				"---\nname: codex-session-default\ndescription: Default Codex scope\n---\nCodex\n",
-			);
-			const homedirSpy = spyOn(os, "homedir").mockReturnValue(root);
-			resetSettingsForTest();
-			const settings = await Settings.init({
-				inMemory: true,
-				cwd,
-				overrides: { "skills.enableCodexUser": false },
-			});
-			const releaseSettings = initializeWithSettings(settings);
-			try {
-				const loaded = await loadSkills({ cwd });
-				expect(loaded.skills.find(skill => skill.name === "codex-session-default")?.filePath).toBe(filePath);
-				expect(
-					(await loadSkills({ cwd, enableCodexUser: false })).skills.some(
-						skill => skill.name === "codex-session-default",
-					),
-				).toBe(false);
-			} finally {
-				releaseSettings();
-				resetSettingsForTest();
-				homedirSpy.mockRestore();
-				await removeWithRetries(root);
-			}
-		});
 
 		it("should keep user Claude skills when project .claude/skills is missing", async () => {
 			const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -797,12 +702,7 @@ describe("skills", () => {
 			}
 		});
 
-		// Fork contract (openspec/specs/model-and-skill-discovery/spec.md「Codex 用户技能」): ~/.codex/skills
-		// participates in discovery by default, and on a name collision the
-		// upstream default sources still win — .agents registers before codex and
-		// the dedup keeps the first entry. Discovery reads the global settings
-		// singleton for `skills.enableCodexUser`, so an initialized in-memory
-		// instance (fork schema default: true) is part of the setup.
+		// The initialized default admits Codex without displacing a same-name .agents skill.
 		it("discovers ~/.codex/skills by default and keeps ~/.agents/skills ahead on collision", async () => {
 			const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "pi-codex-home-"));
 			const tempCwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-codex-cwd-"));

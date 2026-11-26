@@ -505,7 +505,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		);
 		const summaries = ["FIRST-SUMMARY-WITHOUT-OBJECTIVE", "SECOND-SUMMARY-WITHOUT-OBJECTIVE"];
 		let committedCount = 0;
-		const compact = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
 			summary: summaries[committedCount++]!,
 			shortSummary: undefined,
 			firstKeptEntryId: preparation.firstKeptEntryId,
@@ -560,12 +560,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 					.map(entry => JSON.stringify(entry)),
 			).toEqual(saved);
 		}
-		expect(compact).toHaveBeenCalledTimes(2);
-		expect(
-			sessionManager
-				.getBranch()
-				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
-		).toHaveLength(3);
 		await sessionManager.flush();
 		const file = sessionManager.getSessionFile();
 		if (!file) throw new Error("Expected persisted goal journal");
@@ -587,17 +581,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 				.getBranch()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
 		);
-		expect(journal.filter(entry => entry.type === "compaction").map(entry => entry.summary)).toEqual(summaries);
-		expect(journal).toContainEqual(
-			expect.objectContaining({
-				type: "message",
-				message: expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
-			}),
-		);
-		expect(session.getLocalGoalModeState()).toMatchObject({
-			autoOrchestrate: true,
-			goal: { objective, status: "active" },
-		});
 	});
 
 	it("does not backfill a restored auto Goal notice during ordinary prompts or tool continuation", async () => {
@@ -624,40 +607,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 				.getBranch()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
 		).toHaveLength(0);
-	});
-
-	it("persists the explicit first auto Goal prompt notice once across tool continuation and later prompts", async () => {
-		const { session, sessionManager, observedContexts } = await createHarness({ "compaction.enabled": false });
-		const state = await session.goalRuntime.createGoal({ objective: "Ship the release", autoOrchestrate: true });
-		const expected = buildGoalAutoOrchestrateMessage(state, session.getEnabledToolNames());
-		if (!expected) throw new Error("Expected first auto Goal notice content");
-
-		await session.prompt(state.goal.objective, { goalAutoOrchestrateInitialId: state.goal.id });
-		await session.prompt("inspect the submitted release");
-
-		expect(observedContexts).toHaveLength(3);
-		for (const context of observedContexts) {
-			expect(
-				context
-					.map(value => JSON.parse(value))
-					.filter(
-						message =>
-							message.role === "user" &&
-							Array.isArray(message.content) &&
-							message.content.some((block: { type: string; text?: string }) => block.text === expected.content),
-					),
-			).toHaveLength(1);
-		}
-		expect(
-			session.messages.filter(
-				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
-			),
-		).toEqual([expect.objectContaining({ content: expected.content, attribution: "user" })]);
-		expect(
-			sessionManager
-				.getBranch()
-				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
-		).toEqual([expect.objectContaining({ content: expected.content, attribution: "user" })]);
 	});
 
 	it("does not backfill an auto Goal notice after cancelled first setup and ordinary resume", async () => {

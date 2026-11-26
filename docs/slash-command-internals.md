@@ -188,7 +188,7 @@ Slash command state is refreshed:
 - when the editor component is swapped
 - by explicit plugin reload flows such as `/reload-plugins`
 - when session command-metadata notifications arrive, including live settings changes, skill management, and MCP prompt updates (autocomplete rebuilds from current session state)
-- after `/wt` moves into a newly created linked Git worktree: it runs the configured `post-checkout` hook with the arguments `git worktree add` uses (`vcs.runPostCheckoutHook`), then refreshes skills and commands. A failing hook keeps the worktree and shows a warning. Reusing a worktree does not run the hook, and `/wt` does not clean the source checkout.
+- after `/wt` ran a new worktree's `post-checkout` hook (linked git worktree or ovnfs checkout): once the move and `worktree.cleanSource` are done and reported, `/wt` runs the hook with the arguments `git worktree add` gives it (`vcs.runPostCheckoutHook`, the helper behind `omp worktree add`) and then refreshes session skills/commands, so they include what the hook added. A failing hook keeps the worktree and shows a warning; the hook cannot be cancelled. An ovnfs checkout has its own git dir without `hooks/`: only a hook found through `core.hooksPath` runs there, not one in the source repo's `.git/hooks`
 
 There is no continuous file watcher for command directories.
 
@@ -202,8 +202,6 @@ The unified built-in registry is checked before `AgentSession.prompt(...)` in TU
 
 Built-in parsing splits at the first whitespace or colon, so `/model:opus` is a built-in invocation. Extension/custom/file parsing instead splits only at the first literal space, preserving names such as `plugin:command`. In the TUI, a built-in with arguments falls through when its spec does not declare `allowArgs`; the ACP dispatcher leaves argument validation to the handler.
 
-For example, ACP `/model <selector>` switches models through its text handler. ACP `/share` ignores trailing arguments and still shares the session; use these commands only when you intend to run them.
-
 After that boundary, `AgentSession.prompt(...)` processes slash input in this order when `expandPromptTemplates !== false`:
 
 1. **Extension commands** (`#tryExecuteExtensionCommand`)  
@@ -214,10 +212,8 @@ After that boundary, `AgentSession.prompt(...)` processes slash input in this or
    - empty string or `void/undefined` -> treated as handled; no LLM prompt
 3. **File-based slash commands** (`expandSlashCommand`)  
    If text still starts with `/`, attempt markdown command expansion.
-   File commands can use `{{{rawArguments}}}` to insert everything after the first space verbatim. The bundled Developer Test Agent commands use it to preserve the user's original input.
 4. **Prompt templates** (`expandPromptTemplate`)  
    Applied after slash/custom processing.
-   Ordinary prompt templates (`.omp/prompts/`) use the upstream argument syntax such as `{{arguments}}` or `$ARGUMENTS`. They do not expose `rawArguments`; if no supported placeholder consumes the arguments, the parsed argument text is appended.
 5. **Delivery**
    - idle: prompt is sent immediately to agent
    - streaming: prompt is queued according to `streamingBehavior` (`steer`, `followUp`, or `aside`)
@@ -279,9 +275,7 @@ TUI and ACP/RPC dispatch the shared built-in registry before `session.prompt(...
 
 ## ACP/RPC availability
 
-`buildAvailableSlashCommands(...)` publishes commands first-wins in this order: text-capable built-ins, optional skill commands, extension commands, TypeScript/MCP custom commands, then discovered file commands. The ACP built-in rules reserve primary names, aliases, and their colon prefixes (such as `model:foo`) across all non-built-in sources. A file-command load updates the session expansion set only if the working directory has not changed.
-
-`/team configure` opens the Team configuration panel in the TUI. Text hosts point users to that entry without starting a discussion.
+`buildAvailableSlashCommands(...)` publishes commands first-wins in this order: text-capable built-ins, optional skill commands, extension commands, TypeScript/MCP custom commands, then discovered file commands. Built-in primary names and aliases are reserved; extension names such as `model:foo`, whose prefix parses as a built-in, are filtered from ACP availability. The same file-command load updates the session expansion set.
 
 ## 8) Streaming-time differences vs idle
 

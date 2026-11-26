@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:28e29f956f4319e170ba69ca871bb03ca154b4cdcdf843c9bd339ab1f9d101ee",
+  "pageVersion": "sha256:eb0f4c1c2482c1a7782a283cc9b655d606892d638f87db2010d4345aff9f4aff",
   "claims": [
     {
       "id": "claim_d6df72d07ce04f398c3f049890032589",
@@ -17,16 +17,6 @@
         {
           "resource": "repo://packages/coding-agent/src/spec-driven/vendor/inventory.json",
           "version": "repo-file-v1:sha256:a1a681f727517ab56b0688ddd2e9fc8e94d255c91544f0067bb3de0e496e9f07"
-        }
-      ]
-    },
-    {
-      "id": "claim_03ab145ad9ab42de9e016ecbb64e7fbe",
-      "statement": "低优先级 spec-driven 提供者按清单发现 Superpowers 和 JCH 技能，并将普通 OpenSpec 发现限制为五项核心技能和五项 opsx 命令。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/discovery/spec-driven.ts#L10-L91",
-          "version": "repo-lines-v1:sha256:f6ea261d82567978f5174e3db48060171bf6047e95740f2e06325eef75b1bd52:eyJzZWxlY3RlZExpbmVDb3VudCI6ODIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjUyNzFlMjViNTg5NmVmYTJhMzczMzRlYjA0MGYzYWVlNTdmODVkZDQ5NDZhZjQ1N2I4ODA5OWJlZmI5NDBiNmQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2ZjViNDBiMTU4NDU3ZDE3ODY0ZjIxNzkwNzg2ZGQ1YTJlY2RiNjRiNjZhNjUxZjc4OGQ0ZTI1Y2QzMzAzZDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImM2NDQ2NjkwM2M4NGUzMmUxM2I1MThmNjkxN2RjMmM5N2U2MzM3ZjU2NWRhNDllZTA3YjBkNThlYWY2MDBmOWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
         }
       ]
     },
@@ -64,29 +54,11 @@
     },
     {
       "id": "claim_dff1c5ec7dd847219366daa41b5c5864",
-      "statement": "独立 omp openspec 运行包内 CLI；新项目默认使用原生 spec-driven，init 不安装重复工具，不改已有配置，显式 schema 和已有配置优先。",
+      "statement": "独立 omp openspec 运行包内 OpenSpec CLI，并将参数传给该 CLI。",
       "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/cli.ts#L518-L535",
-          "version": "repo-lines-v1:sha256:72caa4b2766d3be7a579ab071865952739a4f80af660407294053c17ca64bac1:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImMyMzA0MTM5ZGVlYzg0ZDVlNjUwNDRkODdmZWI2N2ZkNmJhYWRjNjc1M2NiYzI0OWJhOTczMzdjNDA0ZjJkMjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImU4NjFmZWZkMTM2ODcyM2YzOTI5MmMyZTBlMTQ1YTFhZTQzYjMwZTUyZmY3ZjNkYjY1MjA0MmE0Nzc0YTgyODMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjBhOTQ4MTkwZTI3MDA1MWM0MjZjYjNlZTViOGJkNWEzOTdlZTVlZGU0OWY4MDYwOGY5NTFhZmYxNzYxM2U4MGIifQ"
-        },
         {
           "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts",
           "version": "repo-file-v1:sha256:4622838f325e9950fc70ec34a3ed39b055b1672345d7e4dda3676038ab2479ff"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts",
-          "version": "repo-file-v1:sha256:6f7326b9ab2575c741cece673a6ec274937241fb688d54ec2cd7e909d1a35b7b"
-        }
-      ]
-    },
-    {
-      "id": "claim_734862d6aa644b6bbd51be4bd4406716",
-      "statement": "原生 spec-driven schema 的材料包括 proposal、specs、design 和 tasks；独立需求维护不负责实施或软件验收。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts",
-          "version": "repo-file-v1:sha256:6f7326b9ab2575c741cece673a6ec274937241fb688d54ec2cd7e909d1a35b7b"
         }
       ]
     },
@@ -95,10 +67,6 @@
       "statement": "omp superpowers 仅运行清单中 skills 目录下且路径受限的资源；JavaScript 使用 Bun，shell 需要 bash 或 sh shebang 和 Bash，Windows 使用 Git Bash。",
       "evidence": [
         {
-          "resource": "repo://packages/coding-agent/src/cli.ts#L536-L568",
-          "version": "repo-lines-v1:sha256:76af170e85e33253ab5af8efb4370b23ee43840d8cabf5e982fbf64a9c0e10b1:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2NjliZGIzMDhiNjI0Nzc1NmEwZDViNjVhOWI5MGJiMWUwYTdhYzA0NTU2NTJiMmYzNDMzYzkxNGNjMGEwYWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc2YTI5YWQ3MWI0MGNiYWU5ZjhjZDMzZDdiZDNkNzM5Yjk0ZTNmMjk3NjM4YzllMDljNzJhZjVhYjJhMmUzMGEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZlYmVmY2NlOWY4YTlmMDI1Y2Y4N2M1YWU3YjZlNjMzZDY2MjE5NzczY2IzY2QzNmVlOTQzMzc0OTkyYjQ1MDIifQ"
-        },
-        {
           "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts",
           "version": "repo-file-v1:sha256:4622838f325e9950fc70ec34a3ed39b055b1672345d7e4dda3676038ab2479ff"
         }
@@ -106,25 +74,11 @@
     },
     {
       "id": "claim_4b30044028ed43489aad97a5e9276bba",
-      "statement": "资源进程禁用遥测，使用调用目录和固定 brainstorm 目录，支持中止并返回 stdout、stderr 和子进程退出码；脚本入口缺参数返回 2、帮助返回 0、入口错误返回 1。",
+      "statement": "资源子进程禁用 OpenSpec 遥测、使用调用目录并支持中止；Superpowers 脚本的 brainstorm 目录为调用目录下的 .superpowers/brainstorm。",
       "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/cli.ts#L536-L568",
-          "version": "repo-lines-v1:sha256:76af170e85e33253ab5af8efb4370b23ee43840d8cabf5e982fbf64a9c0e10b1:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2NjliZGIzMDhiNjI0Nzc1NmEwZDViNjVhOWI5MGJiMWUwYTdhYzA0NTU2NTJiMmYzNDMzYzkxNGNjMGEwYWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc2YTI5YWQ3MWI0MGNiYWU5ZjhjZDMzZDdiZDNkNzM5Yjk0ZTNmMjk3NjM4YzllMDljNzJhZjVhYjJhMmUzMGEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZlYmVmY2NlOWY4YTlmMDI1Y2Y4N2M1YWU3YjZlNjMzZDY2MjE5NzczY2IzY2QzNmVlOTQzMzc0OTkyYjQ1MDIifQ"
-        },
         {
           "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts",
           "version": "repo-file-v1:sha256:4622838f325e9950fc70ec34a3ed39b055b1672345d7e4dda3676038ab2479ff"
-        }
-      ]
-    },
-    {
-      "id": "claim_4aa858240f114978babd60bd9542754d",
-      "statement": "公开进程测试覆盖打包 OpenSpec 命令参数、初始化、默认及显式 schema、验证和归档。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts",
-          "version": "repo-file-v1:sha256:6f7326b9ab2575c741cece673a6ec274937241fb688d54ec2cd7e909d1a35b7b"
         }
       ]
     }

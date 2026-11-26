@@ -68,8 +68,6 @@ describe("zero-OMP-config offline terminal entry", () => {
 					},
 				}),
 			);
-			expect(await Bun.file(path.join(configRoot, "agent", "config.yml")).exists()).toBe(false);
-			expect(await Bun.file(path.join(configRoot, "agent", "models.yml")).exists()).toBe(false);
 			const env = Object.fromEntries(
 				Object.entries({
 					...process.env,

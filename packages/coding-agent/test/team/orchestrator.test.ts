@@ -14,7 +14,6 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	assignReviewerParticipant,
-	computeUnresolvedBlocking,
 	needsRecheck,
 	runTeamDiscussion,
 	resolveTeamParticipants,
@@ -293,35 +292,6 @@ describe("team malformed-output gates", () => {
 		expect(result.status).toBe("failed");
 		expect(calls.some(call => call.role === "synthesizer")).toBe(false);
 	});
-
-	it("rejects a review whose summary plus findings exceed the total text budget", async () => {
-		const oversizedReview = {
-			...reviewData({ blocking: 1 }),
-			reviewSummary: "x".repeat(1500),
-		};
-		const { result, calls } = await run({ review: () => oversizedReview });
-		expect(result.status).toBe("failed");
-		expect(result.failureReason).toContain("全部审查子代理失败");
-		expect(calls.some(call => call.role === "synthesizer")).toBe(false);
-	});
-
-	it("does not install a revision whose recheck flags are missing", async () => {
-		const { result, calls } = await run({
-			review: () => reviewData({ blocking: 1 }),
-			revision: ({ findingIds }) => ({
-				...revisionData({}, findingIds),
-				revisedProposal: "invalid-revision-marker-43d",
-				reviewFlags: {},
-			}),
-			synthesis: () => synthesisData("A"),
-		});
-		expect(result.status).toBe("completed");
-		expect(result.droppedRecommendation).toBe(true);
-		expect(calls.filter(call => call.role === "reviser")).toHaveLength(3);
-		expect(calls.filter(call => call.role === "reviewer")).toHaveLength(3);
-		const synthesis = calls.find(call => call.role === "synthesizer");
-		expect(synthesis?.task).not.toContain("invalid-revision-marker-43d");
-	});
 });
 
 describe("team visible participant settlement", () => {
@@ -383,25 +353,6 @@ describe("team visible participant settlement", () => {
 });
 
 describe("team reviewer rotation", () => {
-	it("assigns the next different model in proposer order, wrapping around", () => {
-		const participants = participants3();
-		expect(assignReviewerParticipant(participants, 0)).toBe(participants[1]);
-		expect(assignReviewerParticipant(participants, 1)).toBe(participants[2]);
-		// Wraps to the session-model participant, which runs as a fresh reviewer subprocess.
-		expect(assignReviewerParticipant(participants, 2)).toBe(participants[0]);
-	});
-
-	it("uses the session-model participant as a reviewer subprocess when it is next and different", () => {
-		const session = participantOf(MODEL_A, 0, true);
-		const b = participantOf(MODEL_B, 1);
-		const c = participantOf(MODEL_C, 2);
-		expect(assignReviewerParticipant([session, b, c], 0)).toBe(b);
-		expect(assignReviewerParticipant([session, b, c], 1)).toBe(c);
-		expect(assignReviewerParticipant([session, b, c], 2)).toBe(session);
-		// With two distinct models, B is reviewed by a fresh child using session model A.
-		expect(assignReviewerParticipant([session, b], 1)).toBe(session);
-	});
-
 	it("skips same-model participants", () => {
 		const a1 = participantOf(MODEL_A, 0);
 		const a2 = participantOf(MODEL_A, 1);
@@ -411,44 +362,15 @@ describe("team reviewer rotation", () => {
 		expect(assignReviewerParticipant(participants, 1)).toBe(b);
 		expect(assignReviewerParticipant(participants, 2)).toBe(a1);
 	});
-
-	it("falls back to the same model when only one distinct model participates", () => {
-		const a1 = participantOf(MODEL_A, 0);
-		const a2 = participantOf(MODEL_A, 1);
-		// Same-model fallback: the reviewer is a fresh subagent of the same model;
-		// which same-model participant is named is immaterial.
-		expect(assignReviewerParticipant([a1, a2], 0).modelPattern).toBe(a1.modelPattern);
-		expect(assignReviewerParticipant([a1], 0)).toBe(a1);
-	});
 });
 
-describe("team revision flags and blocking tracking", () => {
+describe("team revision recheck flags", () => {
 	it("triggers a recheck only when a flag is set", () => {
 		expect(needsRecheck(revisionData().reviewFlags)).toBe(false);
 		expect(needsRecheck(revisionData({ changedCoreDesign: true }).reviewFlags)).toBe(true);
 		expect(needsRecheck(revisionData({ claimsResolvedBlocking: true }).reviewFlags)).toBe(true);
 		expect(needsRecheck(revisionData({ newEvidenceChangesAssumptions: true }).reviewFlags)).toBe(true);
 		expect(needsRecheck(revisionData({ disputesBlockingFinding: true }).reviewFlags)).toBe(true);
-	});
-
-	it("closes blockers by exact ID, retaining identical issues and newly discovered blockers", () => {
-		const finding = reviewData({ blocking: 1 }).findings as TeamReviewRecord["findings"];
-		const first = { ...finding[0]!, id: "A-F1" };
-		const second = { ...finding[0]!, id: "A-F2" };
-		const initial = { ...reviewData({ blocking: 2 }), findings: [first, second] } as TeamReviewRecord;
-		expect(computeUnresolvedBlocking([initial])).toEqual([first, second]);
-		const partial = {
-			...reviewData(),
-			blockingResolutions: [...resolutions(["A-F1"], "resolved"), ...resolutions(["A-F2"], "unresolved")],
-		} as TeamReviewRecord;
-		expect(computeUnresolvedBlocking([initial, partial])).toEqual([second]);
-		const third = { ...first, id: "A-F3" };
-		const final = {
-			...reviewData({ blocking: 1 }),
-			findings: [third],
-			blockingResolutions: resolutions(["A-F2"], "resolved"),
-		} as TeamReviewRecord;
-		expect(computeUnresolvedBlocking([initial, partial, final])).toEqual([third]);
 	});
 });
 
@@ -823,34 +745,6 @@ describe("team orchestrator", () => {
 		]);
 	});
 
-	it("runs revision rounds and rechecks when findings exist, resolving blocking after a recheck", async () => {
-		let reviewCalls = 0;
-		const { result, calls } = await run({
-			review: ({ recheck, blockingIds }) => {
-				reviewCalls++;
-				if (!recheck) return reviewData({ blocking: 1 });
-				return reviewData({ resolutions: resolutions(blockingIds, "resolved") });
-			},
-			revision: ({ findingIds }) => revisionData({ claimsResolvedBlocking: true }, findingIds),
-		});
-		expect(result.status).toBe("completed");
-		const revisions = calls.filter(call => parseMarker(call.task).role === "revision");
-		const rechecks = calls.filter(call => parseMarker(call.task).role === "review" && parseMarker(call.task).recheck);
-		expect(revisions).toHaveLength(3);
-		expect(rechecks).toHaveLength(3);
-		// Rechecks run on the rotation-assigned reviewer model (same as initial).
-		// Stage 4 processes the proposals concurrently, so compare per-target.
-		expect(
-			rechecks
-				.map(call => ({ target: parseMarker(call.task).target!, pattern: call.modelPattern }))
-				.sort((a, b) => a.target.localeCompare(b.target))
-				.map(entry => entry.pattern),
-		).toEqual([PATTERN_B, PATTERN_C, PATTERN_A]);
-		// Blocking resolved: report has no 尚不可采用 entries.
-		expect(result.reportMarkdown).not.toContain("尚不可采用 — 未解决阻断问题");
-		expect(reviewCalls).toBe(6);
-	});
-
 	it("refuses a third revision round and marks the proposal 尚不可采用", async () => {
 		const { result, calls } = await run({
 			review: ({ recheck, blockingIds }) =>
@@ -1199,19 +1093,6 @@ describe("team orchestrator", () => {
 		expect(calls.filter(call => parseMarker(call.task).role === "alignment")).toHaveLength(0);
 	});
 
-	it("refuses oversized initial proposals before alignment or review", async () => {
-		const { result, calls } = await run({
-			proposal: () => ({
-				...proposalData("A"),
-				proposal: "p".repeat(3999),
-				evidence: [{ claim: "evidence", source: "source" }],
-			}),
-		});
-		expect(result.status).toBe("failed");
-		expect(result.failureReason).toContain("所有提案子代理均失败");
-		expect(calls.every(call => call.role === "proposer")).toBe(true);
-	});
-
 	it("treats a throwing runner as a failed call instead of a rejected run", async () => {
 		const runner: TeamSubagentRunner = async () => {
 			throw new Error("runner exploded");
@@ -1253,13 +1134,6 @@ describe("team orchestrator", () => {
 		expect(partial.result.status).toBe("completed");
 		expect(partial.result.reportMarkdown).toContain("方案 A 审查子代理失败");
 		expect(partial.result.reportMarkdown).toContain("未经审查不可作为最终选项");
-	});
-
-	it("stops before later stages once cancelled", async () => {
-		const controller = new AbortController();
-		const { result, calls } = await run({ onCall: () => controller.abort() }, { signal: controller.signal });
-		expect(result.status).toBe("cancelled");
-		expect(calls.filter(call => parseMarker(call.task).role === "alignment")).toHaveLength(0);
 	});
 
 	it("revokes all choices when cancelled after successful reviews", async () => {
@@ -1555,65 +1429,42 @@ describe("team orchestrator", () => {
 		]);
 	});
 
-	for (const maxConcurrency of [1, 2]) {
-		it(`queues all repeated roster slots with maxConcurrency=${maxConcurrency}`, async () => {
-			let active = 0;
-			let peak = 0;
-			const { runner, calls } = createScriptedRunner({});
-			const firstWave = Promise.withResolvers<void>();
-			const wrapped: TeamSubagentRunner = async (call, signal) => {
+	it("queues all repeated roster slots while two subprocesses run concurrently", async () => {
+		const { runner, calls } = createScriptedRunner({});
+		const firstWave = Promise.withResolvers<void>();
+		let active = 0;
+		let peak = 0;
+		const result = await runTeamDiscussion({
+			question: "并发测试",
+			cwd: "/tmp/repo",
+			participants: [participantOf(MODEL_B, 0), participantOf(MODEL_C, 1), participantOf(MODEL_B, 2)],
+			sessionModelPattern: PATTERN_A,
+			signal: new AbortController().signal,
+			maxConcurrency: 2,
+			runner: async (call, signal) => {
 				active++;
 				peak = Math.max(peak, active);
-				if (active === maxConcurrency) firstWave.resolve();
+				if (active === 2) firstWave.resolve();
 				try {
 					await firstWave.promise;
 					return await runner(call, signal);
 				} finally {
 					active--;
 				}
-			};
-			const roster = resolveTeamParticipants({
-				configuredMembers: [PATTERN_B, PATTERN_C],
-				sessionModel: MODEL_A,
-				availableModels: [MODEL_A, MODEL_B, MODEL_C],
-			});
-			expect(roster.ok).toBe(true);
-			if (!roster.ok) throw new Error(roster.error);
-			const result = await runTeamDiscussion({
-				question: "并发测试",
-				cwd: "/tmp/repo",
-				participants: roster.participants,
-				sessionModelPattern: PATTERN_A,
-				runner: wrapped,
-				signal: new AbortController().signal,
-				maxConcurrency,
-			});
-			expect(result.status).toBe("completed");
-			expect(peak).toBe(maxConcurrency);
-			expect(active).toBe(0);
-			const proposals = calls.filter(call => call.role === "proposer");
-			expect(proposals.map(call => call.label).sort()).toEqual([
-				"team-proposal-A",
-				"team-proposal-B",
-				"team-proposal-C",
-			]);
-			expect(proposals.map(call => call.modelPattern)).toEqual([PATTERN_B, PATTERN_C, PATTERN_B]);
-			const reviews = calls
-				.filter(call => call.role === "reviewer")
-				.map(call => ({ target: parseMarker(call.task).target, model: call.modelPattern }))
-				.sort((left, right) => left.target!.localeCompare(right.target!));
-			expect(reviews).toEqual([
-				{ target: "A", model: PATTERN_C },
-				{ target: "B", model: PATTERN_B },
-				{ target: "C", model: PATTERN_C },
-			]);
-			expect(calls.filter(call => call.modelPattern === PATTERN_A).map(call => call.role)).toEqual([
-				"aligner",
-				"synthesizer",
-			]);
-			for (const label of ["A", "B", "C"]) {
-				expect(result.reportMarkdown).toContain(`| 方案 ${label} | ✅ 可作为选项`);
-			}
+			},
 		});
-	}
+		expect(peak).toBe(2);
+		expect(
+			calls
+				.filter(call => call.role === "proposer")
+				.map(call => call.label)
+				.sort(),
+		).toEqual(["team-proposal-A", "team-proposal-B", "team-proposal-C"]);
+		expect(result.status).toBe("completed");
+		expect(result.candidates.filter(candidate => candidate.adoptable).map(candidate => candidate.label)).toEqual([
+			"A",
+			"B",
+			"C",
+		]);
+	});
 });

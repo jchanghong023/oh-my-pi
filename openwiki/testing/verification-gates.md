@@ -102,12 +102,13 @@ fulltest 将脚本、静态检查和测试绑定到同一 post-native source ide
 
 ## 行为证据与焦点测试地图
 
+日常门禁不再维护 spec-driven、OpenSpec 或 OpenWiki 专项测试。
+
 | 改动域 | 先找的焦点证据 | 需要扩大时 |
 | --- | --- | --- |
 | 门禁选择、超时、进程回收、报告 | `scripts/test-gate-runtime.test.ts`、`test-reporting.test.ts` | 对应 `fulltest.test.ts`、`slowtest.test.ts` 和获授权的真实入口；短任务自测不替代真实门禁。 |
-| 独立 OpenSpec、Superpowers 与技能资源 | `test/spec-driven/resources.test.ts`、`test/spec-driven/skill-policy.test.ts` | `test/spec-driven/process-resources.e2e.test.ts` 覆盖公开 CLI、打包资源和 schema 行为。 |
 | TUI 输入、状态和焦点 | 相应组件/控制器测试 | 隔离原生 TUI PTY 冒烟，保留取消、恢复、焦点等不同边界。 |
 
-路径中的 `test/` 指 `packages/coding-agent/test/`。局部 UT 可证明其断言的逻辑；真实子进程覆盖启动和协议，但本地 fixture 不证明真实提供者认证。参考终端或虚拟终端可验证渲染模型，PTY 上实际源码 TUI 可验证终端交互，但都不是共享桌面真实 GUI 输入。真实桌面输入需要另行明确授权，门禁记作 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`；真实模型质量、公司内网与真实认证也需单独授权和证据。
+局部 UT 可证明其断言的逻辑；真实子进程覆盖启动和协议，但本地 fixture 不证明真实提供者认证。参考终端或虚拟终端可验证渲染模型，PTY 上实际源码 TUI 可验证终端交互，但都不是共享桌面真实 GUI 输入。真实桌面输入需要另行明确授权，门禁记作 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`；真实模型质量、公司内网与真实认证也需单独授权和证据。
 
 临时真实 TUI 验收使用源码入口 `bun run dev` 和 `tui-test`：首次先执行 `tui-test skill` 并读完整指南，唯一 session 显式指定 cwd、cols、rows，用业务断言而非仅 `wait idle` 判断完成，检查命令和进程退出，最后只关闭自己的 session。需要模型响应时先确认隔离配置、实际模型和请求目标，使用本地模拟模型；失败不回退真实模型。只有明确要求打包产物时才使用已确认的当前产物绝对路径，源码运行不能代替产物验证。

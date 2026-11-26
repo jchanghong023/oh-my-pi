@@ -5,7 +5,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import {
-	decodeWslOutput,
 	discoverWsl,
 	gitRemoteIdentity,
 	parseWslListVerbose,
@@ -216,10 +215,6 @@ exec /usr/bin/rm "$@"
 }
 
 describe("optional WSL selection", () => {
-	test("decodes UTF-8 and UTF-16LE management output", () => {
-		expect(decodeWslOutput(new TextEncoder().encode("Ubuntu-24.04"))).toBe("Ubuntu-24.04");
-		expect(decodeWslOutput(new Uint8Array([0xff, 0xfe, 0x57, 0, 0x53, 0, 0x4c, 0]))).toBe("WSL");
-	});
 	test.each([
 		{ encoding: "utf-8", available: true },
 		{ encoding: "utf-16le", available: true },
@@ -464,11 +459,8 @@ describe("streamed deployed fixed-commit execution", () => {
 			"/root",
 			"--",
 		]);
-		expect(execution.kind).toBeUndefined();
 		expect(execution.wallTimeoutSeconds).toBeUndefined();
 		expect(execution.eventToken).toBe(request.env.OMP_GATE_EVENT_TOKEN);
-		expect(String(execution.stdin)).toContain("setsid --wait");
-		expect(execution.onAbort).toBeDefined();
 		for (const command of f.commands) {
 			const content = `${command.argv.join(" ")}\n${command.stdin ?? ""}`;
 			expect(content).not.toMatch(

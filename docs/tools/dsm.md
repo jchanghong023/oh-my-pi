@@ -26,7 +26,7 @@
 
 ## Availability
 
-- `disassembler.backend` (`auto` by default, `ida`, `ghidra`, `binja`, `none`) selects the backend. `cfgDisasmBackend` resolves it:
+- `disassembler.backend` (`auto` default, `ida`, `ghidra`, `binja`, `none`) selects the backend. `cfgDisasmBackend` resolves it:
    - `auto`: IDA when an install shipping idalib is found, else Ghidra when the host is supported, else none. Never Binary Ninja: an install does not show whether its license permits headless use.
    - `ida`: IDA only when an install is found; otherwise none.
    - `ghidra`: Ghidra when the host is supported (macOS/Linux x64/arm64, Windows x64); otherwise none.

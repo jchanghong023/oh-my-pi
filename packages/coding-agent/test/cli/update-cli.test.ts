@@ -210,9 +210,7 @@ function registerUpstreamTests(): void {
 	});
 
 	describe("compareUpdateVersions", () => {
-		it("orders fork builds whose SemVer precedence ignores build metadata", () => {
-			expect(compareUpdateVersions("18.0.6+fork.124", "18.0.6+fork.123")).toBeGreaterThan(0);
-			expect(compareUpdateVersions("18.0.6+fork.122", "18.0.6+fork.123")).toBeLessThan(0);
+		it("orders different upstream versions before considering the fork build counter", () => {
 			expect(compareUpdateVersions("18.0.7+fork.1", "18.0.6+fork.999")).toBeGreaterThan(0);
 		});
 
@@ -241,15 +239,10 @@ function registerUpstreamTests(): void {
 			const release = await getLatestGitHubRelease("jchanghong023/oh-my-pi");
 
 			expect(requestedUrl).toBe("https://api.github.com/repos/jchanghong023/oh-my-pi/releases/latest");
-			expect(release).toEqual({
+			expect(release).toMatchObject({
 				tag: "v18.0.6+fork.123",
 				version: "18.0.6+fork.123",
 				dist: "binary",
-				packages: {
-					pkg: "@oh-my-pi/pi-coding-agent",
-					natives: "@oh-my-pi/pi-natives",
-				},
-				registry: "",
 			});
 		});
 

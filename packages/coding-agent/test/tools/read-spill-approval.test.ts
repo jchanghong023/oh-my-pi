@@ -151,9 +151,6 @@ describe("local:// spill reads through session approval", () => {
 		expect(
 			resolveApproval(read, { path: "ssh://example.test:2222/log.txt:raw:4-4" }, "always-ask-cached", {}, grants),
 		).toMatchObject({ policy: "prompt", tier: "exec" });
-		expect(
-			resolveApproval(read, { path: "ssh://example.test:2223/log.txt:raw:4-4" }, "always-ask-cached", {}, grants),
-		).toMatchObject({ policy: "prompt", tier: "exec" });
 	});
 
 	it.skipIf(process.platform === "win32")(

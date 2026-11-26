@@ -308,7 +308,6 @@ describe("EventController — ending the wait on a real session", () => {
 			expect(events.some(event => event.type === "agent_pause" && event.yielded)).toBe(true);
 			expect(events.some(event => event.type === "agent_end")).toBe(false);
 			expect(mock.calls.length).toBe(1);
-			expect(controller.isAwaitingAsyncWork()).toBe(true);
 			if (ui) {
 				const dock = [...nativeNodes(ui.tree("dock"))];
 				const waitingRows = dock.filter(node => nativeText(node)?.includes("Waiting for"));

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:dfcb793c2b0d6f2367ae436eb763cb14c7b5f940dcee0c0d9a250cd6900417ab",
+  "pageVersion": "sha256:4d1eb729724b5446f9accc5006311c04186a519e2af2914f8deca1e4a2a3d153",
   "claims": [
     {
       "id": "claim_4db2e2e342e94c21aaba397b1a0f4d6f",
@@ -238,19 +238,11 @@
     },
     {
       "id": "claim_1683e8f86ea743feb99b6d7b9c848c89",
-      "statement": "资源和入口回归可从 spec-driven 资源测试、OpenWiki CLI 测试及 ptree 超时测试定位；测试文件存在不意味着本次实际运行或通过。",
+      "statement": "进程管道回归可从 ptree 超时测试定位；测试文件存在不意味着本次实际运行或通过。",
       "evidence": [
         {
           "resource": "repo://docs-zh-CN/fork-engineering-notes.md#L25-L27",
           "version": "repo-lines-v1:sha256:8114da0e73805044cc3c6507aeabbe4f97e8ae4062bdd29ef4bc820609abfcad:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNTc5YjVlNmYxMzg5NTdlNTlhODE3M2EyZjk2YjlkZDY4MDNhYTRiNmQ2NDRhYTI0OThhM2Q5MjE5NTQ2NGUyZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTgxZDY4NDk1ZDlkNDg0ZDNkYzYxMDZiZTc0YWM0N2ViNWI5MjY1Y2FiYTQyZTFmZDQ4OGY2MDRjY2M5YTU5MCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNDJlZGYxYmFlY2JmNjRjNmFiNzNkZTJhZWFlNzE4ZGY2ZmI2NGFhNjdmODUyYWY2ZDczYTAxZWE5YzhlN2YxYiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTRjZGE2OWJmYmY1MDc5MmRjNmQxMjc4ZTQ3NjBhNDBlMDMzY2M1NGIyMjY2YjEyZjM4NjBmNDVkYjJjNDY3MSJ9"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/cli/openwiki-generation.test.ts",
-          "version": "repo-file-v1:sha256:3944b08a9256fc207066229eec977144b89011ec756b19ac63df3f98b0b93972"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/spec-driven/resources.test.ts#L35-L99",
-          "version": "repo-lines-v1:sha256:9ab6dfdc42513e6e4c0b6c9b1977123a7015446b26fd193d0995f110ecfa37f5:eyJzZWxlY3RlZExpbmVDb3VudCI6NjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJjOTdhODlkYmM1NjhkYzY1ZWQwZmQwMzg2YjRkOWFhZGE5YjdjZGFhYTMzNGZiNWM3MmRmMGZjMTU0NzM3MTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAwZTFhZjgwYWVmZjY2YmJmYzNmM2Y0NzA4M2E5YzFlZGIyZjg5ZjExZDA0OGQzNDYxMjBmZmQxZThhM2NjNmEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBkM2EwZmE2OTg5MjVkMjZmOWMwY2Y5MWMyZGY3NTYyMDNkODY2ZjAwOWI0ZmE5ZWJhODRjNzUwMzQ3ZDI1MjYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImZhZDExMTI4NTA2MjQ4NWI0NDZlY2VlZjcwYmE2OTA5MGIyZDE5Y2U4ZTllMDU3MDViYjRjZWFlZWY0ZGJkMjEifQ"
         },
         {
           "resource": "repo://packages/utils/test/ptree-timeout.test.ts",

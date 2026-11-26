@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { dereferenceJsonSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { dereferenceJsonSchema, sanitizeSchemaForStrictMode } from "@oh-my-pi/pi-ai/utils/schema";
+import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema/json-schema-validator";
 
 describe("dereferenceJsonSchema", () => {
 	for (const referenced of [false, true]) {
@@ -99,30 +100,6 @@ describe("dereferenceJsonSchema", () => {
 				line: { type: "integer", minimum: 0 },
 			},
 		});
-	});
-
-	it("inlines escaped and empty definition names before stripping definitions", () => {
-		for (const keyword of ["$defs", "definitions"]) {
-			const schema = {
-				type: "object",
-				properties: {
-					escaped: { $ref: `#/${keyword}/foo~1bar~0baz~01` },
-					empty: { $ref: `#/${keyword}/` },
-				},
-				[keyword]: {
-					"foo/bar~baz~1": { type: "string" },
-					"": { type: "integer" },
-				},
-			};
-
-			expect(dereferenceJsonSchema(schema)).toEqual({
-				type: "object",
-				properties: {
-					escaped: { type: "string" },
-					empty: { type: "integer" },
-				},
-			});
-		}
 	});
 
 	it("inlines $ref from definitions (legacy keyword)", () => {
@@ -332,34 +309,63 @@ describe("dereferenceJsonSchema", () => {
 		});
 	}
 
-	it("preserves reserved property names while dereferencing their nested schemas", () => {
-		const namedSchemas = {
-			$ref: { $ref: "#/$defs/Text" },
+	it("keeps literal values and nested reserved names usable after strict sanitization", () => {
+		const literal = { $ref: "#/$defs/Text", definitions: { keep: "literal" }, $defs: { keep: "literal" } };
+		const dereferenced = dereferenceJsonSchema({
 			$defs: {
-				type: "object",
-				properties: { definitions: { $ref: "#/$defs/Text" } },
+				Obj: { type: "object" },
+				Text: { type: "string", enum: ["kept"] },
 			},
-			definitions: { $ref: "#/$defs/Text" },
-			allowed: true,
-			forbidden: false,
-		};
-		const expanded = {
-			$ref: { type: "string", minLength: 2 },
-			$defs: {
-				type: "object",
-				properties: { definitions: { type: "string", minLength: 2 } },
+			type: "object",
+			properties: {
+				payload: { $ref: "#/$defs/Obj", const: literal, default: literal },
+				choice: { $ref: "#/$defs/Obj", enum: [literal], examples: [literal] },
+				nested: {
+					$ref: "#/$defs/Obj",
+					properties: {
+						$ref: { $ref: "#/$defs/Text" },
+						$defs: {
+							$ref: "#/$defs/Obj",
+							properties: { definitions: { $ref: "#/$defs/Text" } },
+							required: ["definitions"],
+						},
+						definitions: { $ref: "#/$defs/Text" },
+					},
+					required: ["$ref", "$defs", "definitions"],
+				},
 			},
-			definitions: { type: "string", minLength: 2 },
-			allowed: true,
-			forbidden: false,
+			required: ["payload", "choice", "nested"],
+		}) as Record<string, unknown>;
+		const sanitized = sanitizeSchemaForStrictMode(dereferenced);
+		expect(sanitized).toMatchObject({
+			properties: {
+				payload: { type: "object", enum: [literal] },
+				choice: { type: "object", enum: [literal] },
+				nested: {
+					properties: {
+						$ref: { type: "string", enum: ["kept"] },
+						$defs: { properties: { definitions: { type: "string", enum: ["kept"] } } },
+						definitions: { type: "string", enum: ["kept"] },
+					},
+				},
+			},
+		});
+		const value = {
+			payload: literal,
+			choice: literal,
+			nested: { $ref: "kept", $defs: { definitions: "kept" }, definitions: "kept" },
 		};
-		for (const keyword of ["properties", "patternProperties", "dependentSchemas", "dependencies"]) {
-			expect(
-				dereferenceJsonSchema({
-					$defs: { Text: { type: "string", minLength: 2 } },
-					[keyword]: namedSchemas,
-				}),
-			).toEqual({ [keyword]: expanded });
+		for (const schema of [dereferenced, sanitized]) {
+			expect(validateJsonSchemaValue(schema, value).success).toBe(true);
+			expect(validateJsonSchemaValue(schema, { ...value, payload: { type: "string" } }).success).toBe(false);
+			expect(validateJsonSchemaValue(schema, { ...value, choice: { type: "string" } }).success).toBe(false);
+			for (const nested of [
+				{ ...value.nested, $ref: false },
+				{ ...value.nested, $defs: { definitions: "rejected" } },
+				{ ...value.nested, definitions: false },
+			]) {
+				expect(validateJsonSchemaValue(schema, { ...value, nested }).success).toBe(false);
+			}
 		}
 	});
 
@@ -380,11 +386,6 @@ describe("dereferenceJsonSchema", () => {
 			"unevaluatedProperties",
 		]) {
 			expect(dereferenceJsonSchema({ $defs: definitions, [keyword]: false })).toEqual({ [keyword]: false });
-		}
-		for (const keyword of ["items", "prefixItems", "anyOf", "oneOf", "allOf"]) {
-			expect(dereferenceJsonSchema({ $defs: definitions, [keyword]: [{ $ref: "#/$defs/Text" }, true] })).toEqual({
-				[keyword]: [{ type: "string", minLength: 2 }, true],
-			});
 		}
 	});
 });

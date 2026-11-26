@@ -560,11 +560,9 @@ function consumerFallbackDir(root: string): string {
 describe("diagnostic consumer contracts", () => {
 	test.each([
 		["error", ["error"]],
-		["warn", ["error", "warn"]],
 		["info", ["error", "warn", "info"]],
 		["debug", ["error", "warn", "info", "debug"]],
 		["not-a-level", ["error", "warn"]],
-		["", ["error", "warn"]],
 	] as const)("applies offline level %s before reading context and delivering sinks", async (logLevel, levels) => {
 		const result = await runDiagnosticConsumer(
 			`

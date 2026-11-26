@@ -95,7 +95,7 @@ With the default batched task schema, supply shared `context` and per-item `task
 
 ## User-tagged model agents
 
-Type `^` in the composer to choose a model from the same scope and ranking as the temporary model picker (`Ctrl+T` by default). Accepting a completion inserts an atomic chip showing its display name. For example, type `Have ^`, pick a model, then finish with `review this change`.
+Type `^` in the composer to choose a model from the same scope and ranking as the `Alt+P` session picker. Accepting a completion inserts an atomic chip showing its display name. For example, type `Have ^`, pick a model, then finish with `review this change`.
 
 On submit, each first-mentioned model receives a branch-local pseudonym (`m1`, `m2`, …). The user message carries `<model agent="m1" name="Display Name"/>`; the task description lists its provider/model selector. `task`, eval `agent()`, and `workpool()` accept that pseudonym as their `agent`. These agents use the bundled general-purpose task template, not a specialist template, and are intended only for requests explicitly naming the tagged model.
 
@@ -170,7 +170,7 @@ Because bundled parsing uses `level: "fatal"`, unrecoverable YAML errors or inva
    - the session's effective `extensions:` array, in its configured order
    - installed npm/link plugins
      Project and user `extensions:` arrays are not concatenated: settings use array-replacement precedence. Session overlays/runtime overrides and the configured array's project/user provenance are preserved. In `explicit-only` mode (`--no-extensions` or SDK `disableExtensionDiscovery`), only explicit roots contribute this package surface; file entrypoints have no `agents/` subdirectory to scan.
-4. Marketplace plugin roots (`listClaudePluginRoots(home, cwd)`) with `agents/` subdirs — only when `isProviderEnabled("claude-plugins")`; project-scope plugins sort before user-scope. Roots from Claude's own registry are skipped by default. To include them, add `claude-plugins` or `claude` to `enabledProviders` (`*` or `all` also works). `CLAUDE_CONFIG_DIR` sets the Claude directory but does not enable its plugin registry. OMP-installed plugins and `--plugin-dir` roots do not require this opt-in.
+4. Claude marketplace plugin roots (`listClaudePluginRoots(home, cwd)`) with `agents/` subdirs — only when `isProviderEnabled("claude-plugins")`; project-scope plugins sort before user-scope. User-scope roots additionally require the `claude-plugins` or `claude` user source to be enabled (`isUserSourceEnabled`: normally via `enabledProviders`, e.g. `["claude-plugins"]`; `claude` is also enabled implicitly when `CLAUDE_CONFIG_DIR` is set), except roots whose origin is not the foreign `~/.claude/plugins` tree (omp's own installs with `origin: "omp"` and `--plugin-dir` roots) — mirroring the skills path's exemption.
 5. Bundled agents (`loadBundledAgents()`)
 
 The OMP extension-package surface is disabled when the `omp-plugins` capability provider is disabled. Marketplace roots are excluded from `listOmpExtensionRoots` and enter only through the separately gated Claude-plugin path.
@@ -285,8 +285,6 @@ A `model` for an agent with a `task.agentModelOverrides` entry fails preflight w
 
 A per-call worker never moves to an unapproved main-loop model. Retry fallback, context promotion and agent prewalk are off, and an unavailable requested model or missing working credentials fails the call rather than using the parent's model. Its requests never carry a server-side fallback chain, including one a caller supplies. Factory models whose provider attaches a server-side fallback chain are not refused: the per-call request omits the chain, and a response served by another model (or carrying a fallback handoff block) fails the worker before any of its content is forwarded. Every main-loop request is checked against the current operator grants, so an extension replacement or settings change cannot move the worker to an unapproved model; a decision is reused until the settings or the model catalog change. A cold registry at preflight, or a model not yet found during background discovery, is checked again before child-session creation once discovery settles.
 
-Fork execution policies cannot silently replace a per-call model: a foreground child whose exact model or routing conflicts with the required submission model fails before dispatch. A matching model keeps its capped per-call thinking level. Per-call workers do not invoke submission execution recovery, including recovery that could switch to another approved model; ordinary workers retain that recovery.
-
 Cold revival waits for model discovery, restores only the exact saved `perCallModelIdentity` route and `perCallThinkingLevel` selector, and rechecks current grants before creating the child session and again on every main-loop request. The selected agent is rediscovered through the live real parent's session, including that parent's local mention agents; root discovery supplies only file-defined agents when a nested worker's parent is not live, never the root's local mention agents. Current configured roles and discovered, enabled bundled/user frontmatter can still grant without a live parent. The parent's model grants only from the worker's real parent while it is live (the root session for its direct children); missing parent-local grants refuse revival with an error directing the operator to revive the parent first. Revival never wakes the parent automatically or treats saved grant metadata as authorization. Legacy per-call records missing either canonical field refuse revival rather than guessing from `resolvedModel`. Changing `task.perCallModel` affects new calls only.
 
 Side requests the session makes for maintenance (compaction summaries and advisor calls) are not covered by the main-loop approval check: compaction tries the model's `compactionModel`, the session model and the built-in chat roles' models, then also the available model with the largest context window.
@@ -295,7 +293,7 @@ For a per-call `model`, `task.maxEffort` bounds every per-call-model spawn, not 
 
 After policy resolution, the `before_subagent_spawn` extension hook runs once for the actual dispatch. It can block the spawn or replace the resolved model patterns; a routing note is carried into progress metadata.
 
-Press `Ctrl+T` to open the temporary model picker, then press it again to switch to Task model selection. The choice applies only to the current session. Saving a model in `/agents` replaces that runtime selection and persists the new value for future sessions.
+The `Alt+P` task model pick is session-only; saving a model in `/agents` replaces that runtime selection for the current session and persists the new value for future sessions.
 
 Compaction triggers are separate from model and service-tier selection: an exact, case-sensitive
 `task.agentCompactionThresholdOverrides[agentName]` entry (`90000` or `"80%"`) replaces the

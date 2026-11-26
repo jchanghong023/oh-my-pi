@@ -721,7 +721,7 @@ describe("TodoLoop native context and cleanup boundaries", () => {
 		}
 	});
 
-	it("reads explicit ordinary-file references in the session cwd and retains previous-attempt evidence", async () => {
+	it("reads updated explicit references on retry and retains earlier edits in the session cwd", async () => {
 		await using temp = await TempDir.create("@todoloop-reference-");
 		await fs.mkdir(temp.join("docs"), { recursive: true });
 		await Bun.write(temp.join("docs", "requirements.txt"), "required content");
@@ -732,20 +732,22 @@ describe("TodoLoop native context and cleanup boundaries", () => {
 			const document = await Bun.file(pkg.filePath).text();
 			const reference = document.match(/\]\(([^)]+)\)/)?.[1];
 			if (!reference) throw new Error("Missing explicit requirement reference");
-			const requirement = await Bun.file(path.resolve(path.dirname(pkg.filePath), reference)).text();
+			const requirementPath = path.resolve(path.dirname(pkg.filePath), reference);
+			const requirement = await Bun.file(requirementPath).text();
 			if (pkg.attempt === 1) {
 				await Bun.write(path.join(options.cwd, "partial"), requirement);
+				await Bun.write(requirementPath, "updated requirement");
 				return result(options, { output: "partial work retained" });
 			}
 			expect(pkg.previous?.text).toBe("partial work retained");
 			expect(pkg.previous?.error).toBeUndefined();
 			const existing = await Bun.file(path.join(options.cwd, "partial")).text();
-			await Bun.write(path.join(pkg.cwd, "artifact"), existing);
+			await Bun.write(path.join(pkg.cwd, "artifact"), `${existing}; ${requirement}`);
 			await check(pkg);
 			return result(options);
 		});
 		expect((await h.run()).phase).toBe("completed");
-		expect(await Bun.file(temp.join("artifact")).text()).toBe("required content");
+		expect(await Bun.file(temp.join("artifact")).text()).toBe("required content; updated requirement");
 		expect(await Bun.file(temp.join("docs", "artifact")).exists()).toBe(false);
 	});
 

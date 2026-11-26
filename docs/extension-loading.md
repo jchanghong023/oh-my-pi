@@ -109,21 +109,24 @@ extensions:
 
 ### Disable discovery
 
-- **CLI:** Both normal and offline runs skip automatic extension discovery by
-  default, even without `--no-extensions`. Explicit `-e`/`--extension` and
-  `--hook` paths still load, and only sibling capability roots from explicitly
-  named extension packages remain eligible. Project/user `extensions:` settings
-  and installed OMP extension packages are excluded from that sibling surface.
-  `--trusted-extension` remains available as an alternative for exact files.
-- **SDK:** Set `disableExtensionDiscovery=true` to exclude ambient extension
-  factories. `additionalExtensionPaths` are still resolved normally, including
-  package directories with `package.json#omp.extensions`.
+- CLI: `--no-extensions`
+- SDK option: `disableExtensionDiscovery`
 
-Executable custom tools follow the same explicit-only contract: ambient
-`.omp/tools`, `.claude/tools`, `.codex/tools`, marketplace and installed-plugin
-tools are not imported. Tools under explicitly named extension packages'
-`tools/` directories still load. Bundled custom commands remain available;
-external custom commands are not discovered.
+Behavior split:
+
+- SDK: when `disableExtensionDiscovery=true`, ambient extension factories are
+  excluded, while `additionalExtensionPaths` are still resolved normally
+  (including package directories with `package.json#omp.extensions`).
+- CLI: `--no-extensions` follows the same explicit-only contract. Explicit
+  `-e/--extension` and `--hook` paths still load, and only sibling capability
+  roots from explicitly named extension packages remain eligible. Project/user
+  `extensions:` settings and installed OMP extension packages are excluded from
+  that sibling surface.
+- Executable custom tool and custom command modules follow the same
+  explicit-only contract: ambient `.omp/tools`, `.claude/tools`, `.codex/tools`,
+  marketplace and installed-plugin tools are not imported, and no custom
+  command modules are loaded. Tools under explicitly named extension packages'
+  `tools/` directories still load.
 
 This flag governs extension factories, executable custom tool/command modules,
 and OMP extension-package sibling roots; it is not a whole-process

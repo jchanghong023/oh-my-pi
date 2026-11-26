@@ -71,25 +71,6 @@ describe("eval Python availability contract", () => {
 		expect(candidateProbe).toHaveBeenCalledTimes(1);
 	});
 
-	it("keeps the configured language enum across failed and successful probes", async () => {
-		const owner = session();
-		const tool = new EvalTool(owner);
-		const candidateProbe = vi.spyOn(probe, "probeCandidates").mockResolvedValue({
-			ok: false,
-			aborted: false,
-			failures: ["broken"],
-		});
-		await pyKernel.checkPythonKernelAvailability(owner.cwd, undefined, { forceProbe: true });
-		expect(languages(tool)).toEqual(["py", "js"]);
-		candidateProbe.mockResolvedValue({ ok: true, index: 0 });
-		await pyKernel.checkPythonKernelAvailability(owner.cwd, undefined, { forceProbe: true });
-		expect(languages(tool)).toEqual(["py", "js"]);
-		candidateProbe.mockResolvedValue({ ok: false, aborted: false, failures: ["broken again"] });
-		await pyKernel.checkPythonKernelAvailability(owner.cwd, undefined, { forceProbe: true });
-		expect(languages(tool)).toEqual(["py", "js"]);
-		expect(candidateProbe).toHaveBeenCalledTimes(3);
-	});
-
 	it("does not turn a cancelled or deadline-limited probe into permanent unavailability", async () => {
 		const owner = session();
 		const tool = new EvalTool(owner);

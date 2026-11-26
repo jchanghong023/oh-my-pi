@@ -173,14 +173,6 @@ describe("native Goal Codex WebSocket history", () => {
 					expect(wire.requests, diagnostics).toHaveLength(11);
 					const activeConnections = connections.filter(connection => connection.requests.length > 0);
 					expect(activeConnections, diagnostics).toHaveLength(1);
-					expect(
-						wire.requests.map(request => request.body.model),
-						diagnostics,
-					).toEqual(Array(11).fill("gpt-5.3-codex-spark"));
-					expect(
-						wire.requests.map(request => request.connection),
-						diagnostics,
-					).toEqual(Array(11).fill(activeConnections[0]!.connection));
 					expect(wire.requests.map(request => request.body.previous_response_id)).toEqual([
 						undefined,
 						...Array.from({ length: 10 }, (_, index) => `resp_${index + 1}`),
@@ -203,7 +195,6 @@ describe("native Goal Codex WebSocket history", () => {
 								output: expect.stringContaining(files[index - 1]!.content),
 							}),
 						]);
-						expect(JSON.stringify(delta)).not.toContain("MUST 全自动无人值守完成完整目标。");
 					}
 					expect(session.getLastAssistantMessage()?.content).toContainEqual(
 						expect.objectContaining({

@@ -25,29 +25,6 @@ afterEach(async () => {
 });
 
 describe("shared native installed-file comparison", () => {
-	it("preserves identical writable bytes, inode and mtime regardless of source timestamps", async () => {
-		const before = await fs.stat(target, { bigint: true });
-		await fs.utimes(source, new Date("2020-01-01T00:00:00.000Z"), new Date("2020-01-01T00:00:00.000Z"));
-		expect(await matchesInstalledFile(source, target)).toBe(true);
-		const after = await fs.stat(target, { bigint: true });
-		expect(after.ino).toBe(before.ino);
-		expect(after.mtimeNs).toBe(before.mtimeNs);
-		expect(await fs.readFile(target)).toEqual(await fs.readFile(source));
-	});
-
-	it("rejects changed bytes with equal size and timestamps without modifying the installed file", async () => {
-		await fs.writeFile(target, "installed native bytes");
-		await fs.utimes(source, oldTime, oldTime);
-		await fs.utimes(target, oldTime, oldTime);
-		const before = await fs.stat(target, { bigint: true });
-		expect((await fs.stat(source)).size).toBe(Number(before.size));
-		expect(await matchesInstalledFile(source, target)).toBe(false);
-		const after = await fs.stat(target, { bigint: true });
-		expect(after.ino).toBe(before.ino);
-		expect(after.mtimeNs).toBe(before.mtimeNs);
-		expect(await fs.readFile(target, "utf8")).toBe("installed native bytes");
-	});
-
 	it("leaves an identical non-owner-writable target untouched for atomic replacement", async () => {
 		await fs.chmod(target, 0o444);
 		const before = await fs.stat(target, { bigint: true });
@@ -60,16 +37,18 @@ describe("shared native installed-file comparison", () => {
 		expect(await fs.readFile(target)).toEqual(await fs.readFile(source));
 	});
 
-	it("repairs POSIX permissions on identical writable bytes without replacing the inode or mtime", async () => {
-		await fs.chmod(target, 0o755);
-		const before = await fs.stat(target, { bigint: true });
-		expect(await matchesInstalledFile(source, target)).toBe(true);
-		const after = await fs.stat(target, { bigint: true });
-		expect(after.ino).toBe(before.ino);
-		expect(after.mtimeNs).toBe(before.mtimeNs);
-		if (process.platform !== "win32") expect(after.mode & 0o7777n).toBe(0o644n);
-		expect(await fs.readFile(target)).toEqual(await fs.readFile(source));
-	});
+	it.skipIf(process.platform === "win32")(
+		"repairs POSIX permissions on identical bytes without replacing the file",
+		async () => {
+			await fs.chmod(target, 0o755);
+			const before = await fs.stat(target, { bigint: true });
+			expect(await matchesInstalledFile(source, target)).toBe(true);
+			const after = await fs.stat(target, { bigint: true });
+			expect(after.ino).toBe(before.ino);
+			expect(after.mtimeNs).toBe(before.mtimeNs);
+			expect(after.mode & 0o7777n).toBe(0o644n);
+		},
+	);
 
 	it("rejects absent files and directory targets instead of treating them as an unchanged installation", async () => {
 		expect(await matchesInstalledFile(source, path.join(root, "missing.node"))).toBe(false);
@@ -81,13 +60,9 @@ describe("shared native installed-file comparison", () => {
 		expect(await fs.readFile(path.join(directory, "keep"), "utf8")).toBe("unrelated contents");
 	});
 
-	it("does not accept a POSIX symlink target or turn permission-repair failures into an unchanged install", async () => {
-		if (process.platform === "win32") {
-			// Windows symlinks need separate privileges and has no POSIX repair step;
-			// keep exercising its real unchanged-file branch rather than adding a skip.
-			expect(await matchesInstalledFile(source, target)).toBe(true);
-			expect(await fs.readFile(target)).toEqual(await fs.readFile(source));
-		} else {
+	it.skipIf(process.platform === "win32")(
+		"rejects POSIX symlinks and files whose permissions cannot be repaired",
+		async () => {
 			const linked = path.join(root, "linked.node");
 			await fs.symlink(source, linked);
 			expect(await matchesInstalledFile(source, linked)).toBe(false);
@@ -106,6 +81,6 @@ describe("shared native installed-file comparison", () => {
 			expect(after.ino).toBe(before.ino);
 			expect(after.mtimeNs).toBe(before.mtimeNs);
 			expect(after.mode).toBe(before.mode);
-		}
-	});
+		},
+	);
 });

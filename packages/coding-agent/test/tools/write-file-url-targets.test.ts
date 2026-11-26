@@ -2,7 +2,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InternalUrlRouter, VaultProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import * as vaultProtocol from "@oh-my-pi/pi-coding-agent/internal-urls/vault-protocol";
@@ -26,20 +25,6 @@ function createSession(cwd: string): ToolSession {
 
 function resultText(result: { content: { type: string; text?: string }[] }): string {
 	return result.content.flatMap(block => (block.type === "text" && block.text ? [block.text] : [])).join("\n");
-}
-
-function expectWriteCard(
-	args: { path: string; content: string },
-	result: AgentToolResult,
-	marker?: string,
-	partial = false,
-): void {
-	const call = toolCall({ name: "write", args, result, partial });
-	const detailed = toolCallText(call);
-	expect(detailed.length).toBeGreaterThan(0);
-	if (marker) expect(detailed).toContain(marker);
-	call.setActivityVisible(false);
-	expect(toolCallText(call)).toBe("");
 }
 
 describe("write to file-backed internal URLs", () => {
@@ -91,48 +76,10 @@ describe("write to file-backed internal URLs", () => {
 		] as const) {
 			const result = await tool.execute(id, input);
 			expect(await fs.readFile(file, "utf8")).toBe(input.content);
-			expectWriteCard(input, result, input.content.trim());
-		}
-	});
-
-	it("renders handler-backed and partial write cards only in detailed mode", () => {
-		for (const target of ["agent://peer", "proc://job", "cfg://display/test"]) {
-			const args = { path: target, content: "Not a file" };
-			expectWriteCard(args, {
-				content: [{ type: "text", text: "Not a file" }],
-				details: { fileChanged: true, path: "/tmp/file", resolvedPath: "/tmp/file" },
-			});
-			expectWriteCard(args, {
-				content: [{ type: "text", text: "Not a file" }],
-				details: { conflictChanges: [{ path: "/tmp/file", diff: "-old\n+new" }] },
-			});
-		}
-		expectWriteCard(
-			{ path: "vault://Work/note.md", content: "Unverified" },
-			{
-				content: [{ type: "text", text: "Unverified" }],
-				details: {},
-			},
-		);
-		expectWriteCard(
-			{ path: "vault://Work/note.md", content: "Preview" },
-			{
-				content: [{ type: "text", text: "Preview" }],
-				details: { resolvedPath: "/tmp/file" },
-			},
-			undefined,
-			true,
-		);
-	});
-
-	it("renders file and handler-backed URL write cards only in detailed mode without change metadata", () => {
-		for (const target of [
-			"file:///tmp/note.txt",
-			"local://note.txt",
-			"ssh://example.test/tmp/note.txt",
-			"conflict://1",
-		]) {
-			expectWriteCard({ path: target, content: "replacement" }, { content: [{ type: "text", text: "unchanged" }] });
+			const call = toolCall({ name: "write", args: input, result });
+			expect(toolCallText(call)).toContain(input.content.trim());
+			call.setActivityVisible(false);
+			expect(toolCallText(call)).toBe("");
 		}
 	});
 

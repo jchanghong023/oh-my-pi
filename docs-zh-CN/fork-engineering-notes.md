@@ -10,14 +10,9 @@
 - `packages/utils/src/ptree.ts`：stdout 经包装流跟踪 EOF（attachSignal 等待 stdout/stderr 收尾、stdout 惰性暴露与完成后收口），孙子进程在截止/中止后持有管道不再永久挂起读取；`packages/utils/test/ptree-timeout.test.ts` 覆盖。
 - `packages/coding-agent/src/session/agent-session.ts`：用户及自定义 aside 的预处理跨越 `switchSession()` 时，统一等待已有代际结算屏障；切换回滚保留原会话的消息，成功切换仍丢弃旧会话的延迟消息。
 - `packages/utils/src/sqlite.ts`：输入历史、会话标题和 recap 的损坏恢复不得遗漏多个坏页之间仍可读取的记录；保留损坏原库和既有恢复上限，不改变健康数据库的读取路径。
-- `packages/coding-agent/src/launch/client.ts`、`packages/natives/native/loader-state.js`：独立长寿命 daemon broker 在实际 worker 启动、native 加载前，把 native 缓存所有者切到自身 scope runtime 的 `natives/`，不能继承短寿命 creator core 的独占 `PI_NATIVES_DIR`；正常 core／worker 的显式缓存根语义不变。并发冷启动的 embedded 提取与 Windows 包安装 staging 均先写唯一临时文件再原子发布；Windows 已加载 winner 阻止替换时，仅完整字节一致才可复用，否则保留发布错误，不能截断已发布 DLL。
+- `packages/natives/native/loader-state.js`：并发冷启动的 embedded 提取与 Windows 包安装 staging 均先写唯一临时文件再原子发布；Windows 已加载 winner 阻止替换时，仅完整字节一致才可复用，否则保留发布错误，不能截断已发布 DLL。
 - `packages/coding-agent/src/tools/read-archive.ts`：Windows 同尺寸快速重写归档并恢复 mtime 时，ctime 也可能不变；该平台不复用仅由文件元数据验证的归档目录缓存，避免返回旧成员名称或读取错误成员。其他平台保留既有有界缓存。
-- `crates/pi-shell/src/shell.rs`：TERM 宽限等待按平台编译：Unix 继续异步等待清理，Windows 的 TERM 本已强制结束进程，返回立即就绪的 Future；不增加延迟，也不屏蔽 `clippy::unused_async`。
-- `crates/pi-natives/src/memory.rs`：非 Linux/glibc 平台的空操作入口使用 `const fn`，满足 Windows 静态门禁；Linux/glibc 继续执行原有工作计数、释放通知与空闲裁剪，不屏蔽 lint。
-- `crates/vendor/brush-core/src/interp.rs`：前台子进程已启动后收到取消时，仍通过既有取消感知等待保留 TERM 清理宽限；不能因等待前的取消检查提前丢弃子进程并强制结束，导致清理或输出丢失。取消总时限与进程隔离规则不变。
-- `crates/pi-shell/src/process.rs`：取消时每一波信号在发送前冻结自有目标，同一进程／进程组不重复投递 TERM，避免重入清理 trap；跨组后代与 TERM 后新生进程仍由后续 KILL 波回收，保留既有进程身份保护和宽限时限。
-- `crates/pi-natives/src/memory.rs`：glibc Linux 保留原有堆修剪计数与释放通知，其他目标的平台空操作使用独立 `const fn` 定义，满足 Windows 严格静态门禁，不屏蔽 `missing_const_for_fn` 或改变运行时行为。
-- `python/robomp/src/tasks.py`：GitHub 元数据读取失败须向 delivery 执行器传播，保留重试机会，不能把未执行的 PR 审查、review 或 conversation 当作已成功处理；映射缺失或 branch 缺失时查询 PR 的失败同样不得吞掉。Robomp 测试保留手动入口，不纳入默认 fork 门禁；Windows 原生不支持。
+- `crates/natives/src/memory.rs`：glibc Linux 保留原有堆修剪计数与释放通知，其他目标的平台空操作使用独立 `const fn` 定义，满足 Windows 严格静态门禁，不屏蔽 `missing_const_for_fn` 或改变运行时行为。
 - `scripts/ci-release-build-binaries.ts`：上游基线 `b0756921` 的 Linux x64 musl baseline target 写成 `bun-linux-x64-musl-baseline`，不符合 Bun 的 `SIMD-Libc` 顺序；改为 `bun-linux-x64-baseline-musl`，保留 musl 与 baseline CPU 兼容目标，不改成 glibc 或 modern。
 
 ### 本轮 fulltest 的待提 PR 缺陷（2026-11-15）
@@ -79,7 +74,7 @@
 - Bun 的依赖分析有近似：动态依赖、环境或外部输入可能漏检，affected 不等于完整新回归。Bun fork 套件版本见 [`BUN_FORK_SUITE_REVISION`](../scripts/test-reporting.ts#L9)；范围变化后须在干净工作区通过一次获授权的完整 fork 回归才能建立新基线，旧范围报告不可复用。报告区分本轮实际执行、deselected、not-selected 与未运行；默认 fulltest scope 为 `fulltest: fork feature suites`，控制台范围为 `fork-features`。历史用例耗时不算本轮新执行，也不能称全仓全量通过。普通失败继续其他独立工作，保留首个实际失败退出码；取消、参数错误和原预算到限仍停止本次拥有的工作。
 - 普通用例失败后，门禁在本轮剩余预算内对账并写入带实际退出码的部分报告；不会因报告较大而在一秒后丢弃汇总。硬超时与中断仍优先终止本轮工作。
 - CLI 子进程夹具在公共 harness 或独立启动器中静态导入真实使用的 Tools registry，补足 Bun 无法追踪的 spawn 路径字符串；不导入或执行 CLI 主入口，不仅为某两个实验源码添加特例依赖。
-- 并发门禁中的时序断言以实际完成边界为准：Superpowers 服务启动先等待完整换行终止的状态记录，再验证 HTTP 与进程退出；Settings 的“排队保存后发生外部编辑”场景须在同一 JS turn 完成外部写入，再 flush，不能让异步文件 I/O 与 100ms debounce 自由竞争后仍假定固定顺序。原退出、回收、外部值优先及内存状态断言保持。
+- Settings 的“排队保存后发生外部编辑”场景在同一 JS turn 完成外部写入再 flush，不让异步文件 I/O 与 100ms debounce 自由竞争后仍假定固定顺序；保留外部值优先及内存状态断言。
 - fastcheck、fulltest、slowtest 默认隐藏成功用例、成功分块及成功命令输出，仅显示失败用例和错误诊断；最外层最终状态、耗时、退出码和报告路径保留。`--debug` 不恢复成功用例刷屏。静默只影响呈现，本轮实际执行的用例写入 JUnit／计时结果，平台跳过明确报告，首错通知、失败继续、取消与预算不变。真实桌面输入仍需单独授权。
 - 手动 CI 只执行构建、打包及其必要准备，不执行单元、集成、冒烟或安装测试，发布只依赖版本元数据、二进制和浏览器扩展构建成功。保留的 `ci:test:*` 名称是显式测试工具，不由工作流调用；本地 fulltest／slowtest 仍须用户明确授权。现有上游显式目标 Bazel 工具和产物保留，不恢复 fork 专用 Bazel 图或引入统一框架。
 - Windows/Linux 的 Bun 和 Rust Nextest 各池最多 28；Bun 分块、文件 worker 与文件内并发共用预算。fulltest 按实际静态检查、脚本和语言套件预留槽：Rust 静态检查、workspace 测试、Rust SDK 依次复用 Cargo 槽；全量 Python／Go 复用先释放的非 Cargo 槽。低内存仍受每 GiB 一个槽及低容量串行限制。
@@ -95,8 +90,6 @@
 - 首事件禁用回归验证超过 idle 预算后仍可成功收到正文，不再断言整个进程没有其他定时器；透明预览回归验证实际终端单元的显式前景色和透明背景，兼容 256 色及真彩编码，不绑定翻译文本。命令报告以输入／补全完成后的实际呈现边界核对恢复、主屏无污染和历史无重复，不将输入阶段的重排归因于报告。
 - Windows sed 文件截断夹具验证 Windows 流式读取与 Unix 打开时快照各自的既有合同，取消手工过滤；Python `export_html` 按 `Path` 比较跨平台结果，而非要求 Windows 路径呈现为 POSIX 字符串。
 - 上游显式 TS 全量入口覆盖 `stats` 及 `metaharness`，后者包含包根目录下的 edit adapter 测试；这不意味着两者完整套件进入日常 fork 门禁。历史费用回填用例使用独立的分时／分日期价格夹具，不假定实时模型目录中某个型号必然在固定日期换价；仍断言费用、缓存节省及重启后的回填结果。
-- 普通 TUI 的 OpenSpec 资源授权 E2E 先确认多行草稿及光标已进入真实输入框，再单独发送 Enter；每轮关联独立输入和完成标记后检查原生读取结果，不用旧回复或画面 idle 代替当前工具轮完成。
-- 目录、缺失、同名文件、仅父目录四种分支分别验证六项核心发现；同名文件场景完整验证技能补全、逐项原生读取与授权期限，其余场景保留代表性真实允许／拒绝，不重复整个技能与目录状态的笛卡尔积。Windows 既有不适用场景不变。
 - 递归 submodule 隔离用例中的独立只读 Git 查询并行执行；copy／rcopy 两条路径、父工作树不变、对象保留及分支合并断言与原 30 秒用例预算保持不变。
 - 验证时按授权运行对应局部测试及门禁，并核对场景、隔离、超时和实际报告；入口存在不代表已通过。
 
@@ -112,9 +105,9 @@
 
 - 三种显示模式、插话不拆轮、聊天历史过滤及切换时布局稳定性。紧凑模式显示固定两行活动和最近工具的只读输出预览，不显示独立的模型处理忙碌提示。
 - 紧凑模式直接显示本轮工具结果自带的 Diff，不从快照重算。`Ctrl+O` 按完成顺序展开原始 Diff，`Esc` 收起；新一轮开始时清除，不写入聊天历史。
-- Bash 的 30 秒边界、短命令成功与失败、等待输入、无输出、前台转后台，以及跨轮次后台任务。
+- Bash 沿用上游的输出、计时和前后台反馈；验证短命令成功与失败、等待输入、前台转后台及跨轮次后台任务，不再验证专有的 30 秒日志触发。
 - 日志刷新不新增模型请求或工具调用。
 
 ### 中文界面验证参考
 
-- 本次不增加测试；复用既有自动化验证。验收须观察真实源码入口的中文界面及关键交互，并运行当前平台 `bun run fulltest`；不得把静态文案检查或局部渲染冒充真实入口验收，也不得因汉化改写业务断言或放宽门禁。尚未实际执行的验证保持未验证。
+- 验收须观察真实源码入口的中文界面及关键交互，不以静态文案检查或局部渲染代替。验证范围及门禁授权以 [Fork 验证门禁](../openspec/specs/fork-verification-gates/spec.md) 为准。

@@ -23,8 +23,6 @@ sources:
     resource: repo://packages/coding-agent/src/spec-driven/skill-policy.ts
   - id: openwiki-source-084e8e5e6c766123015b0708
     resource: repo://packages/coding-agent/src/spec-driven/vendor/inventory.json
-  - id: openwiki-source-e48b07871b298dbcff18c959
-    resource: repo://packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts
 generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 ---
 
@@ -51,7 +49,7 @@ flowchart TD
 
 ## 普通发现、同名覆盖与授权
 
-`spec-driven` 是低优先级能力提供者。它从清单逐项发现 Superpowers 和 JCH 技能，但 OpenSpec 普通技能只开放五项：`openspec-propose`、`openspec-explore`、`openspec-update-change`、`openspec-sync-specs`、`openspec-archive-change`。同一提供者从包内 OpenSpec `commands` 目录只发现 `/opsx-propose`、`/opsx-explore`、`/opsx-update`、`/opsx-sync`、`/opsx-archive`。其他包内资源仍可供 CLI 使用。
+`spec-driven` 是低优先级能力提供者，按清单加载包内技能。OpenSpec 的 12 项技能均可通过原生 `/skill:<name>` 调用，其中六项默认进入模型自动发现索引；包内 Superpowers 技能只支持显式调用。OpenSpec、Superpowers 和 JCH 的发现与授权边界见[已批准的规格](../../openspec/specs/spec-driven-orchestration/spec.md)。
 
 技能 catalog 先按来源发现、解析名称，再应用启用、包含和排除过滤。自定义目录同名技能取得裸名，不同内容的原版本保留为命名空间名称，必要时带 `~N`；正文和 frontmatter 均相同的副本可合并。`OMP_SKILLS_DIR` 是优先于其他自定义目录的共享单层技能根，不负责下载或同步；默认也启用 Codex 用户技能发现。配置及其他模型发现边界见[配置与模型](../concepts/configuration-and-models.md)。普通会话可通过 `/skill:<name>` 显式调用；隐藏技能不出现在系统提示的技能列表中，但仍可被显式调用。
 
@@ -74,6 +72,6 @@ omp superpowers skills/subagent-driven-development/scripts/review-package <plan-
 
 子进程继承环境并关闭 OpenSpec 遥测，工作目录为调用目录，brainstorm 数据目录设为该目录下 `.superpowers/brainstorm`。CLI 将 `SIGINT`、`SIGTERM` 转为 abort signal，转发子进程 stdout、stderr 和真实退出码；缺少脚本参数返回 2，帮助返回 0，路径、解释器等入口错误返回 1。外部工具的失败不被伪装成成功。
 
-## 验证与维护
+## 维护
 
-`resources.test.ts` 和 `skill-policy.test.ts` 覆盖资源边界与隐藏技能访问；`process-resources.e2e.test.ts` 经公开进程入口验证打包命令、带引号参数、初始化不覆盖用户文件、默认与显式 schema，以及验证和归档。更新 vendored 资源时应同时检查清单、打包、脚本运行环境和这些实际入口，而不是只验证源码树；参见 [fork 维护](../operations/fork-maintenance.md)和[无头与扩展接口](headless-and-extension-surfaces.md)。
+更新 vendored 资源时，应同时检查清单、打包、脚本运行环境和公开入口，而不是只核对源码树。参见 [fork 维护](../operations/fork-maintenance.md)和[无头与扩展接口](headless-and-extension-surfaces.md)。

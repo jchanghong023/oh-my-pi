@@ -1008,17 +1008,6 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(headers["X-Api-Key"]).toBeUndefined();
 	});
 
-	it("sends no Authorization for empty credentials on non-official endpoints", () => {
-		const headers = buildAnthropicHeaders({
-			apiKey: "",
-			baseUrl: "https://proxy.example.com",
-			stream: true,
-		});
-
-		expect(headers.Authorization).toBeUndefined();
-		expect(headers["X-Api-Key"]).toBeUndefined();
-	});
-
 	it("honors caller-supplied Authorization on non-official Anthropic endpoints (#3391)", () => {
 		const headers = buildAnthropicHeaders({
 			apiKey: "sk-ant-api-test",

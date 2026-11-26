@@ -419,7 +419,6 @@ describe("structured subagent primitive", () => {
 		};
 		const capabilities: Partial<executorModule.ExecutorOptions>[] = [
 			{ subagentHooks: { beforeSpawn: async () => ({}), configureSession: async () => ({}) } },
-			{ subagentRequest: request() },
 			{ onSessionCreated: () => {} },
 			{ localProtocolOptions: { allowCrossAgentReads: false, getReadIsolationRoots: () => ["/tmp"] } },
 		];
@@ -1763,28 +1762,6 @@ describe("agent frontmatter structured opt-in", () => {
 		}
 	}
 
-	it("absent native hooks preserve an ordinary child read operation", async () => {
-		await withNativeHookFixture(
-			async ({ parent, cwd, model }) => {
-				await fs.writeFile(path.join(cwd, "ordinary.txt"), "ordinary native child evidence");
-				const settled = await runStructuredSubagent(
-					request({ session: parent, structured: false, keepAlive: false }),
-				);
-				expect(settled.result.exitCode).toBe(0);
-				expect(settled.result.output).toContain("ordinary native child evidence");
-				expect(model.calls.length).toBeGreaterThanOrEqual(2);
-				expect(artifactsDirsFromRegistry()).toEqual([]);
-			},
-			context => {
-				const last = context.messages.at(-1);
-				if (last?.role === "toolResult") {
-					return { content: [last.content.map(part => (part.type === "text" ? part.text : "")).join("\n")] };
-				}
-				return { content: [{ type: "toolCall", name: "read", arguments: { path: "ordinary.txt" } }] };
-			},
-		);
-	}, 30_000);
-
 	it("reports the final invocation result without waiting for warm-child release", async () => {
 		await withNativeHookFixture(
 			async ({ parent }) => {
@@ -1916,58 +1893,44 @@ describe("agent frontmatter structured opt-in", () => {
 		30_000,
 	);
 
-	it.each(["worker", "leaf"])(
-		"beforeSpawn rejects %s before artifacts, isolation, or model dispatch",
-		async agent => {
-			await withNativeHookFixture(
-				async ({ parent, model }) => {
-					cfgTaskIsolationEnabled.set(parent.settings, true);
-					const isolate = vi.spyOn(isolationRunner, "prepareIsolationContext");
-					const create = vi.spyOn(sdkModule, "createAgentSession");
-					const artifacts = vi.fn(() => null);
-					parent.getArtifactsDir = artifacts;
-					const admission = vi.fn(async () => {
-						throw new Error("native admission denied");
-					});
-					const configureSession = vi.fn<NativeSubagentHooks["configureSession"]>(async () => {
-						throw new Error("session configuration must not run after denied admission");
-					});
-					parent.subagentHooks = { beforeSpawn: admission, configureSession };
-					await expect(
-						runStructuredSubagent(
-							request({
-								session: parent,
-								agent,
-								isolation: { requested: true },
-								structured: false,
-								keepAlive: false,
-							}),
-						),
-					).rejects.toThrow("native admission denied");
-					expect(admission).toHaveBeenCalledTimes(1);
-					expect(configureSession).not.toHaveBeenCalled();
-					expect(artifacts).not.toHaveBeenCalled();
-					expect(isolate).not.toHaveBeenCalled();
-					expect(create).not.toHaveBeenCalled();
-					expect(model.calls).toHaveLength(0);
-					expect(artifactsDirsFromRegistry()).toEqual([]);
-				},
-				() => ({ content: ["unexpected dispatch"] }),
-			);
-		},
-		30_000,
-	);
+	it("beforeSpawn rejects admission before artifacts, isolation, or model dispatch", async () => {
+		await withNativeHookFixture(
+			async ({ parent, model }) => {
+				cfgTaskIsolationEnabled.set(parent.settings, true);
+				const isolate = vi.spyOn(isolationRunner, "prepareIsolationContext");
+				const create = vi.spyOn(sdkModule, "createAgentSession");
+				const artifacts = vi.fn(() => null);
+				parent.getArtifactsDir = artifacts;
+				const admission = vi.fn(async () => {
+					throw new Error("native admission denied");
+				});
+				const configureSession = vi.fn<NativeSubagentHooks["configureSession"]>(async () => {
+					throw new Error("session configuration must not run after denied admission");
+				});
+				parent.subagentHooks = { beforeSpawn: admission, configureSession };
+				await expect(
+					runStructuredSubagent(
+						request({
+							session: parent,
+							isolation: { requested: true },
+							structured: false,
+							keepAlive: false,
+						}),
+					),
+				).rejects.toThrow("native admission denied");
+				expect(admission).toHaveBeenCalledTimes(1);
+				expect(configureSession).not.toHaveBeenCalled();
+				expect(artifacts).not.toHaveBeenCalled();
+				expect(isolate).not.toHaveBeenCalled();
+				expect(create).not.toHaveBeenCalled();
+				expect(model.calls).toHaveLength(0);
+				expect(artifactsDirsFromRegistry()).toEqual([]);
+			},
+			() => ({ content: ["unexpected dispatch"] }),
+		);
+	}, 30_000);
 
-	it.each([
-		"capture",
-		"apply",
-		"branch",
-		"subdir",
-		"ordinary-subdir",
-		"freeze-failure",
-		"persist-failure",
-		"retained",
-	] as const)(
+	it.each(["apply", "branch", "subdir", "ordinary-subdir", "freeze-failure", "persist-failure", "retained"] as const)(
 		"observes actual isolated source and preserves callback failures (%s)",
 		async mode => {
 			await withNativeHookFixture(

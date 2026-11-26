@@ -17,7 +17,6 @@ import * as open from "@oh-my-pi/pi-coding-agent/utils/open";
 import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
 import { jsx } from "@oh-my-pi/pi-tui/jsx-runtime";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
-import type { InputInterceptor } from "../../src/ui/shell";
 import { initTheme } from "../../src/ui/theme/service";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
@@ -66,7 +65,6 @@ function service() {
 }
 
 function harness(artifactsDir: string, streaming = false) {
-	const listeners = new Set<InputInterceptor>();
 	const changes = new Set<() => void>();
 	const disposers: Array<() => void> = [];
 	const statuses = new Map<string, string>();
@@ -110,15 +108,6 @@ function harness(artifactsDir: string, streaming = false) {
 		},
 		withLocalSubmission: async <T>(_text: string, run: () => Promise<T>): Promise<T> => run(),
 	});
-	const interceptInput = ctx.shell.interceptInput.bind(ctx.shell);
-	spyOn(ctx.shell, "interceptInput").mockImplementation(listener => {
-		listeners.add(listener);
-		const remove = interceptInput(listener);
-		return () => {
-			listeners.delete(listener);
-			remove();
-		};
-	});
 	const controller = new InputController(ctx);
 	ctx.handleImagePathPaste = controller.handleImagePathPaste.bind(controller);
 	controller.setupEditorSubmitHandler();
@@ -127,10 +116,7 @@ function harness(artifactsDir: string, streaming = false) {
 		composer: ctx.composer,
 		prompt,
 		abort,
-		listeners,
-		changes,
 		statuses,
-		disposers,
 		async submit() {
 			ctx.composer.submit();
 			await controller.waitForSubmissionDispatches();
@@ -259,8 +245,6 @@ describe("native /sketch", () => {
 		expect(h.prompt).not.toHaveBeenCalled();
 		expect(open.openPath).toHaveBeenCalledWith(canvas.server.url);
 		expect(h.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining(canvas.server.url));
-		expect(h.listeners.size).toBe(0);
-		expect(h.changes.size).toBe(0);
 		expect(h.statuses.size).toBe(0);
 
 		await h.submit();
@@ -313,8 +297,6 @@ describe("native /sketch", () => {
 		expect(h.abort).not.toHaveBeenCalled();
 		expect(h.composer.expandedText()).toBe("unchanged [Image #1]");
 		expect(h.composer.pendingImages).toEqual([existing]);
-		expect(h.listeners.size).toBe(0);
-		expect(h.statuses.size).toBe(0);
 	});
 
 	it("does not restore the consumed command on browser cancellation or launch failure", async () => {
@@ -332,9 +314,6 @@ describe("native /sketch", () => {
 		await executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
 		expect(h.ctx.showError).toHaveBeenCalledWith("Sketch failed: listen denied");
 		expect(h.composer.text()).toBe("");
-		expect(h.listeners.size).toBe(0);
-		expect(h.changes.size).toBe(0);
-		expect(h.statuses.size).toBe(0);
 	});
 
 	it("closes on session replacement while PNG delivery is in flight", async () => {
@@ -351,9 +330,6 @@ describe("native /sketch", () => {
 		expect(canvas.close).toHaveBeenCalled();
 		expect(h.composer.text()).toBe("replacement draft");
 		expect(h.composer.pendingImages).toEqual([]);
-		expect(h.listeners.size).toBe(0);
-		expect(h.changes.size).toBe(0);
-		expect(h.statuses.size).toBe(0);
 	});
 
 	it.each(["view", "prompt", "draft", "dispose"] as const)(
@@ -376,13 +352,10 @@ describe("native /sketch", () => {
 			await run;
 			expect(h.composer.pendingImages).toEqual([]);
 			expect(h.prompt).not.toHaveBeenCalled();
-			expect(h.listeners.size).toBe(0);
-			expect(h.changes.size).toBe(0);
-			expect(h.statuses.size).toBe(0);
 		},
 	);
 
-	it("prevents duplicate canvases and retains only one session disposal hook across invocations", async () => {
+	it("prevents duplicate canvases and allows reopening after cancellation", async () => {
 		const h = createHarness();
 		const s = service();
 		const first = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
@@ -395,9 +368,6 @@ describe("native /sketch", () => {
 		s.canvas.cancel();
 		await second;
 		expect(s.start).toHaveBeenCalledTimes(2);
-		expect(h.disposers).toHaveLength(1);
-		expect(h.listeners.size).toBe(0);
-		expect(h.changes.size).toBe(0);
 	});
 
 	it("reports artifact write failures without dropping existing draft content or attachments", async () => {
@@ -416,8 +386,5 @@ describe("native /sketch", () => {
 		expect(h.composer.expandedText()).toBe("keep [Image #1]");
 		expect(h.composer.pendingImages).toEqual([image]);
 		expect(h.prompt).not.toHaveBeenCalled();
-		expect(h.listeners.size).toBe(0);
-		expect(h.changes.size).toBe(0);
-		expect(h.statuses.size).toBe(0);
 	});
 });

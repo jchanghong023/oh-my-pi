@@ -27,10 +27,6 @@ sources:
     resource: repo://packages/coding-agent/scripts/openwiki-resources.ts
   - id: openwiki-source-f1ce65dd1cd56769cd03c432
     resource: repo://packages/coding-agent/scripts/spec-driven-resources.ts
-  - id: openwiki-source-40c86b63e8e4aac6300dcfad
-    resource: repo://packages/coding-agent/test/cli/openwiki-generation.test.ts
-  - id: openwiki-source-d01aa418557b4e5e852d7499
-    resource: repo://packages/coding-agent/test/spec-driven/resources.test.ts
   - id: openwiki-source-eb2943f7c93f937ee7d1f458
     resource: repo://packages/utils/test/ptree-timeout.test.ts
   - id: openwiki-source-d96bf26b7f5ef5721d9d1b12
@@ -97,4 +93,4 @@ CI 的发行矩阵仅为 Linux glibc x64 和 Windows x64，上传两个二进制
 
 ## 验证入口与证据边界
 
-资源变更可从 `packages/coding-agent/test/spec-driven/resources.test.ts` 的完整资源树和隔离消费者检查，以及 `packages/coding-agent/test/cli/openwiki-generation.test.ts` 等真实 CLI 用例定位；进程管道线索可查 `packages/utils/test/ptree-timeout.test.ts`。涉及二进制还需在授权后检查目标平台、内嵌资源和干净环境的真实入口，不能用开发机缓存证明发行物完整。门禁范围、授权和报告解释见[验证门禁](../testing/verification-gates.md)。上述测试是入口，不表示本次运行或通过；同步限制与另行授权的功能验收不可混为一谈。
+进程管道线索可查 `packages/utils/test/ptree-timeout.test.ts`；测试文件存在不表示本次运行或通过。涉及二进制还需在授权后检查目标平台、内嵌资源和干净环境的真实入口，不能用开发机缓存证明发行物完整。门禁范围和授权以[已批准规格](../../openspec/specs/fork-verification-gates/spec.md)为准，报告解释见[验证门禁](../testing/verification-gates.md)。同步限制与另行授权的功能验收不可混为一谈。

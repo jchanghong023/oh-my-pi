@@ -4,7 +4,7 @@ import { compileCompatRules, renderAuthIds } from "../scripts/compat-compiler";
 import { compileAuth } from "../scripts/compat-compiler/compile-auth";
 import { compileBehavior } from "../scripts/compat-compiler/compile-behavior";
 import { compileCascade } from "../scripts/compat-compiler/compile-cascade";
-import { compileProviders, renderProviderIds } from "../scripts/compat-compiler/compile-providers";
+import { compileProviders } from "../scripts/compat-compiler/compile-providers";
 import { compileTaxonomy } from "../scripts/compat-compiler/compile-taxonomy";
 import { cursorModelParameters } from "../src/compat/behavior";
 import type { CompiledProvider } from "../src/compat/types";
@@ -484,19 +484,16 @@ describe("provider catalog grammar", () => {
 	});
 
 	test("runtime-only policy survives serialization without inventing a model catalog or default", () => {
-		const sources = src(
-			[
+		const compiled = compileProviders(
+			src(
 				provider("runtime", [
 					"\tautomatic-default #false",
 					"\tallow-unauthenticated #true",
 					"\tdynamic-models-authoritative #true",
 					'\tenv "RUNTIME_KEY"',
-					"\tsupports-store #false",
 				]),
-				provider("wire", ["\tsupports-store #false"]),
-			].join("\n"),
+			),
 		);
-		const compiled = compileProviders(sources);
 		// Runtime metadata remains available even when no model ID is known.
 		expect(compiled.runtime.automaticDefault).toBe(false);
 		expect(compiled.runtime.allowUnauthenticated).toBe(true);
@@ -508,13 +505,6 @@ describe("provider catalog grammar", () => {
 		expect(persisted.runtime).not.toHaveProperty("seed");
 		expect(persisted.runtime).not.toHaveProperty("discovery");
 		expect(persisted.runtime).not.toHaveProperty("kindApis");
-		expect(persisted).not.toHaveProperty("wire");
-		expect(renderProviderIds(compiled)).toContain('\t| "runtime"');
-		expect(renderProviderIds(compiled)).not.toContain('\t| "wire"');
-		expect(compileCascade(sources).rules).toEqual([
-			{ source: "providers/p.kdl:1", providers: ["runtime"], wire: { supportsStore: false } },
-			{ source: "providers/p.kdl:8", providers: ["wire"], wire: { supportsStore: false } },
-		]);
 	});
 
 	test("a missing default requires an explicit automatic-selection opt-out", () => {

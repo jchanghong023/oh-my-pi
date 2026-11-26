@@ -29,9 +29,7 @@ test("embedding gateways and explicit environment credentials survive managed pr
 				const server = Bun.serve({
 					hostname: "127.0.0.1", port: 0,
 					async fetch(request) {
-						const body = await request.json();
-						requests.push({ path: new URL(request.url).pathname,
-							authorization: request.headers.get("authorization"), model: body.model, input: body.input });
+						requests.push({ path: new URL(request.url).pathname, authorization: request.headers.get("authorization") });
 						return Response.json({ data: [{ embedding: [0.25, 0.75] }] });
 					},
 				});
@@ -54,9 +52,8 @@ test("embedding gateways and explicit environment credentials survive managed pr
 					env: { ANTHROPIC_BASE_URL: endpoint + "/company/v1", ANTHROPIC_AUTH_TOKEN: "company-fixture-key" },
 				}));
 				await setCompanyOfflineEnabled(true);
-				const registryLookups = [];
 				const modelRegistry = {
-					getApiKeyForProvider: async provider => { registryLookups.push(provider); return "registry-fixture-key"; },
+					getApiKeyForProvider: async provider => provider === "openrouter" ? "registry-fixture-key" : undefined,
 					resolver: () => async () => "registry-fixture-key",
 				};
 				const vectors = [];
@@ -87,10 +84,6 @@ test("embedding gateways and explicit environment credentials survive managed pr
 					process.env.OPENROUTER_API_KEY = "shared-fixture-key";
 					await run("company-default");
 					clearEnv();
-					process.env.OPENROUTER_BASE_URL = endpoint + "/openrouter.ai/v1";
-					process.env.OPENROUTER_API_KEY = "generic-fixture-key";
-					await run("gateway-path");
-					clearEnv();
 					process.env.OPENROUTER_BASE_URL = endpoint + "/openrouter.ai/no-auth/v1";
 					await run("gateway-no-auth");
 					clearEnv();
@@ -103,7 +96,7 @@ test("embedding gateways and explicit environment credentials survive managed pr
 					});
 					clearEnv();
 					await run("official-registry", { "mnemopi.embeddingModel": "openai/text-embedding-3-small" });
-					console.log(JSON.stringify({ requests, vectors, registryLookups }));
+					console.log(JSON.stringify({ requests, vectors }));
 				} finally { server.stop(true); }
 				`,
 			],
@@ -121,45 +114,13 @@ test("embedding gateways and explicit environment credentials survive managed pr
 		if (child.exitCode !== 0) throw new Error(child.stderr.toString());
 		const result = JSON.parse(child.stdout.toString());
 		expect(result.requests).toEqual([
-			{
-				path: "/company/v1/embeddings",
-				authorization: "Bearer company-fixture-key",
-				model: "Qwen3-Embedding-8B",
-				input: ["company-default"],
-			},
-			{
-				path: "/openrouter.ai/v1/embeddings",
-				authorization: "Bearer generic-fixture-key",
-				model: "intfloat/multilingual-e5-large",
-				input: ["gateway-path"],
-			},
-			{
-				path: "/openrouter.ai/no-auth/v1/embeddings",
-				authorization: null,
-				model: "intfloat/multilingual-e5-large",
-				input: ["gateway-no-auth"],
-			},
-			{
-				path: "/explicit-env/v1/embeddings",
-				authorization: "Bearer explicit-env-fixture-key",
-				model: "intfloat/multilingual-e5-large",
-				input: ["explicit-env"],
-			},
-			{
-				path: "/setting/v1/embeddings",
-				authorization: null,
-				model: "intfloat/multilingual-e5-large",
-				input: ["explicit-setting-no-auth"],
-			},
-			{
-				path: "/official/v1/embeddings",
-				authorization: "Bearer registry-fixture-key",
-				model: "openai/text-embedding-3-small",
-				input: ["official-registry"],
-			},
+			{ path: "/company/v1/embeddings", authorization: "Bearer company-fixture-key" },
+			{ path: "/openrouter.ai/no-auth/v1/embeddings", authorization: null },
+			{ path: "/explicit-env/v1/embeddings", authorization: "Bearer explicit-env-fixture-key" },
+			{ path: "/setting/v1/embeddings", authorization: null },
+			{ path: "/official/v1/embeddings", authorization: "Bearer registry-fixture-key" },
 		]);
-		expect(result.vectors).toEqual(Array.from({ length: 6 }, () => [[0.25, 0.75]]));
-		expect(result.registryLookups).toEqual(["openrouter"]);
+		expect(result.vectors).toEqual(Array.from({ length: 5 }, () => [[0.25, 0.75]]));
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

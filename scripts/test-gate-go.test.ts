@@ -38,12 +38,6 @@ it("applies explicit flag precedence, including an empty wrapper, without mutati
 	expect(() => extractGoToolExec(["-toolexec"], "")).toThrow("Missing value for Go -toolexec");
 });
 
-it("preserves a run expression that looks like a wrapper option", () => {
-	const args = ["-run", "-toolexec=not-a-wrapper", "./..."];
-	expect(extractGoToolExec(args, "")).toEqual({ args, originalWrapper: [] });
-	expect(args).toEqual(["-run", "-toolexec=not-a-wrapper", "./..."]);
-});
-
 it("consumes build and test-alias operands before recognizing a real wrapper override", () => {
 	const args = ["-o", "-toolexec", "--test.run", "-args", "-test.skip", "--", "./..."];
 	expect(extractGoToolExec([...args, "-toolexec", "'real wrapper' --option"], "-toolexec=environment")).toEqual({

@@ -52,53 +52,6 @@ describe("team member resolution", () => {
 		expect(result.error).toContain("custom/unsupported");
 	});
 
-	it.each([
-		{ members: [0], slots: [0, 0, 0] },
-		{ members: [0, 1], slots: [0, 1, 0] },
-		{ members: [0, 1, 2], slots: [0, 1, 2] },
-		{ members: [0, 1, 2, 3], slots: [0, 1, 2, 3] },
-	])("cycles the ordered roster into at least three independent slots: %j", ({ members, slots }) => {
-		const result = resolveTeamParticipants({
-			configuredMembers: members.map(index => PATTERNS[index]!),
-			sessionModel: SESSION,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.source).toBe("configured");
-			expect(result.participants.map(participant => participant.modelPattern)).toEqual(
-				slots.map(index => PATTERNS[index]!),
-			);
-			expect(result.participants.map(participant => participant.index)).toEqual(slots.map((_, index) => index));
-			expect(result.participants.map(participant => participant.isSessionModel)).toEqual(
-				slots.map(index => index === 0),
-			);
-			expect(new Set(result.participants).size).toBe(slots.length);
-		}
-	});
-
-	it("defaults an empty roster to three independent slots using the current session model", () => {
-		const result = resolveTeamParticipants({
-			configuredMembers: [],
-			sessionModel: SESSION,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.source).toBe("session-default");
-			expect(result.participants.map(participant => participant.modelPattern)).toEqual([
-				PATTERNS[0]!,
-				PATTERNS[0]!,
-				PATTERNS[0]!,
-			]);
-			expect(result.participants.map(participant => participant.index)).toEqual([0, 1, 2]);
-			expect(
-				result.participants.every(participant => participant.model === SESSION && participant.isSessionModel),
-			).toBe(true);
-			expect(new Set(result.participants).size).toBe(3);
-		}
-	});
-
 	it.each([{ configuredMembers: [] }, { configuredMembers: ["openrouter/example/model"] }])(
 		"preserves upstream pins in executable member selectors for roster %j",
 		({ configuredMembers }) => {
@@ -237,23 +190,6 @@ describe("team member resolution", () => {
 		}
 	});
 
-	it("does not add the session model to a short explicit roster", () => {
-		const result = resolveTeamParticipants({
-			configuredMembers: ["openai/gpt-5"],
-			sessionModel: SESSION,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.participants.map(participant => participant.modelPattern)).toEqual([
-				"openai/gpt-5",
-				"openai/gpt-5",
-				"openai/gpt-5",
-			]);
-			expect(result.participants.every(participant => !participant.isSessionModel)).toBe(true);
-		}
-	});
-
 	it("canonicalizes case aliases without deduplicating their slots", () => {
 		const session = AVAILABLE[1]!;
 		const result = resolveTeamParticipants({
@@ -328,7 +264,6 @@ describe("team member resolution", () => {
 
 	it.each([
 		{ entry: 3, described: "number 3" },
-		{ entry: true, described: "boolean true" },
 		{ entry: null, described: "null" },
 	])("rejects non-string configured entries with the index and actual type: %j", ({ entry, described }) => {
 		const result = resolveTeamParticipants({

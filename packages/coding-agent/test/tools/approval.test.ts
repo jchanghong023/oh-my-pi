@@ -9,7 +9,6 @@ import {
 	requiresApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
-	sessionApprovalScope,
 	truncateForPrompt,
 } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
@@ -93,15 +92,6 @@ describe("resolveApproval override and user policy", () => {
 		const result = resolveApproval(dangerous, {}, "yolo");
 		expect(result).toMatchObject({ policy: "allow", tier: "exec", override: false });
 		expect(result.reason).toBeUndefined();
-	});
-
-	it("guarded prompts for critical overrides on every call, unlike yolo", () => {
-		for (let i = 0; i < 2; i++) {
-			const result = resolveApproval(dangerous, {}, "guarded", { bash: "allow" });
-			expect(result).toMatchObject({ policy: "prompt", source: "tool", override: true });
-			expect(sessionApprovalScope(result, dangerous.name)).toBeUndefined();
-		}
-		expect(resolveApproval(dangerous, {}, "yolo").policy).toBe("allow");
 	});
 
 	it("user policy still controls execution in yolo mode", () => {

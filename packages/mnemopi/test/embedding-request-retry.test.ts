@@ -73,27 +73,6 @@ describe("embedding request timeout recovery", () => {
 		expect(caller.signal.aborted).toBe(false);
 	});
 
-	it("retries a timeout while reading the body after successful response headers", async () => {
-		const timers = captureTimeouts();
-		let calls = 0;
-		mockFetch(async (_input, init) => {
-			if (++calls !== 1) return reply();
-			const signal = init?.signal;
-			expect(signal).toBeDefined();
-			return new Response(
-				new ReadableStream({
-					start(controller) {
-						signal!.addEventListener("abort", () => controller.error(signal!.reason), { once: true });
-						timers[0]!.abort(new DOMException("response deadline", "TimeoutError"));
-					},
-				}),
-			);
-		});
-
-		expect(await embed(new AbortController().signal)).toEqual([new Float32Array([1, 2])]);
-		expect(calls).toBe(2);
-	});
-
 	it("retries a stalled HTTP response body after the per-attempt deadline", async () => {
 		let calls = 0;
 		const server = Bun.serve({

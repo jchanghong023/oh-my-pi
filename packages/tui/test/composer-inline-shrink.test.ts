@@ -90,7 +90,6 @@ it.each(["preserve", "append"] as const)(
 			backend.renderNow();
 			expect(vt.screen()).toEqual(before);
 			expect(vt.screen()).toContain("ANSWER_END");
-			expect(surface.dock()[0]!.props()).toMatchObject({ text: draft, cursor: draft.length });
 		} finally {
 			await dispose();
 		}

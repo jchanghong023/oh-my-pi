@@ -99,7 +99,6 @@ describe("native artifact install recovery through the real CLI", () => {
 			await fs.utimes(target, oldTime, oldTime);
 			if (process.platform !== "win32") {
 				await fs.chmod(candidate, 0o444);
-				await fs.chmod(target, 0o444);
 			}
 			const child = Bun.spawn(
 				[

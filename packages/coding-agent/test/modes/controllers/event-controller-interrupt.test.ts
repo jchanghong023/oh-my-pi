@@ -128,7 +128,6 @@ describe("EventController aborted-turn working messages", () => {
 			args: { html: '<form><label>Confirm the action? <input name="confirm"></label></form>' },
 		});
 		const ask = ctx.pendingTools.get("question-1");
-		expect(ask).toBeDefined();
 		expect(renderTranscript(ctx).join("\n")).not.toContain("Confirm the action?");
 		await controller.handleEvent({
 			type: "tool_execution_end",

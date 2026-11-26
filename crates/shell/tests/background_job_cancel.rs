@@ -32,59 +32,18 @@ async fn cancelled_run_stops_waiting_on_its_background_job() {
 	}
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn cancelled_pipeline_waits_for_term_cleanup() {
-	let dir = tempfile::tempdir().unwrap();
-	let cwd = dir.path().to_str().unwrap().to_owned();
-	let command = "sh -c 'trap \"sleep 0.15; echo done > first.done; exit 0\" TERM; echo ready > \
-	               first.ready; while :; do sleep 1; done' | sh -c 'trap \"sleep 0.15; echo done > \
-	               second.done; exit 0\" TERM; echo ready > second.ready; while :; do sleep 1; \
-	               done'";
-	let mut cancel = CancelToken::default();
-	let abort = cancel.emplace_abort_token();
-	let run = tokio::spawn(async move {
-		Shell::new(None)
-			.run(
-				ShellRunOptions { command: command.to_owned(), cwd: Some(cwd), ..Default::default() },
-				None,
-				cancel,
-			)
-			.await
-	});
-	tokio::time::timeout(Duration::from_secs(10), async {
-		while !dir.path().join("first.ready").exists() || !dir.path().join("second.ready").exists() {
-			tokio::time::sleep(Duration::from_millis(10)).await;
-		}
-	})
-	.await
-	.expect("pipeline stages did not start");
-	abort.abort(omp_shell::cancel::AbortReason::User);
-	let result = run.await.unwrap().expect("cancelled run");
-	assert!(result.cancelled, "pipeline run must report the requested cancellation");
-	assert_eq!(
-		std::fs::read(dir.path().join("first.done")).expect("first stage TERM cleanup"),
-		b"done\n",
-		"first stage cleanup must finish before return"
-	);
-	assert_eq!(
-		std::fs::read(dir.path().join("second.done")).expect("second stage TERM cleanup"),
-		b"done\n",
-		"second stage cleanup must finish before return"
-	);
-}
-
-/// A stopped external and a running external share a cancellation wait:
-/// the stopped member must be reaped while the running member finishes TERM
-/// cleanup, including waiting for its own child.
+/// Cancellation reaps a stopped member and lets both running members finish
+/// TERM cleanup, including one that must wait for its own child.
 #[tokio::test(flavor = "multi_thread")]
 async fn cancelled_mixed_stopped_pipeline_reaps_members_and_cleanup_descendant() {
+	const PID_FILES: [&str; 4] = ["stopped.pid", "running.pid", "peer.pid", "child.pid"];
 	struct Cleanup<'a>(&'a std::path::Path, bool);
 	impl Drop for Cleanup<'_> {
 		fn drop(&mut self) {
 			if !self.1 {
 				return;
 			}
-			for name in ["stopped.pid", "running.pid", "child.pid"] {
+			for name in PID_FILES {
 				if let Ok(text) = std::fs::read_to_string(self.0.join(name))
 					&& let Ok(pid) = text.trim().parse::<i32>()
 					&& pid > 1
@@ -100,10 +59,12 @@ async fn cancelled_mixed_stopped_pipeline_reaps_members_and_cleanup_descendant()
 	let dir = tempfile::tempdir().unwrap();
 	let mut cleanup = Cleanup(dir.path(), true);
 	let cwd = dir.path().to_str().unwrap().to_owned();
-	let command = "sh -c 'echo $$ > stopped.pid; kill -STOP $$; exit 0' | sh -c 'echo $$ > \
-	               running.pid; sleep 30 & child=$!; echo $child > child.pid; trap \"kill $child \
-	               2>/dev/null; wait $child; sleep 0.15; echo reaped > running.done; exit 0\" \
-	               TERM; echo ready > running.ready; wait $child'";
+	let command = "sh -c 'trap \"sleep 0.15; echo done > peer.done; exit 0\" TERM; echo $$ > \
+	               peer.pid; echo ready > peer.ready; while :; do :; done' | sh -c 'echo $$ > \
+	               stopped.pid; kill -STOP $$; exit 0' | sh -c 'echo $$ > running.pid; sleep 30 & \
+	               child=$!; echo $child > child.pid; trap \"kill $child 2>/dev/null; wait $child; \
+	               sleep 0.15; echo done > running.done; exit 0\" TERM; echo ready > \
+	               running.ready; wait $child'";
 	let mut cancel = CancelToken::default();
 	let abort = cancel.emplace_abort_token();
 	let run = tokio::spawn(async move {
@@ -117,7 +78,7 @@ async fn cancelled_mixed_stopped_pipeline_reaps_members_and_cleanup_descendant()
 	});
 	let pids = tokio::time::timeout(Duration::from_secs(10), async {
 		loop {
-			let pids: Option<Vec<i32>> = ["stopped.pid", "running.pid", "child.pid"]
+			let pids: Option<Vec<i32>> = PID_FILES
 				.into_iter()
 				.map(|name| {
 					std::fs::read_to_string(dir.path().join(name))
@@ -129,6 +90,7 @@ async fn cancelled_mixed_stopped_pipeline_reaps_members_and_cleanup_descendant()
 				.collect();
 			if let Some(pids) = pids
 				&& dir.path().join("running.ready").exists()
+				&& dir.path().join("peer.ready").exists()
 				&& omp_builtins::ProcInfo::all()
 					.into_iter()
 					.any(|process| process.pid() == pids[0] && process.state() == 'T')
@@ -139,7 +101,7 @@ async fn cancelled_mixed_stopped_pipeline_reaps_members_and_cleanup_descendant()
 		}
 	})
 	.await
-	.expect("one stage must actually stop while the other installs its TERM handler");
+	.expect("one stage must stop and both running stages must install their TERM handlers");
 	assert!(
 		pids
 			.iter()
@@ -152,11 +114,13 @@ async fn cancelled_mixed_stopped_pipeline_reaps_members_and_cleanup_descendant()
 		.unwrap()
 		.expect("cancelled shell run");
 	assert!(result.cancelled, "run must observe the explicit cancellation");
-	assert_eq!(
-		std::fs::read(dir.path().join("running.done")).expect("running stage TERM cleanup"),
-		b"reaped\n",
-		"running member must finish cleanup before cancellation returns"
-	);
+	for marker in ["peer.done", "running.done"] {
+		assert_eq!(
+			std::fs::read(dir.path().join(marker)).expect("stage TERM cleanup"),
+			b"done\n",
+			"{marker} cleanup must finish before cancellation returns"
+		);
+	}
 	for pid in pids {
 		// SAFETY: signal zero only probes the fixture's positive PID; even a
 		// zombie still exists and must fail this fully-reaped assertion.

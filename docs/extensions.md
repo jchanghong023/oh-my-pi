@@ -448,13 +448,14 @@ Handlers and tool `execute` receive `ctx` with:
 
    ```ts
    pi.registerCommand("mission", {
-     handler: async (args, ctx) => {
-       const entered = await ctx.sessionModes?.set({ mode: "plan", action: "enter" });
-       if (!entered?.ok) return ctx.ui.notify(entered?.message ?? "Mode control needs the TUI", "warning");
-       pi.sendUserMessage(args);
-     },
+   	handler: async (args, ctx) => {
+   		const entered = await ctx.sessionModes?.set({ mode: "plan", action: "enter" });
+   		if (!entered?.ok) return ctx.ui.notify(entered?.message ?? "Mode control needs the TUI", "warning");
+   		pi.sendUserMessage(args);
+   	},
    });
    ```
+
 - `getSystemPrompt()`
 - `isProjectTrusted()` — always `true`; OMP does not ask for per-directory trust before loading project inputs
 - `agent` — the agent this session runs: `{ kind: "main" | "sub", id, name, depth, parentId? }`. Factories are rebound to every subagent session (task tool, eval `agent()`, `/tan` clones), so a handler can check `ctx.agent.kind === "sub"` or the lowercased agent definition `name` (for example `"explore"`) to act only in subagents. Use `kind`, not `depth`: `depth` counts `task` nesting only, so `/tan` clones are subagents at depth 0 and report `name: "sub"`. An advisor's own tool calls reach the session's `tool_call`/`tool_result` handlers with `{ kind: "sub", id: "advisor", name: "advisor", depth: 0, parentId }`, so `kind === "main"` also excludes advisor activity
@@ -1563,7 +1564,7 @@ Nodes are drawn by the terminal and by Tern. Rows objects are drawn by the termi
 
 ## Migrating from pi-tui
 
-`@oh-my-pi/pi-tui` keeps its package name but replaces the component API with reactive JSX. Extensions using old component exports must migrate. Imports of `@mariozechner/pi-tui` or `@earendil-works/pi-tui` are rejected with a migration message. To port an extension, hook or custom tool:
+`@oh-my-pi/pi-tui` was replaced by `@oh-my-pi/pi-tui`. This is a breaking change: an extension, hook or custom tool that imports `@oh-my-pi/pi-tui` (or the upstream `@mariozechner/pi-tui` / `@earendil-works/pi-tui`) fails to load with an error naming the import and this section. To port it:
 
 | pi-tui | now |
 | --- | --- |
@@ -1588,7 +1589,7 @@ Nodes are drawn by the terminal and by Tern. Rows objects are drawn by the termi
 - `tool_call` errors and timeouts block execution (fail-closed). Its budget is `extensionHandlers.toolCallTimeoutMs` (default 30,000 ms), paused during extension UI waits.
 - Most dispatched handlers have a 30-second budget; `session_shutdown` handlers run concurrently with a 2-second budget. Timing out stops waiting and cancels handler UI, but cannot undo arbitrary extension side effects.
 - Command name conflicts with built-ins are skipped with diagnostics.
-- Reserved shortcuts are ignored (`ctrl+c`, `ctrl+d`, `ctrl+z`, `ctrl+k`, `ctrl+p`, `ctrl+l`, `ctrl+o`, `ctrl+t`, `ctrl+g`, `ctrl+q`, `alt+m`, `alt+p`, `alt+e`, `shift+tab`, `shift+ctrl+p`, `alt+enter`, `escape`, `enter`); `getShortcutConflict` reports them as `reserved`.
+- Reserved shortcuts are ignored (`ctrl+c`, `ctrl+d`, `ctrl+z`, `ctrl+k`, `ctrl+p`, `ctrl+l`, `ctrl+o`, `ctrl+t`, `ctrl+g`, `ctrl+q`, `alt+m`, `shift+tab`, `shift+ctrl+p`, `alt+enter`, `escape`, `enter`); `getShortcutConflict` reports them as `reserved`.
 - Treat `ctx.reload()` as terminal for the current command handler frame.
 - Module globals are shared by parent/child bindings. Keep session-specific state in the factory closure or persisted session entries.
 

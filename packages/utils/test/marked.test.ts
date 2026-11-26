@@ -30,6 +30,12 @@ describe("marked compatibility", () => {
 		});
 	});
 
+	test("keeps a Unicode separator and backticks in tilde-fence info", () => {
+		const tokens = Lexer.lex("lead\n~~~`literal`\u2029metadata\nmask*value*next\n~~~\n");
+		expect(tokens.map(token => token.type)).toEqual(["paragraph", "code"]);
+		expect(tokens[1]).toMatchObject({ type: "code", lang: "`literal`\u2029metadata", text: "mask*value*next" });
+	});
+
 	test("preserves standalone invalid fences as prose and valid fence contents", () => {
 		const invalid = "``` `invalidfencebeacon`\nThis is a normal paragraph.\n";
 		const tokens = Lexer.lex(invalid);

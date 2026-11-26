@@ -21,12 +21,6 @@ import { runGateCommands } from "./test-gate-scheduler";
 
 const ordinaryToolPath = "packages/coding-agent/src/tools/read.ts";
 
-test("fork plan excludes standalone Python suites while preserving the public TUI smoke", () => {
-	const commands = fulltestCommands({ debug: false }, "/tmp/home", "a".repeat(40));
-	expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
-	expect(commands.flatMap(command => command.argv)).not.toContain("scripts/test-report-py.ts");
-});
-
 test("debug changes only the isolated smoke diagnostic argument, not test scope", () => {
 	for (const full of [false, true]) {
 		const normal = fulltestCommands({ debug: false, full }, "/tmp/home", "a".repeat(40));
@@ -47,27 +41,6 @@ test("fork and full plans leave distribution packaging out of the verification g
 			expect(command.argv.some(arg => /(?:bundle-dist|build-binary|compile-binary)\.ts$/.test(arg))).toBe(false);
 		}
 	}
-});
-
-test("the full plan shares one Bun pool while the fork plan keeps both TypeScript lanes", () => {
-	const typeScript = (full: boolean) =>
-		fulltestCommands({ debug: false, full }, "/tmp/home").filter(
-			command => command.argv[1] === "scripts/ci-test-ts.ts",
-		);
-	const full = typeScript(true);
-	expect(full).toHaveLength(1);
-	expect(full[0]?.argv).toEqual([
-		"bun",
-		"scripts/ci-test-ts.ts",
-		"all",
-		"--exclude-desktop",
-		"--unsharded",
-		"--shared-fulltest-pool",
-	]);
-	expect(full[0]?.env?.OMP_TEST_CONCURRENCY).toBe("all");
-	const fork = typeScript(false);
-	expect(fork.map(command => command.argv.at(-1))).toEqual(["--defer-startup", "--only-startup"]);
-	for (const command of fork) expect(command.env?.OMP_TEST_CONCURRENCY).toBe("all");
 });
 
 describe("fulltest worker allocation", () => {
@@ -219,6 +192,10 @@ test("fulltest preserves Bun selection and schedules Rust tests only with --full
 			},
 		);
 		expect(observedBase).toBe(!scenario.full && scenario.affected ? baseline : "HEAD");
+		expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
+		if (!scenario.full) {
+			expect(commands.flatMap(command => command.argv)).not.toContain("scripts/test-report-py.ts");
+		}
 		const rust = commands.filter(command => command.label.startsWith("test/Rust"));
 		expect(rust.map(command => command.label).sort()).toEqual(
 			scenario.full ? ["test/Rust SDK", "test/Rust workspace"] : [],
@@ -232,6 +209,7 @@ test("fulltest preserves Bun selection and schedules Rust tests only with --full
 			]);
 		}
 		const ts = commands.filter(command => command.label.startsWith("test/TypeScript"));
+		for (const command of ts) expect(command.env?.OMP_TEST_CONCURRENCY).toBe("all");
 		if (scenario.full) {
 			expect(
 				commands

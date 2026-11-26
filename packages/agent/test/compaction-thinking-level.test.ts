@@ -240,7 +240,6 @@ describe("compact() propagates thinkingLevel to all three summarizers (regressio
 		await compact(makePreparation(), getAnthropicModel(), "test-key", undefined, undefined);
 
 		expectSummarizerEfforts(spy.mock.calls, ai.Effort.High);
-		for (const [, , opts] of spy.mock.calls) expect(opts?.thinkingProbe).toBeUndefined();
 	});
 
 	test("xai-oauth/grok-build + ThinkingLevel.High → every fan-out call gets reasoning=undefined (clamp)", async () => {

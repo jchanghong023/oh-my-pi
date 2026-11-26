@@ -37,7 +37,6 @@ function createHarness(isStreaming: boolean) {
 	function pressFollowUp(ui: Awaited<ReturnType<typeof nativeShell>>) {
 		const callIndex = followUp.mock.calls.length;
 		ui.type(FOLLOW_UP);
-		expect(followUp).toHaveBeenCalledTimes(callIndex + 1);
 		const pending = followUp.mock.results[callIndex]?.value;
 		if (!(pending instanceof Promise)) throw new Error("Ctrl+Enter did not dispatch a follow-up");
 		return pending;

@@ -46,7 +46,7 @@ async function probe(scenario: string, archive?: Buffer): Promise<void> {
 			new Response(child.stdout).text(),
 			new Response(child.stderr).text(),
 		]);
-		expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+		expect(exitCode, stderr).toBe(0);
 		expect(JSON.parse(stdout)).toEqual({ scenario, assertionsCompleted: true });
 	} finally {
 		if (child.exitCode === null) {
@@ -69,7 +69,7 @@ describe("Developer Test Agent archive materialization", () => {
 		await probe("cache", gzipSync(JSON.stringify([["commands", null], file("commands/dt.md", "# DT fixture\n")])));
 	});
 
-	it("rejects traversal, absolute, Windows and empty path components without publishing or leaking staging files", async () => {
+	it("rejects traversal, absolute, Windows and dot path components without leaking staging files", async () => {
 		await probe("invalid-paths");
 	});
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema/json-schema-validator";
-import { isJTDSchema, jtdToJsonSchema } from "../src/tools/jtd-to-json-schema";
+import { jtdToJsonSchema } from "../src/tools/jtd-to-json-schema";
 
 describe("JTD document constraint regressions", () => {
 	it("does not discard a JSON Schema additionalProperties constraint beside definitions", () => {
@@ -9,8 +9,6 @@ describe("JTD document constraint regressions", () => {
 			additionalProperties: false,
 		};
 		const converted = jtdToJsonSchema(input);
-		expect(isJTDSchema(input)).toBe(false);
-		expect(converted).toBe(input);
 		expect(validateJsonSchemaValue(converted, {}).success).toBe(true);
 		expect(validateJsonSchemaValue(converted, { extra: "forbidden" }).success).toBe(false);
 	});

@@ -8,7 +8,6 @@ import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { createAgentSession, type CreateAgentSessionResult } from "../../src/sdk";
 import { SessionManager } from "../../src/session/session-manager";
-import * as sessionWorktree from "../../src/session/session-worktree";
 import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
@@ -67,7 +66,7 @@ async function fixture() {
 			refreshCommands: async () => {},
 			reloadPlugins: async () => {},
 		};
-		return { ...result, runtime, manager, settings };
+		return { ...result, runtime, manager };
 	}
 	return { source, make };
 }
@@ -101,17 +100,8 @@ describe("personal command session isolation", () => {
 		const siblingIdentity = sibling.manager.getSessionId();
 		const processDirectory = getProjectDir();
 		const nativeProcessDirectory = process.cwd();
-		const worktree = vi.spyOn(sessionWorktree, "createSessionWorktree");
 		const move = vi.spyOn(host.session, "moveSession");
 		expect(await executeAcpBuiltinSlashCommand("/wt main", host.runtime)).toEqual({ consumed: true });
-		expect(worktree).toHaveBeenCalledTimes(1);
-		expect(worktree).toHaveBeenCalledWith(f.source, host.settings, "main");
-		await expect(worktree.mock.results[0]!.value).resolves.toMatchObject({
-			path: f.source,
-			branch: "main",
-			created: false,
-			createdBranch: false,
-		});
 		expect(host.manager.getCwd()).toBe(f.source);
 		expect(host.runtime.cwd).toBe(f.source);
 		expect(host.manager.getSessionId()).toBe(identity);

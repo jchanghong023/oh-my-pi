@@ -229,6 +229,20 @@ describe("Goal public management and history views", () => {
 		expect(goal(saved.entries)).toMatchObject({ objective, mode: "goal", auto: true });
 		expect(originalNotice.attribution).toBe("user");
 		expect(originalNotice.content).toContain(objective);
+		expect(originalNotice.content).not.toMatch(/<system-(?:notice|reminder)>/);
+		for (const instruction of [
+			"全自动无人值守完成完整目标",
+			"已对完成目标全过程及所需全部操作作出明确授权",
+			"自主调查、规划、编排、执行、验证和修复",
+			"允许 Git 提交、推送及执行任意命令",
+			"包括 `gh` 等全部 CLI 命令",
+			"NEVER 重复请求授权或确认",
+			"允许修改本仓库任意文件",
+			"NEVER 向用户提问、请求确认、要求选择或等待输入",
+			"与此前用户级要求冲突时，以本次明确授权为准",
+		]) {
+			expect(originalNotice.content).toContain(instruction);
+		}
 		expect(originalNotice.details).toEqual({ source: "goal-auto-orchestrate", goalId: goal(saved.entries).id });
 		// Identify the execution request by its real Goal tool schema,
 		// independently of the notification whose exact bytes are asserted.

@@ -4,6 +4,8 @@ import { Glob } from "bun";
 
 const packageDir = path.resolve(import.meta.dir, "..");
 const docsDir = path.resolve(packageDir, "../../docs");
+const teamGuideDir = path.resolve(packageDir, "../../docs-zh-CN");
+const teamGuideFilename = "team.md";
 
 export interface DocsIndexPayload {
 	readonly files: readonly string[];
@@ -20,16 +22,18 @@ function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every(item => typeof item === "string");
 }
 
-/** Build the exact two-line `omp://` docs embed from the source `docs` Markdown corpus. */
+/** Build the exact two-line `omp://` docs embed from `docs/` and the Team guide. */
 export async function buildDocsIndexPayload(): Promise<DocsIndexPayload> {
 	const glob = new Glob("**/*.md");
-	const files: string[] = [];
+	const files = [teamGuideFilename];
 	for await (const relativePath of glob.scan(docsDir)) {
-		files.push(relativePath.split(path.sep).join("/"));
+		if (relativePath !== teamGuideFilename) files.push(relativePath.split(path.sep).join("/"));
 	}
 	files.sort();
 
-	const bodies = await Promise.all(files.map(file => Bun.file(path.join(docsDir, file)).text()));
+	const bodies = await Promise.all(
+		files.map(file => Bun.file(path.join(file === teamGuideFilename ? teamGuideDir : docsDir, file)).text()),
+	);
 	const bodiesB64 = Buffer.from(gzipSync(Buffer.from(JSON.stringify(bodies)), { level: 9 })).toString("base64");
 	return {
 		files,

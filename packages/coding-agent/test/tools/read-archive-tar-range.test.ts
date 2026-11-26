@@ -47,7 +47,7 @@ it("lists a plain TAR past the in-memory ceiling and reads only its selected sma
 	expect(await Bun.file(temp.join("identity.json")).exists()).toBe(false);
 });
 
-it("reads plain TAR members using a safe platform-specific index strategy", async () => {
+it("reads plain TAR members across executions without re-indexing on POSIX", async () => {
 	await using temp = await TempDir.create("@read-tar-cache-");
 	const archivePath = temp.join("members.tar");
 	await ar.writeArchive(archivePath, "tar", [
@@ -81,10 +81,7 @@ it("reads plain TAR members using a safe platform-specific index strategy", asyn
 		path: `${archivePath}:second.txt:raw`,
 	});
 	expect(second.content).toEqual([{ type: "text", text: "second" }]);
-	if (process.platform === "win32") {
-		// Windows metadata cannot reliably detect rapid same-size rewrites.
-		expect(reads.slice(readsBeforeSecondMember).at(-1)).toEqual([1536, 1542]);
-	} else {
+	if (process.platform !== "win32") {
 		expect(reads.slice(readsBeforeSecondMember)).toEqual([[1536, 1542]]);
 	}
 });

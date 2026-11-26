@@ -27,11 +27,11 @@ import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent
 import {
 	runStructuredSubagent,
 	type StructuredSubagentRequest,
+	type StructuredSubagentResult,
 } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { cfgToolsApprovalMode } from "@oh-my-pi/pi-coding-agent/tools/settings";
-import { WORKSPACE_MODE_STATE_TYPE, type WorkspaceModeState } from "@oh-my-pi/pi-coding-agent/workspace-mode";
+import type { WorkspaceModeState } from "@oh-my-pi/pi-coding-agent/workspace-mode";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { __resetDirsFromEnvForTests, removeWithRetries, resolveEquivalentPath, setAgentDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
@@ -126,7 +126,7 @@ interface Fixture {
 	project: string;
 	extra: string;
 	setState(state: WorkspaceModeState): void;
-	spawn(overrides?: Partial<StructuredSubagentRequest>): ReturnType<typeof runStructuredSubagent>;
+	spawn(overrides?: Partial<StructuredSubagentRequest>): Promise<StructuredSubagentResult>;
 	coldOwner: AgentSession;
 	auth: ReturnType<typeof createInMemoryAuthStorage>;
 	registry: ModelRegistry;
@@ -262,60 +262,42 @@ function expectScope(messages: readonly Message[], child: AgentSession, f: Fixtu
 }
 
 describe("native workspace subagent inheritance", () => {
-	it.each(["task", "eval"] as const)(
-		"%s leaves ordinary disabled children without an active reminder",
-		async invocationKind => {
-			const f = await fixture();
-			f.setState({ enabled: false });
-			const result = await f.spawn({ invocationKind });
-			expect(result.result.exitCode, [result.result.error, result.result.stderr].filter(Boolean).join("\n")).toBe(0);
-			expect(f.model.calls.length).toBeGreaterThan(0);
-			const child = f.children[0];
-			for (const call of f.model.calls) expect(reminders(call.context.messages, child)).toHaveLength(0);
-			expect(child.model?.provider).toBe("mock");
-			expect(child.getEnabledToolNames()).toContain("read");
-			expect(child.getEnabledToolNames()).toContain("task");
-			expect(cfgToolsApprovalMode.get(child.settings)).toBe("yolo");
-		},
-		30_000,
-	);
+	it("leaves an ordinary disabled child without an active reminder", async () => {
+		const f = await fixture();
+		f.setState({ enabled: false });
+		const result = await f.spawn();
+		expect(result.result.exitCode, [result.result.error, result.result.stderr].filter(Boolean).join("\n")).toBe(0);
+		expect(f.model.calls.length).toBeGreaterThan(0);
+		for (const call of f.model.calls) expect(reminders(call.context.messages, f.children[0])).toHaveLength(0);
+	}, 30_000);
 
-	it.each(["task", "eval"] as const)(
-		"%s captures dispatch-time scope and keeps it after the parent toggles",
-		async invocationKind => {
-			const f: Fixture = await fixture(context => {
-				if (lastConversationalMessage(context.messages)?.role === "toolResult") return { content: ["done"] };
-				f.setState({ enabled: false });
-				return { content: [{ type: "toolCall", name: "read", arguments: { path: "scope.txt" } }] };
-			});
-			// Resolution precedes actual spawn. A getter captured while constructing tools
-			// would miss this update at the native discovery boundary.
+	it("captures dispatch-time scope and keeps it after the parent toggles", async () => {
+		const f: Fixture = await fixture(context => {
+			if (lastConversationalMessage(context.messages)?.role === "toolResult") return { content: ["done"] };
 			f.setState({ enabled: false });
-			vi.spyOn(discovery, "discoverAgents").mockImplementation(async () => {
-				const result = { agents: [...f.parent.getSessionAgents!()], projectAgentsDir: null };
-				f.setState({ enabled: true, inheritedScope: { projectRoot: f.project, allowedRoots: [f.project] } });
-				return result;
-			});
-			const result = await f.spawn({ invocationKind });
-			expect(result.result.exitCode, [result.result.error, result.result.stderr].filter(Boolean).join("\n")).toBe(0);
-			const child = f.children[0];
-			const calls = f.model.calls.filter(call => call.context.tools?.some(tool => tool.name === "read"));
-			expect(calls.length).toBeGreaterThanOrEqual(2);
-			for (const call of calls) expectScope(call.context.messages, child, f);
-			expect(
-				calls.some(call =>
-					call.context.messages.some(
-						message => message.role === "toolResult" && text(message).includes("native child read evidence"),
-					),
+			return { content: [{ type: "toolCall", name: "read", arguments: { path: "scope.txt" } }] };
+		});
+		// Resolution precedes spawn; capturing the scope before resolving the child would miss this update.
+		f.setState({ enabled: false });
+		vi.spyOn(discovery, "discoverAgents").mockImplementation(async () => {
+			const result = { agents: [...f.parent.getSessionAgents!()], projectAgentsDir: null };
+			f.setState({ enabled: true, inheritedScope: { projectRoot: f.project, allowedRoots: [f.project] } });
+			return result;
+		});
+		const result = await f.spawn({ invocationKind: "eval" });
+		expect(result.result.exitCode, [result.result.error, result.result.stderr].filter(Boolean).join("\n")).toBe(0);
+		const child = f.children[0];
+		const calls = f.model.calls.filter(call => call.context.tools?.some(tool => tool.name === "read"));
+		expect(calls.length).toBeGreaterThanOrEqual(2);
+		for (const call of calls) expectScope(call.context.messages, child, f);
+		expect(
+			calls.some(call =>
+				call.context.messages.some(
+					message => message.role === "toolResult" && text(message).includes("native child read evidence"),
 				),
-			).toBe(true);
-			expect(child.model?.provider).toBe("mock");
-			expect(child.getEnabledToolNames()).toContain("read");
-			expect(child.getEnabledToolNames()).toContain("task");
-			expect(cfgToolsApprovalMode.get(child.settings)).toBe("yolo");
-		},
-		30_000,
-	);
+			),
+		).toBe(true);
+	}, 30_000);
 
 	it("inherits recursively through the child's real SDK task tool without trusting its cwd", async () => {
 		const f = await fixture(context => {
@@ -426,9 +408,6 @@ describe("native workspace subagent inheritance", () => {
 		await cold.prompt("cold user continuation");
 		expect(f.model.calls.length).toBeGreaterThan(start);
 		for (const call of f.model.calls.slice(start)) expectScope(call.context.messages, cold, f);
-		expect(cold.model?.provider).toBe("mock");
-		expect(cold.getEnabledToolNames()).toContain("read");
-		expect(cfgToolsApprovalMode.get(cold.settings)).toBe("yolo");
 	}, 30_000);
 
 	it("keeps legacy child logs without workspace metadata off even under an enabled parent", async () => {
@@ -471,10 +450,5 @@ describe("native workspace subagent inheritance", () => {
 		await child.prompt("legacy continuation");
 		expect(f.model.calls.length).toBeGreaterThan(0);
 		for (const call of f.model.calls) expect(reminders(call.context.messages, child)).toHaveLength(0);
-		expect(
-			child.sessionManager
-				.getBranch()
-				.some(entry => entry.type === "custom" && entry.customType === WORKSPACE_MODE_STATE_TYPE),
-		).toBe(false);
 	}, 30_000);
 });

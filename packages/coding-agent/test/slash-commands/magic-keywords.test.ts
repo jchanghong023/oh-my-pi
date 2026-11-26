@@ -3,33 +3,27 @@ import {
 	buildAvailableSlashCommands,
 	type AvailableCommandsSession,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
-import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
-import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
+import type { TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
 describe("magic keyword public slash dispatch", () => {
-	it.each(["ultrathink", "orchestrate", "workflowz"])(
-		"expands /%s in TUI and leaves ACP dispatch upstream",
-		async keyword => {
-			const runtime = { session: { model: undefined }, output: () => {} } as unknown as SlashCommandRuntime;
-			expect(await executeAcpBuiltinSlashCommand(`/${keyword} task-marker-43d`, runtime)).toBe(false);
-			let editor = `/${keyword} task-marker-43d`;
-			expect(
-				await executeBuiltinSlashCommand(editor, {
-					ctx: {
-						session: { model: undefined },
-						composer: {
-							setText: (text: string) => {
-								editor = text;
-							},
+	it.each(["ultrathink", "orchestrate", "workflowz"])("clears the TUI draft when /%s expands", async keyword => {
+		let editor = `/${keyword} task-marker-43d`;
+		expect(
+			await executeBuiltinSlashCommand(editor, {
+				ctx: {
+					session: { model: undefined },
+					composer: {
+						setText: (text: string) => {
+							editor = text;
 						},
-						sessionManager: { getCwd: () => "/tmp/commands" },
 					},
-				} as unknown as TuiSlashCommandRuntime),
-			).toBe(`${keyword} task-marker-43d`);
-			expect(editor).toBe("");
-		},
-	);
+					sessionManager: { getCwd: () => "/tmp/commands" },
+				},
+			} as unknown as TuiSlashCommandRuntime),
+		).toBe(`${keyword} task-marker-43d`);
+		expect(editor).toBe("");
+	});
 });
 
 describe("public command inventory", () => {

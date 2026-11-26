@@ -33,7 +33,6 @@ import {
 	cfgTerminalShowProgress,
 	cfgSetupVersion,
 	cfgStatusLineLeftSegments,
-	cfgStatusLineCompactThinkingLevel,
 	cfgSpellingAutocomplete,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
@@ -78,7 +77,6 @@ import { cfgHindsightBankId, cfgHindsightScoping } from "@oh-my-pi/pi-coding-age
 import { cfgEditMode } from "@oh-my-pi/pi-coding-agent/edit/settings";
 import { cfgExaEnabled } from "@oh-my-pi/pi-coding-agent/web/settings";
 import {
-	cfgCompaction,
 	cfgCompactionMethodOrder,
 	cfgSnapcompactSystemPrompt,
 } from "@oh-my-pi/pi-coding-agent/session/context-settings";
@@ -159,14 +157,11 @@ describe("Settings", () => {
 	});
 
 	describe("effective values", () => {
-		it("keeps cloned defaults independent across settings instances", () => {
-			const first = cfgCompaction.get(Settings.isolated());
-			const second = cfgCompaction.get(Settings.isolated());
-			const expected = structuredClone(second);
-			first.methodOrder = [...first.methodOrder].reverse();
-			first.enabled = !first.enabled;
-			expect(second).toEqual(expected);
-			expect(cfgCompaction.get(Settings.isolated())).toEqual(expected);
+		it("does not let one settings instance mutate another's default compaction order", () => {
+			const first = cfgCompactionMethodOrder.get(Settings.isolated());
+			const expected = [...first];
+			(first as Array<(typeof first)[number]>).pop();
+			expect(cfgCompactionMethodOrder.get(Settings.isolated())).toEqual(expected);
 		});
 
 		it("bumps the effective revision when cwd re-resolves scoped arrays", async () => {
@@ -1386,7 +1381,6 @@ describe("Settings", () => {
 			expect(cfgSetupVersion.get(isolated)).toBe(0);
 			expect(cfgShellPath.get(isolated)).toBe("");
 			expect(cfgEnabledModels.get(isolated)).toEqual([]);
-			expect(cfgStatusLineCompactThinkingLevel.get(isolated)).toBe(false);
 		});
 
 		it("treats a config key written without a value as unset", async () => {

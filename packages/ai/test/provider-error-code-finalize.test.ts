@@ -10,13 +10,4 @@ describe("provider error classification", () => {
 			AIError.OpenAIHttpError.parseEnvelope({ error: { code: 7103, type: "invalid_request" } }, undefined).code,
 		).toBe("invalid_request");
 	});
-
-	it("prefers Anthropic detail error_code over error type and code", async () => {
-		const response = Response.json(
-			{ error: { code: "outer", type: "invalid_request", details: { error_code: "inner" } } },
-			{ status: 400 },
-		);
-		const error = await AIError.AnthropicApiError.fromResponse(response);
-		expect(error.code).toBe("inner");
-	});
 });

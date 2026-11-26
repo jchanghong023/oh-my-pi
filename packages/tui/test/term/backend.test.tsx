@@ -86,37 +86,39 @@ describe("TermBackend frame priority", () => {
 		["linux", "yes", 250, 250],
 		["linux", "false", 30, 30],
 		["win32", "1", 30, 30],
-		["darwin", "true", 30, 30],
-	] as const)("coalesces only the configured background frames (%s offline=%s cap=%dms)", (platform, offline, cap, due) => {
-		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-		const previousOffline = process.env.OMP_OFFLINE;
-		Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-		process.env.OMP_OFFLINE = offline;
-		vi.useFakeTimers({ now: 0 });
-		const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-		const driver = new FakeDriver();
-		const rows = signal(["start"]);
-		const surface = createSurface(() => ({ dock: <rows lines={rows} /> }));
-		const backend = new TermBackend({ surface, driver, theme: () => PLAIN_THEME, frameInterval: cap });
-		try {
-			backend.start();
-			vi.advanceTimersByTime(10);
-			for (let i = 0; i < 20; i++) rows.set([`background ${i}`]);
-			vi.advanceTimersByTime(due - 11);
-			expect(driver.frames).toHaveLength(1);
-			vi.advanceTimersByTime(1);
-			expect(driver.frames).toHaveLength(2);
-			expect(driver.viewport).toEqual(["background 19"]);
-		} finally {
-			backend.stop();
-			surface.dispose();
-			clock.mockRestore();
-			vi.useRealTimers();
-			Object.defineProperty(process, "platform", platformDescriptor);
-			if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
-			else process.env.OMP_OFFLINE = previousOffline;
-		}
-	});
+	] as const)(
+		"coalesces only the configured background frames (%s offline=%s cap=%dms)",
+		(platform, offline, cap, due) => {
+			const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+			const previousOffline = process.env.OMP_OFFLINE;
+			Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+			process.env.OMP_OFFLINE = offline;
+			vi.useFakeTimers({ now: 0 });
+			const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+			const driver = new FakeDriver();
+			const rows = signal(["start"]);
+			const surface = createSurface(() => ({ dock: <rows lines={rows} /> }));
+			const backend = new TermBackend({ surface, driver, theme: () => PLAIN_THEME, frameInterval: cap });
+			try {
+				backend.start();
+				vi.advanceTimersByTime(10);
+				for (let i = 0; i < 20; i++) rows.set([`background ${i}`]);
+				vi.advanceTimersByTime(due - 11);
+				expect(driver.frames).toHaveLength(1);
+				vi.advanceTimersByTime(1);
+				expect(driver.frames).toHaveLength(2);
+				expect(driver.viewport).toEqual(["background 19"]);
+			} finally {
+				backend.stop();
+				surface.dispose();
+				clock.mockRestore();
+				vi.useRealTimers();
+				Object.defineProperty(process, "platform", platformDescriptor);
+				if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
+				else process.env.OMP_OFFLINE = previousOffline;
+			}
+		},
+	);
 
 	it("accelerates input that changes the display, but not an intercepted key", () => {
 		const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -129,9 +131,15 @@ describe("TermBackend frame priority", () => {
 		const driver = new FakeDriver();
 		const surface = createSurface(() => ({ dock: <rows lines={rows} /> }));
 		const backend = new TermBackend({
-			driver, surface, theme: () => PLAIN_THEME, frameInterval: 30,
+			driver,
+			surface,
+			theme: () => PLAIN_THEME,
+			frameInterval: 30,
 			intercept: event => event.type === "key" && event.key.id === "x",
-			onKey: () => { rows.set(["input"]); return true; },
+			onKey: () => {
+				rows.set(["input"]);
+				return true;
+			},
 		});
 		const key = (id: string) => driver.input!({ type: "key", key: { id, kind: "press", raw: id, text: id } });
 		try {

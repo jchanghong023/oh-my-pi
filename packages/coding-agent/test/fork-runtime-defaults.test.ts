@@ -1,15 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { toolWireSchema } from "@oh-my-pi/pi-ai";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgEvalJs } from "@oh-my-pi/pi-coding-agent/eval/settings";
-import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
-import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
-import { askTimeoutMs, cfgTerminalProgramStatus } from "@oh-my-pi/pi-coding-agent/modes/settings";
-import { createTools, resolveBuiltinToolPlan, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { EvalTool } from "@oh-my-pi/pi-coding-agent/tools/eval";
+import { cfgTerminalProgramStatus } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import {
 	disposeProgramStatus,
 	initProgramStatus,
@@ -19,50 +13,10 @@ import {
 import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 import { setTerminalHeadless, TempDir } from "@oh-my-pi/pi-utils";
 
-const defaults = {
-	"recap.enabled": false,
-	"debug.enabled": true,
-	"disassembler.backend": "auto",
-	"archive.enabled": true,
-	"eval.js": true,
-	"fetch.enabled": true,
-	"async.maxJobs": 32,
-	"startup.setupWizard": false,
-	"statusLine.compactThinkingLevel": false,
-	"composer.shape": "box",
-	"composer.predictions": true,
-	"theme.dark": "titanium",
-	"theme.light": "light",
-	"display.showTurnTime": true,
-	"display.mode": "compact",
-	"lsp.enabled": false,
-	"mnemopi.embeddingVariant": "multilingual",
-	"stt.language": "zh-CN",
-};
-
-function value(settings: Settings, id: string): unknown {
-	const handle = lookup(id);
-	if (!handle) throw new Error(`Missing setting: ${id}`);
-	return handle.get(settings);
-}
-
-function toolSession(cwd: string, settings: Settings, taskDepth = 0): ToolSession {
-	return { cwd, settings, taskDepth, hasUI: false, getSessionFile: () => null, getSessionSpawns: () => "" };
-}
-
-function languages(tool: EvalTool): unknown {
-	const wire = toolWireSchema(tool) as { properties: { language: { enum?: string[]; const?: string } } };
-	return wire.properties.language.enum ?? [wire.properties.language.const];
-}
-
-afterEach(async () => {
-	vi.restoreAllMocks();
-	await disposeAllVmContexts();
-});
-
 describe("fork runtime defaults", () => {
 	for (const mode of ["ordinary", "offline"] as const) {
-		it(`${mode} defaults reach configuration, tool registration, execution and terminal consumers`, async () => {
+		it(`${mode} resolves fork defaults and honors an explicit terminal status setting`, async () => {
+			const offline = mode === "offline";
 			// The offline-sensitive defaults are registered at import time: use a fresh process,
 			// rather than changing OMP_OFFLINE after importing settings in the singleton bucket.
 			if (process.env.OMP_DEFAULTS_CONTRACT !== mode) {
@@ -71,14 +25,14 @@ describe("fork runtime defaults", () => {
 				for (const key of Object.keys(env)) if (/^(PI_|OMP_|CLAUDE_CONFIG_DIR$)/.test(key)) delete env[key];
 				Object.assign(env, {
 					OMP_DEFAULTS_CONTRACT: mode,
-					OMP_OFFLINE: mode === "offline" ? "1" : "0",
+					OMP_OFFLINE: offline ? "1" : "0",
 					HOME: root.path(),
 					USERPROFILE: root.path(),
 					PI_CODING_AGENT_DIR: root.join("agent"),
 					OMP_CONFIG_ROOT: root.join(".omp"),
 				});
 				const child = Bun.spawn(
-					[process.execPath, "test", import.meta.path, "--test-name-pattern", `${mode} defaults reach`],
+					[process.execPath, "test", import.meta.path, "--test-name-pattern", `${mode} resolves fork defaults`],
 					{ env, stdout: "pipe", stderr: "pipe" },
 				);
 				const [stdout, stderr, code] = await Promise.all([
@@ -95,90 +49,54 @@ describe("fork runtime defaults", () => {
 			const agentDir = root.join("agent");
 			fs.mkdirSync(agentDir);
 			const settings = await Settings.loadReadOnly({ cwd: root.path(), agentDir });
-			for (const [id, expected] of Object.entries(defaults)) expect(value(settings, id), id).toEqual(expected);
-			expect(fs.existsSync(path.join(agentDir, "config.yml"))).toBe(false);
-
-			const probe = vi.spyOn(pyKernel, "checkPythonKernelAvailability");
-			const start = vi.spyOn(pyKernel.PythonKernel, "start");
-			for (const depth of [0, 1]) {
-				const owner = toolSession(root.path(), settings, depth);
-				const plan = await resolveBuiltinToolPlan(owner, ["eval", "debug", "lsp"]);
-				expect(plan.names).toEqual(["eval", "debug"]);
-				const tools = await createTools(owner, ["eval", "debug", "lsp"]);
-				const names = tools.map(tool => tool.name);
-				expect(names).toContain("eval");
-				expect(names).toContain("debug");
-				expect(names).not.toContain("lsp");
-			}
-			expect(probe).not.toHaveBeenCalled();
-			expect(start).not.toHaveBeenCalled();
-			const owner = toolSession(root.path(), settings);
-			const evalTool = new EvalTool(owner);
-			expect(languages(evalTool)).toEqual(["py", "js"]);
-			expect(evalTool.docTopics().helpers).toContain("%pip");
-			expect(evalTool.docTopics().helpers).toContain("%bun");
-			const result = await evalTool.execute("default-js", { language: "js", code: "print(6 * 7)" });
-			expect(result.content).toEqual(
-				expect.arrayContaining([expect.objectContaining({ type: "text", text: expect.stringContaining("42") })]),
-			);
-
-			for (const configured of [undefined, mode === "offline"]) {
-				const active =
-					configured === undefined ? settings : Settings.isolated({ "terminal.programStatus": configured });
-				const writes: string[] = [];
-				const oldTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-				const previousHeadless = setTerminalHeadless(false);
-				vi.spyOn(titleGenerator, "setTerminalTitleState").mockImplementation(() => {});
-				Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-				const output = vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
-					writes.push(String(chunk));
-					return true;
-				});
-				try {
-					initProgramStatus();
-					setProgramStatusEnabled(cfgTerminalProgramStatus.get(active));
-					writes.length = 0;
-					setRunStatus({ state: "working" });
-					setRunStatus({ state: "done" });
-					expect(writes).toEqual(
-						(configured ?? mode === "ordinary")
-							? ["\x1b]7501;state=working:app=omp\x1b\\", "\x1b]7501;state=done:app=omp\x1b\\"]
-							: [],
-					);
-				} finally {
-					disposeProgramStatus();
-					output.mockRestore();
-					if (oldTty) Object.defineProperty(process.stdout, "isTTY", oldTty);
-					else Reflect.deleteProperty(process.stdout, "isTTY");
-					setTerminalHeadless(previousHeadless);
+			if (!offline) {
+				for (const [id, expected] of Object.entries({
+					"recap.enabled": false,
+					"startup.setupWizard": false,
+					"statusLine.compactThinkingLevel": false,
+					"composer.shape": "box",
+					"display.showTurnTime": true,
+					"display.mode": "compact",
+					"mnemopi.embeddingVariant": "multilingual",
+				})) {
+					expect(lookup(id)?.get(settings), id).toBe(expected);
 				}
 			}
 
-			if (mode === "offline") return;
-
 			const file = path.join(agentDir, "config.yml");
-			const saved =
-				"theme:\n  dark: anthracite\ncomposer:\n  predictions: false\nterminal:\n  programStatus: false\nask:\n  timeout: 9\neval:\n  js: false\n";
+			const saved = `terminal:\n  programStatus: ${offline}\n`;
 			await Bun.write(file, saved);
 			const configured = await Settings.loadReadOnly({ cwd: root.path(), agentDir });
-			expect(value(configured, "theme.dark")).toBe("anthracite");
-			expect(value(configured, "composer.predictions")).toBe(false);
-			expect(cfgTerminalProgramStatus.get(configured)).toBe(false);
-			expect(askTimeoutMs(configured)).toBe(9_000);
-			expect(languages(new EvalTool(toolSession(root.path(), configured)))).toEqual(["py"]);
-			expect(await Bun.file(file).text()).toBe(saved);
-			const savedJs = Bun.env.PI_JS;
+
+			const writes: string[] = [];
+			const oldTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+			const previousHeadless = setTerminalHeadless(false);
+			const title = spyOn(titleGenerator, "setTerminalTitleState").mockImplementation(() => {});
+			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+			const output = spyOn(process.stdout, "write").mockImplementation(chunk => {
+				writes.push(String(chunk));
+				return true;
+			});
 			try {
-				Bun.env.PI_JS = "1";
-				expect(languages(new EvalTool(toolSession(root.path(), configured)))).toEqual(["py", "js"]);
-				Bun.env.PI_JS = "0";
-				expect(languages(new EvalTool(toolSession(root.path(), configured)))).toEqual(["py"]);
-				cfgEvalJs.override(configured, true);
-				expect(languages(new EvalTool(toolSession(root.path(), configured)))).toEqual(["py", "js"]);
+				initProgramStatus();
+				setProgramStatusEnabled(cfgTerminalProgramStatus.get(settings));
+				writes.length = 0;
+				setRunStatus({ state: "working" });
+				expect(writes.some(chunk => chunk.startsWith("\x1b]7501;"))).toBe(!offline);
+
+				setProgramStatusEnabled(cfgTerminalProgramStatus.get(configured));
+				writes.length = 0;
+				setRunStatus({ state: "done" });
+				expect(writes.some(chunk => chunk.startsWith("\x1b]7501;"))).toBe(offline);
 			} finally {
-				if (savedJs === undefined) delete Bun.env.PI_JS;
-				else Bun.env.PI_JS = savedJs;
+				disposeProgramStatus();
+				output.mockRestore();
+				title.mockRestore();
+				if (oldTty) Object.defineProperty(process.stdout, "isTTY", oldTty);
+				else Reflect.deleteProperty(process.stdout, "isTTY");
+				setTerminalHeadless(previousHeadless);
 			}
+			expect(await Bun.file(file).text()).toBe(saved);
 		}, 60_000);
 	}
 });

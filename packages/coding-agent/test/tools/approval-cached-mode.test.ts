@@ -97,20 +97,13 @@ function chooseAnswer(prompt: ExtensionApprovalPrompt, answer: ExtensionApproval
 }
 
 describe("always-ask-cached resolution", () => {
-	it("allows targeted reads in always-ask but asks in cached mode until granted", () => {
+	it("allows targeted reads in always-ask unless the user overrides the policy", () => {
 		const agentDir = freshAgentDir();
 		const read = pathTool("read", "read", agentDir);
 		const args = { path: "notes.txt" };
-		const grants = getApprovalGrants(agentDir, "s1");
-		expect(resolveApproval(read, args, "always-ask", {}, grants)).toMatchObject({ policy: "allow", source: "mode" });
-		expect(resolveApproval(read, args, "always-ask-cached", {}, grants)).toMatchObject({
-			policy: "prompt",
-			source: "mode",
-		});
-		grants.record(approvalGrantKey("read", approvalTargetKey(agentDir, args.path)!), "read", "session");
-		expect(resolveApproval(read, args, "always-ask-cached", {}, grants).policy).toBe("allow");
-		expect(resolveApproval(read, args, "always-ask", { read: "prompt" }, grants).policy).toBe("prompt");
-		expect(resolveApproval(read, args, "always-ask", { read: "deny" }, grants).policy).toBe("deny");
+		expect(resolveApproval(read, args, "always-ask", {}).policy).toBe("allow");
+		expect(resolveApproval(read, args, "always-ask", { read: "prompt" }).policy).toBe("prompt");
+		expect(resolveApproval(read, args, "always-ask", { read: "deny" }).policy).toBe("deny");
 	});
 
 	it("does not allow exec-tier targets through remembered grants", () => {
@@ -518,7 +511,13 @@ describe("always-ask-cached wrapper cycle", () => {
 			return "允许";
 		});
 		const wrapper = new ExtensionToolWrapper(tool, runnerWith(session, select));
-		const ctx = { ...context(session), settings: Settings.isolated({ "tools.approvalMode": "guarded" }) };
+		const ctx = {
+			...context(session),
+			settings: Settings.isolated({
+				"tools.approvalMode": "guarded",
+				"tools.approval": { critical_probe: "allow" },
+			}),
+		};
 		for (const id of ["critical-1", "critical-2"]) {
 			expect((await wrapper.execute(id, { path: "a.txt" }, undefined, undefined, ctx)).content).toEqual([
 				{ type: "text", text: "executed" },

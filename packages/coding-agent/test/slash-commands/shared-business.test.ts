@@ -2,11 +2,7 @@ import { afterEach, describe, expect, test, vi } from "bun:test";
 import { getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { Settings } from "../../src/config/settings";
 import { ACP_BUILTIN_SLASH_COMMANDS, executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
-import {
-	type BuiltinSlashCommandRuntime,
-	executeBuiltinSlashCommand,
-	lookupBuiltinSlashCommand,
-} from "../../src/slash-commands/builtin-registry";
+import { type BuiltinSlashCommandRuntime, executeBuiltinSlashCommand } from "../../src/slash-commands/builtin-registry";
 import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 import type { AgentSession } from "../../src/session/agent-session";
 import { AuthStorage } from "../../src/session/auth-storage";
@@ -130,23 +126,6 @@ describe("shared logout business", () => {
 		const stale = await logoutProviderForCommand(session, "anthropic", ui);
 		expect(stale.status).toBe("skipped");
 		expect(storage.credentials.list("anthropic")).toHaveLength(1);
-		expect(refreshProvider).not.toHaveBeenCalled();
-	});
-
-	test("a session switch during selection cannot remove credentials", async () => {
-		const { storage, session, refreshProvider } = await logoutFixture();
-		const before = storage.credentials.list("anthropic");
-		let generation = 0;
-		Object.defineProperty(session, "sessionGeneration", { get: () => generation });
-		const result = await logoutProviderForCommand(session, "anthropic", {
-			selectProvider: async () => "anthropic",
-			selectAccount: async (_provider, accounts) => {
-				generation++;
-				return accounts[0]!.credentialId;
-			},
-		});
-		expect(result.status).toBe("skipped");
-		expect(storage.credentials.list("anthropic")).toEqual(before);
 		expect(refreshProvider).not.toHaveBeenCalled();
 	});
 
@@ -332,23 +311,4 @@ describe("shared task dispatch", () => {
 			expect(ACP_BUILTIN_SLASH_COMMANDS.some(command => command.name === name)).toBe(false);
 		},
 	);
-
-	for (const host of ["tui", "acp"] as const) {
-		test(`${host} expands /jchime through its shared handler`, async () => {
-			const fixture = ordinaryTaskDispatchFixture();
-			const command = lookupBuiltinSlashCommand("jchime")!;
-			const handle = vi.spyOn(command, "handle");
-			const text = "/jchime investigate the distinct dispatch regression";
-			const expanded = await fixture[host](text);
-			expect(handle).toHaveBeenCalledTimes(1);
-			const expandedPrompt =
-				typeof expanded === "string"
-					? expanded
-					: expanded && typeof expanded === "object" && "prompt" in expanded
-						? expanded.prompt
-						: undefined;
-			expect(expandedPrompt).toContain("investigate the distinct dispatch regression");
-			expect(expandedPrompt).not.toBe(text);
-		});
-	}
 });

@@ -11,8 +11,6 @@ A call runs one of these either directly (a top-level tool call, matched by its 
 
 `resolveDispatchDetails(toolName, result)` reads a completed `resolve`/`reject` from whichever surface ran it: a direct result carries `ResolveDetails` on `details`, and a `bash` result is searched backwards through its `details.toolCommands` records for the last `execute` dispatch of `resolve`/`reject`, parsed from that record's `inner`. `ResolveDetails` holds `action` (`apply` or `discard`), `reason`, the pending action's `label`, its `sourceToolName`, and any `sourceResultDetails` from the wrapped tool result.
 
-Run `<command> --help` through `bash` for usage without executing the command. When commands are not mounted, use the top-level tool schema.
-
 ## Preview flows
 
 Preview producers call `queueResolveHandler(...)` with `apply(reason)` and optional `reject(reason)` callbacks. Each preview receives a unique pending-invoker ID in `ToolChoiceQueue`, so stacked previews do not overwrite one another.

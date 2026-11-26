@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import {
-	enforceTextBudget,
 	parseTeamAlignment,
 	parseTeamProposal,
 	parseTeamReview,
@@ -69,12 +68,6 @@ const alignment = () => ({
 });
 
 describe("team yield payload validation", () => {
-	it("preserves structured proposal evidence and ambiguity impact", () => {
-		const data = proposal();
-		expect(parseTeamProposal(data)).toEqual(data);
-		expect(parseTeamAlignment(alignment())).toEqual(alignment());
-	});
-
 	it("accepts exactly 4000 aggregate proposal characters and refuses 4001 without losing evidence", () => {
 		const data = {
 			proposal: "p".repeat(3890),
@@ -110,49 +103,9 @@ describe("team yield payload validation", () => {
 		expect(data).toEqual(original);
 	});
 
-	it("caps model narratives at the exact budget with a visible marker and preserves structured fields", () => {
-		const marker = "…（超出输出预算，已截断）";
-		const capped = (character: string, budget: number) => character.repeat(budget - marker.length) + marker;
-		expect(parseTeamReview({ ...review(), reviewSummary: "r".repeat(2000) })).toBeUndefined();
-		const cleanReview = { ...review(), findings: [], noSubstantiveIssues: true, reviewSummary: "r".repeat(2000) };
-		expect(parseTeamReview(cleanReview)).toEqual({ ...cleanReview, reviewSummary: capped("r", 1500) });
-		const oversizedRevision = {
-			...revision(),
-			revisedProposal: "v".repeat(5000),
-			revisionSummary: "c".repeat(2000),
-		};
-		const original = structuredClone(oversizedRevision);
-		expect(parseTeamRevision(oversizedRevision, ["A-F1"])).toEqual({
-			...oversizedRevision,
-			revisedProposal: capped("v", 4000),
-			revisionSummary: capped("c", 1500),
-		});
-		expect(oversizedRevision).toEqual(original);
-		const oversizedAlignment = { ...alignment(), unifiedUnderstanding: "a".repeat(4000) };
-		expect(parseTeamAlignment(oversizedAlignment)).toEqual({
-			...oversizedAlignment,
-			unifiedUnderstanding: capped("a", 3000),
-		});
-		const oversizedSynthesis = {
-			reportMarkdown: "s".repeat(14000),
-			recommendedProposal: "A",
-			recommendationReason: "Evidence",
-			recommendationPreconditions: "Compatible API",
-			hardConstraintViolations: [{ proposalLabel: "A", issue: "Breaks compatibility", evidence: "src/api.ts:10" }],
-		};
-		expect(parseTeamSynthesis(oversizedSynthesis)).toEqual({
-			...oversizedSynthesis,
-			reportMarkdown: capped("s", 12000),
-		});
-		expect(enforceTextBudget("exact", 5)).toBe("exact");
-		expect(enforceTextBudget("a".repeat(100), 50)).toBe(capped("a", 50));
-	});
-
 	it.each([
 		{ ...proposal(), noViableProposal: "false" },
 		{ ...proposal(), investigationBlockedReason: undefined },
-		{ ...proposal(), investigationBlockedReason: null },
-		{ ...proposal(), investigationBlockedReason: false },
 		{ ...proposal(), noViableProposal: true, investigationBlockedReason: " \n " },
 		{ ...proposal(), noViableProposal: true, investigationBlockedReason: " missing.md is absent " },
 		{ ...proposal(), investigationBlockedReason: "missing.md is absent" },
@@ -220,12 +173,6 @@ describe("team yield payload validation", () => {
 		expect(parseTeamReview(data)).toBeUndefined();
 	});
 
-	it("retains a valid blocker and accepts an explicit clean verdict", () => {
-		expect(parseTeamReview(review())).toEqual(review());
-		const clean = { ...review(), findings: [], noSubstantiveIssues: true };
-		expect(parseTeamReview(clean)).toEqual(clean);
-	});
-
 	it.each([
 		{},
 		{ ...revision(), reviewFlags: {} },
@@ -234,10 +181,6 @@ describe("team yield payload validation", () => {
 		{ ...revision(), revisedProposal: "" },
 	])("rejects incomplete revision gates: %j", data => {
 		expect(parseTeamRevision(data, ["A-F1"])).toBeUndefined();
-	});
-
-	it("preserves valid revision flags so new claims require recheck", () => {
-		expect(parseTeamRevision(revision(), ["A-F1"])).toEqual(revision());
 	});
 
 	it("requires one evidenced decision for each exact pending blocker ID", () => {

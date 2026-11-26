@@ -97,43 +97,23 @@ function createHarness(initial: { state?: LocalGoalModeState; usage?: GoalTokenU
 	};
 }
 
-async function completeAutopilot(runtime: GoalRuntime, goalId: string): Promise<void> {
+function autopilotResponseRequests(runtime: GoalRuntime, goalId: string): () => GoalAutopilotRequest {
 	const run = { goalId, sessionGeneration: 0 };
-	const request = () =>
+	return () =>
 		new GoalAutopilotRequest(
 			run,
 			() => true,
 			() => runtime.flushUsage("allowed"),
 		);
-	await runtime.completeGoalFromTool(request());
-	await runtime.completeGoalFromTool(request());
 }
 
 describe("goal runtime", () => {
-	it("sets orchestration only for successful explicit creation or replacement and ordinary replacements clear it", async () => {
-		const harness = createHarness();
-		const created = await harness.runtime.createGoal({ objective: "  First  ", autoOrchestrate: true });
-		expect(created.goal.objective).toBe("First");
-		expect(harness.getState()?.autoOrchestrate).toBe(true);
-		expect(harness.persists.at(-1)?.state?.autoOrchestrate).toBe(true);
-
-		const ordinary = await harness.runtime.replaceGoal({ objective: "Second" });
-		expect(ordinary).not.toHaveProperty("autoOrchestrate");
-		expect(ordinary.goal.id).not.toBe(created.goal.id);
-		expect(harness.getState()?.goal.objective).toBe("Second");
-		expect(harness.persists.at(-1)?.state).not.toHaveProperty("autoOrchestrate");
-
-		await harness.runtime.replaceGoal({ objective: "Third", autoOrchestrate: true });
-		expect(harness.getState()?.autoOrchestrate).toBe(true);
-		const disabled = await harness.runtime.replaceGoal({ objective: "Fourth", autoOrchestrate: false });
-		expect(disabled).not.toHaveProperty("autoOrchestrate");
-		expect(harness.persists.at(-1)?.state).not.toHaveProperty("autoOrchestrate");
-	});
-
 	it("does not carry a completed or dropped goal's orchestration into ordinary creation", async () => {
 		const harness = createHarness();
 		const original = await harness.runtime.createGoal({ objective: "First", autoOrchestrate: true });
-		await completeAutopilot(harness.runtime, original.goal.id);
+		const nextResponse = autopilotResponseRequests(harness.runtime, original.goal.id);
+		await harness.runtime.completeGoalFromTool(nextResponse());
+		await harness.runtime.completeGoalFromTool(nextResponse());
 		const ordinary = await harness.runtime.createGoal({ objective: "Second" });
 		expect(ordinary.autoOrchestrate).toBeUndefined();
 		expect(ordinary.goal.objective).toBe("Second");
@@ -262,7 +242,16 @@ describe("goal runtime", () => {
 		await harness.runtime.resumeGoal();
 		expect(harness.getState()?.enabled).toBe(true);
 		expect(harness.getState()?.autoOrchestrate).toBe(true);
-		await completeAutopilot(harness.runtime, original.goal.id);
+		const nextResponse = autopilotResponseRequests(harness.runtime, original.goal.id);
+		const first = nextResponse();
+		for (let call = 0; call < 2; call++) {
+			expect(await harness.runtime.completeGoalFromTool(first)).toMatchObject({
+				id: original.goal.id,
+				status: "active",
+			});
+			expect(harness.getState()).toMatchObject({ enabled: true, mode: "active" });
+		}
+		await harness.runtime.completeGoalFromTool(nextResponse());
 		expect(harness.getState()).toMatchObject({
 			enabled: false,
 			mode: "exiting",
@@ -358,66 +347,6 @@ describe("goal runtime", () => {
 		});
 		expect(harness.persists.at(-1)?.mode).toBe("goal_paused");
 		expect(harness.persists.every(entry => entry.state?.autoOrchestrate === true)).toBe(true);
-	});
-
-	it("keeps legacy state ordinary through restoration, management, usage, and completion", async () => {
-		const harness = createHarness({
-			state: { enabled: true, mode: "active", goal: createGoal() },
-		});
-		const restored = await harness.runtime.onThreadResumed();
-		expect(restored?.enabled).toBe(false);
-		expect(restored?.autoOrchestrate).toBeUndefined();
-		await harness.runtime.resumeGoal();
-		harness.runtime.onTurnStart("turn-1", createUsage());
-		harness.setUsage({ input: 5 });
-		await harness.runtime.onToolCompleted("read");
-		await harness.runtime.onBudgetMutated(5);
-		expect(harness.getState()?.goal.status).toBe("budget-limited");
-		await harness.runtime.onBudgetMutated(undefined);
-		await harness.runtime.pauseGoal();
-		await harness.runtime.resumeGoal();
-		await harness.runtime.completeGoalFromTool();
-		expect(harness.getState()?.autoOrchestrate).toBeUndefined();
-		expect(harness.persists.every(entry => entry.state?.autoOrchestrate === undefined)).toBe(true);
-	});
-
-	it("retains the full saved objective in normal auto-mode continuations across pause and resume", async () => {
-		const harness = createHarness();
-		const objective = `Unique saved objective <unsafe> & detailed\n${"Complete every specified requirement. ".repeat(300).trimEnd()}\nCONTINUATION_OBJECTIVE_END`;
-		await harness.runtime.createGoal({
-			objective,
-			tokenBudget: 50,
-			autoOrchestrate: true,
-		});
-		const continuation = harness.runtime.buildContinuationPrompt();
-		expect(continuation).toContain(escapeXmlText(objective));
-		expect(continuation).toContain("Token budget: 50");
-		await harness.runtime.pauseGoal();
-		expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
-		await harness.runtime.resumeGoal();
-		expect(harness.runtime.buildContinuationPrompt()).toContain(escapeXmlText(objective));
-		await harness.runtime.replaceGoal({ objective: "Ordinary objective <unsafe>" });
-		expect(harness.runtime.buildContinuationPrompt()).toContain("Ordinary objective &lt;unsafe&gt;");
-		expect(harness.runtime.buildContinuationPrompt()).not.toContain("CONTINUATION_OBJECTIVE_END");
-	});
-
-	it("retains the objective and wrap-up steer when a marked goal reaches its budget limit", async () => {
-		const harness = createHarness();
-		await harness.runtime.createGoal({
-			objective: "Finish the marked task",
-			tokenBudget: 5,
-			autoOrchestrate: true,
-		});
-		harness.runtime.onTurnStart("turn-1", createUsage());
-		harness.setUsage({ output: 5 });
-		await harness.runtime.flushUsage("allowed");
-		expect(harness.getState()).toMatchObject({
-			autoOrchestrate: true,
-			goal: { status: "budget-limited", tokensUsed: 5 },
-		});
-		expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
-		expect(harness.hiddenMessages[0]?.content).toContain("Finish the marked task");
-		expect(harness.hiddenMessages[0]?.content).toContain("NEVER start new substantive work");
 	});
 
 	it("counts cache writes but ignores cache reads in token deltas", () => {

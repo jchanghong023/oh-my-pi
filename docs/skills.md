@@ -77,7 +77,7 @@ Current runtime behavior:
 `loadSkills()` in `packages/coding-agent/src/extensibility/skills.ts` does three passes:
 
 1. **Capability providers** via `loadCapability("skills")` (the managed/auto-learn provider's skills are skipped here and handled in pass 3)
-2. **Shared and custom directories** via `scanSkillsFromDir(..., { requireDescription: true })` (one-level directory enumeration). If `OMP_SKILLS_DIR` is set, it adds a shared root with the layout `<root>/<skill-name>/SKILL.md`. It works with or without `OMP_OFFLINE`; nothing is copied or synced. `/extensions` labels this source `Shared`.
+2. **Custom directories** via `scanSkillsFromDir(..., { requireDescription: true })` (one-level directory enumeration). A custom-directory skill overrides a same-named default provider skill; the displaced provider skill stays reachable under its namespaced name unless its body is identical.
 3. **Managed (auto-learn) skills** (`omp-managed` provider) resolved dead-last, so any same-named enabled authored skill from a provider or custom directory takes precedence
 
 If `skills.enabled` is `false`, discovery returns no skills.
@@ -119,7 +119,7 @@ Filter order is:
 3. not ignored
 4. included (if include list present)
 
-The `agents` provider (`.agent[s]/skills`) has its own `enableAgentsUser`/`enableAgentsProject` toggles — disabling Claude/Codex/Pi does **not** turn it off. Foreign user-level providers are opt-in through `enabledProviders`, except that this fork enables `skills.enableCodexUser` by default for `~/.codex/skills` only; Codex MCP, hooks, commands and context files remain opt-in. Foreign project roots still load by default. Native OMP sources and marketplace plugins registered under `~/.omp/plugins` also load by default. For `claude-plugins`, the opt-in controls only plugins from Claude Code's own user registry.
+The `agents` provider (`.agent[s]/skills`) has its own `enableAgentsUser`/`enableAgentsProject` toggles — disabling Claude/Codex/Pi does **not** turn it off. Foreign user-level providers are opt-in through `enabledProviders`; their project roots still load by default. Native OMP sources and marketplace plugins registered under `~/.omp/plugins` also load by default. For `claude-plugins`, the opt-in controls only plugins from Claude Code's own user registry.
 
 ### Manual-only skills
 
@@ -142,11 +142,11 @@ skills:
 - `extensibility/skills.ts` then:
    - de-duplicates identical files by `realpath` (symlink-safe)
    - drops a later same-named skill silently when its body is identical and its parsed frontmatter is deeply equal to a loaded one (the same skill installed twice, e.g. a plugin copy mirrored into `~/.agents/skills`). When the incoming skill outranks the bare holder (below), the identical copies it supersedes (the bare holder and any namespaced aliases) are dropped instead, so an override never re-admits its own duplicate
-   - when same-named skills differ, the higher-precedence skill keeps the bare name and every other variant receives a `<namespace>/<name>` suffix, with collision warnings naming the paths. The namespace is the plugin identity from provider metadata when the provider tracks one (every registry-backed provider supplies one: `claude-plugins` and `agent-plugins` use the plugin name, `omp-plugins` the extension package name, `skillshare` the package name — so an installed plugin namespaces by its own name rather than its cache path's version segment, and the namespace survives plugin updates); otherwise the directory owning the skill's `skills/` tree, or the skill root's directory name, falling back to the provider id for dotted homes such as `~/.claude/skills`. A namespaced slot that is itself already taken by a differing skill gets a `~2`, `~3`, … suffix; no differing skill is dropped without a warning.
+   - when same-named skills differ, the higher-precedence skill keeps the bare name and every other variant receives a `<namespace>/<name>` suffix, with collision warnings naming the paths. Precedence: an authored skill outranks a registry-installed package (the `skillshare` provider, `omp skill install`); a custom-directory skill outranks a provider skill (#7190); otherwise whichever was admitted first — provider-priority order for providers, array order within `skills.customDirectories` for custom directories — keeps the bare name. The namespace is the plugin identity from provider metadata when the provider tracks one (every registry-backed provider supplies one: `claude-plugins` and `agent-plugins` use the plugin name, `omp-plugins` the extension package name, `skillshare` the package name — so an installed plugin namespaces by its own name rather than its cache path's version segment, and the namespace survives plugin updates); otherwise the directory owning the skill's `skills/` tree, or the skill root's directory name, falling back to the provider id for dotted homes such as `~/.claude/skills`. A namespaced slot that is itself already taken by a differing skill gets a `~2`, `~3`, … suffix; no differing skill is dropped without a warning.
    - rejects a raw frontmatter `name` containing `/` or `\` (with a warning) for every provider and custom directory: the separator is reserved for the namespaced form and for `skill://<name>/<path>` resolution, so a raw name cannot claim a namespaced address
    - keeps the convenience `loadSkillsFromDir({ dir, source })` API as a thin adapter over `scanSkillsFromDir`
 - Namespaced skills resolve through `skill://<namespace>/<name>[/<path>]` and the `/skill:<namespace>/<name>` token, both leading and mid-prompt (a mid-prompt token accepts exactly one `/`; deeper paths are left as prose). Because skill names never contain `/`, an exact `<host>/<first segment>` match is unambiguous and takes precedence over reading that segment as a path relative to a bare skill of the same name as the namespace.
-- On a name collision, the shared `OMP_SKILLS_DIR` skill takes the bare name ahead of user, project, and `skills.customDirectories` skills. Without a shared match, custom-directory skills outrank same-named provider skills (#7190), and the first matching custom directory wins. Among providers, authored skills outrank `skillshare` packages; otherwise provider order applies.
+- Custom-directory skills are merged after provider skills and outrank a same-named default-path provider skill regardless of admission order (#7190): the custom-directory skill keeps the bare name, and the provider skill is re-admitted under its namespaced name (suffixed if that slot is taken) when it differs or dropped when it is identical. Among two custom directories, the first one in `skills.customDirectories` keeps the bare name and the other is namespaced.
 - `disabledExtensions` (`skill:<name>`) and `skills.ignoredSkills` are applied to both the raw and the final name, so a namespaced alias cannot bypass an exclusion. `skills.includeSkills` is applied to the final listing only, after every name is resolved, so `second/*` selects a namespaced skill even though the bare skill it collided with is not itself included.
 
 ## Runtime usage behavior
@@ -240,14 +240,6 @@ MCP-advertised skills:
 - MCP-served text keeps `read`'s normal result limits; only local skill files read whole.
 - `omp read` starts MCP servers only when a read reaches an MCP resource, so reading a local skill never spawns them.
 
-## Registry management commands
-
-`/skills search <query>`, `/skills install <@scope/name[@range]>… [--global]`,
-`/skills installed`, and `/skills update [@scope/name…] [--global]` use shared
-TUI/ACP/RPC business logic. They use the executing session's cwd and
-`skills.registryUrl`; successful changes refresh skills and the command catalog.
-Script-bearing installation requires actual confirmation through the host UI:
-missing UI capability is an error, not silent approval or cancellation.
 ## Skills vs AGENTS.md, commands, tools, hooks
 
 ### Skills vs AGENTS.md

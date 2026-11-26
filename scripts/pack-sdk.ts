@@ -56,6 +56,7 @@ async function pack(out: string): Promise<void> {
 			"patches",
 			"packages",
 			"docs",
+			"docs-zh-CN/team.md",
 			"scripts/test-gate-clock.ts",
 			"scripts/test-gate-events.ts",
 			"scripts/test-gate-libc.ts",

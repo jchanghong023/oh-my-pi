@@ -29,7 +29,6 @@ import {
 const keys = [
 	"OMP_CACHE_DIR",
 	"OMP_CONFIG_ROOT",
-	"OMP_WIKI_DIR",
 	"OMP_OFFLINE",
 	"OMP_PROFILE",
 	"PI_PROFILE",
@@ -64,16 +63,6 @@ describe("cache root", () => {
 		}
 		__resetDirsFromEnvForTests();
 		fs.rmSync(temp, { recursive: true, force: true });
-	});
-
-	it("does not treat the removed Wiki-only root as an alias for configuration or performance data", () => {
-		const wiki = path.join(temp, "standalone-wiki");
-		process.env.OMP_WIKI_DIR = wiki;
-		__resetDirsFromEnvForTests();
-		expect(getConfigRootDir()).toBe(path.join(temp, "persistent"));
-		expect(getAgentDir()).toBe(path.join(temp, "persistent", "agent"));
-		expect(getStatsDbPath()).toBe(path.join(temp, "persistent", "stats.db"));
-		expect(fs.existsSync(wiki)).toBe(false);
 	});
 
 	it("routes caches, logs and stats to the explicit root without moving persistent data", () => {

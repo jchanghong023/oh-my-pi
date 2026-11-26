@@ -22,16 +22,10 @@ import type {
 	UrlCompletion,
 } from "./types";
 
-/**
- * Repo `docs/` tree the embedded corpus is generated from. Only the
- * docs-index-owned root ({@link getDocsDiskRoot}) is ever probed: resolving
- * `docs/` relative to this module would land in the consumer's own tree
- * (their project's `docs/`, `node_modules/docs`) on installs where the
- * corpus is embedded.
- */
+/** Probe only the indexed doc's source root, never the consumer's own tree. */
 function docFileOnDisk(docPath: string): string | undefined {
-	const root = getDocsDiskRoot();
-	if (root === null || !getDocFilenames().includes(docPath)) return undefined;
+	const root = getDocsDiskRoot(docPath);
+	if (root === null) return undefined;
 	const resolution = resolveContainedPathSync(root, path.resolve(root, docPath));
 	return resolution.status === "ok" ? resolution.realPath : undefined;
 }
@@ -108,8 +102,8 @@ export class OmpProtocolHandler implements ProtocolHandler {
 		// the first call still initializes the memoized corpus synchronously.
 		const docPath = ompDocRel(url);
 		if (docPath.length === 0) return null;
-		const root = getDocsDiskRoot();
-		if (root === null || !getDocFilenames().includes(docPath)) return null;
+		const root = getDocsDiskRoot(docPath);
+		if (root === null) return null;
 		const resolution = await resolveContainedPath(root, path.resolve(root, docPath));
 		return resolution.status === "ok" ? resolution.realPath : null;
 	}

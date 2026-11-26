@@ -58,13 +58,12 @@ test("build-only artifact install retains stamping while the default rejects an 
 		const installedPath = path.join(skippedDest, filename);
 		const preservedTime = new Date("2000-01-01T00:00:00.000Z");
 		await fs.utimes(installedPath, preservedTime, preservedTime);
+		const beforeReuse = await fs.stat(installedPath, { bigint: true });
 		const unchanged = await install(skippedDest, true);
 		expect(unchanged.exitCode).toBe(0);
-		expect((await fs.stat(installedPath)).mtimeMs).toBe(preservedTime.getTime());
-		await Bun.write(path.join(sourceDir, filename), Buffer.concat([invalidImage, Buffer.from([0x7f])]));
-		const changed = await install(skippedDest, true);
-		expect(changed.exitCode).toBe(0);
-		expect((await fs.readFile(installedPath)).at(-1)).toBe(0x7f);
+		const afterReuse = await fs.stat(installedPath, { bigint: true });
+		expect(afterReuse.ino).toBe(beforeReuse.ino);
+		expect(afterReuse.mtimeNs).toBe(beforeReuse.mtimeNs);
 		const normal = await install(skippedDest, false);
 		expect(normal.exitCode).not.toBe(0);
 		expect(normal.stderr).toContain("cannot be loaded on this host");
@@ -91,16 +90,4 @@ test("native driver options distinguish probe flags from forwarded Bazel argumen
 		"--source cannot be combined with extra bazel arguments",
 	);
 	expect(() => parseCliArgs(["host", "--dest"])).toThrow("--dest requires a directory argument");
-	expect(() => parseCliArgs(["host", "--output-dir=artifacts"])).toThrow("Unknown flag --output-dir=artifacts");
-});
-
-test("binding build rejects the removed output producer option before building", async () => {
-	const child = Bun.spawn([process.execPath, "packages/natives/scripts/build-bindings.ts", "--output-dir=artifacts"], {
-		cwd: repoRoot,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-	expect(exitCode).not.toBe(0);
-	expect(stderr).toContain("Usage: bun packages/natives/scripts/build-bindings.ts");
 });

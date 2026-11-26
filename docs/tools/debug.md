@@ -163,7 +163,7 @@ Side-channel artifacts outside the model tool result:
 ## Modes / Variants
 
 - **Availability gate**
-  - Tool hidden when `debug.enabled` is false. The tool uses discoverable loading and exclusive concurrency.
+   - Tool hidden when `debug.enabled` is false; the setting defaults to `true`. The tool uses discoverable loading and exclusive concurrency.
 - **Adapter selection**
    - Built-in adapter ids are `gdb`, `lldb-dap`, `codelldb`, `debugpy`, `dlv`, `js-debug-adapter`, `netcoredbg`, `kotlin-debug-adapter`, `rdbg`, `php-debug-adapter`, `bash-debug-adapter`, `dart-debug-adapter`, `flutter-debug-adapter`, and `elixir-ls-debugger`.
    - `launch`: explicit `adapter` wins. Otherwise extension-matching adapters are tried first; if configured matches exist but none resolve, the tool reports their installation/configuration failure rather than silently choosing an unrelated debugger. Root markers are checked up the target's ancestry. Package directories prefer matching directory-capable adapters; remaining candidates rank by extension match, root match, then native-debugger preference (`gdb`, `lldb-dap`).

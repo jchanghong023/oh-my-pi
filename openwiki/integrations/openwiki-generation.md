@@ -149,4 +149,4 @@ flowchart TD
 
 OpenWiki 按需查询已有 Wiki，不在普通任务开始时预加载全部页面。Wiki 页面可能过时，排障时应回到源码和测试。
 
-修改集成时，可重点检查 `packages/coding-agent/test/cli/openwiki-generation.test.ts` 的生成与模型路径、`openwiki-dry-run.test.ts` 的只读预览、`openwiki-recovery.test.ts` 的恢复，以及 `test/openwiki/query.test.ts` 和 `agents-instructions.test.ts` 的查询与指令边界；fork 自身的生成测试覆盖原生页面编排。资源或子模块变化后应重新生成并检查指纹，而不是沿用旧视觉产物。
+修改集成时，按 [OpenWiki 规格](../../openspec/specs/openwiki/spec.md)核对受影响的宿主行为；`vendor/openwiki` 自身的生成测试覆盖原生页面编排，不在 OMP 父仓门禁范围内。资源或子模块变化后应重新生成并检查指纹，而不是沿用旧视觉产物。

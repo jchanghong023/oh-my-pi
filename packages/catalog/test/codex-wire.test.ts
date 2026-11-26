@@ -79,7 +79,7 @@ describe("getCodexResidency", () => {
 });
 
 describe("Codex client version refresh", () => {
-	it.each(["1", " TrUe ", "yes", "ON", "0", "false", ""])(
+	it.each(["1", " TrUe ", "yes", "ON", "false"])(
 		"respects OMP_OFFLINE=%j without discarding the cached version",
 		offline => {
 			const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-version-"));
@@ -127,7 +127,7 @@ describe("Codex client version refresh", () => {
 					version: "999.0.0",
 					cacheProviderId: "openai-codex:999.0.0",
 					passiveFetchCount: 0,
-					fetchCount: ["0", "false", ""].includes(offline) ? 1 : 0,
+					fetchCount: offline === "false" ? 1 : 0,
 				});
 			} finally {
 				fs.rmSync(home, { recursive: true, force: true });

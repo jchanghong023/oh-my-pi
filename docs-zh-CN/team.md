@@ -2,7 +2,7 @@
 
 `/team <问题或需求>` 让多个独立代理调查、交叉审查和修订方案，再由当前会话模型综合结果。适合需求分析、故障诊断和设计比较；不执行方案、不修改项目代码。本文可通过 `omp://team.md` 读取。
 
-行为与验收的权威契约见 [Team 需求](../openspec/specs/team-discussion/spec.md)；本文是使用指南，不另立需求。通用模型接入见 [模型配置](models.md)，设置优先级见 [设置](settings.md)。
+行为与验收的权威契约见 [Team 需求](../openspec/specs/team-discussion/spec.md)；本文是使用指南，不另立需求。通用模型接入见 [模型配置](../docs/models.md)，设置优先级见 [设置](../docs/settings.md)。
 
 ## 1. 怎么用
 
@@ -98,7 +98,7 @@ omp config get team.members --json
 3. **逐项匹配。** 将用户的中文名、简称、版本、参数规模和 provider 限制与候选的名称和真实模型引用核对。例如“智谱”“千问”是查找 GLM／Qwen 的线索，不是可拼造的模型 ID。保存只采用目录中的真实 `{provider, modelId}`；CLI 使用其完整 selector。
 4. **处理歧义与缺失。** 用户指定的完整 selector 精确匹配时直接采用；自然语言描述按名称／家族、版本、规模、来源与可用范围筛选后只有一个有效候选时也直接采用，并说明映射。多个 provider 提供同名模型、存在多个符合描述的版本，或“最好／最新”没有可核实标准时，列出会影响选择的候选差异，批量请用户确认；不擅自按字典序、价格、名称相似度选一个，也不静默升级版本。零匹配先换中英文名称片段并检查完整目录及禁用／认证配置；仍无匹配就报告缺失，不生成假 ID，不用另一模型替换。
 5. **检查实际允许范围。** 核对 `enabledModels`、`enabledProviders`／`disabledProviders` 和当前项目的覆盖，排除非聊天模型；全局名单配置不检查当前聊天主模型。用户只要求配置参与者时，不顺带切换主模型、开放被禁用的 provider、添加所有可用模型或更改凭据。
-6. **最小写入。** 在 TUI 中预览后保存，或按上文使用 `config set/reset`。按用户顺序保留明确要求的重复项，只更新 `team.members`。已有 provider 无需重写 `models.yml`。确需新增自定义服务时，先依据用户提供或已核实的 endpoint、协议、模型 ID 和认证来源按[模型配置](models.md)接入；缺失关键信息再问，不能虚构地址、密钥、上下文或工具能力。名单配置不保存 provider，不在回复中展示密钥，也不复制认证文件。
+6. **最小写入。** 在 TUI 中预览后保存，或按上文使用 `config set/reset`。按用户顺序保留明确要求的重复项，只更新 `team.members`。已有 provider 无需重写 `models.yml`。确需新增自定义服务时，先依据用户提供或已核实的 endpoint、协议、模型 ID 和认证来源按[模型配置](../docs/models.md)接入；缺失关键信息再问，不能虚构地址、密钥、上下文或工具能力。名单配置不保存 provider，不在回复中展示密钥，也不复制认证文件。
 7. **读回验证。** 核对保存回执、名单及有效值与用户意图一致，报告“自然语言名称 → selector”、修改路径及覆盖情况。冲突先重读比较；结果未知先核实，不自动重试。只查询名单不足以证明真实服务可用；未经当次明确授权，不为验证配置启动 `/team` 或发送真实模型请求。
 
 `team.members` 是数组，高优先级配置会**整体替换**低优先级名单，不会追加合并。项目 `.omp/config.yml`、`--config`／`PI_CONFIG_FILES` overlay 和运行时覆盖都可能遮蔽全局设置。`config set` 可能提示已保存但被覆盖；先查清来源，只在用户授权的范围内修改，不以“写入成功”冒充已生效。
@@ -113,7 +113,7 @@ omp config get team.members --json
 
 offline 中的 `company` provider 复用外部 Claude 配置目录中的 `settings.json`：默认 `~/.claude/settings.json`，设置 `CLAUDE_CONFIG_DIR` 时以其实际解析位置为准。需要已有 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；它们来自该文件，不是仅凭 shell 中同名变量就能完成接入。修复后需重启 OMP。
 
-优先复用已有公司接入，不为每个 Team 成员重复创建 provider／凭据。[公司内网模式](../docs-zh-CN/quick-start-intranet.md)无法连接互联网，但可调用获准的内网模型，并非只能本地推理。目录缺失、配置失败或无可用服务时，不切到公网、不安装依赖、不擅自调用真实模型探测。
+优先复用已有公司接入，不为每个 Team 成员重复创建 provider／凭据。[公司内网模式](quick-start-intranet.md)无法连接互联网，但可调用获准的内网模型，并非只能本地推理。目录缺失、配置失败或无可用服务时，不切到公网、不安装依赖、不擅自调用真实模型探测。
 
 ## 5. 生效与常见问题
 

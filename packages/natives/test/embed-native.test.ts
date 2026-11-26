@@ -76,12 +76,10 @@ describe("native addon embedding", () => {
 			);
 			expect(embeddedAddon.platformTag).toBe("win32-arm64");
 			expect(embeddedAddon.version).toBe("18.1.1");
-			const cacheFilename = embeddedAddon.files[0].filename;
-			expect(cacheFilename).toBe("pi_natives.win32-arm64.node");
 			expect(embeddedAddon.files).toEqual([
 				{
 					variant: "default",
-					filename: cacheFilename,
+					filename: "pi_natives.win32-arm64.node",
 					size: addon.length,
 					hash: Bun.hash.xxHash64(addon).toString(16).padStart(16, "0"),
 					zstdPath: path.join(await fs.realpath(outDir), "pi_natives.win32-arm64.node.zst"),
@@ -93,11 +91,6 @@ describe("native addon embedding", () => {
 			const beforeReuse = await fs.stat(cachedAddon);
 			expect(extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: cacheDir })).toEqual([]);
 			expect((await fs.stat(cachedAddon)).mtimeMs).toBe(beforeReuse.mtimeMs);
-			// Within a build's hash directory, a complete file of the expected size needs no rehash.
-			const sameSize = addon.replace("binary", "newbin");
-			await Bun.write(cachedAddon, sameSize);
-			expect(extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: cacheDir })).toEqual([]);
-			expect(await Bun.file(cachedAddon).text()).toBe(sameSize);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}

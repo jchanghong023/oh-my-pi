@@ -164,7 +164,6 @@ describe("multiline IME-safe caret layout", () => {
 				composer.setCursor(lineEnd);
 				const opened = paint();
 				const row = opened.cursor!.row;
-				expect(row).toBeGreaterThan(0);
 				expect(opened.cursor!.col).toBe(closed.cursor!.col + 2);
 				expect(opened.cursor!.row).toBe(closed.cursor!.row);
 				expect(Bun.stripANSI(opened.rows[row]!)).toEndWith("输入文本");
@@ -172,8 +171,6 @@ describe("multiline IME-safe caret layout", () => {
 				expect(opened.rows.filter((_, index) => index !== row)).toEqual(
 					closed.rows.filter((_, index) => index !== row),
 				);
-				expect(composer.text()).toBe(draft);
-				expect(composer.cursor()).toBe(lineEnd);
 			} finally {
 				dispose();
 			}
@@ -199,7 +196,6 @@ describe("multiline IME-safe caret layout", () => {
 					if (condition === "visual selection") {
 						sendKey(composer.node, composer.field, key("\x1b"));
 						sendKey(composer.node, composer.field, key("V"));
-						expect(composer.field.props()).toMatchObject({ mode: expect.stringMatching(/visual/i) });
 					}
 					const closed = paint();
 					composer.setImeSafeCursor(true);

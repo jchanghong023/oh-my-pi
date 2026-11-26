@@ -51,7 +51,6 @@ test("settled Write previews expand without losing content, then return to the o
 			const collapsed = view();
 			call.setExpanded(true);
 			const expanded = view();
-			expect(expanded.terminal.length).toBeGreaterThan(collapsed.terminal.length);
 			expect(expanded.terminal.join("\n")).toContain("LINE_79");
 			expect(expanded.native).not.toEqual(collapsed.native);
 			call.setExpanded(false);

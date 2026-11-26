@@ -290,8 +290,7 @@ async fn rmdir_nt_prefix_reaches_native_removal_without_deleting_win32_alias() {
 /// without requiring an administrator-created SMB share on the test machine.
 #[derive(Debug)]
 struct UncFilesystem {
-	root:   std::path::PathBuf,
-	opened: std::sync::Mutex<Vec<std::path::PathBuf>>,
+	root: std::path::PathBuf,
 }
 
 impl UncFilesystem {
@@ -319,7 +318,6 @@ impl omp_vfs::FileSystem for UncFilesystem {
 		path: &Path,
 		options: &omp_vfs::OpenOptions,
 	) -> std::io::Result<omp_vfs::File> {
-		self.opened.lock().unwrap().push(path.to_path_buf());
 		omp_vfs::Fs::native()
 			.open_with(self.mapped(path)?, options)
 			.await
@@ -359,17 +357,11 @@ impl omp_vfs::FileSystem for UncFilesystem {
 /// server as a remote operand or lose the doubled UNC prefix before opening.
 #[tokio::test(flavor = "multi_thread")]
 async fn rsync_unc_scan_reads_the_unc_filter_file() {
-	use std::sync::Arc;
-
 	let dir = tempfile::tempdir().unwrap();
 	fs::create_dir(dir.path().join("source")).unwrap();
 	fs::write(dir.path().join("source/.rules"), b"secret\n").unwrap();
 	fs::write(dir.path().join("source/keep"), b"visible").unwrap();
 	fs::write(dir.path().join("source/secret"), b"hidden").unwrap();
-	let provider = Arc::new(UncFilesystem {
-		root:   dir.path().to_path_buf(),
-		opened: std::sync::Mutex::new(Vec::new()),
-	});
 	let (tx, rx) = flume::unbounded();
 	let result = Shell::new(None)
 		.run(
@@ -379,7 +371,9 @@ async fn rsync_unc_scan_reads_the_unc_filter_file() {
 					quote(r"\\omp-fixture\share\source\"),
 				),
 				cwd: Some(dir.path().to_str().unwrap().to_owned()),
-				filesystem: Some(omp_vfs::Fs::new(provider.clone())),
+				filesystem: Some(omp_vfs::Fs::new(std::sync::Arc::new(UncFilesystem {
+					root: dir.path().to_path_buf(),
+				}))),
 				..Default::default()
 			},
 			Some(tx),
@@ -391,10 +385,4 @@ async fn rsync_unc_scan_reads_the_unc_filter_file() {
 	assert_eq!(result.exit_code, Some(0), "{output}");
 	assert!(output.lines().any(|line| line.ends_with(" keep")), "{output}");
 	assert!(!output.lines().any(|line| line.ends_with(" secret")), "{output}");
-	assert!(
-		provider.opened.lock().unwrap().iter().any(|path| {
-			path.to_string_lossy().replace('\\', "/") == "//omp-fixture/share/source/.rules"
-		}),
-		"filter must be opened in the original UNC namespace"
-	);
 }

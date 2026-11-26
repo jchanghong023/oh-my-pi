@@ -488,7 +488,7 @@ OMP MUST 复用同一命令语义并将新约束交给适用讨论流程。
 
 **4.6 内置使用指南与 Agent 代配**
 
-* 提供 [Team 使用指南](../../../docs/team.md)，由既有 `docs/**/*.md` 收集与打包机制暴露为 `omp://team.md`；说明命令用法、主模型与参与名单区别、多模型配置和默认槽位规则，并说明 [TUI `/team configure`](../team-configuration/spec.md#requirement-team-模型配置界面) 的操作及验收边界。
+* 提供 [Team 使用指南](../../../docs-zh-CN/team.md)，由源码和发行版共用的 `omp://` 文档入口显式收录为 `omp://team.md`；说明命令用法、主模型与参与名单区别、多模型配置和默认槽位规则，并说明 [TUI `/team configure`](../team-configuration/spec.md#requirement-team-模型配置界面) 的操作及验收边界。
 * 用户在普通聊天中授权代配后，Agent 须查询目标环境及 profile 的真实模型目录，将用户自然语言名称、简称、版本及规模解析到实际可用的完整 selector；唯一匹配直接采用，实质歧义列出候选并确认，缺失项如实报告，不拼造 ID、不静默替换版本或 provider。保留用户顺序及明确重复项；成员校验与保存遵循 [Team 配置规格](../team-configuration/spec.md#requirement-team-保存接口的范围)，实际启动讨论时仍按 2.2 单独校验当前会话模型。不能把配置任务派给只读 `/team`。
 * 指南须区分主设置 `config.yml` 与 provider 定义 `models.yml`，说明 profile、项目及 overlay 覆盖；配置只修改授权字段并读回有效值，不为代配自动发送真实模型请求。
 

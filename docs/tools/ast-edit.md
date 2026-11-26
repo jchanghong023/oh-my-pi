@@ -33,7 +33,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
    - captures from `pat` are substituted into `out`,
    - each rewrite is a 1:1 structural substitution; one capture cannot expand into multiple sibling nodes unless the grammar itself permits that expansion at that position.
 
-`ast_edit` is discoverable and enabled by default via `astEdit.enabled`, including under `OMP_OFFLINE`. Offline mode uses built-in or cached grammars and only fetches missing ones from an explicitly configured `PI_GRAMMARS_URL`; it does not fall back to GitHub.
+`ast_edit` is enabled by default by `astEdit.enabled`. It is discoverable rather than part of the essential tool set.
 
 ## Outputs
 

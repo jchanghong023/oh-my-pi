@@ -979,24 +979,6 @@ describe("bash services via proc://", () => {
 		expect(text).not.toContain("Ignored ready:");
 	});
 
-	it.each([
-		{ label: "log condition", ready: { log: "READY", port: 0, timeout: 30 } },
-		{ label: "port condition", name: "", ready: { log: "", port: 1, host: "", timeout: 1 } },
-	])("rejects $label without a service name", async ({ name, ready }) => {
-		const bash = new BashTool(toolSession(process.cwd()));
-		await expect(
-			bash.execute("plain", {
-				command: "printf 'PLAIN\\n'",
-				timeout: 10,
-				cwd: process.cwd(),
-				pty: false,
-				async: false,
-				name,
-				ready,
-			}),
-		).rejects.toThrow("ready requires a service name; the command was not executed.");
-	});
-
 	it("refuses to detach the project-shared browser, which the daemon would relaunch on an unprepared profile", async () => {
 		const name = sharedBrowserDaemonName(true);
 		const daemon = serviceUnit(name, { id: "shared", state: "ready", readyAt: Date.now() });

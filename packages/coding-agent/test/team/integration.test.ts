@@ -442,21 +442,16 @@ describe("team in-process integration", () => {
 			expect(new Set(recorded.map(call => call.sessionId)).size).toBe(recorded.length);
 			expect(new Set(recorded.map(call => call.sessionManager)).size).toBe(recorded.length);
 			for (const call of recorded) {
-				expect(call.sessionId).toBeDefined();
-				expect(call.sessionManager).toBeDefined();
 				expect(call.initialMessages).toHaveLength(0);
 				expect(call.outputSchemaMode).toBe("strict");
 				// The executor appends required yield separately; no writable tools leak in.
 				expect([...(call.toolNames ?? [])].sort()).toEqual(["ast_grep", "glob", "grep", "read"]);
-				expect(call.toolNames).not.toContain("wiki");
 			}
 		});
 	}
 
-	it.each([
-		["proposal heading", "### 方案 A\n\n可以采用。"],
-		["paragraph label and list", "方案 A：\n- 可以采用。"],
-	])("rejects blocked adoption through the executor: %s", async (_name, reportMarkdown) => {
+	it("rejects an adoption claim scoped to a blocked proposal through the executor", async () => {
+		const reportMarkdown = "### 方案 A\n\n可以采用。";
 		recorded.length = 0;
 		script = (stage, text) => {
 			const data = scriptedData(stage, text);

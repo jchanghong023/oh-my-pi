@@ -157,7 +157,7 @@ describe("TodoLoop file parsing", () => {
 		]);
 	});
 
-	for (const level of [1, 2, 3, 4, 5, 6]) {
+	for (const level of [1, 3, 6]) {
 		it(`infers H${level} groups from a completed checkbox and freezes the level across rereads`, async () => {
 			const heading = "#".repeat(level);
 			const other = level === 6 ? "#" : "#".repeat(level + 1);

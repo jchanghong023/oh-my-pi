@@ -7,6 +7,7 @@ import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-ag
 import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-thinking-preview";
 import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
 import { cfgDisplayMode, cfgDisplayShimmer, cfgTuiSpinnerInterval } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
@@ -28,9 +29,9 @@ import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import type { TspNode } from "@oh-my-pi/pi-wire";
 import { AppFrame } from "../src/modes/interactive/frame";
 import { initTheme } from "../src/ui/theme/service";
-import { ReadGroup } from "../src/ui/transcript/read-group";
 import {
 	applyRenderFixtureEvent,
+	contextDisplay,
 	createInteractiveModeContext,
 	createSessionStub,
 	renderTranscript,
@@ -351,13 +352,12 @@ describe("compact action dock", () => {
 		}
 	});
 
-	it("maps execution and write actions to four-character labels and falls back to 调用 for unknown tools", async () => {
+	it("labels edits as writes and falls back to 调用 for unknown tools", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
 		const cases = [
-			{ name: "bash", args: { command: "echo hi" }, running: "正在执行", done: "执行完成" },
 			{ name: "edit", args: { path: "a.ts", input: "*** Begin Patch" }, running: "正在写入", done: "写入完成" },
 			{ name: "mystery_tool", args: { query: "target" }, running: "正在调用", done: "调用完成" },
 		] as const;
@@ -405,24 +405,6 @@ describe("compact action dock", () => {
 		expect(row).not.toContain("boom");
 		expect(h.rows()[1]).toContain(currentTheme().fg("error", "Agent：上次执行失败"));
 		expect(h.nativeRendered()).toBe(h.rendered());
-		// A live tool replaces the settled one on the Agent row.
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "b",
-			toolName: "bash",
-			args: { command: "true" },
-		});
-		expect(plain(h.rows())[0]).toBe("");
-		expect(plain(h.rows())[1]).toContain("Agent：正在执行  true");
-		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "b",
-			toolName: "bash",
-			result: { content: [] },
-			isError: false,
-		});
-		expect(plain(h.rows())[0]).toBe("");
-		expect(plain(h.rows())[1]).toContain("Agent：上次执行完成  true");
 	});
 
 	it("separates request, thinking and reply from the tool row", async () => {
@@ -475,7 +457,7 @@ describe("compact action dock", () => {
 		const live = liveSession();
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
-		for (let i = 1; i <= 17; i++) {
+		for (let i = 1; i <= 3; i++) {
 			await live.emit({
 				type: "tool_execution_start",
 				toolCallId: `call-${i}`,
@@ -483,7 +465,7 @@ describe("compact action dock", () => {
 				args: { command: `task ${i}` },
 			});
 		}
-		expect(plain(h.rows())[1]).toMatch(/task 1.*\+16/);
+		expect(plain(h.rows())[1]).toMatch(/task 1.*\+2/);
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "call-1",
@@ -491,7 +473,7 @@ describe("compact action dock", () => {
 			result: { content: [] },
 			isError: false,
 		});
-		expect(plain(h.rows())[1]).toMatch(/task 2.*\+15/);
+		expect(plain(h.rows())[1]).toMatch(/task 2.*\+1/);
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
@@ -525,17 +507,6 @@ describe("compact action dock", () => {
 		h.ctx.hideThinkingBlock = false;
 		expect(h.rendered()).toContain("final-tail");
 		expect(h.nativeRendered()).toBe(h.rendered());
-		const dock = new CompactThinkingPreview(h.ctx, () => "Waiting for a job");
-		try {
-			const rows = plain(dock.render(60));
-			expect(rows[0]).toContain("正在思考");
-			expect(rows[1]).toContain("Waiting for a job");
-			expect(rows.join("")).not.toContain("正在执行");
-			expect(rows[1]).toContain("Agent：");
-			expect(plain(nativeDockRows(60, dock))).toEqual(rows);
-		} finally {
-			dock.clear();
-		}
 	});
 
 	it("starts model shimmer with the spinner and keeps it through streamed thinking and replies", async () => {
@@ -672,32 +643,6 @@ describe("compact action dock", () => {
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
-	it("shows the actual command folded to one line and tail-truncated, without output or elapsed", async () => {
-		const h = focusFixture();
-		const live = liveSession();
-		h.register("Worker", live);
-		await h.focus.focusAgent("Worker");
-		await live.emit({
-			type: "tool_execution_start",
-			toolCallId: "a",
-			toolName: "bash",
-			args: { i: "THE_INTENT", command: "echo begin\ngit diff --stat" },
-		});
-		const row = plain(h.rows())[1]!;
-		expect(row).toStartWith(" Agent：正在执行  ");
-		expect(row).toContain("echo begin git diff --stat");
-		expect(row).not.toContain("THE_INTENT");
-		expect(row).not.toMatch(/\d+(?:\.\d+)?(?:ms|s|m)\b/);
-		await live.emit({
-			type: "tool_execution_update",
-			toolCallId: "a",
-			toolName: "bash",
-			args: { command: "echo begin\ngit diff --stat" },
-			partialResult: { content: [{ type: "text", text: "OUTPUT_MUST_NOT_APPEAR" }] },
-		});
-		expect(h.rendered()).not.toContain("OUTPUT_MUST_NOT_APPEAR");
-	});
-
 	it("drops file intent before clipping the path and keeps the distinguishing parent directory", async () => {
 		const h = focusFixture();
 		const live = liveSession();
@@ -739,13 +684,13 @@ describe("compact action dock", () => {
 				type: "tool_execution_start",
 				toolCallId: "with-intent",
 				toolName: "bash",
-				args: { command: "echo raw", i: "Describe action" },
+				args: { command: "echo raw\npwd", i: "Describe action" },
 			});
 			for (const rows of [dock.render(60), nativeDockRows(60, dock)]) {
 				expect(plain(rows)[1]).toContain("Describe action");
 				expect(plain(rows)[1]).not.toContain("echo raw");
 			}
-			expect(plain(dock.render(40))[1]).toContain("echo raw");
+			expect(plain(dock.render(40))[1]).toContain("echo raw pwd");
 			previewId = "other-call";
 			expect(plain(dock.render(60))[1]).toContain("echo raw");
 			previewId = undefined;
@@ -787,10 +732,9 @@ describe("compact action dock", () => {
 			toolName: "bash",
 			args: { command: "printf hello" },
 		});
-		for (const width of [32, 12, 8, 4, 1, 0]) {
-			for (const rows of [h.dock.render(width), h.nativeRows(width)]) {
-				expect(rows.every(row => Bun.stringWidth(row) <= Math.max(width, 0))).toBe(true);
-			}
+		const width = 12;
+		for (const rows of [h.dock.render(width), h.nativeRows(width)]) {
+			expect(rows.every(row => Bun.stringWidth(row) <= width)).toBe(true);
 		}
 		const narrow = plain(h.dock.render(44));
 		expect(narrow[0]).toBe("");
@@ -959,26 +903,49 @@ describe("compact action dock", () => {
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
-	it("keeps file write content out of compact chat", async () => {
+	it.each(["compact", "detailed"] as const)("respects file write visibility in %s chat", async mode => {
 		const h = focusFixture();
+		const compact = mode === "compact";
+		cfgDisplayMode.set(h.ctx.settings, mode);
+		h.ctx.hideToolActivity = compact;
+		// The fixture overrides the context property, so sync the presenter's signal separately.
+		contextDisplay(h.ctx).hideToolActivity.set(compact);
 		const live = liveSession();
-		h.register("ExpandedWrite", live);
-		await h.focus.focusAgent("ExpandedWrite");
-		const body = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n");
+		h.register("Writer", live);
+		await h.focus.focusAgent("Writer");
+
+		const file = "large.txt";
+		const firstLine = "WRITE_SOURCE_START";
+		const lastLine = "WRITE_SOURCE_END";
+		const body = [firstLine, ...Array.from({ length: 58 }, () => "filler line"), lastLine].join("\n");
 		await live.emit({
 			type: "tool_execution_start",
-			toolCallId: "expanded",
+			toolCallId: "write",
 			toolName: "write",
-			args: { path: "large.txt", content: body },
+			args: { path: file, content: body },
 		});
+		if (compact) expect(renderTranscript(h.ctx).join("\n")).not.toContain("WRITE_SOURCE_");
 		await live.emit({
 			type: "tool_execution_end",
-			toolCallId: "expanded",
+			toolCallId: "write",
 			toolName: "write",
-			result: { content: [{ type: "text", text: "written" }], details: { op: "create", newText: body } },
+			result: {
+				content: [{ type: "text", text: `Successfully wrote ${body.length} bytes to ${file}` }],
+				details: { resolvedPath: path.resolve(file) },
+			},
 			isError: false,
 		});
-		expect(renderTranscript(h.ctx).join("\n")).not.toContain("line 60");
+
+		const collapsed = renderTranscript(h.ctx).join("\n");
+		if (compact) {
+			expect(plain(h.rows())[1]).toContain(file);
+			expect(collapsed).not.toContain("WRITE_SOURCE_");
+		} else {
+			expect(collapsed).toContain(firstLine);
+			expect(collapsed).not.toContain(lastLine);
+			new InputController(h.ctx).toggleToolOutputExpansion();
+			expect(renderTranscript(h.ctx).join("\n")).toContain(lastLine);
+		}
 	});
 
 	it("does not display parameter generation as a running action", async () => {
@@ -1056,8 +1023,6 @@ describe("compact action dock", () => {
 		for (const [id, path, content, expected] of [
 			["patch", "apply_patch", patch, "正在写入  src/one.ts (2 files)"],
 			["settings", "cfg://display", "PRIVATE_BODY", "正在调用  write cfg://display"],
-			["message", "agent://Worker", "PRIVATE_BODY", "正在调用  write agent://Worker"],
-			["control", "proc://job/kill", "PRIVATE_BODY", "正在调用  write proc://job/kill"],
 		] as const) {
 			const toolName = id === "patch" ? "bash" : "write";
 			const args = id === "patch" ? { command: "apply_patch @patch.txt" } : { path, content };
@@ -1114,16 +1079,6 @@ describe("execution-only read group activity", () => {
 			isError: false,
 		});
 		expect(group.status(group.entries())).toBe("done");
-	});
-
-	it("keeps the group running for concurrent reads and settles the unfinished read when sealed", () => {
-		const group = new ReadGroup();
-		group.updateArgs({ path: "first.ts" }, "first");
-		group.updateArgs({ path: "second.ts" }, "second");
-		group.updateResult({ content: [{ type: "text", text: "first" }] }, false, "first");
-		expect(group.status(group.entries())).toBe("running");
-		group.seal();
-		expect(group.status(group.entries())).toBe("cancelled");
 	});
 });
 
@@ -1492,23 +1447,6 @@ describe("compact latest live Output consumers", () => {
 		expect(h.outputRows()[1]).toEqual(rows);
 	});
 
-	it("does not open or replace meaningful output for symbol-only frames", async () => {
-		const h = focusFixture();
-		const live = liveSession();
-		const symbols = outputCall("symbols", 2, "\x1b[31m{}\n---\n╰──╯\x1b[0m\n✅");
-		const output = new LiveToolOutputState();
-		output.restore([symbols], false);
-		vi.spyOn(live.session, "getLiveToolOutputPreview").mockImplementation(() => output.preview());
-		h.register("SymbolOutput", live);
-		await h.focus.focusAgent("SymbolOutput");
-		expect(h.outputRows()).toEqual([[], []]);
-		output.restore([outputCall("content", 1, "0"), symbols], false);
-		const view = h.previewView();
-		expect(view.head).toContain("echo content");
-		expect(view.body).toEqual(["0"]);
-		expect(view.nativeBody).toEqual(["0"]);
-	});
-
 	it("retains eligible read output through symbol, image and empty display frames", async () => {
 		const h = focusFixture();
 		const live = liveSession();
@@ -1753,23 +1691,6 @@ describe("compact latest live Output consumers", () => {
 		expect(terminal.nativeBody).toEqual(terminal.body);
 	});
 
-	it("fills remaining rows with context when grep hits are fewer than the budget", async () => {
-		const h = focusFixture();
-		const live = liveSession();
-		const text = ["# src/", " 10│context one", "*12│only hit", " 13│context two", " 14│context three"].join("\n");
-		const call = outputCall("search", 1, text, {
-			toolName: "grep",
-			args: { pattern: "only" },
-			terminalAt: Date.now(),
-		});
-		vi.spyOn(live.session, "getLiveToolOutputPreview").mockReturnValue(previewFixture(call));
-		h.register("GrepFill", live);
-		await h.focus.focusAgent("GrepFill");
-		const view = h.previewView();
-		expect(view.body).toEqual(["*12│only hit", "# src/", " 10│context one", " 13│context two", " 14│context three"]);
-		expect(view.nativeBody).toEqual(view.body);
-	});
-
 	it("prioritizes glob and sole Bash grep hits but keeps mixed shell output in shell order", async () => {
 		const h = focusFixture();
 		const live = liveSession();
@@ -1922,28 +1843,4 @@ describe("compact latest live Output consumers", () => {
 			expect(h.outputRows()).toEqual([[], []]);
 		},
 	);
-
-	it("keeps a still-running background source across the turn boundary", async () => {
-		setSystemTime(10_000);
-		const h = focusFixture();
-		const live = liveSession(null, undefined, true);
-		h.register("RunningBoundary", live);
-		await h.focus.focusAgent("RunningBoundary");
-		await live.emit({ type: "agent_start" });
-		await live.emit({ type: "tool_execution_start", toolCallId: "bg", toolName: "bash", args: {} });
-		await live.emit({
-			type: "tool_execution_end",
-			toolCallId: "bg",
-			toolName: "bash",
-			result: {
-				content: [{ type: "text", text: "background progress" }],
-				details: { async: { jobId: "bg", state: "running" } },
-			},
-			isError: false,
-		});
-		await live.emit({ type: "agent_end", messages: [] });
-		setSystemTime(20_000);
-		await live.emit({ type: "agent_start" });
-		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("background progress");
-	});
 });

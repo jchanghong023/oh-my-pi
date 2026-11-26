@@ -26,8 +26,7 @@ The form is plain semantic HTML. Controls: `<input type="radio">` (one-of), `typ
 - Single-shot result.
 - `content[0].text`:
    - submit: `User answers:` followed by the form data as indented JSON
-   - timeout with valid values: `No answer before the timeout; submitted the form's current values:` followed by the JSON
-   - timeout with incomplete or invalid values: reports no answer, with `details.answers: []` and `details.timedOut: true`
+   - timeout: `No answer before the timeout; submitted the form's current values:` followed by the JSON
 - Form data (`HtmlFormData`): keyed by control `name`. A radio group or single `<select>` gives the chosen `value` (omitted when none); a checkbox group or `<select multiple>` gives an array; a lone checkbox gives its `value` when checked, else is omitted; `number`/`range` inputs give a number when the text parses; other text fields give their text; hidden inputs pass through. Disabled options and unnamed controls never appear.
 - "Other" answers: every radio group and checkbox group of two or more options (not `<select>`) whose options include none labelled "Other…" gets a UI-supplied free-text "Other" answer (`ChoiceField.other`). The trimmed text is a radio group's value (`"db": "MySQL 8"`) or is appended to a checkbox group's array (`["ci", "terraform"]`); blank text is no answer. The fallback adds an `Other (type your own)` row that opens `input`; collab guests get the same row with an editor; ACP adds an optional `<name>_other` string property.
 - Option notes: in the interactive form, `n` (`app.ask.note`) adds a note to an option; notes on chosen options follow the JSON under `Option notes:` and are in `details.notes` (`{ name, question, option, value, text }[]`). The fallback, collab guests and ACP collect no notes.
@@ -49,7 +48,7 @@ The form is plain semantic HTML. Controls: `<input type="radio">` (one-of), `typ
    - empty single-line input: `input` with the placeholder
    - textarea or prefilled input: `editor` with the current text
    - text answers are re-asked with the validation error until valid
-8. A timeout uses the values supplied by the host or fallback; RPC uses the form defaults. Unanswered fields in the fallback keep their defaults and checkbox groups keep choices made so far. Invalid values, including a required control left unanswered, yield no answer.
+8. A timeout submits the form's current values: in the fallback the unanswered fields keep their defaults and a checkbox group keeps what was checked so far. `details.timedOut` is set.
 9. A user cancel aborts the tool context and throws `ToolAbortError("Ask tool was cancelled by the user")`.
 
 ## Side Effects
@@ -66,7 +65,7 @@ The form is plain semantic HTML. Controls: `<input type="radio">` (one-of), `typ
 
 ## Limits & Caps
 
-- The tool schema declares only `html`. Argument recovery can convert a bare HTML string or a valid older `questions` list into the same form flow; neither is a separate protocol.
+- Unknown parameters are rejected because `AskTool.strict=true`.
 - `ask.timeout` defaults to `0` seconds (disabled). Plan mode always disables it.
 - In the fallback, `editor` prompts (textareas, prefilled inputs) have no timeout; `select` and `input` prompts do. Prompt surfaces that report presentation/reset events start or re-arm the deadline at those events; otherwise the timer starts when the prompt is requested.
 - `AskTool.concurrency = "exclusive"`: the tool runs alone in its tool batch because the dialog surface is shared.
@@ -81,5 +80,5 @@ The form is plain semantic HTML. Controls: `<input type="radio">` (one-of), `typ
 
 ## Notes
 
-- `/tree` re-answer reopens the recovered form in a sibling answer branch, including when a valid older `questions` call can be converted to HTML. Only unrecoverable calls fall back to a plain leaf move.
-- Extensions can use `ui.askDialog` for question lists or `ui.formDialog` for HTML forms. The `ask` tool uses the form flow, not the extension question-list dialog.
+- `/tree` re-answer recovers the original `html` from the persisted `ask` call and reopens the form to create a sibling answer branch; calls without an `html` string (legacy `questions` sessions) fall back to a plain leaf move.
+- Extensions keep `ui.askDialog` (questions-based) for their own prompts; only the tool uses forms.

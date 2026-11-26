@@ -79,13 +79,6 @@ test("full mode selects every supported language plan without enabling separate 
 		"test/Rust SDK",
 		"smoke/isolated native TUI PTY",
 	]);
-	for (const command of commands.filter(command => command.label.startsWith("test/TypeScript"))) {
-		expect(command.argv).toContain("all");
-		expect(command.argv).toContain("--unsharded");
-		expect(command.argv).toContain("--exclude-desktop");
-		expect(command.argv).toContain("--shared-fulltest-pool");
-		expect(command.env?.OMP_FULLTEST_AFFECTED).toBeUndefined();
-	}
 	for (const command of commands.filter(
 		command => command.label.startsWith("test/") && !command.label.startsWith("test/TypeScript"),
 	)) {

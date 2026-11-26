@@ -69,7 +69,7 @@ omp
 ### 多代理与无人值守
 
 - **Team**：在 TUI 输入 `/team <需求>`，或从命令行运行 `omp -p '/team <需求>'`，发起只读调查和交叉评审，不改代码。命令行调用把问题写在命令里，不另附 stdin 或 `@文件`。
-- **Goal Autopilot**：用 `/goal-autopilot <目标>` 运行无人值守长任务。无有效推荐的表单超时后返回未答复；恢复任务仍需结题复核。
+- **Goal Autopilot**：用 `/goal-autopilot <目标>` 运行无人值守长任务。表单静默等待 60 秒；超时时，只有存在有效推荐且当前填写有效才返回表单内容，否则报告未答复并继续任务。首次请求结题时先复核。
 - **按清单执行**：用 `/todoloop tasks.md --check` 只预检，用 `/todoloop tasks.md` 按组执行 Markdown 待办。
 - **按需编排**：`/orchestrate` 拆解并分派任务，`/workflowz` 组织批量工作，`/ultrathink` 深入分析。
 - **同目录实例通信**：默认允许同目录的其他 OMP 实例读取子代理输出并向其发消息；不需要时运行 `omp config set task.crossInstance false`。

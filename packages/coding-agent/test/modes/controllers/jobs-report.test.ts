@@ -53,26 +53,21 @@ describe("CommandController /jobs full", () => {
 		expect(lines[second + 1]).toBe("  sleep 5");
 	});
 
-	it.each([false, true])(
-		"warns without opening a dialog or report when jobs are unavailable (full=%s)",
-		async full => {
-			const showWarning = vi.fn();
-			const showJobsSheet = vi.fn();
-			const requestJobCaptions = vi.fn();
-			const set = vi.fn();
-			const ctx = {
-				shell: { native: () => true, dock: { slot: () => ({ set }) } },
-				viewSession: { getAsyncJobTree: () => null, requestJobCaptions },
-				showWarning,
-				showJobsSheet,
-			} as unknown as InteractiveModeContext;
-			await new CommandController(ctx).handleJobsCommand({ full });
-			expect(showWarning).toHaveBeenCalledTimes(1);
-			expect(showJobsSheet).not.toHaveBeenCalled();
-			expect(set).not.toHaveBeenCalled();
-			expect(requestJobCaptions).toHaveBeenCalledTimes(full ? 1 : 0);
-		},
-	);
+	it("warns when jobs are unavailable without opening a dialog or report", async () => {
+		const showWarning = vi.fn();
+		const showJobsSheet = vi.fn();
+		const set = vi.fn();
+		const ctx = {
+			shell: { native: () => true, dock: { slot: () => ({ set }) } },
+			viewSession: { getAsyncJobTree: () => null },
+			showWarning,
+			showJobsSheet,
+		} as unknown as InteractiveModeContext;
+		await new CommandController(ctx).handleJobsCommand();
+		expect(showWarning).toHaveBeenCalledWith(expect.stringContaining("unavailable"));
+		expect(showJobsSheet).not.toHaveBeenCalled();
+		expect(set).not.toHaveBeenCalled();
+	});
 
 	it("renders an empty full report with a zero running count", async () => {
 		const lines = await renderFullJobs([]);

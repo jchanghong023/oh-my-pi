@@ -787,9 +787,7 @@ describe("shared browser reachability check", () => {
 			const capMs = 50;
 			const first = stopSharedBrowserIfUnreachable(scope, { client: broker, probeCapMs: capMs });
 			const joined = stopSharedBrowserIfUnreachable(scope, { client: broker, probeCapMs: capMs });
-			expect(joined).toBe(first);
-
-			expect(await first).toBe(true);
+			expect(await Promise.all([first, joined])).toEqual([true, true]);
 			expect(stops).toEqual([DAEMON_NAME]);
 
 			// Settled slot: the next check describes again instead of joining a

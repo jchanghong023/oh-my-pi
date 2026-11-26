@@ -219,7 +219,6 @@ describe("/crawl", () => {
 			await fs.mkdir(path.join(dir, "my folder"));
 			await fs.writeFile(path.join(dir, "my file"), "");
 			const command = BUILTIN_SLASH_COMMANDS.find(entry => entry.name === "crawl");
-			expect(command).toBeDefined();
 			const complete = buildCrawlArgumentCompletions(dir);
 			expect(await complete("https://exa")).toBeNull();
 			expect((await complete("https://example.com --ma"))?.map(item => item.label)).toEqual([
@@ -232,7 +231,7 @@ describe("/crawl", () => {
 			expect((await complete("https://example.com --output my"))?.map(item => item.value)).toEqual([
 				'https://example.com --output "my folder/"',
 			]);
-			const registered = await command!.getArgumentCompletions!("https://example.com --re");
+			const registered = await command?.getArgumentCompletions?.("https://example.com --re");
 			expect(registered?.map(item => item.label)).toContain("--recursive");
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
