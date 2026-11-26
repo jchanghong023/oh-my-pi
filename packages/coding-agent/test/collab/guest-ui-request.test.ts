@@ -1061,8 +1061,8 @@ describe("guest ask multi-select Next", () => {
 			const result = controller.showAskDialog(questions);
 
 			const first = await nextUiRequest(guest);
-			expect(selectLabels(first)).toContain("下一步 →");
-			guest.socket.send({ t: "ui-response", reqId: first.request.reqId, value: "下一步 →" });
+			expect(selectLabels(first)).toContain("Next →");
+			guest.socket.send({ t: "ui-response", reqId: first.request.reqId, value: "Next →" });
 
 			const settled = await result;
 			expect(settled?.kind).toBe("submit");
@@ -1148,8 +1148,8 @@ describe("guest ask multi-select Next", () => {
 			const second = await nextUiRequest(guest);
 			if (second.request.kind !== "select") throw new Error(`expected select, got ${second.request.kind}`);
 			expect(second.request.checkedIndices).toEqual([0]);
-			expect(selectLabels(second)).toContain("下一步 →");
-			guest.socket.send({ t: "ui-response", reqId: second.request.reqId, value: "下一步 →" });
+			expect(selectLabels(second)).toContain("Next →");
+			guest.socket.send({ t: "ui-response", reqId: second.request.reqId, value: "Next →" });
 
 			const settled = await result;
 			expect(settled?.kind).toBe("submit");
@@ -1292,13 +1292,13 @@ describe("guest HTML form race", () => {
 			// A required group offers Next before anything is checked: the form flags rules, never blocks.
 			const extras = await nextUiRequest(guest);
 			if (extras.request.kind !== "select") throw new Error(`expected select, got ${extras.request.kind}`);
-			expect(selectLabels(extras)).toEqual(["Cache", "Queue", "其他（自行输入）", "下一步 →"]);
+			expect(selectLabels(extras)).toEqual(["Cache", "Queue", "Other (type your own)", "Next →"]);
 			guest.socket.send({ t: "ui-response", reqId: extras.request.reqId, value: "Queue" });
 			const extrasNext = await nextUiRequest(guest);
 			if (extrasNext.request.kind !== "select") throw new Error(`expected select, got ${extrasNext.request.kind}`);
 			expect(extrasNext.request.checkedIndices).toEqual([1]);
-			expect(selectLabels(extrasNext)).toContain("下一步 →");
-			guest.socket.send({ t: "ui-response", reqId: extrasNext.request.reqId, value: "下一步 →" });
+			expect(selectLabels(extrasNext)).toContain("Next →");
+			guest.socket.send({ t: "ui-response", reqId: extrasNext.request.reqId, value: "Next →" });
 
 			// A value breaking the form's rules is asked again with the reason; sending it again keeps it.
 			const workers = await nextUiRequest(guest);

@@ -272,7 +272,7 @@ describe("eval tool dynamic schema", () => {
 	});
 
 	it("follows eval.py changes made after construction on the next schema read", () => {
-		const session = makeSession({ backends: { "eval.js": true } });
+		const session = makeSession({});
 		const tool = new EvalTool(session);
 		expect(wireCellFields(tool).languages).toEqual(["js", "py"]);
 		cfgEvalPy.set(session.settings, false);

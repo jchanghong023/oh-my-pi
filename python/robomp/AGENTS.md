@@ -30,7 +30,7 @@ Webhook → durable queue → async dispatcher → per-issue git worktree → om
 Task runner is `bun` against the **monorepo root** `package.json`. roboomp itself no longer ships a `package.json`; every recipe lives at the root under the `robomp:*` namespace. Local venv (no docker): `bun run robomp:install` runs `pip install -e sdk/python/omp-rpc -e 'python/robomp[dev]'` (the local `omp-rpc` is not on the package index). From there:
 
 ```
-bun run test:py                   # pytest -x sdk/python/omp-rpc/tests python/robomp/tests
+bun run test:py                   # SDK Python tests, then RoboOMP Python tests
 bun run robomp:test:integration   # ROBOMP_INTEGRATION=1, requires omp on PATH
 bun run robomp:serve              # python -m robomp serve on the host
 ```
@@ -123,5 +123,6 @@ Lint + format: TypeScript via oxlint/oxfmt (root `.oxlintrc.json` / `.oxfmtrc.js
 - **Isolation rules**: any test mutating env via `monkeypatch.setenv` MUST also call `reset_settings_cache()` to invalidate the `@cache`d `get_settings()`.
 - **Async tests**: `test_github_client.py` and `test_host_tools.py` spin custom event loops in background threads to bridge sync-style tests with async client code. Prefer `pytest-asyncio` `auto` mode (`async def test_*`) for new tests; only fall back to the loop helpers if matching the surrounding file's style.
 - **Mocking**: never patch internals; inject test doubles via `httpx.MockTransport` for HTTP and via the `db` / `tmp_path` fixtures for storage. Sandbox tests use a real local bare repo as the upstream.
-- **Integration**: `tests/test_worker_smoke.py` is gated by `ROBOMP_INTEGRATION=1` (uses `pytestmark.skipif`) and needs `omp` on `PATH`. Don't enable it in default `bun run test:py`.
+- **Running tests**: Use root `bun run test:py` for ordinary Python suites, or `python3 -m pytest python/robomp/tests/<file>.py` for a focused run. Root `test` and `test:ts` do not include these Python suites. Use a POSIX host or explicitly enter an existing WSL environment.
+- **Integration**: `tests/test_worker_smoke.py` is gated by `ROBOMP_INTEGRATION=1` (uses `pytestmark.skipif`) and needs `omp` on `PATH`. Enable only via the separate `bun run robomp:test:integration` when authorized.
 - **Coverage expectation**: ~80 unit tests currently. New code with a control-flow branch needs a test covering it; new host tools need at minimum a happy path + one validation-failure path mirroring `test_host_tools.py`. Test logical behavior (assertions on observable effects in DB / HTTP requests), not literal strings or default config values.

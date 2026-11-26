@@ -203,7 +203,7 @@ describe("InteractiveMode live working label", () => {
 			current.agent.emitExternalEvent({ type: "agent_start" });
 			current.agent.emitExternalEvent({ type: "turn_start" });
 			await drain();
-			await term.waitFor(rows => rows.some(line => line.includes("等待响应")));
+			await term.waitFor(rows => rows.some(line => line.includes("Model waiting")));
 			expect(roles()).toContain('"omp.compact.activity"');
 			expect(roles()).not.toContain('"omp.working"');
 
@@ -219,20 +219,20 @@ describe("InteractiveMode live working label", () => {
 				assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: rawThought, partial: thinking },
 			});
 			await drain();
-			await term.waitFor(rows => rows.some(line => line.includes("正在思考") && line.includes(marker)));
+			await term.waitFor(rows => rows.some(line => line.includes("Model thinking") && line.includes(marker)));
 			expect(term.screen().filter(line => line.includes(marker))).toHaveLength(1);
 			expect(term.scrollback().join("\n")).not.toContain(marker);
 			expect(roles()).not.toContain('"omp.working"');
 			expect(term.screen().join("\n")).not.toContain("INTERNAL_CODE_MARKER");
 			cfgProseOnlyThinking.set(settings, false);
-			await term.waitFor(rows => rows.some(line => line.includes("正在思考") && line.includes("```")));
+			await term.waitFor(rows => rows.some(line => line.includes("Model thinking") && line.includes("```")));
 			expect(term.screen().join("\n")).not.toContain(marker);
 			cfgProseOnlyThinking.set(settings, true);
 			await term.waitFor(rows => rows.some(line => line.includes(marker)));
 
 			term.press("alt+p");
 			await term.waitFor(
-				rows => rows.some(line => line.includes("正在思考")) && !rows.some(line => line.includes(marker)),
+				rows => rows.some(line => line.includes("Model thinking")) && !rows.some(line => line.includes(marker)),
 			);
 			expect(cfgHideThinkingBlock.get(settings)).toBe(true);
 			term.press("alt+p");
@@ -247,7 +247,7 @@ describe("InteractiveMode live working label", () => {
 			});
 			await drain();
 			await term.waitFor(
-				rows => rows.some(line => line.includes("等待响应")) && !rows.some(line => line.includes(marker)),
+				rows => rows.some(line => line.includes("Model waiting")) && !rows.some(line => line.includes(marker)),
 			);
 
 			live.setWorkingMessage("custom activity");

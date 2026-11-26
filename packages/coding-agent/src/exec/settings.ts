@@ -130,7 +130,7 @@ export const cfgBashEnabled = register({
 		tab: "shell",
 		group: "Bash",
 		label: "Bash",
-		description: "启用 bash 工具以执行 Shell 命令",
+		description: "Enable the bash tool for shell command execution",
 	},
 });
 
@@ -141,8 +141,9 @@ export const cfgBashAllowCompoundCommands = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: "允许复合命令",
-		description: "逐条评估字面量 && 命令链；未匹配的命令使用常规 bash 授权策略和模式",
+		label: "Allow Compound Commands",
+		description:
+			"Evaluate literal && chains per command; unmatched commands use normal bash approval policy and mode",
 	},
 });
 
@@ -154,8 +155,8 @@ export const cfgBashAutoBackgroundEnabled = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: "Bash 自动转后台",
-		description: "自动将长时间运行的 bash 命令转入后台，稍后交付结果",
+		label: "Bash Auto-Background",
+		description: "Automatically background long-running bash commands and deliver the result later",
 	},
 });
 
@@ -179,9 +180,9 @@ export const cfgBashGitGuard = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: "Git 防护",
+		label: "Git Guard",
 		description:
-			"在仓库主工作区中拒绝丢弃或移动共享工作的 git 命令：stash、reset --hard 或重置到其它提交，以及非合并或变基冲突期间的 checkout/switch/restore；在关联工作树中允许执行，并先保存将被丢弃的未提交改动",
+			"Refuse git commands that discard or move shared work in a repository's main checkout: stash, reset --hard or to another commit, and checkout/switch/restore outside a merge or rebase conflict. In a linked worktree they run, saving uncommitted changes they discard first",
 	},
 });
 
@@ -194,8 +195,9 @@ export const cfgBashPatterns = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: "Bash 授权匹配规则",
-		description: "按顺序匹配的 bash 命令授权规则。每项包含 match 和 approval 字段；仅支持 '*' 通配符。",
+		label: "Bash Approval Patterns",
+		description:
+			"Ordered bash command approval rules. Each item has match and approval fields; only '*' wildcards are supported.",
 	},
 });
 
@@ -220,8 +222,8 @@ export const cfgBashInterceptorEnabled = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: "Bash 拦截器",
-		description: "拦截已有专用工具的 Shell 命令",
+		label: "Bash Interceptor",
+		description: "Block shell commands that have dedicated tools",
 	},
 });
 
@@ -241,8 +243,9 @@ export const cfgBashDirenv = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: "自动加载 direnv",
-		description: "使用内置 direnv 加载项目环境变量，无需安装外部 direnv，并遵循其允许和拒绝规则",
+		label: "direnv Auto-Load",
+		description:
+			"Load project environment variables with the embedded direnv builtin, honoring direnv's allow and deny rules",
 	},
 });
 
@@ -253,8 +256,9 @@ export const cfgBashDirenvLoadTimeoutMs = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: "direnv 加载超时（毫秒）",
-		description: "内置 direnv 执行 .envrc 的最长等待时间（devenv 冷启动可能较慢）；超时后不加载其导出的变量",
+		label: "direnv Load Timeout (ms)",
+		description:
+			"Max wait for embedded .envrc evaluation (a cold devenv shell can be slow); on timeout the session runs without its exports",
 	},
 });
 
@@ -266,8 +270,8 @@ export const cfgShellMinimizerEnabled = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: "Shell 输出精简",
-		description: "将冗长的 Shell 输出（git、npm、cargo 等）压缩后再返回给 Agent",
+		label: "Shell Minimizer",
+		description: "Compress verbose shell output (git, npm, cargo, etc.) before returning it to the agent",
 	},
 });
 
@@ -303,8 +307,8 @@ export const cfgShellMinimizerSourceOutlineLevel = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: "Shell 精简源码提纲",
-		description: "cat/read 读取源文件时的提纲模式：default 或 aggressive",
+		label: "Shell Minimizer Source Outline",
+		description: "Source outline mode for cat/read of source files: default or aggressive",
 	},
 });
 

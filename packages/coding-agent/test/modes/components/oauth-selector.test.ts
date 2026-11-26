@@ -86,14 +86,14 @@ describe("OAuth selector", () => {
 			},
 		} as unknown as OAuthSelectorAuthSource;
 		const { rendered, selected } = search("logout", auth, "opencode-go", { confirm: true });
-		expect(rendered).toContain("没有可退出登录的已存 Provider 凭据");
+		expect(rendered).toContain("No stored provider credentials to log out");
 		expect(selected).toEqual([]);
 	});
 
 	it("offers stored providers as logout targets", () => {
 		const { rendered, selected } = search("logout", storedOpencodeGo, "opencode-go", { confirm: true });
 		expect(rendered).toContain("OpenCode Go");
-		expect(rendered).toContain("已登录");
+		expect(rendered).toContain("logged in");
 		expect(selected).toEqual(["opencode-go"]);
 	});
 

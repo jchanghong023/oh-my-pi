@@ -27,7 +27,6 @@ concurrency:
 jobs:
    stale:
       name: Mark and close stale issues and PRs
-      if: github.repository == 'can1357/oh-my-pi'
       runs-on: ubuntu-22.04
       steps:
          - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0

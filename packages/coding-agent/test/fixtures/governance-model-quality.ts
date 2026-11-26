@@ -19,7 +19,6 @@ import {
 import evaluation from "./governance-model-quality.json" with { type: "json" };
 import writeToolContract from "./governance-model-quality-write.md" with { type: "text" };
 import removeToolContract from "./governance-model-quality-remove.md" with { type: "text" };
-import { buildChildEnv } from "../../../../scripts/ci-test-ts";
 
 // Explicit paid/external acceptance: run with `bun .../governance-model-quality.ts`.
 // It is deliberately not a .test.ts file and never registers a skipped test.
@@ -57,11 +56,10 @@ const auth = await discoverAuthStorage(existingAgentDir, { settings, cwd: repoRo
 
 function childEnvironment(root: string): NodeJS.ProcessEnv {
 	const runtime = path.join(path.dirname(root), "runtime");
-	// Reuse the repository credential scrubber, then retain only executable
-	// discovery variables. No actor/judge credential or config selector reaches
-	// the fixed CLI, assertion checker or mutation-verification subprocesses.
+	// Allow only executable discovery variables, never actor/judge credentials
+	// or config selectors, in the verification subprocesses.
 	const executableEnvironment = Object.fromEntries(
-		Object.entries(buildChildEnv()).filter(([name]) => ["PATH", "SYSTEMROOT", "WINDIR"].includes(name.toUpperCase())),
+		Object.entries(process.env).filter(([name]) => ["PATH", "SYSTEMROOT", "WINDIR"].includes(name.toUpperCase())),
 	);
 	return {
 		...executableEnvironment,

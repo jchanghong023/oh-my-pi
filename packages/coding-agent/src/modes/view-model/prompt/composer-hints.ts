@@ -45,7 +45,7 @@ const COMPOSER_HINTS: readonly ComposerHint[] = [
 			if (ctx.runningAgents === 0 || ctx.focusedOnAgent) return undefined;
 			return {
 				key: formatDoubleTap("left"),
-				label: `查看 ${ctx.runningAgents} 个正在运行的 Agent`,
+				label: `to see ${ctx.runningAgents} running ${ctx.runningAgents === 1 ? "agent" : "agents"}`,
 			};
 		},
 	},
@@ -55,7 +55,7 @@ const COMPOSER_HINTS: readonly ComposerHint[] = [
 		resolve: ctx => {
 			if (ctx.conversationStarted) return undefined;
 			const key = ctx.keybindings.keysFor("app.thinking.cycle")[0];
-			return key ? { key: formatKeyHint(key), label: "切换思考强度" } : undefined;
+			return key ? { key: formatKeyHint(key), label: "to change thinking effort" } : undefined;
 		},
 	},
 ];

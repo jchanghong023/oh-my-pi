@@ -234,8 +234,8 @@ describe("team member resolution", () => {
 		});
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error).toContain("company/NoSuchModel");
-			expect(result.error).toContain("不会静默剔除");
+			expect(result.error).toContain("Model in team.members is unavailable: company/NoSuchModel");
+			expect(result.error).toContain("Fix or remove this entry");
 		}
 	});
 
@@ -285,7 +285,7 @@ describe("team member resolution", () => {
 			availableModels: AVAILABLE,
 		});
 		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.error).toContain("主代理");
+		if (!result.ok) expect(result.error).toContain("requires a session model as its main agent");
 	});
 
 	it.each([{ configuredMembers: [] }, { configuredMembers: ["company/GLM-5.2-public"] }])(
@@ -299,8 +299,8 @@ describe("team member resolution", () => {
 			expect(result.ok).toBe(false);
 			if (!result.ok) {
 				expect(result.error).toContain("ghost/m1");
-				expect(result.error).toContain("主代理");
-				expect(result.error).toContain("不会静默跳过");
+				expect(result.error).toContain("cannot act as the main agent");
+				expect(result.error).toContain("Switch to an available model");
 			}
 		},
 	);
@@ -313,10 +313,9 @@ describe("team member resolution", () => {
 		});
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error).toContain("company/GLM-5.2");
-			expect(result.error).toContain("company/GLM-5.2-public");
-			expect(result.error).toContain("主代理");
-			expect(result.error).toContain("不会静默跳过");
+			expect(result.error).toContain("Session model company/GLM-5.2 is not available");
+			expect(result.error).toContain("similar available model: company/GLM-5.2-public");
+			expect(result.error).toContain("/team will not substitute it");
 		}
 	});
 

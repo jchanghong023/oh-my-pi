@@ -2,17 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { TeamConfigError, TeamConfigService } from "../../src/team/config";
 import { cfgTeamMembers } from "../../src/team/settings";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 // Real YAML, Settings CAS and catalog resolution; no provider requests or replacement storage implementation.
 describe("TeamConfigService", () => {
-	let state: SettingsTestState;
 	let temporary: TempDir;
 	let agentDir: string;
 	let cwd: string;
@@ -23,7 +21,6 @@ describe("TeamConfigService", () => {
 	let notifications: object[];
 
 	beforeEach(async () => {
-		state = beginSettingsTest();
 		temporary = TempDir.createSync("omp-team-config-");
 		agentDir = temporary.join("agent");
 		cwd = temporary.join("project");
@@ -62,8 +59,7 @@ describe("TeamConfigService", () => {
 
 	afterEach(() => {
 		auth?.close();
-		restoreSettingsTestState(state);
-		AgentStorage.close();
+		AgentStorage.close(getAgentDbPath(agentDir));
 		Bun.gc(true);
 		temporary.removeSync();
 	});
@@ -87,6 +83,8 @@ describe("TeamConfigService", () => {
 	it("refreshes consumers in the same user root across projects without disturbing their drafts", async () => {
 		const otherCwd = temporary.join("other-project");
 		const otherRoot = temporary.join("other-agent");
+		using databases = new DisposableStack();
+		databases.defer(() => AgentStorage.close(getAgentDbPath(otherRoot)));
 		fs.mkdirSync(otherCwd, { recursive: true });
 		fs.mkdirSync(otherRoot, { recursive: true });
 		const independent = await Settings.loadIsolated({ agentDir, cwd: otherCwd });
@@ -129,6 +127,8 @@ describe("TeamConfigService", () => {
 
 	it("refreshes a consumer whose user root is a directory alias", async () => {
 		const alias = temporary.join("agent-alias");
+		using databases = new DisposableStack();
+		databases.defer(() => AgentStorage.close(getAgentDbPath(alias)));
 		// TempDir accepts a relative prefix; symlink targets must not be relative to the link's parent.
 		fs.symlinkSync(path.resolve(agentDir), alias, process.platform === "win32" ? "junction" : "dir");
 		expect(fs.realpathSync(alias)).toBe(fs.realpathSync(agentDir));

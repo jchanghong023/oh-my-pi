@@ -76,11 +76,11 @@ export interface TreeSelectorProps {
 }
 
 const FILTER_TABS = [
-	{ id: "default", label: "默认" },
-	{ id: "no-tools", label: "隐藏工具" },
-	{ id: "user-only", label: "仅用户" },
-	{ id: "labeled-only", label: "已标记" },
-	{ id: "all", label: "全部" },
+	{ id: "default", label: "Default" },
+	{ id: "no-tools", label: "No tools" },
+	{ id: "user-only", label: "User only" },
+	{ id: "labeled-only", label: "Labeled" },
+	{ id: "all", label: "All" },
 ] as const;
 const FILTER_LABELS: Readonly<Record<TreeFilterMode, string>> = {
 	default: "[default]",
@@ -254,19 +254,19 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 		const message = messageOf(entry);
 		if (message?.role === "toolResult") {
 			const call = resultCalls.get(entry.id);
-			const args = call ? JSON.stringify(call.arguments) : "（不可用）";
+			const args = call ? JSON.stringify(call.arguments) : "(unavailable)";
 			return sanitizeText(
-				`状态：${message.isError ? "失败" : "成功"}\n参数：${args}\n结果：\n${joinTextContent(message.content)}`,
+				`Status: ${message.isError ? "Failed" : "Success"}\nArguments: ${args}\nResult:\n${joinTextContent(message.content)}`,
 			);
 		}
 		if (message?.role === "bashExecution" || message?.role === "pythonExecution") {
 			const args = message.role === "bashExecution" ? { command: message.command } : { code: message.code };
 			const status = message.cancelled
-				? "已取消"
+				? "Cancelled"
 				: message.exitCode === undefined
-					? "退出码不可用"
-					: `${message.exitCode === 0 ? "成功" : "失败"}（退出码 ${message.exitCode}）`;
-			return sanitizeText(`状态：${status}\n参数：${JSON.stringify(args)}\n结果：\n${message.output ?? ""}`);
+					? "Exit code unavailable"
+					: `${message.exitCode === 0 ? "Success" : "Failed"} (exit code ${message.exitCode})`;
+			return sanitizeText(`Status: ${status}\nArguments: ${JSON.stringify(args)}\nResult:\n${message.output ?? ""}`);
 		}
 		return undefined;
 	};
@@ -697,12 +697,12 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 		labelEditor()
 			? [pickerAction("label-save", "Save label", confirmKbd(), { primary: true }), closeAction("Cancel")]
 			: [
-					pickerAction("switch", "切换", confirmKbd(), { primary: true }),
-					pickerAction("summarize", "摘要后切换", ["shift", "enter"]),
-					pickerAction("label", "标记", ["shift", "l"]),
-					pickerAction("filter", "筛选", ["ctrl", "o"]),
-					pickerAction("details", "工具详情", ["alt", "enter"]),
-					closeAction("关闭"),
+					pickerAction("switch", "Switch", confirmKbd(), { primary: true }),
+					pickerAction("summarize", "Summarize & switch", ["shift", "enter"]),
+					pickerAction("label", "Label", ["shift", "l"]),
+					pickerAction("filter", "Filter", ["ctrl", "o"]),
+					pickerAction("details", "Tool details", ["alt", "enter"]),
+					closeAction(),
 				];
 	const onAction = (act: string, value?: string): void => {
 		if (labelEditor()) {
@@ -766,16 +766,16 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 		<col>
 			<picker
 				key={PICKER_KEY}
-				title="会话树"
+				title="Session tree"
 				subtitle={props.sessionName}
 				icon="git-branch"
-				noun="条目"
+				noun="entries"
 				size="lg"
 				layout="tree"
 				preview="side"
 				query={() => search().text}
 				cursor={() => search().cursor}
-				placeholder="搜索条目…"
+				placeholder="Search entries…"
 				tabs={FILTER_TABS}
 				tab={filter}
 				items={items}

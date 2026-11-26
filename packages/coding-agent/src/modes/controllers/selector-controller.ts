@@ -846,7 +846,7 @@ export class SelectorController {
 				return;
 			}
 			const roleSelectorHint = actionKey("app.model.select", this.ctx.keybindings) || formatKeyHint("alt+m");
-			this.ctx.showStatus(`仅当前会话的模型：${selector}。使用 ${roleSelectorHint} 或 /model 设置角色。`);
+			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /model for roles.`);
 		};
 		if (!compactFirst || focusedAgentId) {
 			await apply();
@@ -1060,8 +1060,9 @@ export class SelectorController {
 				const configuredStorage = cfgModelRoleStorage.get(this.ctx.settings);
 				const targetScope = configuredStorage === "project" ? (scope ?? "project") : "global";
 				const selectorValue = selector ?? `${model.provider}/${model.id}`;
-				const scopeLabel = configuredStorage === "project" ? `${targetScope === "project" ? "项目" : "全局"} ` : "";
-				const defaultStatusLabel = configuredStorage === "project" ? `${scopeLabel}默认` : "默认";
+				const scopeLabel =
+					configuredStorage === "project" ? `${targetScope === "project" ? "Project" : "Global"} ` : "";
+				const defaultStatusLabel = configuredStorage === "project" ? `${scopeLabel}default` : "Default";
 				try {
 					if (role === "default") {
 						// `auto` on the default role configures the active session. Other roles
@@ -1115,7 +1116,7 @@ export class SelectorController {
 							this.ctx.statusLine.refresh();
 							this.ctx.updateEditorBorderColor();
 						}
-						this.ctx.showStatus(`${defaultStatusLabel}模型：${selector ?? model.id}`);
+						this.ctx.showStatus(`${defaultStatusLabel} model: ${selector ?? model.id}`);
 					} else {
 						// Other roles (smol, slow, custom): update settings, not the current model.
 						const modelRoleValue = formatModelSelectorValue(selectorValue, thinkingLevel);
@@ -1126,7 +1127,7 @@ export class SelectorController {
 						}
 						const roleInfo = getRoleInfo(role, settings);
 						this.ctx.showStatus(
-							`${scopeLabel}${roleInfo?.tag ?? roleInfo?.name ?? role} 模型：${selector ?? model.id}`,
+							`${scopeLabel}${roleInfo?.tag ?? roleInfo?.name ?? role} model: ${selector ?? model.id}`,
 						);
 					}
 					return true;
@@ -1794,10 +1795,10 @@ export class SelectorController {
 					const branchSummariesEnabled = cfgBranchSummaryEnabled.get(settings);
 
 					while (!wantsSummary && branchSummariesEnabled) {
-						const summaryChoice = await this.ctx.showHookSelector("生成分支摘要？", [
-							"不生成摘要",
-							"生成摘要",
-							"使用自定义 Prompt 生成摘要",
+						const summaryChoice = await this.ctx.showHookSelector("Summarize branch?", [
+							"No summary",
+							"Summarize",
+							"Summarize with custom prompt",
 						]);
 
 						if (summaryChoice === undefined) {
@@ -1806,10 +1807,10 @@ export class SelectorController {
 							return;
 						}
 
-						wantsSummary = summaryChoice !== "不生成摘要";
+						wantsSummary = summaryChoice !== "No summary";
 
-						if (summaryChoice === "使用自定义 Prompt 生成摘要") {
-							customInstructions = await this.ctx.showHookEditor("自定义摘要指令");
+						if (summaryChoice === "Summarize with custom prompt") {
+							customInstructions = await this.ctx.showHookEditor("Custom summarization instructions");
 							if (customInstructions === undefined) {
 								// User cancelled - loop back to summary selector
 								continue;
@@ -2027,7 +2028,7 @@ export class SelectorController {
 				return await this.handleResumeSession(sessionFile, { settingsFlushed: true });
 			};
 			selectorOptions = {
-				title: `导入 ${sourceName} 会话`,
+				title: `Import ${sourceName} Session`,
 				showCwd: true,
 			};
 		} else {
@@ -2281,7 +2282,10 @@ export class SelectorController {
 			return;
 		}
 
-		const confirmed = await this.ctx.showHookConfirm("删除会话", "这将永久删除当前会话。\n随后将返回会话选择器。");
+		const confirmed = await this.ctx.showHookConfirm(
+			"Delete Session",
+			"This will permanently delete the current session.\nYou will be returned to the session selector.",
+		);
 
 		if (!confirmed) {
 			this.ctx.showStatus("Delete cancelled");
@@ -2308,7 +2312,7 @@ export class SelectorController {
 	 * comes back at once. Returns true when credentials were stored.
 	 */
 	async #handleOAuthLogin(providerId: string): Promise<boolean> {
-		this.ctx.showStatus(`正在登录 ${providerId}…`);
+		this.ctx.showStatus(`Logging in to ${providerId}…`);
 		const { getOAuthCredentialProvider, PASTE_CODE_LOGIN_PROVIDERS } = await loadProviderAuthUi();
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		const restoreEditor = () => handle.close();
@@ -2344,7 +2348,7 @@ export class SelectorController {
 				onManualCodeInput: useManualInput
 					? signal =>
 							dialog.showManualInput(
-								`粘贴授权码（或完整重定向 URL），然后按 ${formatKeyHint("enter")}：`,
+								`Paste the authorization code (or full redirect URL), then press ${formatKeyHint("enter")}:`,
 								signal,
 							)
 					: undefined,
@@ -2365,8 +2369,8 @@ export class SelectorController {
 			const destination = await credentialStoreLabel(getOAuthCredentialProvider(providerId));
 			this.ctx.present(() =>
 				outcomeLinesView([
-					["success", successText(`已成功登录 ${providerId}${who ? `，身份为 ${who}` : ""}`)],
-					["dim", `凭据已保存到 ${destination}`],
+					["success", successText(`Successfully logged in to ${providerId}${who ? ` as ${who}` : ""}`)],
+					["dim", `Credentials saved to ${destination}`],
 				]),
 			);
 			return true;
@@ -2488,7 +2492,7 @@ export class SelectorController {
 			this.ctx.showStatus("Cannot pin an account while the session is streaming.");
 			return;
 		}
-		this.ctx.showStatus("正在加载 Provider 账户…", { dim: true });
+		this.ctx.showStatus("Loading provider accounts…", { dim: true });
 		let accountList: SessionOAuthAccountList | undefined;
 		try {
 			accountList = await session.listCurrentProviderOAuthAccounts();
@@ -2499,7 +2503,7 @@ export class SelectorController {
 			return;
 		}
 		if (!accountList) {
-			this.ctx.showStatus("请先选择模型，再固定 Provider 账户。");
+			this.ctx.showStatus("Select a model before pinning a provider account.");
 			return;
 		}
 		const { getOAuthProviders } = await loadProviderAuthUi();
@@ -2510,8 +2514,8 @@ export class SelectorController {
 			const source = session.modelRegistry.authStorage.keys.describe(accountList.provider, session.sessionId);
 			this.ctx.showStatus(
 				source
-					? `${providerName} 没有已存储的 OAuth 账户。当前认证来自 ${source}。`
-					: `${providerName} 没有已存储的 OAuth 账户。使用 /login 添加。`,
+					? `No stored OAuth accounts for ${providerName}. Current auth comes from ${source}.`
+					: `No stored OAuth accounts for ${providerName}. Use /login to add one.`,
 			);
 			return;
 		}

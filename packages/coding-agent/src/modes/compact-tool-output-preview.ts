@@ -77,12 +77,12 @@ function selectOutputRows(
 /** Preview lifecycle state derived from the real terminal facts. */
 type PreviewState = "running" | "completed" | "failed" | "cancelled";
 
-/** Chinese status word shown in the frame header, aligned with the activity dock vocabulary. */
+/** Status word shown in the frame header. */
 const PREVIEW_STATE_WORD: Record<PreviewState, string> = {
-	running: "运行中",
-	completed: "已完成",
-	failed: "失败",
-	cancelled: "已取消",
+	running: "Running",
+	completed: "Done",
+	failed: "Failed",
+	cancelled: "Cancelled",
 };
 
 const PREVIEW_STATE_COLOR: Record<PreviewState, string> = {

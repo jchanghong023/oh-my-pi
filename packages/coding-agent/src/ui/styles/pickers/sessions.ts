@@ -187,12 +187,12 @@ function listRows(
 function confirmRows(cx: PaintContext, width: number, confirm: NonNullable<SessionsLookTerm["confirm"]>): string[] {
 	return paintHookPanel(cx.theme, width, {
 		look: "omp.hook",
-		title: "删除会话？",
+		title: "Delete session?",
 		details: [confirm.name],
 		outline: false,
 		options: [
-			{ label: "是", disabled: false },
-			{ label: "否", disabled: false },
+			{ label: "Yes", disabled: false },
+			{ label: "No", disabled: false },
 		],
 		cursor: confirm.answer === "yes" ? 0 : 1,
 		total: 2,
@@ -206,12 +206,16 @@ function confirmRows(cx: PaintContext, width: number, confirm: NonNullable<Sessi
 function renameRows(cx: PaintContext, width: number, line: NonNullable<SessionsLookTerm["rename"]>): string[] {
 	const theme = cx.theme;
 	const body = [
-		theme.style("strong accent", "重命名会话"),
+		theme.style("strong accent", "Rename session"),
 		"",
 		caretField(theme, "> ", line.text, line.cursor, width - 4),
 		"",
 	];
-	return [boxTop(theme, width, "重命名会话"), ...body.map(row => boxRow(theme, width, row)), boxBottom(theme, width)];
+	return [
+		boxTop(theme, width, "Rename Session"),
+		...body.map(row => boxRow(theme, width, row)),
+		boxBottom(theme, width),
+	];
 }
 
 /** The framed sheet: load status or error, then the search field and the list (or the open question), then the key hints. */

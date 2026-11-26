@@ -35,7 +35,7 @@ describe("settings section sidebar", () => {
 		for (let i = 0; i < 7; i++) term.press("right");
 		expect(cfgDevAutoqa.get(settings)).toBe(true);
 		const group = getSettingDef(createSettingsHost().entries, "dev.autoqa")?.group;
-		expect(group).toBe("开发者");
+		expect(group).toBe("Developer");
 		clickLabel(term, group!);
 		expect(cfgDevAutoqa.get(settings)).toBe(true);
 		clickLabel(term, group!);
@@ -45,7 +45,7 @@ describe("settings section sidebar", () => {
 
 /** Open the extra-context-files text editor. */
 function openExtraContextFiles(term: TestTerminal): void {
-	term.type("额外上下文文件");
+	term.type("extra context files");
 	term.press("enter");
 }
 
@@ -98,7 +98,7 @@ describe("extra context filenames editor", () => {
 				for (let i = 0; i < 3; i++) term.press("right");
 				await settings.flush();
 				const label = getSettingDef(createSettingsHost().entries, "contextFiles.extra")?.label;
-				expect(label).toBe("额外上下文文件");
+				expect(label).toBe("Extra Context Files");
 				expect(settingsScreen(term)).not.toContain(label!);
 			} finally {
 				term.dispose();

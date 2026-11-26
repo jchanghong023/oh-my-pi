@@ -89,45 +89,47 @@ function sidebarStyle(theme: Theme, hub: ModelHubState, entry: SidebarEntry, ind
 /** The body's status row. */
 function statusRow(theme: Theme, hub: ModelHubState, width: number): string {
 	const cut = (text: string): string => truncate(text, width, theme.symbols.ellipsis);
-	if (hub.assignmentPending) return cut(theme.style("accent", " 正在应用模型…"));
+	if (hub.assignmentPending) return cut(theme.style("accent", " Applying model…"));
 	const assigning = hub.assigning;
 	if (assigning !== null) {
 		const enter = keyLabel(theme, "enter");
 		const cancel = bindingGlyph("tui.select.cancel", "escape", theme);
 		if (assigning.kind === "fallbackKey")
-			return cut(theme.style("accent", ` 新建回退链：${enter} 选择需要回退的模型，${cancel} 取消`));
+			return cut(
+				theme.style("accent", ` New fallback chain — ${enter} picks the model it protects, ${cancel} cancels`),
+			);
 		const info = hub.source.getRoleInfo(assigning.role);
 		const label = theme.style("accent strong", info.tag ?? info.name ?? assigning.role);
 		if (assigning.kind === "fallback") {
-			const verb = assigning.index === null ? "添加回退：" : "替换回退：";
+			const verb = assigning.index === null ? "Adding fallback for" : "Replacing fallback of";
 			return cut(
-				`${theme.style("accent", ` ${verb}`)}${label}${theme.style("accent", ` · ${enter} 选择回退模型，${cancel} 取消`)}`,
+				`${theme.style("accent", ` ${verb} `)}${label}${theme.style("accent", ` — ${enter} picks the fallback model, ${cancel} cancels`)}`,
 			);
 		}
 		return cut(
-			`${theme.style("accent", " 正在分配 ")}${label}${theme.style("accent", ` · ${enter} 分配，${cancel} 取消`)}`,
+			`${theme.style("accent", " Assigning ")}${label}${theme.style("accent", ` — ${enter} assigns, ${cancel} cancels`)}`,
 		);
 	}
 	const entry = hub.activeEntry();
-	const scoped = hub.scoped ? " · --models 范围" : "";
+	const scoped = hub.scoped ? " · --models scope" : "";
 	if (hub.configError && entry.kind !== "provider") return cut(theme.style("error", ` ${hub.configError}`));
 	let text: string;
 	switch (entry.kind) {
 		case "recent":
-			text = `最近使用的模型${scoped}`;
+			text = `Recently used models${scoped}`;
 			break;
 		case "roles":
-			text = "模型角色：按 f 添加重试回退；清除角色后自动选择";
+			text = "Model roles — f adds a retry fallback, cleared roles fall back to auto-selection";
 			break;
 		case "provider":
 			text = entry.locked
-				? `${entry.label} · 未配置`
+				? `${entry.label} · not configured`
 				: hub.isRefreshing(entry.providerId)
-					? `${entry.label} · 正在刷新模型列表…`
-					: `${entry.label} · ${entry.annotation ?? "0"} 个模型${scoped}`;
+					? `${entry.label} · refreshing model list…`
+					: `${entry.label} · ${entry.annotation ?? "0"} models${scoped}`;
 			break;
 		default:
-			text = `所有可用模型${scoped}`;
+			text = `All available models${scoped}`;
 	}
 	return cut(theme.style("muted", ` ${text}`));
 }
@@ -149,16 +151,16 @@ function rolesView(theme: Theme, hub: ModelHubState, width: number, rows: number
 			: `${keyLabels(theme, ["ctrl+left", "ctrl+right"])} · ${keyLabels(theme, ["p", "shift+p"])}`;
 	const preset =
 		names.length > 0
-			? `   ${theme.style("dim", "预设：")} ${active ? theme.style("accent", active) : theme.style("muted", "自定义")}  ${theme.style("dim", presetKeys)}`
+			? `   ${theme.style("dim", "Preset:")} ${active ? theme.style("accent", active) : theme.style("muted", "custom")}  ${theme.style("dim", presetKeys)}`
 			: "";
 	const tabs = segmentTrack(
 		theme,
-		ROLE_TABS.map(tab => (tab === "all" ? "全部" : tab === "chat" ? "对话" : "类型")),
+		ROLE_TABS.map(tab => (tab === "kind" ? "kinds" : tab)),
 		Math.max(0, ROLE_TABS.indexOf(hub.roleTab)),
 	);
 	const lines = [
 		cut(
-			`${theme.style("dim", " 角色：")} ${tabs}  ${theme.style("dim", keyLabels(theme, ["alt+left", "alt+right"]))}${preset}`,
+			`${theme.style("dim", " Roles:")} ${tabs}  ${theme.style("dim", keyLabels(theme, ["alt+left", "alt+right"]))}${preset}`,
 		),
 	];
 	let tagWidth = 0;
@@ -472,7 +474,7 @@ function paintHub(node: UiNode, cx: PaintContext) {
 	const footer = strip
 		? stripRow(theme, hub, strip, width - 4).row
 		: truncate(theme.style("dim", footerHint(theme, hub)), width - 4, theme.symbols.ellipsis);
-	const out = hubFrameRows(theme, width, "模型", side, pane, footer, sidebar);
+	const out = hubFrameRows(theme, width, "Models", side, pane, footer, sidebar);
 	const hits: Hit[] = [{ row: 0, col: 0, width, height: out.length, node }];
 	return { rows: out, hits };
 }

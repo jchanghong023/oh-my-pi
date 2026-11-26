@@ -33,9 +33,9 @@ const PRESS_KEY_SUFFIX = /,?\s*then press\s+\S+\s*:?\s*$/i;
 /** Progress reporting a problem rather than a finished stage. */
 const PROGRESS_PROBLEM = /\b(?:fail(?:ed|ure)?|error|unavailable|in use|could ?n[o']t|unable)\b/i;
 /** The field's error when the flow asks for the manual code again. */
-const RETRY_MESSAGE = "无法读取授权码。请粘贴授权码或完整的重定向 URL。";
+const RETRY_MESSAGE = "Couldn't read a code from that. Paste the authorization code or the full redirect URL.";
 /** Status while the browser half runs and the provider reports nothing. */
-const BROWSER_WAIT = "等待你在浏览器中完成登录…";
+const BROWSER_WAIT = "Waiting for you to finish in the browser…";
 
 /** A text field of the flow. */
 export interface LoginField {
@@ -140,13 +140,13 @@ export class LoginDialogState {
 			{ kind: "url", url },
 			{
 				kind: "text",
-				text: `按住 ${formatKeyHint(keyHintPlatform() === "darwin" ? "super" : "ctrl")} 并点击打开`,
+				text: `${formatKeyHint(keyHintPlatform() === "darwin" ? "super" : "ctrl")}+click to open`,
 				style: "dim",
 				href: url,
 			},
 		];
 		if (launchUrl && launchUrl !== url) {
-			pieces.push({ kind: "text", text: `本机快捷链接：${launchUrl}`, style: "dim" });
+			pieces.push({ kind: "text", text: `Local shortcut (this machine only): ${launchUrl}`, style: "dim" });
 		}
 		if (instructions) pieces.push({ kind: "spacer" }, { kind: "text", text: instructions, style: "warning" });
 		this.pieces.set(pieces);
@@ -332,7 +332,7 @@ export function LoginDialog(props: { readonly state: LoginDialogState }): JSXNod
 	return (
 		<col
 			term={() => ({
-				title: `登录 ${state.providerName}`,
+				title: `Login to ${state.providerName}`,
 				pieces: state.pieces(),
 				caret: state.focused() && !state.terminalCursor(),
 			})}
@@ -362,7 +362,7 @@ export function LoginDialog(props: { readonly state: LoginDialogState }): JSXNod
 			<overlay
 				key="sheet"
 				role="omp.overlay.login"
-				head={`登录 ${state.providerName}`}
+				head={`Sign in to ${state.providerName}`}
 				anchor="center"
 				size="md"
 				modal
@@ -376,10 +376,10 @@ export function LoginDialog(props: { readonly state: LoginDialogState }): JSXNod
 							const body: JSXNode[] = [];
 							if (auth) {
 								const lead = auth.device
-									? "在登录页面输入此代码，以连接你的账户。"
+									? "Enter this code on the sign-in page to connect your account."
 									: auth.instructions
 										? sheetText(auth.instructions)
-										: "请在浏览器中继续。如果没有自动打开，请打开或复制下方的链接。";
+										: "Continue in your browser. If it didn't open, open or copy the link below.";
 								body.push(<text key="lead" role="omp.login.lead" wrap="word" text={lead} />);
 								if (auth.device) {
 									body.push(
@@ -389,7 +389,7 @@ export function LoginDialog(props: { readonly state: LoginDialogState }): JSXNod
 											align="center"
 											actions={{ click: "copy" }}
 											href={auth.device}
-											title="复制代码"
+											title="Copy code"
 										>
 											<text key="value" spans={[{ s: "mono", t: auth.device }]} />
 											<icon key="icon" name="copy" />
@@ -410,9 +410,9 @@ export function LoginDialog(props: { readonly state: LoginDialogState }): JSXNod
 										<ActionButton
 											id="copy"
 											nodeKey="copyLink"
-											label="复制"
+											label="Copy"
 											href={auth.url}
-											title="复制登录链接"
+											title="Copy the sign-in link"
 										/>
 									</row>,
 								);
@@ -425,7 +425,7 @@ export function LoginDialog(props: { readonly state: LoginDialogState }): JSXNod
 											lines={1}
 											title={auth.launchUrl}
 											spans={[
-												{ s: "dim", t: "本机  " },
+												{ s: "dim", t: "On this machine  " },
 												{ s: "mono", t: auth.launchUrl, href: auth.launchUrl } as TspSpan,
 											]}
 										/>,
@@ -478,9 +478,9 @@ export function LoginDialog(props: { readonly state: LoginDialogState }): JSXNod
 							<ActionButton
 								id="open"
 								nodeKey="openLink"
-								label="打开登录页面"
+								label="Open sign-in page"
 								href={auth.url}
-								title={`在浏览器中打开 ${urlPlace(auth.url)}`}
+								title={`Open ${urlPlace(auth.url)} in your browser`}
 								icon="open"
 								tone={field ? undefined : "accent"}
 							/>
@@ -489,8 +489,8 @@ export function LoginDialog(props: { readonly state: LoginDialogState }): JSXNod
 						const cancel = (
 							<ActionButton
 								id="cancel"
-								label="取消"
-								title={`取消  ${keyTitle(cancelKey)}`}
+								label="Cancel"
+								title={`Cancel  ${keyTitle(cancelKey)}`}
 								keys={kbdOf(cancelKey)}
 							/>
 						);
@@ -502,8 +502,8 @@ export function LoginDialog(props: { readonly state: LoginDialogState }): JSXNod
 								{field ? (
 									<ActionButton
 										id="submit"
-										label="继续"
-										title={`继续  ${keyTitle(actionKeyId("tui.input.submit", "enter"))}`}
+										label="Continue"
+										title={`Continue  ${keyTitle(actionKeyId("tui.input.submit", "enter"))}`}
 										tone="accent"
 										keys={actionKbd("tui.input.submit", "enter")}
 									/>

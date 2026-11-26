@@ -1,30 +1,9 @@
 #!/usr/bin/env bun
 
-import { createHash, randomUUID } from "node:crypto";
-import { type Dirent, lstatSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { windowsTestTempOverride } from "./windows-test-temp";
-import { BunTestFailureObserver, GateCommandError, gateFailure, reportGateFailure } from "./test-gate-failure-events";
-import { testConcurrencyLimit } from "./test-gate-scheduler";
-import { bunRequiresFullSelection, captureChangedPaths } from "./test-gate-source";
-import type { GateRun } from "./test-gate-runtime";
-import {
-	beginTestRun,
-	BUN_FORK_SUITE_REVISION,
-	bunTestProducerKey,
-	endTestRun,
-	isActiveBunFulltest,
-	isGeneratedTestRunDirectory,
-	latestFulltestBunProducers,
-	recordTestProducer,
-	testReportPath,
-} from "./test-reporting";
-import type { BunFulltestProducerScope, TestProducerRecord } from "./test-reporting";
-
-export const FULLTEST_HOME_PREFIX = "omp-fulltest-home-";
-export const FULLTEST_BUN_CAPACITY_FILE = ".bun-capacity";
+import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 
 type Mode =
 	| "all"
@@ -47,188 +26,13 @@ interface TestCommand {
 	command: string[];
 	/** `bun test --parallel` width this chunk wants when it has the machine to itself. */
 	parallel?: number;
-	/** A fresh command process already isolates a one-file chunk. */
-	oneFile?: boolean;
-	requireNoSelection?: boolean;
-	selection?: BunSelection;
+	/** Expected wall seconds from the timing history, set by weighted chunk planning; orders pool dispatch. */
+	estimatedSeconds?: number;
 }
 
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
 
 const repoRoot = path.join(import.meta.dir, "..");
-
-export interface BunSelection {
-	tool: "bun";
-	mode: "full" | "affected";
-	baseline?: string;
-	reason?: string;
-	selected?: number;
-	group?: "ordinary" | "startup";
-	/** Distinguishes the current fork test scope from earlier consumer sets. */
-	suiteRevision?: typeof BUN_FORK_SUITE_REVISION;
-}
-
-/** A clean full TS baseline lets Bun compare the current worktree against its revision. */
-export async function bunTestSelection(
-	root: string = repoRoot,
-	enabled = process.env.OMP_FULLTEST_AFFECTED === "1",
-	hint: string | null | undefined = process.env.OMP_FULLTEST_BASELINE,
-	currentRunId: string | undefined = process.env.OMP_TEST_RUN_ID,
-): Promise<BunSelection> {
-	const fallback = {
-		tool: "bun",
-		mode: "full",
-		reason: "no qualifying clean fork-feature fulltest baseline",
-	} as const;
-	if (!enabled || hint === "none") return { tool: "bun", mode: "full", reason: "full selected fork feature suites" };
-	const version = Bun.version.split(".").map(Number);
-	if (version[0]! < 1 || (version[0] === 1 && (version[1]! < 3 || (version[1] === 3 && version[2]! < 13))))
-		return { ...fallback, reason: "Bun does not support --changed" };
-	let entries: Dirent[];
-	try {
-		entries = await fs.readdir(path.join(root, "runs", "test-timing"), { withFileTypes: true });
-	} catch {
-		return fallback;
-	}
-	// Only runner-owned directories can be candidates or invalidate an earlier
-	// result. Manual timing artifacts may share the parent without a run.json.
-	const directories = entries
-		.filter(entry => entry.isDirectory() && isGeneratedTestRunDirectory(entry.name))
-		.sort((a, b) => b.name.localeCompare(a.name));
-	const unreadableReport = { ...fallback, reason: "newer test report is unreadable or invalid" };
-	for (const entry of directories) {
-		try {
-			const run = JSON.parse(
-				await fs.readFile(path.join(root, "runs", "test-timing", entry.name, "run.json"), "utf8"),
-			);
-			if (typeof run?.scope !== "string" || !run.scope) return unreadableReport;
-			if (run.scope !== "fulltest: fork feature suites") continue;
-			if (
-				typeof run.platform !== "string" ||
-				!run.platform ||
-				typeof run.architecture !== "string" ||
-				!run.architecture
-			)
-				return unreadableReport;
-			if (run.platform !== process.platform || run.architecture !== process.arch) continue;
-			// fulltest creates its running report before it selects tests. Only
-			// that exact report is this invocation, not an interrupted prior run.
-			if (entry.name === currentRunId && run.runId === currentRunId && run.completion === "running") continue;
-			if (run.completion !== "complete" || run.exitCode !== 0)
-				return { ...fallback, reason: "most recent fork-feature fulltest failed or is incomplete" };
-			const producers = Array.isArray(run.producers)
-				? run.producers.filter((producer: TestProducerRecord) => producer.scope === "ci-test-ts:local-ts")
-				: [];
-			const rustScope: TestProducerRecord | undefined = Array.isArray(run.producers)
-				? run.producers.find(
-						(producer: TestProducerRecord) =>
-							producer.scope === "rust-fork-features" && producer.producer === "cargo nextest run",
-					)
-				: undefined;
-			if (
-				run.dirtyState !== "clean" ||
-				run.runtimeVersions?.bun !== Bun.version ||
-				run.reconciliation?.status !== "validated" ||
-				run.unreconciledScope != null ||
-				run.coverage === "affected-tests-only" ||
-				!Array.isArray(run.producers) ||
-				!producers.length ||
-				!producers.every(
-					(producer: TestProducerRecord & { report?: string }) =>
-						producer.exitCode === 0 &&
-						producer.status === "passed" &&
-						producer.report === "available" &&
-						producer.selection?.mode === "full" &&
-						producer.selection.suiteRevision === BUN_FORK_SUITE_REVISION,
-				) ||
-				!["ordinary", "startup"].every(group =>
-					producers.some(
-						(producer: TestProducerRecord) => (producer.selection as BunSelection | undefined)?.group === group,
-					),
-				) ||
-				rustScope?.exitCode !== 0 ||
-				rustScope.status !== "not-selected" ||
-				rustScope.selection?.tool !== "fork-scope" ||
-				rustScope.selection.mode !== "full" ||
-				rustScope.selection.selected !== 0 ||
-				!Array.isArray(rustScope.selection.packages) ||
-				rustScope.selection.packages.length !== 0 ||
-				!run.producers.some(
-					(producer: TestProducerRecord) =>
-						producer.producer === "ui-smoke/runner-stage" &&
-						producer.exitCode === 0 &&
-						(producer.status === "passed" || producer.status === "stage"),
-				) ||
-				run.producers.some(
-					(producer: TestProducerRecord) =>
-						(producer.status === "not-selected" && producer !== rustScope) ||
-						producer.selection?.mode === "affected",
-				) ||
-				(hint != null && run.sourceRevision !== hint) ||
-				!/^[a-f0-9]{40,64}$/i.test(run.sourceRevision ?? "") ||
-				!Number.isFinite(Date.parse(run.startedAtUtc))
-			)
-				continue;
-			try {
-				const child = Bun.spawn(["git", "merge-base", "--is-ancestor", run.sourceRevision, "HEAD"], {
-					cwd: root,
-					stdout: "ignore",
-					stderr: "ignore",
-				});
-				if ((await child.exited) === 0) return { tool: "bun", mode: "affected", baseline: run.sourceRevision };
-			} catch {
-				return { ...fallback, reason: "Git unavailable to validate baseline" };
-			}
-		} catch {
-			// Without a readable report, its scope cannot be ruled out.
-			return unreadableReport;
-		}
-	}
-	return fallback;
-}
-
-/** Git failure or a dynamic/native input makes automatic Bun selection unsafe. */
-async function bunCanTraceChanges(root: string, baseline: string): Promise<boolean> {
-	try {
-		const gitGate = {
-			charged: async <T>(work: () => Promise<T>) => work(),
-			capture: async ({ argv }: { argv: string[] }) => {
-				const child = Bun.spawn(argv, { cwd: root, stdout: "pipe", stderr: "ignore" });
-				const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-				if (exitCode !== 0) throw new Error("Git change capture failed");
-				return { stdout };
-			},
-		} as unknown as GateRun;
-		return !bunRequiresFullSelection(await captureChangedPaths(gitGate, root, baseline));
-	} catch {
-		return false;
-	}
-}
-/** Consolidation is safe only when Git confirms that the baseline is the entire current tree. */
-export async function bunCleanBaseline(selection: BunSelection, root = repoRoot): Promise<boolean> {
-	if (selection.mode !== "affected" || !selection.baseline) return false;
-	try {
-		const git = async (...args: string[]) => {
-			const child = Bun.spawn(["git", ...args], { cwd: root, stdout: "pipe", stderr: "ignore" });
-			const [output, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-			return code === 0 ? output : undefined;
-		};
-		const [head, status] = await Promise.all([
-			git("rev-parse", "HEAD"),
-			git("status", "--porcelain=v1", "--untracked-files=all"),
-		]);
-		return head?.trim() === selection.baseline && status === "";
-	} catch {
-		return false;
-	}
-}
-
-export function bunNoTestsSelected(output: string): boolean {
-	const plain = output.replaceAll(/\x1b\[[0-9;]*m/g, "");
-	return /--changed:\s*(?:no changed files, nothing to run|\d+ changed files?, but no test files are affected)/.test(
-		plain,
-	);
-}
 const args = process.argv.slice(2);
 const isDryRun = args.includes("--dry-run");
 const requestedMode = args.find(arg => !arg.startsWith("--")) ?? "all";
@@ -246,11 +50,6 @@ const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
 // opts back into inline replay of every chunk. Tied to `onlyFailures` so the
 // quiet path is whatever the verbose filter is not.
 const quiet = onlyFailures;
-// A gate receives failures immediately; independent chunks and the rest of
-// each suite still run so one failure cannot hide the remaining results.
-const gateReportsFailures = Boolean(process.env.OMP_GATE_EVENT_TOKEN);
-const sharedFulltestPool = args.includes("--shared-fulltest-pool");
-const fulltestStartupHome = sharedFulltestPool ? Bun.env.OMP_FULLTEST_STARTUP_HOME : undefined;
 
 const validModes: Record<Mode, true> = {
 	all: true,
@@ -265,12 +64,18 @@ const validModes: Record<Mode, true> = {
 	"coding-agent-heavy": true,
 };
 
-// `chunkSize` splits a bucket's file list into that-many-file groups, each run as a
-// separate `bun test` child process. A fresh process per chunk resets Bun's
-// heap and reaps any dangling spawned children between groups, keeping peak RSS
-// under the CI runner's OOM ceiling (a single 170–370-file invocation gets
-// SIGKILLed at 137). Singleton/global-state files also run serially within
-// bounded fresh processes, avoiding a single long-running bucket.
+// `chunkSize` caps how many files of a bucket share one `bun test` child process.
+// A fresh process per chunk resets Bun's heap and reaps any dangling spawned
+// children between groups, keeping peak RSS under the CI runner's OOM ceiling (a
+// single 170–370-file invocation gets SIGKILLed at 137). A bucket always gets
+// `ceil(files / chunkSize)` chunks. Which files share a chunk comes from the
+// timing history (see TimingHistory): files are dealt heaviest-first onto the
+// lightest chunk with room, so slow suites spread out instead of clustering in
+// one alphabetical run (ten `cli-*` files once made a 67s chunk beside a 5s
+// median), and chunks are numbered heaviest-first. With no history for any of a
+// bucket's files the plan falls back to consecutive alphabetical runs. The
+// singleton/global-state bucket is left whole: its suites co-locate in one
+// process to exercise process-wide state, so they must not split.
 //
 // The UI/TUI bucket uses a smaller chunk (5) than the others: its suites build up
 // native ghostty-vt cells, and bun 1.3.14's GC aborts (SIGTRAP/SIGABRT, exit
@@ -279,18 +84,11 @@ const validModes: Record<Mode, true> = {
 // fault — the crash is cumulative heap volume. Under a 256MB-forced heap, a
 // 10-file chunk aborts ~50% of runs while either 5-file half is 0/20; halving the
 // chunk keeps each process under the threshold.
-// Bun 1.4.0 on Windows also wedges when runtime/collab registry suites share a
-// process: the next file can spin past the watchdog. Isolate runtime and native
-// files on that platform while retaining larger chunks elsewhere.
 const codingAgentBucketPlans: Record<CodingAgentBucket, { label: string; parallel: number; chunkSize?: number }> = {
-	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10 },
+	singleton: { label: "singleton/global-state bucket", parallel: 1 },
 	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
-	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: process.platform === "win32" ? 1 : 10 },
-	native: {
-		label: "native/tooling/browser/unit bucket",
-		parallel: 1,
-		chunkSize: process.platform === "win32" ? 1 : 10,
-	},
+	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
+	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10 },
 };
 
 // Smaller workspace packages stay separate from native/TUI/integration suites so
@@ -314,188 +112,7 @@ const nativeAndIntegrationPackages = [
 	"packages/tui",
 	"packages/collab-web",
 	"packages/typescript-edit-benchmark",
-	"packages/stats",
-	"packages/metaharness",
-	"python/robomp/web",
 ];
-
-// Discover coding-agent tests at file granularity before chunking. Full mode
-// uses Bun's test filename conventions.
-const forkCodingAgentDirectories = ["test/team/", "test/goals/", "test/todoloop/"];
-const forkCodingAgentFiles = new Set([
-	"test/acp-builtins.test.ts", // /wt consumer
-	"test/session/picker-worktrees.test.ts",
-	"test/cli-goal-flag.test.ts",
-	"test/goal-tool-runtime-enable.test.ts",
-	"test/skills.test.ts",
-	"test/skill-descriptions-xdg.test.ts",
-	"test/skill-protocol-customdirs.test.ts",
-	"test/skillful-toggle.test.ts",
-	"test/cli/skill-list.test.ts",
-	"test/slash-commands/team-command.test.ts",
-	"test/slash-commands/guided-goal.test.ts",
-	"test/slash-commands/display.test.ts",
-	"test/slash-commands/jch-ime.test.ts",
-	"test/slash-commands/tan.test.ts",
-	"test/slash-commands/shared-business.test.ts",
-	"test/sketch-server.test.ts",
-	"test/slash-commands/sketch.test.ts",
-	"test/input-controller-image-ownership.test.ts",
-	"test/lsp/edits.test.ts",
-	"test/models-offline-company.test.ts",
-	"test/company-models.test.ts",
-	"test/company-provider.test.ts",
-	"test/codeagent-provider.test.ts",
-	"test/codeagent-thinking-policy.test.ts",
-	"test/offline-subcommands.test.ts",
-	"test/cli-offline-env.test.ts",
-	"test/offline-notice.test.ts",
-	"test/sdk-system-prompt-template.test.ts",
-	"test/mnemopi-company-embeddings.test.ts",
-	"test/profile-cli.test.ts",
-	"test/profile-bootstrap.test.ts",
-	"test/profile-alias.test.ts",
-	"test/sample-profile.test.ts",
-	"test/interactive-mode-restart-profile.test.ts",
-	"test/session-paths.test.ts",
-	"test/config-cli.test.ts",
-	"test/config/user-settings.test.ts",
-	"test/config/config-file.test.ts",
-	"test/config/model-registry.test.ts",
-	"test/config/models-config-validation.test.ts",
-	"test/settings-manager.test.ts",
-	"test/input-controller-approval-routing.test.ts",
-	"test/cfg-approval-timeout.test.ts",
-	"test/tools/approval-mode.test.ts",
-	"test/tools/approval-cached-mode.test.ts",
-	"test/tools/approval-restricted-folders.test.ts",
-	"test/agent-session-snapcompact-reader.test.ts",
-	"test/session-manager/snapcompact-archive-persistence.test.ts",
-	"test/tools/approval.test.ts",
-	"test/snapcompact-inline.test.ts",
-	"test/event-controller-thinking-preview.test.ts",
-	"test/interactive-terminal-e2e.test.ts",
-	"test/modes/utils/render-initial-messages.test.ts",
-	"test/status-line-usage.test.ts",
-	"test/status-line-time-spent.test.ts",
-	"test/agent-session-auto-compaction-progress-guard.test.ts",
-	"test/agent-session-compaction.test.ts",
-	"test/agent-session-goal-midrun-compaction.test.ts",
-	"test/agent-session-magic-keywords.test.ts",
-	"test/agent-session-queued-steer-delivery.test.ts",
-	"test/agent-session-stats.test.ts",
-	"test/approval-launch-contract.test.ts",
-	"test/artifacts-integrity.test.ts",
-	"test/autolearn-managed-skills.test.ts",
-	"test/bench-offline-company.test.ts",
-	"test/cli-explicit-extension-isolation.test.ts",
-	"test/commit-conventional.test.ts",
-	"test/compact-status-spacing.test.ts",
-	"test/compact-tool-summary.test.ts",
-	"test/composer-prediction-controller.test.ts",
-	"test/config-cli-revision-contract.test.ts",
-	"test/context-fits-model.test.ts",
-	"test/developer-test-agent-resources.test.ts",
-	"test/discovery-skill-scanner.test.ts",
-	"test/discovery/claude-plugins.test.ts",
-	"test/eval/completion-bridge.test.ts",
-	"test/extension-dashboard-mcp-parity.test.ts",
-	"test/fork-diagnostic-logging.test.ts",
-	"test/fork-runtime-defaults.test.ts",
-	"test/input-controller-input-events.test.ts",
-	"test/input-controller-thinking-visibility.test.ts",
-	"test/interactive-mode-activity-line.test.ts",
-	"test/interactive-mode-loop-teardown.test.ts",
-	"test/interactive-mode-loop.test.ts",
-	"test/interactive-mode-working-label.test.ts",
-	"test/internal-urls/mcp-protocol.test.ts",
-	"test/judgment-chain.test.ts",
-	"test/loop-limit.test.ts",
-	"test/model-picker.test.ts",
-	"test/model-provider-contract.test.ts",
-	"test/model-registry-default-config.test.ts",
-	"test/model-registry-runtime-provider.test.ts",
-	"test/modes/components/oauth-selector.test.ts",
-	"test/modes/components/settings-layout.test.ts",
-	"test/modes/controllers/input-controller-tool-expansion.test.ts",
-	"test/modes/controllers/jobs-command.test.ts",
-	"test/modes/controllers/jobs-report.test.ts",
-	"test/ui/composer/composer.test.ts",
-	"test/ui/overlays/pickers/jobs-panel.test.tsx",
-	"test/ui/overlays/pickers/tree-selector.test.tsx",
-	"test/ui/status/status-line.test.ts",
-	"test/ui/tools/web-search.test.ts",
-	"test/ui/transcript/messages/assistant-message.test.tsx",
-	"test/ui/transcript/messages/async-cards.test.tsx",
-	"test/modes/goal-autopilot-websocket.test.ts",
-	"test/native-pipe-fallback-contract.test.ts",
-	"test/online-tiny-candidates.test.ts",
-	"test/parallel-review-MagicSkills-regression.test.ts",
-	"test/parallel-review-OfflineStartup-regression.test.ts",
-	"test/parallel-review-ProviderCatalog-regression.test.ts",
-	"test/parallel-review-TeamDiscussion-regression.test.ts",
-	"test/personal-tool-arguments.test.ts",
-	"test/retry-fallback.test.ts",
-	"test/runtime-irc-receipt-contract.test.ts",
-	"test/runtime-tool-cancellation-contract.test.ts",
-	"test/sdk-async-job-manager-singleton.test.ts",
-	"test/sdk-move-cwd.test.ts",
-	"test/sdk-request-hooks.test.ts",
-	"test/sdk-skills.test.ts",
-	"test/settings-gated-tools-live.test.ts",
-	"test/setup-wizard.test.ts",
-	"test/slash-commands/crawl.test.ts",
-	"test/slash-commands/personal-prompt-delivery.test.ts",
-	"test/slash-commands/personal-session-isolation.test.ts",
-	"test/speculative-live-config.test.ts",
-	"test/speculative-read-integration.test.ts",
-	"test/startup-composer.test.ts",
-	"test/status-line-overflow.test.ts",
-	"test/stt-cloud.test.ts",
-	"test/stt-preflight.test.ts",
-	"test/stt-whisper-language.test.ts",
-	"test/title-generator.test.ts",
-	"test/task/parked-subagent-session-release.test.ts",
-	"test/tools/jtd-upstream-contract.test.ts",
-	"test/tools/todo.test.ts",
-	"test/upstream-extension-validation.test.ts",
-	"test/vibe/spawn-model-role.test.ts",
-	"test/zero-config-terminal.test.ts",
-	"test/tools/browser/crawl.test.ts",
-	"test/tools/browser/crawl-access.test.ts",
-	"test/parallel-review-SessionRuntimeCompact-regression.test.ts",
-	"test/developer-test-agent-materialization.test.ts",
-	"test/task/structured-subagent.test.ts",
-	"test/registry/agent-lifecycle.test.ts",
-	"test/agent-hub-activate.test.ts",
-	"test/agent-session-dispose-releases-memory.test.ts",
-	"test/sharpshooter-extract.test.ts",
-]);
-const forkPackageFiles: Record<string, string[]> = {
-	"packages/agent": ["test/output-budget.test.ts", "test/pause-gate.test.ts"],
-	"packages/utils": ["test/dirs-cache.test.ts", "test/logger-contract.test.ts"],
-	"packages/ai": ["test/proxy.test.ts"],
-	"packages/mnemopi": ["test/offline-storage.test.ts"],
-	"packages/stats": ["test/storage-relocation.test.ts"],
-	"packages/collab-web": [
-		"test/composer.test.tsx",
-		"test/transcript.test.tsx",
-		"test/tool-view.test.tsx",
-		"test/markdown.test.tsx",
-	],
-	"packages/tui": [
-		"test/composer-inline-shrink.test.ts",
-		"test/composer-welcome-scrollback.test.ts",
-		"test/transcript-container.test.ts",
-		"test/transcript-seam-loss.test.ts",
-		"test/driver-session/session.test.ts",
-	],
-	"packages/snapcompact": ["test/snapcompact.test.ts"],
-};
-
-export function isForkCodingAgentTest(file: string): boolean {
-	return forkCodingAgentFiles.has(file) || forkCodingAgentDirectories.some(dir => file.startsWith(dir));
-}
 
 const projectToolTestCommand: TestCommand = {
 	label: ".omp/tests (project-local TUI debug tool)",
@@ -503,6 +120,9 @@ const projectToolTestCommand: TestCommand = {
 	command: ["bun", "test", ...onlyFailuresArgs, "./.omp/tests/tui.test.ts"],
 	parallel: 1,
 };
+
+// The local run also covers the stats and Robomp web suites.
+const localOnlyWorkspacePackages = ["packages/stats", "python/robomp/web"];
 
 const codingAgentNativePathPatterns = [
 	/(^|\/)[^/]*(bash|native|browser|cmux|mnemopi|hindsight|memory)[^/]*\.test\.ts$/i,
@@ -547,7 +167,6 @@ const codingAgentNativeContentMarkers = [
 	"Bun.spawnSync",
 	"child_process",
 	"Bun.serve",
-	"startLocalRelay(",
 	"new Worker",
 	"Worker(",
 	"puppeteer",
@@ -587,7 +206,30 @@ const codingAgentUiContentMarkers = [
 
 const codingAgentRuntimeContentMarkers = ["AgentSession", "SessionManager", "AuthStorage", "Bun.sleep", "setTimeout("];
 
-const codingAgentTestPartitionPromises = new Map<boolean, Promise<CodingAgentTestPartition>>();
+let codingAgentTestPartitionPromise: Promise<CodingAgentTestPartition> | null = null;
+
+// A test whose own junit `time` exceeds this many seconds is called out in its
+// chunk's progress line and in the end-of-run slow-test section. A warning
+// only: it never fails the run.
+const SLOW_TEST_SECONDS = 5;
+
+// Observed durations from earlier non-dry runs, used to balance coding-agent
+// chunks and to start the longest pool commands first. `files` maps a
+// repo-relative test file to the seconds of its file-level junit suite;
+// `commands` maps the label of a command that lists no test files (a whole
+// package, the Rust task — labels that stay stable across runs) to its wall
+// seconds. A machine-local cache: missing or malformed reads as empty, which is
+// the cold-start plan.
+interface TimingHistory {
+	files: Record<string, number>;
+	commands: Record<string, number>;
+}
+
+const timingHistoryPath = path.join(repoRoot, "node_modules/.cache/omp-test-timings.json");
+const codingAgentCwd = "packages/coding-agent";
+const TEST_FILE_ARG_RE = /\.test\.[cm]?[jt]sx?$/;
+
+let timingHistoryPromise: Promise<TimingHistory> | null = null;
 
 function shellQuote(value: string): string {
 	if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
@@ -606,33 +248,32 @@ function workspaceTestCommand(pkg: string, parallel: number, options: { extraArg
 	};
 }
 
-// Root `bun run test` reports the Rust fork scope alongside TypeScript results.
+// The Rust suite as one pooled command, so root `bun run test` reports TS and
+// Rust under the same progress stream / failure report. Delegates to
+// run-rs-task.ts, which self-skips when the branch changed no Rust-affecting file
+// since its merge base with main, committed or not (printing a one-line notice),
+// and resolves the cargo/nextest invocation.
 function rustTestCommand(): TestCommand {
 	return {
-		label: "rust (fork test scope)",
+		label: "rust (cargo nextest; skipped if no Rust changes)",
 		cwd: ".",
 		command: ["bun", "scripts/run-rs-task.ts", "test:rs"],
 	};
 }
 
-async function collectTestsUnder(root: string, baseDir: string, all = false): Promise<string[]> {
+async function collectTestsUnder(root: string, baseDir: string): Promise<string[]> {
 	const entries = await fs.readdir(root, { withFileTypes: true });
 	const files: string[] = [];
 	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
 		const filePath = path.join(root, entry.name);
 		if (entry.isDirectory()) {
-			if (all && (entry.name === "node_modules" || entry.name.startsWith("."))) continue;
-			files.push(...(await collectTestsUnder(filePath, baseDir, all)));
+			files.push(...(await collectTestsUnder(filePath, baseDir)));
 			continue;
 		}
-		const relative = path.relative(baseDir, filePath).split(path.sep).join("/");
-		if (
-			!entry.isFile() ||
-			!(/\.test\.tsx?$/.test(entry.name) || (all && /(?:\.|_)(?:test|spec)\.(?:js|jsx|ts|tsx)$/.test(entry.name)))
-		) {
+		if (!entry.isFile() || !/\.test\.tsx?$/.test(entry.name)) {
 			continue;
 		}
-		files.push(relative);
+		files.push(path.relative(baseDir, filePath).split(path.sep).join("/"));
 	}
 	return files;
 }
@@ -676,139 +317,244 @@ function classifyCodingAgentTest(testFile: string, content: string): CodingAgent
 	return "native";
 }
 
-// Resource ownership follows the real launch/probe imports, not an e2e filename
-// suffix: new browser acceptance files must not escape into the ordinary lane.
-const browserConsumerTests = new Set<string>();
+async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> {
+	codingAgentTestPartitionPromise ??= (async () => {
+		const codingAgentDir = path.join(repoRoot, "packages/coding-agent");
+		const testFiles = (await collectTestsUnder(path.join(codingAgentDir, "test"), codingAgentDir)).sort();
+		const partition: CodingAgentTestPartition = {
+			singleton: [],
+			ui: [],
+			runtime: [],
+			native: [],
+		};
 
-function consumesBrowserProcess(content: string): boolean {
-	return (
-		/\blaunchHeadlessBrowser\s*\(/.test(content) ||
-		(/\b(?:loadPuppeteer|puppeteer-core)\b/.test(content) && /\b\w+\.launch\s*\(/.test(content)) ||
-		/from\s+["'][^"']*chromium-probe["']/.test(content)
-	);
+		for (const testFile of testFiles) {
+			const content = await Bun.file(path.join(codingAgentDir, testFile)).text();
+			// Match existing path rules for JSX tests without changing the path passed to Bun.
+			const classificationPath = testFile.endsWith(".tsx") ? testFile.slice(0, -1) : testFile;
+			partition[classifyCodingAgentTest(classificationPath, content)].push(testFile);
+		}
+
+		return partition;
+	})();
+	return codingAgentTestPartitionPromise;
 }
 
-async function getCodingAgentTestPartition(all = false): Promise<CodingAgentTestPartition> {
-	let promise = codingAgentTestPartitionPromises.get(all);
-	if (!promise) {
-		promise = (async () => {
-			const codingAgentDir = path.join(repoRoot, "packages/coding-agent");
-			const testRoot = all ? codingAgentDir : path.join(codingAgentDir, "test");
-			const testFiles = (await collectTestsUnder(testRoot, codingAgentDir, all)).sort();
-			const partition: CodingAgentTestPartition = {
-				singleton: [],
-				ui: [],
-				runtime: [],
-				native: [],
-			};
-
-			for (const testFile of testFiles) {
-				const content = await Bun.file(path.join(codingAgentDir, testFile)).text();
-				if (consumesBrowserProcess(content)) browserConsumerTests.add(testFile);
-				partition[classifyCodingAgentTest(testFile, content)].push(testFile);
-			}
-
-			return partition;
-		})();
-		codingAgentTestPartitionPromises.set(all, promise);
+// Keep the finite numeric entries of an untrusted JSON object.
+function numberRecord(value: unknown): Record<string, number> {
+	const record: Record<string, number> = {};
+	if (typeof value !== "object" || value === null) return record;
+	for (const key in value) {
+		const entry: unknown = Reflect.get(value, key);
+		if (typeof entry === "number" && Number.isFinite(entry)) record[key] = entry;
 	}
-	return promise;
+	return record;
 }
 
-// Start explicitly named end-to-end and integration tests early.
-// Preserve order within each group.
-function isIntegrationTest(testFile: string): boolean {
-	return (
-		/(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile) ||
-		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
-		testFile === "test/tools/browser/crawl.test.ts"
-	);
+// Read the timing history from disk; a missing or corrupt file is an empty one.
+async function readTimingHistory(): Promise<TimingHistory> {
+	let raw: unknown;
+	try {
+		raw = await Bun.file(timingHistoryPath).json();
+	} catch (err) {
+		if (isEnoent(err) || err instanceof SyntaxError) return { files: {}, commands: {} };
+		throw err;
+	}
+	if (typeof raw !== "object" || raw === null) return { files: {}, commands: {} };
+	return {
+		files: numberRecord("files" in raw ? raw.files : undefined),
+		commands: numberRecord("commands" in raw ? raw.commands : undefined),
+	};
 }
 
-export function isIntegrationCommand(command: TestCommand): boolean {
-	return command.cwd === "packages/coding-agent" && command.command.some(isIntegrationTest);
+// The history as it stood when this run started, read once for planning and dispatch.
+function getTimingHistory(): Promise<TimingHistory> {
+	timingHistoryPromise ??= readTimingHistory();
+	return timingHistoryPromise;
 }
 
-function isStartupTest(file: string): boolean {
-	return (
-		browserConsumerTests.has(file) ||
-		file === "test/zero-config-terminal.test.ts" ||
-		file === "test/startup-composer.test.ts" ||
-		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||
-		file === "test/goals/goal-ctrl-enter-tui.e2e.test.ts" ||
-		file === "test/goals/goal-autopilot-public-views.test.ts" ||
-		file === "test/modes/goal-autopilot-websocket.test.ts"
-	);
+function roundSeconds(seconds: number): number {
+	return Math.round(seconds * 1000) / 1000;
 }
 
-// Startup files are isolated before chunking, including in full mode.
-function isStartupCommand(command: TestCommand): boolean {
-	return command.cwd === "packages/coding-agent" && command.command.some(isStartupTest);
+// Whether the argv names test files; commands that don't run a whole package or task.
+function listsTestFiles(testCommand: TestCommand): boolean {
+	return testCommand.command.some(arg => TEST_FILE_ARG_RE.test(arg));
 }
 
-function isBrowserCommand(command: TestCommand): boolean {
-	return command.cwd === "packages/coding-agent" && command.command.some(file => browserConsumerTests.has(file));
+// Merge this run's observations into the on-disk history: re-read it (another
+// run may have written since this one started), let every observed file and
+// whole-package command overwrite its entry, keep everything not seen this run.
+async function recordTimingHistory(runs: CommandRun[]): Promise<void> {
+	if (runs.length === 0) return;
+	const history = await readTimingHistory();
+	for (const run of runs) {
+		Object.assign(history.files, run.report?.fileSeconds);
+		if (!listsTestFiles(run.command)) history.commands[run.command.label] = roundSeconds(run.seconds);
+	}
+	await Bun.write(timingHistoryPath, `${JSON.stringify(history, null, "\t")}\n`);
 }
 
-/** Startup chunks run in their own lane; retain the integration cap for other chunks. */
-export function isLimitedIntegrationCommand(command: TestCommand): boolean {
-	return !isStartupCommand(command) && isIntegrationCommand(command);
+// A test slower than SLOW_TEST_SECONDS: where it lives (repo-relative
+// `file:line`) and its `describe > test` name.
+interface SlowTest {
+	seconds: number;
+	location: string;
+	name: string;
 }
 
-async function codingAgentTestCommands(
-	bucket: CodingAgentBucket,
-	forkOnly = false,
-	all = false,
-): Promise<TestCommand[]> {
-	const partition = await getCodingAgentTestPartition(all);
-	const testFiles = partition[bucket].filter(file =>
-		forkOnly ? isForkCodingAgentTest(file) : all || /\.test\.tsx?$/.test(file),
-	);
+// What one bun junit report says about timing: seconds per repo-relative test
+// file (its file-level suite) and the slow tests.
+interface JunitReport {
+	fileSeconds: Record<string, number>;
+	slowTests: SlowTest[];
+}
+
+// One finished command's contribution to the run's timing record: wall seconds
+// (crash retries included) and its junit report, null when the command is not
+// a `bun test` child or its child died before writing one.
+interface CommandRun {
+	command: TestCommand;
+	seconds: number;
+	report: JunitReport | null;
+}
+
+const JUNIT_TAG_RE = /<(\/?)(testsuites|testsuite|testcase)\b([^>]*)>/g;
+const XML_ATTR_RE = /([\w:-]+)="([^"]*)"/g;
+const XML_ENTITY_RE = /&(?:#(\d+)|#x([0-9a-fA-F]+)|(amp|lt|gt|quot|apos));/g;
+const XML_NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+function decodeXmlText(value: string): string {
+	return value.replace(XML_ENTITY_RE, (_match: string, dec?: string, hex?: string, named?: string) => {
+		if (dec) return String.fromCodePoint(Number(dec));
+		if (hex) return String.fromCodePoint(Number.parseInt(hex, 16));
+		return named ? XML_NAMED_ENTITIES[named] : "";
+	});
+}
+
+function parseXmlAttributes(source: string): Record<string, string> {
+	const attributes: Record<string, string> = {};
+	for (const [, key, value] of source.matchAll(XML_ATTR_RE)) attributes[key] = decodeXmlText(value);
+	return attributes;
+}
+
+// Parse a bun junit report written by a child running in repo-relative `cwd`.
+// Bun nests one `<testsuite>` per file directly under `<testsuites>`, then one
+// per `describe`, with `<testcase>`s at any depth; `file` attributes are
+// relative to the child's cwd. Only the tags are scanned (attribute values are
+// entity-escaped, so they hold no `<`/`>`). Returns null for a truncated report.
+function parseJunitReport(xml: string, cwd: string): JunitReport | null {
+	if (!xml.includes("</testsuites>")) return null;
+	const report: JunitReport = { fileSeconds: {}, slowTests: [] };
+	let depth = 0;
+	for (const [, closing, tag, rawAttributes] of xml.matchAll(JUNIT_TAG_RE)) {
+		if (tag === "testsuites" || (closing && tag === "testcase")) continue;
+		if (closing) {
+			depth -= 1;
+			continue;
+		}
+		const attributes = parseXmlAttributes(rawAttributes);
+		const seconds = Number(attributes.time);
+		const file = path.posix.join(cwd, attributes.file ?? "");
+		if (tag === "testsuite") {
+			depth += 1;
+			if (depth === 1 && attributes.file && Number.isFinite(seconds)) {
+				report.fileSeconds[file] = roundSeconds(seconds);
+			}
+			if (rawAttributes.trimEnd().endsWith("/")) depth -= 1;
+		} else if (seconds > SLOW_TEST_SECONDS) {
+			const name = attributes.name ?? "";
+			report.slowTests.push({
+				seconds,
+				location: `${file}:${attributes.line ?? "?"}`,
+				// Bun lists a nested test's describes innermost-first in `classname`.
+				name: [...(attributes.classname?.split(" > ").reverse() ?? []), name].filter(Boolean).join(" > "),
+			});
+		}
+	}
+	return report;
+}
+
+// The junit report a finished child left at `junitPath`, or null when it wrote
+// none (crashed, killed, or not a `bun test` child) or left it unparseable.
+async function readJunitReport(junitPath: string, cwd: string): Promise<JunitReport | null> {
+	try {
+		return parseJunitReport(await Bun.file(junitPath).text(), cwd);
+	} catch (err) {
+		if (isEnoent(err)) return null;
+		throw err;
+	}
+}
+
+// One chunk of a bucket plan; `seconds` is its estimate, absent without history.
+interface ChunkPlan {
+	files: string[];
+	seconds?: number;
+}
+
+// Per-file weights for a coding-agent bucket from the timing history; files with
+// no entry weigh the mean of those that have one. Null when none has one.
+function bucketFileWeights(testFiles: string[], history: TimingHistory): Map<string, number> | null {
+	const known = testFiles
+		.map(file => history.files[`${codingAgentCwd}/${file}`])
+		.filter(seconds => seconds !== undefined);
+	if (known.length === 0) return null;
+	const mean = known.reduce((sum, seconds) => sum + seconds, 0) / known.length;
+	return new Map(testFiles.map(file => [file, history.files[`${codingAgentCwd}/${file}`] ?? mean]));
+}
+
+// Cold-start plan: consecutive runs of `chunkSize` alphabetical files.
+function consecutiveChunks(testFiles: string[], chunkSize: number): ChunkPlan[] {
+	const chunks: ChunkPlan[] = [];
+	for (let i = 0; i < testFiles.length; i += chunkSize) {
+		chunks.push({ files: testFiles.slice(i, i + chunkSize) });
+	}
+	return chunks;
+}
+
+// Weighted plan: `ceil(n / chunkSize)` chunks, each capped at `chunkSize` files.
+// Files are dealt in descending weight onto the currently lightest chunk with
+// room (ties → lowest index), then each chunk's files are put back in
+// alphabetical order and the chunks ordered heaviest-first.
+function balancedChunks(testFiles: string[], chunkSize: number, weights: Map<string, number>): ChunkPlan[] {
+	const weightOf = (file: string): number => weights.get(file) ?? 0;
+	const chunks: Required<ChunkPlan>[] = Array.from({ length: Math.ceil(testFiles.length / chunkSize) }, () => ({
+		files: [],
+		seconds: 0,
+	}));
+	for (const file of [...testFiles].sort((a, b) => weightOf(b) - weightOf(a))) {
+		let target = chunks[0];
+		for (const chunk of chunks) {
+			if (chunk.files.length >= chunkSize) continue;
+			if (target.files.length >= chunkSize || chunk.seconds < target.seconds) target = chunk;
+		}
+		target.files.push(file);
+		target.seconds += weightOf(file);
+	}
+	for (const chunk of chunks) chunk.files.sort();
+	return chunks.sort((a, b) => b.seconds - a.seconds);
+}
+
+async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestCommand[]> {
+	const partition = await getCodingAgentTestPartition();
+	const testFiles = partition[bucket];
 	if (testFiles.length === 0) {
-		if (forkOnly) return [];
 		throw new Error(`No coding-agent ${bucket} tests matched`);
 	}
 	const plan = codingAgentBucketPlans[bucket];
 	const chunkSize = plan.chunkSize ?? testFiles.length;
-	const chunks: string[][] = [];
-	let pending: string[] = [];
-	for (const file of testFiles) {
-		if (isStartupTest(file)) {
-			if (pending.length) chunks.push(pending);
-			pending = [];
-			chunks.push([file]);
-		} else {
-			pending.push(file);
-			if (pending.length === chunkSize) {
-				chunks.push(pending);
-				pending = [];
-			}
-		}
-	}
-	if (pending.length) chunks.push(pending);
-	// The label is also timing identity: adding unrelated files must not rename an
-	// unchanged chunk, particularly a one-file Windows or startup chunk.
-	const commands: TestCommand[] = [];
-	for (const chunk of chunks) {
-		const first = chunk[0]!;
-		const members =
-			chunk.length === 1
-				? first
-				: `${first} + ${chunk.length - 1} more; ${createHash("sha256").update(JSON.stringify(chunk)).digest("hex").slice(0, 12)}`;
-		commands.push({
-			label: `packages/coding-agent (${plan.label}; ${members})`,
-			cwd: "packages/coding-agent",
-			command: [
-				"bun",
-				"test",
-				...onlyFailuresArgs,
-				...chunk.map(file => (file.endsWith(".e2e.ts") ? `./${file}` : file)),
-			],
+	const weights = bucketFileWeights(testFiles, await getTimingHistory());
+	const chunks = weights ? balancedChunks(testFiles, chunkSize, weights) : consecutiveChunks(testFiles, chunkSize);
+	return chunks.map((chunk, index) => {
+		const chunkLabel = chunks.length > 1 ? ` chunk ${index + 1}/${chunks.length}` : "";
+		return {
+			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.files.length} files)`,
+			cwd: codingAgentCwd,
+			command: ["bun", "test", ...onlyFailuresArgs, ...chunk.files],
 			parallel: plan.parallel,
-			oneFile: chunk.length === 1,
-		});
-	}
-	return commands;
+			estimatedSeconds: chunk.seconds === undefined ? undefined : roundSeconds(chunk.seconds),
+		};
+	});
 }
 
 async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
@@ -836,39 +582,21 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			return [
 				...(await commandsForMode("workspace")),
 				...(await commandsForMode("native")),
-				...(await codingAgentTestCommands("singleton", false, true)),
-				...(await codingAgentTestCommands("ui", false, true)),
-				...(await codingAgentTestCommands("runtime", false, true)),
-				...(await codingAgentTestCommands("native", false, true)),
+				...(await commandsForMode("coding-agent-heavy")),
 			];
-		// Select individual fork consumers before applying the usual isolation chunks.
-		case "local-ts": {
-			const packages: TestCommand[] = [];
-			for (const [cwd, candidates] of Object.entries(forkPackageFiles)) {
-				const files = (
-					await Promise.all(
-						candidates.map(async file =>
-							(await Bun.file(path.join(repoRoot, cwd, file)).exists()) ? file : undefined,
-						),
-					)
-				).filter((file): file is string => file !== undefined);
-				if (files.length)
-					packages.push({
-						label: `${cwd} (fork feature tests; ${files.length} files)`,
-						cwd,
-						command: ["bun", "test", ...onlyFailuresArgs, ...files],
-						parallel: 1,
-					});
-			}
+		// Root test:ts shares one runner and report across the CI buckets
+		// and the additional local workspace packages.
+		case "local-ts":
 			return [
-				...packages,
-				...(await codingAgentTestCommands("singleton", true)),
-				...(await codingAgentTestCommands("ui", true)),
-				...(await codingAgentTestCommands("runtime", true)),
-				...(await codingAgentTestCommands("native", true)),
+				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
+				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
+				projectToolTestCommand,
+				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
+				...(await commandsForMode("coding-agent-heavy")),
 			];
-		}
-		// Root `bun run test` adds the Rust fork task to local TypeScript.
+		// `local` is what root `bun run test` drives: the full TS suite plus the
+		// Rust task, so a single invocation reports TS and Rust together. The Rust
+		// command self-skips when no Rust-affecting files changed (see run-rs-task).
 		case "local":
 			return [...(await commandsForMode("local-ts")), rustTestCommand()];
 	}
@@ -892,9 +620,6 @@ const SCRUBBED_ENV_NAMES = new Set([
 ]);
 
 function isScrubbedEnvVar(key: string): boolean {
-	// Windows environment names are case-insensitive; retain original keys in
-	// buildChildEnv so deletion (and fulltest's overlay tombstone) uses that key.
-	if (process.platform === "win32") key = key.toUpperCase();
 	if (SCRUBBED_ENV_NAMES.has(key)) {
 		return true;
 	}
@@ -905,202 +630,94 @@ function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
-const reportShard = args.includes("--unsharded") ? undefined : Bun.env.OMP_TEST_SHARD?.trim();
-const reportScope = `ci-test-ts:${requestedMode}${reportShard ? `:shard-${reportShard}` : ""}`;
-
-const reportRunnerId = randomUUID().slice(0, 8);
-// Bun's JUnit reporter writes a separate file without replacing console output.
-// The Rust wrapper inherits the same run directory and records its own native report.
-function reportedCommand(testCommand: TestCommand, attempt: number): { command: string[]; reportPath?: string } {
-	if (testCommand.parallel === undefined) return { command: testCommand.command };
-	const reportPath = testReportPath(`${testCommand.label}-attempt-${attempt}`);
-	return {
-		command: [...testCommand.command, "--reporter=junit", `--reporter-outfile=${reportPath}`],
-		reportPath,
-	};
-}
-
-async function recordAttempt(
-	testCommand: TestCommand,
-	attempt: number,
-	command: string[],
-	reportPath: string | undefined,
-	startedAt: string,
-	durationSeconds: number,
-	exitCode: number,
-	timedOut: boolean,
-	output: string,
-): Promise<boolean> {
-	let missing = false;
-	if (reportPath) {
-		try {
-			const stat = await fs.stat(reportPath);
-			missing = !stat.isFile() || stat.size === 0;
-		} catch {
-			missing = true;
-		}
-	}
-	const notSelected =
-		exitCode === 0 && !timedOut && testCommand.selection?.mode === "affected" && bunNoTestsSelected(output);
-	if (notSelected) missing = false;
-	const partial = missing || timedOut || exitCode >= 128;
-	try {
-		await recordTestProducer({
-			producer: `${reportScope}:${reportRunnerId}:${testCommand.label}:attempt-${attempt}`,
-			command,
-			scope: reportScope,
-			attempt,
-			logicalGroup: `${reportScope}:${reportRunnerId}:${testCommand.label}`,
-			concurrency: testCommand.parallel,
-			startedAt,
-			durationSeconds,
-			exitCode,
-			reportPath: notSelected ? undefined : reportPath,
-			status: notSelected
-				? "not-selected"
-				: reportPath
-					? partial
-						? "partial"
-						: exitCode === 0
-							? "passed"
-							: "failed"
-					: "stage",
-			selection: notSelected
-				? { ...testCommand.selection!, selected: 0, reason: "Bun reported no affected test files" }
-				: testCommand.selection,
-			timingBasis: "Bun testcase execution time (seconds); durationSeconds is command wall time",
-		});
-	} catch (error) {
-		// Preserve the test process's exit status when recording fails.
-		if (missing) return true;
-		if (exitCode === 0) throw error;
-		console.error(`Failed to record ${testCommand.label} attempt ${attempt} (exit ${exitCode}):`, error);
-	}
-	return missing;
-}
-
-function testCommandEnv(testCommand: TestCommand, env: Record<string, string | undefined>) {
-	const startupHome = testCommand.selection?.group === "startup" ? fulltestStartupHome : undefined;
-	if (!startupHome) return env;
-	return {
-		...env,
-		HOME: startupHome,
-		USERPROFILE: startupHome,
-		...(process.platform === "win32" && {
-			APPDATA: path.join(startupHome, "AppData", "Roaming"),
-			LOCALAPPDATA: path.join(startupHome, "AppData", "Local"),
-		}),
-	};
-}
-
-async function runTestCommand(
-	testCommand: TestCommand,
-	notifyFailure?: (error: GateCommandError) => void,
-): Promise<void> {
-	// Windows cross-drive relatives are already absolute; joining would build an invalid cwd.
-	const cwd = path.isAbsolute(testCommand.cwd) ? testCommand.cwd : path.join(repoRoot, testCommand.cwd);
+// Print a command's `==> label` / `$ argv` header; returns the rendered argv.
+function printCommandHeader(testCommand: TestCommand): string {
+	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
 	console.log(`\n==> ${testCommand.label}`);
-	if (isDryRun) {
-		console.log(`$ ${testCommand.command.map(shellQuote).join(" ")}`);
-		return;
-	}
+	console.log(`$ ${renderedCommand}`);
+	return renderedCommand;
+}
 
-	const env = testCommandEnv(testCommand, buildChildEnv());
-	for (let attempt = 1; ; attempt++) {
-		const { command, reportPath } = reportedCommand(testCommand, attempt);
-		const renderedCommand = command.map(shellQuote).join(" ");
-		console.log(`$ ${renderedCommand}`);
-		const startedAt = new Date().toISOString();
-		const start = performance.now();
-		const proc = Bun.spawn(command, {
-			cwd,
-			env,
-			stdout: "inherit",
-			stderr: "pipe",
-		});
-		const failureObserver = notifyFailure ? new BunTestFailureObserver(notifyFailure) : undefined;
-		const stderrReader = proc.stderr.getReader();
-		let stderrText = "";
-		const decoder = new TextDecoder();
-		const stderrDrain = (async () => {
-			try {
-				for (;;) {
-					const { done, value } = await stderrReader.read();
-					if (done) break;
-					failureObserver?.push(value);
-					stderrText += decoder.decode(value, { stream: true });
-					process.stderr.write(value);
+// The argv actually spawned. Every `bun test` child (the commands
+// applyChunkBudget gave a `parallel` width) also writes a junit report to
+// `junitPath`, the runner's only per-test timing source; bun keeps its console
+// reporter alongside it, so the captured output and `--only-failures` are
+// unchanged. The displayed command omits it and stays the one to paste for a
+// rerun. Crash retries overwrite the same file.
+function spawnArgv(testCommand: TestCommand, junitPath: string): string[] {
+	if (testCommand.parallel === undefined) return testCommand.command;
+	return [...testCommand.command, "--reporter=junit", `--reporter-outfile=${junitPath}`];
+}
+
+// The sequential path: each command streams straight to the terminal in
+// planned order and the first failure throws. Every finished command (failed
+// ones too) lands in `runs`, and the slow-test section prints before the
+// failure propagates.
+async function runTestCommandsSequentially(
+	commands: TestCommand[],
+	junitDir: string,
+	runs: CommandRun[],
+): Promise<void> {
+	try {
+		for (const [index, testCommand] of commands.entries()) {
+			await runTestCommand(testCommand, path.join(junitDir, `${index}.xml`), runs);
+		}
+	} finally {
+		process.stdout.write(formatSlowTests(runs));
+	}
+}
+
+async function runTestCommand(testCommand: TestCommand, junitPath: string, runs: CommandRun[]): Promise<void> {
+	const cwd = path.join(repoRoot, testCommand.cwd);
+	const renderedCommand = printCommandHeader(testCommand);
+	const env = buildChildEnv();
+	const startedAt = performance.now();
+	try {
+		for (let attempt = 1; ; attempt++) {
+			const proc = Bun.spawn(spawnArgv(testCommand, junitPath), {
+				cwd,
+				env,
+				stdout: "inherit",
+				stderr: "inherit",
+			});
+			// Watchdog, mirroring the parallel path: record that *we* killed the child,
+			// otherwise the resulting 137 is indistinguishable from an OOM kill.
+			let timedOut = false;
+			const killTimer = setTimeout(async () => {
+				timedOut = true;
+				try {
+					process.stdout.write(await describeStuckProcessTree(proc.pid));
+				} finally {
+					proc.kill("SIGKILL");
 				}
-			} catch {
-				// A cancelled or broken pipe must not hide the command's exit status.
-			} finally {
-				failureObserver?.end();
-				stderrReader.releaseLock();
+			}, chunkTimeoutMs());
+			const exitCode = await proc.exited;
+			clearTimeout(killTimer);
+			if (exitCode === 0) {
+				return;
 			}
-		})();
-		// Watchdog, mirroring the parallel path: record that *we* killed the child,
-		// otherwise the resulting 137 is indistinguishable from an OOM kill.
-		let timedOut = false;
-		const killTimer = setTimeout(async () => {
-			timedOut = true;
-			try {
-				process.stdout.write(await describeStuckProcessTree(proc.pid));
-			} finally {
-				proc.kill("SIGKILL");
+			if (!timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
+				console.log(
+					`==> ${testCommand.label}: bun crashed (exit ${exitCode}); retrying (attempt ${attempt + 1}/${MAX_CHUNK_ATTEMPTS})`,
+				);
+				continue;
 			}
-		}, chunkTimeoutMs());
-		const exitCode = await proc.exited;
-		if (notifyFailure && exitCode !== 0)
-			notifyFailure(
-				new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
-			);
-		clearTimeout(killTimer);
-		// Match the parallel path's bounded drain if a grandchild retains stderr.
-		const drainTimer = setTimeout(() => void stderrReader.cancel().catch(() => {}), 5000);
-		try {
-			await stderrDrain;
-		} finally {
-			clearTimeout(drainTimer);
+			throw new Error(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}: ${renderedCommand}`);
 		}
-		const unexpectedSelection =
-			testCommand.requireNoSelection &&
-			exitCode === 0 &&
-			!/--changed:\s*no changed files, nothing to run/.test(stderrText.replaceAll(/\x1b\[[0-9;]*m/g, ""));
-		const recordedExitCode = unexpectedSelection ? 1 : exitCode;
-		const missing = await recordAttempt(
-			testCommand,
-			attempt,
-			command,
-			reportPath,
-			startedAt,
-			(performance.now() - start) / 1000,
-			recordedExitCode,
-			timedOut,
-			stderrText,
-		);
-		if (unexpectedSelection) {
-			throw new GateCommandError("Bun did not confirm an empty affected selection", 1);
-		}
-		if (exitCode === 0) {
-			if (missing) console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
-			return;
-		}
-		if (canRetryBunCrash(exitCode, timedOut, attempt)) {
-			console.log(
-				`==> ${testCommand.label}: bun crashed (exit ${exitCode}); retrying (attempt ${attempt + 1}/${MAX_CHUNK_ATTEMPTS})`,
-			);
-			continue;
-		}
-		throw new GateCommandError(
-			`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}: ${renderedCommand}`,
-			exitCode,
-		);
+	} finally {
+		runs.push({
+			command: testCommand,
+			seconds: (performance.now() - startedAt) / 1000,
+			report: await readJunitReport(junitPath, testCommand.cwd),
+		});
 	}
 }
 
 // Child env shared by every spawned test process: the parent env with the
 // private test-runtime marker set, all CI credential / cloud-config variables
-// scrubbed (see SCRUBBED_ENV_* above), and GITHUB_ACTIONS cleared.
+// scrubbed (see SCRUBBED_ENV_* above), and GITHUB_ACTIONS cleared. Clearing it
+// would also clear run-rs-task.ts's "always run in GitHub Actions" rule for the
+// Rust child, so under GitHub Actions OMP_FORCE_RUST_TASKS carries it instead.
 //
 // GC knobs (both needed — they gate different JSC mechanisms):
 // - `BUN_JSC_useConcurrentGC=0` stops the collector from marking concurrently
@@ -1120,22 +737,15 @@ async function runTestCommand(
 // `JSAbortSignal::visitAdditionalChildrenInGCThread` reading a dead `reason`
 // cell), where no marker/concurrency knob applies. That residual crash is
 // handled by retrying crashed chunks in a fresh process (MAX_CHUNK_ATTEMPTS).
-// Bun 1.4.0 on Windows can also spin indefinitely in the controller suite
-// under default GC settings. Disabling concurrent GC previously hung relay
-// delivery when it shared a process with auth/collab tests; the per-file
-// Windows chunks above keep those heaps separate.
-export function buildChildEnv(): Record<string, string | undefined> {
+function buildChildEnv(): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...Bun.env,
 		GITHUB_ACTIONS: "",
+		...(Bun.env.GITHUB_ACTIONS === "true" ? { OMP_FORCE_RUST_TASKS: "1" } : {}),
 		PI_TEST_RUNTIME: "1",
-		OMP_FULLTEST_BUN_MAX_CAPACITY: undefined,
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",
 	};
-	// Keep test temp fixtures off the Windows system drive when another
-	// writable drive exists (see windows-test-temp.ts).
-	Object.assign(env, windowsTestTempOverride());
 	for (const key of Object.keys(env)) {
 		if (isScrubbedEnvVar(key)) {
 			delete env[key];
@@ -1242,10 +852,6 @@ const BUN_CRASH_EXITS: Record<number, true> = {
 // deterministic crash still fails every attempt and is reported normally.
 const MAX_CHUNK_ATTEMPTS = 3;
 
-function canRetryBunCrash(exitCode: number, timedOut: boolean, attempt: number): boolean {
-	return !gateReportsFailures && !timedOut && attempt < MAX_CHUNK_ATTEMPTS && Boolean(BUN_CRASH_EXITS[exitCode]);
-}
-
 // Why a chunk failed, in words. Exit 137 is SIGKILL, which this runner reaches
 // two very different ways -- the per-chunk watchdog firing, or the kernel OOM
 // killer reaping a chunk that outgrew the runner -- and the bare exit code
@@ -1272,24 +878,27 @@ function isCI(): boolean {
 	return normalized !== "" && normalized !== "0" && normalized !== "false";
 }
 
-// Each chunk is a full bun process, so cap the pool by both the number of
-// commands and the shared CPU budget, including on Windows.
-export function testConcurrency(
-	total: number,
-	spec: string | undefined,
-	cores: number,
-	platform: NodeJS.Platform = process.platform,
-): number {
-	const cap = Math.min(testConcurrencyLimit(cores, platform), total);
+// Fan-out width for the local parallel path, clamped to the command count and
+// to `cores`. Defaults to `cores`; `OMP_TEST_CONCURRENCY` (`spec`) dials it down
+// on a memory-constrained machine, and `all`/`max` name the cap explicitly.
+// Never wider than `cores`: every chunk is a full `bun test` process (~1 GB
+// resident on coding-agent), so launching all ~190 at once only trades a
+// CPU-bound run for an OOM kill.
+function testConcurrency(total: number, spec: string | undefined, cores: number): number {
+	const cap = Math.min(Math.max(1, cores), total);
 	const raw = spec?.trim().toLowerCase();
-	if (!raw) return cap;
-	if (raw === "all" || raw === "max") return cap;
+	if (!raw || raw === "all" || raw === "max") return cap;
 	const override = Number(raw);
 	if (Number.isFinite(override) && override >= 1) {
 		return Math.min(Math.floor(override), cap);
 	}
 	throw new Error(`Invalid OMP_TEST_CONCURRENCY=${JSON.stringify(raw)}; expected a positive integer, all, or max`);
 }
+
+// Test files interleave real IO — sqlite writes, temp dirs, spawned CLIs — with
+// CPU, so keeping every core busy needs more in-flight files than cores. This is
+// the factor by which the shared budget exceeds `availableParallelism()`.
+const FILE_OVERSUBSCRIBE = 2;
 
 // Two independent parallelism knobs stack multiplicatively: the chunk pool runs
 // `poolWidth` `bun test` processes at once, and each of those runs its own
@@ -1298,14 +907,11 @@ export function testConcurrency(
 // workspace bucket asked for 4 x 8 = 32 files on a 4-core box — and because
 // bun's per-test timeout is wall-clock, CPU-starved suites blow it and fail at
 // random (mnemopi's sqlite/CLI files did, a different set each run). Spend one
-// CPU budget instead: each live chunk gets an equal share, never below 1 and
-// never above the width it asked for.
-export function budgetedParallel(
-	requested: number,
-	poolWidth: number,
-	cores: number = os.availableParallelism(),
-): number {
-	const budget = testConcurrencyLimit(cores);
+// budget instead: each live chunk gets an equal share, never below 1 and never
+// above the width it asked for. A chunk that runs alone still gets everything,
+// so the sequential CI path is unchanged.
+function budgetedParallel(requested: number, poolWidth: number): number {
+	const budget = Math.max(1, os.availableParallelism()) * FILE_OVERSUBSCRIBE;
 	return Math.max(1, Math.min(requested, Math.floor(budget / poolWidth)));
 }
 
@@ -1317,24 +923,28 @@ export function budgetedParallel(
 // so keep a ceiling — just one loose enough to only fire on a real hang. The
 // per-chunk watchdog (chunkTimeoutMs) remains the backstop for a wedged process.
 // Override with OMP_TEST_TIMEOUT (seconds); per-test `it(name, fn, ms)` still wins.
-export function testTimeoutMs(override: string | undefined = Bun.env.OMP_TEST_TIMEOUT): number {
-	const raw = Number(override?.trim());
+function testTimeoutMs(): number {
+	const raw = Number(Bun.env.OMP_TEST_TIMEOUT?.trim());
 	if (Number.isFinite(raw) && raw >= 1) return raw * 1000;
 	return 30_000;
 }
 
-// Materialize argv from the actual lease so file parallelism fits alongside the other live children.
-function applyChunkBudget(testCommand: TestCommand, parallel: number, inFulltest: boolean): TestCommand {
-	if (testCommand.parallel === undefined) return testCommand;
-	return {
-		...testCommand,
-		command: [
-			...testCommand.command,
-			...(inFulltest && testCommand.oneFile ? [] : [`--parallel=${parallel}`]),
-			`--timeout=${testTimeoutMs()}`,
-		],
-		parallel,
-	};
+// Materialize each chunk's argv against the pool width it will actually run at,
+// rewriting `parallel` from the requested width to the granted one so later
+// reporting reads the truth. A `parallel` request marks the command as a `bun
+// test` invocation, so that is also where the shared per-test timeout is
+// applied; the Rust task, which has neither, passes through untouched.
+function applyChunkBudget(commands: TestCommand[], poolWidth: number): TestCommand[] {
+	const timeout = testTimeoutMs();
+	return commands.map(testCommand => {
+		if (testCommand.parallel === undefined) return testCommand;
+		const parallel = budgetedParallel(testCommand.parallel, poolWidth);
+		return {
+			...testCommand,
+			command: [...testCommand.command, `--parallel=${parallel}`, `--timeout=${timeout}`],
+			parallel,
+		};
+	});
 }
 
 // ANSI styling for interactive runs only; disabled when stdout is not a TTY or
@@ -1346,11 +956,13 @@ const style = {
 	red: (s: string) => paint("31", s),
 	bold: (s: string) => paint("1", s),
 	dim: (s: string) => paint("2", s),
+	yellow: (s: string) => paint("33", s),
 };
 
 // Outcome of one finished chunk. `output` is the chunk's combined stdout+stderr,
 // buffered so it can be withheld during a quiet run and replayed only on failure.
 // `retries` counts extra attempts spent on bun-crash exits (see BUN_CRASH_EXITS).
+// `slowTests` comes from the chunk's junit report (see SLOW_TEST_SECONDS).
 interface ChunkOutcome {
 	label: string;
 	command: string;
@@ -1358,6 +970,7 @@ interface ChunkOutcome {
 	seconds: number;
 	output: string;
 	retries: number;
+	slowTests: SlowTest[];
 }
 
 // Human duration in bun's bracket style: `[264ms]` under a second, `[3.3s]`
@@ -1370,19 +983,25 @@ function formatDuration(seconds: number): string {
 // pass, `✗ <label> [time]` for a failure (bold red so the eye lands on it in a
 // long scroll). A failure also names the first failing test parsed from the
 // captured output — `— file > test (+N more)` — so the exact break is visible
-// in the stream without waiting for the end-of-run report. Emitted in completion
-// order as each chunk finishes.
+// in the stream without waiting for the end-of-run report. A yellow
+// `(N slow >5s)` note counts the chunk's slow tests, listed at the end of the
+// run. Emitted in completion order as each chunk finishes.
 function formatProgressLine(outcome: ChunkOutcome): string {
 	const time = style.dim(`[${formatDuration(outcome.seconds)}]`);
+	const slowNote =
+		outcome.slowTests.length > 0
+			? ` ${style.yellow(`(${outcome.slowTests.length} slow >${SLOW_TEST_SECONDS}s)`)}`
+			: "";
 	const retryNote = outcome.retries > 0 ? ` ${style.dim(`(retried ×${outcome.retries} after bun crash)`)}` : "";
+	const notes = `${slowNote}${retryNote}`;
 	if (outcome.exitCode === 0) {
-		return `${style.green("✓")} ${outcome.label} ${time}${retryNote}`;
+		return `${style.green("✓")} ${outcome.label} ${time}${notes}`;
 	}
 	const failing = extractFailingTests(outcome.output);
 	const first = failing[0]?.name;
 	const more = failing.length > 1 ? style.dim(` (+${failing.length - 1} more)`) : "";
 	const detail = first ? ` ${style.dim("—")} ${style.red(first)}${more}` : "";
-	return `${style.bold(style.red(`✗ ${outcome.label}`))} ${time}${detail}${retryNote}`;
+	return `${style.bold(style.red(`✗ ${outcome.label}`))} ${time}${detail}${notes}`;
 }
 
 // Closing tally in `bun test` style, but counting test *chunks* (child commands),
@@ -1398,6 +1017,22 @@ function formatSummaryFooter(passed: number, failed: number, totalSeconds: numbe
 		` ${failLine}`,
 		style.dim(`Ran ${passed + failed} test command(s) in ${formatDuration(totalSeconds)}.`),
 	].join("\n");
+}
+
+// End-of-run warning listing every test slower than SLOW_TEST_SECONDS, slowest
+// first: `[duration] file:line — describe > test`. Printed by both run paths
+// ahead of the failure report / summary footer; "" when nothing was slow. It
+// is advice, not a failure, and never touches the exit code.
+function formatSlowTests(runs: CommandRun[]): string {
+	const slowTests = runs.flatMap(run => run.report?.slowTests ?? []).sort((a, b) => b.seconds - a.seconds);
+	if (slowTests.length === 0) return "";
+	const lines = ["", style.yellow(`⚠ ${slowTests.length} test(s) slower than ${SLOW_TEST_SECONDS}s:`)];
+	for (const test of slowTests) {
+		lines.push(
+			`  ${style.yellow(`[${formatDuration(test.seconds)}]`)} ${test.location} ${style.dim("—")} ${test.name}`,
+		);
+	}
+	return `${lines.join("\n")}\n`;
 }
 
 // A single failing test pulled from a chunk's captured bun output: its
@@ -1480,120 +1115,30 @@ function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): strin
 	return lines.join("\n");
 }
 
-// Refill on every completion, including when one weighted chunk releases
-// multiple slots. Skip blocked entries without disturbing runnable order.
-interface PoolLease<T> {
-	budget: number;
-	slots: (item: T) => readonly [minimum: number, preferred: number];
-	/** Absolute slot capacity; only the gate-owned shared pool can grow. */
-	readBudget?: () => number | undefined;
-}
-
-export async function runBoundedPool<T>(
-	items: T[],
-	concurrency: number,
-	isBounded: (item: T) => boolean,
-	boundedLimit: number,
-	run: (item: T, slots: number) => Promise<void>,
-	isExclusive: (item: T) => boolean = () => false,
-	lease?: PoolLease<T>,
-): Promise<void> {
-	let budget = lease?.budget ?? concurrency;
-	let width = concurrency;
-	const queue = items.map(item => {
-		const [minimum, preferred] = lease?.slots(item) ?? [1, 1];
-		return { item, bounded: isBounded(item), exclusive: isExclusive(item), minimum, preferred };
-	});
-	const done = Promise.withResolvers<void>();
-	let active = 0;
-	let activeSlots = 0;
-	let activeBounded = 0;
-	let activeExclusive = 0;
-	let failed = false;
-	async function runEntry(entry: (typeof queue)[number], slots: number): Promise<void> {
-		try {
-			await run(entry.item, slots);
-		} catch (error) {
-			failed = true;
-			done.reject(error);
-		} finally {
-			active--;
-			activeSlots -= slots;
-			if (entry.bounded) activeBounded--;
-			if (entry.exclusive) activeExclusive--;
-		}
-		dispatch();
-	}
-	function dispatch(): void {
-		while (!failed && active < width && queue.length) {
-			const available = budget - activeSlots;
-			const index = queue.findIndex(
-				entry =>
-					entry.minimum <= available &&
-					(!entry.bounded || activeBounded < boundedLimit) &&
-					(!entry.exclusive || activeExclusive === 0),
-			);
-			if (index === -1) break;
-			const [entry] = queue.splice(index, 1);
-			const slots = Math.min(available, entry.preferred);
-			active++;
-			activeSlots += slots;
-			if (entry.bounded) activeBounded++;
-			if (entry.exclusive) activeExclusive++;
-			void runEntry(entry, slots);
-		}
-		if (!active && !queue.length) done.resolve();
-	}
-	function refreshBudget(): void {
-		if (failed || !queue.length) return;
-		const updated = lease?.readBudget?.();
-		if (updated !== undefined && updated > budget) {
-			budget = updated;
-			width = Math.min(items.length, updated);
-			dispatch();
-		}
-	}
-	refreshBudget();
-	dispatch();
-	const timer = lease?.readBudget && queue.length ? setInterval(refreshBudget, 1000).unref() : undefined;
-	try {
-		await done.promise;
-	} finally {
-		clearInterval(timer);
-	}
-}
-
-// Run every command through a bounded worker pool. Each child's stdout and
+// Run every command through a fixed-width worker pool. Each child's stdout and
 // stderr are drained concurrently (so a chatty test never deadlocks on a full
 // pipe) and buffered. Quiet mode (the default) prints one progress line per
 // finished chunk and replays full output only for failures, in a single report
-// at the end; `--full` streams every chunk's output inline as it completes.
-// Gate-owned runs also stream authenticated failure notifications, but keep
-// executing independent work until the shared deadline or cancellation.
+// at the end; `--full` streams every chunk's output inline as it completes. All
+// failures are collected and reported together instead of failing fast, so one
+// run surfaces every broken chunk and exits non-zero without a runner stack trace.
+// Commands are dispatched in the given order; every finished one lands in `runs`.
 async function runTestCommandsInParallel(
 	commands: TestCommand[],
 	concurrency: number,
-	budget?: PoolLease<TestCommand>,
-	materialize?: (command: TestCommand, slots: number) => TestCommand,
-): Promise<number> {
+	junitDir: string,
+	runs: CommandRun[],
+): Promise<void> {
 	const env = buildChildEnv();
+	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
 	let completed = 0;
-	let firstFailureExitCode: number | undefined;
-	let failureReported = false;
-	function reportFirstFailure(error: GateCommandError): boolean {
-		if (failureReported) return false;
-		failureReported = true;
-		reportGateFailure(error);
-		return true;
-	}
-	const fileWidths = [...new Set(commands.map(command => command.parallel).filter(width => width !== undefined))];
-	if (sharedFulltestPool && (budget?.budget ?? 1) >= 2 && commands.some(hasElasticFulltestFiles)) fileWidths.push(2);
-	fileWidths.sort((a, b) => a - b);
+	let dispatched = 0;
+	const fileWidths = [...new Set(commands.map(c => c.parallel).filter(p => p !== undefined))].sort((a, b) => a - b);
 	console.log(
 		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
 			`(OMP_TEST_CONCURRENCY=<n> to lower); ${os.availableParallelism()} cores, ` +
-			`--parallel=${fileWidths.join("/") || "n/a"} per chunk${sharedFulltestPool ? " (shared fulltest budget)" : ""}.`,
+			`--parallel=${fileWidths.join("/") || "n/a"} per chunk.`,
 	);
 
 	// Incremental, cancellable drain into a mutable sink, so a watchdog-killed
@@ -1601,7 +1146,6 @@ async function runTestCommandsInParallel(
 	function drainInto(
 		stream: ReadableStream<Uint8Array>,
 		sink: { text: string },
-		failureObserver?: BunTestFailureObserver,
 	): { done: Promise<void>; cancel: () => void } {
 		const decoder = new TextDecoder();
 		const reader = stream.getReader();
@@ -1610,18 +1154,12 @@ async function runTestCommandsInParallel(
 				for (;;) {
 					const { done: ended, value } = await reader.read();
 					if (ended) break;
-					failureObserver?.push(value);
-					const text = decoder.decode(value, { stream: true });
-					sink.text += text;
-					if (gateReportsFailures) process.stdout.write(text);
+					sink.text += decoder.decode(value, { stream: true });
 				}
 			} catch {
 				// cancelled or broken pipe — keep what was captured
 			}
-			failureObserver?.end();
-			const final = decoder.decode();
-			sink.text += final;
-			if (gateReportsFailures && final) process.stdout.write(final);
+			sink.text += decoder.decode();
 		})();
 		return { done, cancel: () => void reader.cancel().catch(() => {}) };
 	}
@@ -1647,179 +1185,137 @@ async function runTestCommandsInParallel(
 	// can't keep the runner's event loop alive.
 	async function runAttempt(
 		testCommand: TestCommand,
-		attempt: number,
-	): Promise<{ exitCode: number; output: string; timedOut: boolean; missing: boolean; command: string }> {
-		const { command, reportPath } = reportedCommand(testCommand, attempt);
-		const startedAt = new Date().toISOString();
-		const start = performance.now();
-		const proc = Bun.spawn(command, {
+		junitPath: string,
+	): Promise<{ exitCode: number; output: string; timedOut: boolean }> {
+		const proc = Bun.spawn(spawnArgv(testCommand, junitPath), {
 			cwd: path.join(repoRoot, testCommand.cwd),
-			env: testCommandEnv(testCommand, env),
+			env,
 			stdout: "pipe",
 			stderr: "pipe",
 		});
 		const stdout = { text: "" };
 		const stderr = { text: "" };
-		let firstCaseFailure = false;
 		const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
-		const stderrDrain = drainInto(
-			proc.stderr as ReadableStream<Uint8Array>,
-			stderr,
-			gateReportsFailures
-				? new BunTestFailureObserver(error => {
-						firstCaseFailure = reportFirstFailure(error);
-					})
-				: undefined,
-		);
+		const stderrDrain = drainInto(proc.stderr as ReadableStream<Uint8Array>, stderr);
 		const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
 		// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
 		// after a GC crash) would otherwise hang this worker forever.
 		let timedOut = false;
-		const timeoutMs = chunkTimeoutMs();
-		let watchdogOutput = "";
+		let stuckTree = "";
 		const killTimer = setTimeout(async () => {
 			timedOut = true;
 			try {
-				const stuckTree = await describeStuckProcessTree(proc.pid);
-				watchdogOutput = `\n${stuckTree}[watchdog] chunk exceeded ${Math.round(timeoutMs / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n`;
-				// This is runner output, not child output, so the gate's pipe drains won't forward it.
-				if (gateReportsFailures) process.stdout.write(`\n==> ${testCommand.label}${watchdogOutput}`);
+				stuckTree = await describeStuckProcessTree(proc.pid);
 			} finally {
 				proc.kill("SIGKILL");
 			}
-		}, timeoutMs);
+		}, chunkTimeoutMs());
 		const exitCode = await proc.exited;
-		if ((exitCode !== 0 || timedOut) && !canRetryBunCrash(exitCode, timedOut, attempt)) {
-			// A gate may already have observed this chunk's failing case before
-			// other workers exited. Keep that ordering, but preserve the exit code.
-			if (firstCaseFailure) firstFailureExitCode = exitCode || 1;
-			else firstFailureExitCode ??= exitCode || 1;
-			if (gateReportsFailures && !failureReported)
-				reportFirstFailure(
-					new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
-				);
-		}
 		clearTimeout(killTimer);
 		if (!(await settleWithin(drains, 5000))) {
 			stdoutDrain.cancel();
 			stderrDrain.cancel();
 			await drains;
 		}
-		const missing = await recordAttempt(
-			testCommand,
-			attempt,
-			command,
-			reportPath,
-			startedAt,
-			(performance.now() - start) / 1000,
-			exitCode,
-			timedOut,
-			`${stdout.text}${stderr.text}`,
-		);
-		if (missing && exitCode === 0) console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
 		return {
 			exitCode,
 			timedOut,
-			missing,
-			command: command.map(shellQuote).join(" "),
-			output: `${stdout.text}${stderr.text}${watchdogOutput}${missing ? `\nMissing or empty JUnit report: ${reportPath}\n` : ""}`,
+			output: `${stdout.text}${stderr.text}${timedOut ? `\n${stuckTree}[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
 		};
 	}
 
-	async function runChunk(testCommand: TestCommand): Promise<void> {
-		const startedAt = performance.now();
-		let attempt = 1;
-		let result = await runAttempt(testCommand, attempt);
-		// Bun-crash retry: a 128+signal exit means the runtime died (GC
-		// segfault/abort), not that tests failed — rerun in a fresh heap.
-		while (canRetryBunCrash(result.exitCode, result.timedOut, attempt)) {
-			attempt += 1;
-			process.stdout.write(
-				`${style.dim(`↻ ${testCommand.label} — bun crashed (exit ${result.exitCode}); retrying (attempt ${attempt}/${MAX_CHUNK_ATTEMPTS})`)}\n`,
-			);
-			result = await runAttempt(testCommand, attempt);
-		}
-		completed += 1;
-		const outcome: ChunkOutcome = {
-			label: testCommand.label,
-			command: result.command,
-			exitCode: result.exitCode,
-			seconds: (performance.now() - startedAt) / 1000,
-			output: result.output,
-			retries: attempt - 1,
-		};
-		if (quiet) {
-			let msg = `${formatProgressLine(outcome)}\n`;
-			if (!gateReportsFailures && (outcome.exitCode !== 0 || result.timedOut)) {
-				msg += `${formatChunkFailure(outcome, true)}\n`;
+	async function worker(): Promise<void> {
+		for (;;) {
+			const testCommand = queue.shift();
+			if (!testCommand) {
+				return;
 			}
-			process.stdout.write(msg);
-		} else {
-			const status = outcome.exitCode === 0 ? "ok" : `FAILED exit ${outcome.exitCode}`;
-			process.stdout.write(
-				`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${result.command}\n${gateReportsFailures ? "" : outcome.output}`,
-			);
-		}
-		if (outcome.exitCode !== 0 || result.timedOut) {
-			failures.push(outcome);
+			const renderedCommand = testCommand.command.map(shellQuote).join(" ");
+			const junitPath = path.join(junitDir, `${dispatched++}.xml`);
+			const startedAt = performance.now();
+			let attempt = 1;
+			let result = await runAttempt(testCommand, junitPath);
+			// Bun-crash retry: a 128+signal exit means the runtime died (GC
+			// segfault/abort), not that tests failed — rerun in a fresh heap.
+			while (!result.timedOut && BUN_CRASH_EXITS[result.exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
+				attempt += 1;
+				process.stdout.write(
+					`${style.dim(`↻ ${testCommand.label} — bun crashed (exit ${result.exitCode}); retrying (attempt ${attempt}/${MAX_CHUNK_ATTEMPTS})`)}\n`,
+				);
+				result = await runAttempt(testCommand, junitPath);
+			}
+			completed += 1;
+			const seconds = (performance.now() - startedAt) / 1000;
+			const report = await readJunitReport(junitPath, testCommand.cwd);
+			runs.push({ command: testCommand, seconds, report });
+			const outcome: ChunkOutcome = {
+				label: testCommand.label,
+				command: renderedCommand,
+				exitCode: result.exitCode,
+				seconds,
+				output: result.output,
+				retries: attempt - 1,
+				slowTests: report?.slowTests ?? [],
+			};
+			if (quiet) {
+				let msg = `${formatProgressLine(outcome)}\n`;
+				if (result.exitCode !== 0 || result.timedOut) {
+					msg += `${formatChunkFailure(outcome, true)}\n`;
+				}
+				process.stdout.write(msg);
+			} else {
+				const status = result.exitCode === 0 ? "ok" : `FAILED exit ${result.exitCode}`;
+				process.stdout.write(
+					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${outcome.output}`,
+				);
+			}
+			if (result.exitCode !== 0 || result.timedOut) {
+				failures.push(outcome);
+			}
 		}
 	}
 
 	const runStartedAt = performance.now();
-	// A real Chromium owns several native processes and its own CDP transport.
-	// Admit one browser chunk while the other workers continue draining ordinary
-	// startup/integration work; do not lower the lane's CPU/file concurrency.
-	await runBoundedPool(
-		commands,
-		concurrency,
-		command =>
-			sharedFulltestPool
-				? isStartupCommand(command) || isIntegrationCommand(command)
-				: isLimitedIntegrationCommand(command),
-		4,
-		(command, slots) => runChunk(materialize?.(command, slots) ?? command),
-		isBrowserCommand,
-		budget,
-	);
+	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+	process.stdout.write(formatSlowTests(runs));
 
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
-		process.stdout.write(`${formatSummaryFooter(completed - failures.length, failures.length, totalSeconds)}\n`);
+		process.stdout.write(
+			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`,
+		);
 	} else if (failures.length > 0) {
 		process.stdout.write(style.bold(style.red(`\n${failures.length} of ${commands.length} test chunk(s) FAILED\n`)));
 	}
-	return firstFailureExitCode ?? 0;
+	if (failures.length > 0) {
+		process.exitCode = 1;
+	}
 }
 
-export async function runTestCommands(commands: TestCommand[], poolWidth?: number): Promise<number> {
-	if (poolWidth !== undefined && !isDryRun) return runTestCommandsInParallel(commands, poolWidth);
-	let firstFailureExitCode: number | undefined;
-	for (const command of commands) {
-		let failureReported = false;
-		const notifyFailure = gateReportsFailures
-			? (error: GateCommandError) => {
-					if (failureReported) return;
-					failureReported = true;
-					reportGateFailure(error);
-				}
-			: undefined;
-		try {
-			await runTestCommand(command, notifyFailure);
-		} catch (error) {
-			const failure = gateFailure(error);
-			firstFailureExitCode ??= failure.exitCode;
-			notifyFailure?.(failure);
-			console.error(failure.message);
-		}
-	}
-	return firstFailureExitCode ?? 0;
+// Pool dispatch order: longest expected first, so the slowest commands start
+// while the pool is full instead of trailing alone at the end. A chunk's
+// estimate is its planned `estimatedSeconds`; a command that lists no test
+// files uses its label's recorded wall time. Commands with no estimate go
+// first (they may be long), and the sort is stable, so a cold history
+// dispatches in planned order.
+function dispatchOrder(commands: TestCommand[], history: TimingHistory): TestCommand[] {
+	const estimate = (testCommand: TestCommand): number =>
+		testCommand.estimatedSeconds ??
+		(listsTestFiles(testCommand) ? undefined : history.commands[testCommand.label]) ??
+		Number.POSITIVE_INFINITY;
+	return commands
+		.map(testCommand => ({ testCommand, seconds: estimate(testCommand) }))
+		.sort((a, b) => (a.seconds === b.seconds ? 0 : a.seconds > b.seconds ? -1 : 1))
+		.map(entry => entry.testCommand);
 }
 
 // `OMP_TEST_SHARD=i/n` splits a mode's chunk commands across n CI jobs; job i
 // runs every chunk whose index ≡ i-1 (mod n). Round-robin rather than
-// contiguous ranges so neighbouring suites spread evenly instead of piling
-// into one shard. The command order is deterministic.
-// Every chunk lands in exactly one shard; unset/empty runs everything.
+// contiguous ranges because neighbouring chunks are alike in cost (weighted
+// plans list a bucket's chunks heaviest-first; consecutive ones keep similar
+// suites together), so slow chunks spread evenly instead of piling into one
+// shard. Every chunk lands in exactly one shard; unset/empty runs everything.
 function selectShard<T>(commands: T[], spec: string | undefined): T[] {
 	const trimmed = spec?.trim();
 	if (!trimmed) return commands;
@@ -1836,289 +1332,42 @@ function selectShard<T>(commands: T[], spec: string | undefined): T[] {
 	return selected;
 }
 
-// The producer label and exact pre-budget argv together identify an unchanged
-// chunk. Never distribute a chunk's wall time among its files or rechunk it.
-export function prioritizeBunCommands<T extends TestCommand>(
-	commands: T[],
-	producers: TestProducerRecord[],
-	scope: BunFulltestProducerScope,
-): T[] {
-	const durations = new Map<string, number>();
-	const ambiguous = new Set<string>();
-	for (const producer of producers) {
-		const key = bunTestProducerKey(producer, scope);
-		if (!key) continue;
-		if (durations.has(key)) {
-			ambiguous.add(key);
-			continue;
-		}
-		durations.set(key, producer.durationSeconds);
-	}
-	for (const key of ambiguous) durations.delete(key);
-	return commands
-		.map(command => ({
-			command,
-			duration: durations.get(JSON.stringify([command.label, command.command])) ?? -1,
-		}))
-		.sort((a, b) => b.duration - a.duration)
-		.map(item => item.command);
+if (!(requestedMode in validModes)) {
+	throw new Error(`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`);
 }
 
-/** Preserve history order within each group while offering startup work early. */
-function interleaveFulltestCommands(commands: TestCommand[], parallel: boolean): TestCommand[] {
-	const startup: TestCommand[] = [];
-	const ordinary: TestCommand[] = [];
-	for (const command of commands) (command.selection?.group === "startup" ? startup : ordinary).push(command);
-	if (!parallel) return [...startup, ...ordinary];
-	// This is only a queue preference, not a separate startup reservation.
-	const scheduled: TestCommand[] = [];
-	let cursor = 0;
-	for (const command of startup) {
-		scheduled.push(command);
-		for (let i = 0; i < 3 && cursor < ordinary.length; i++) scheduled.push(ordinary[cursor++]!);
-	}
-	for (; cursor < ordinary.length; cursor++) scheduled.push(ordinary[cursor]!);
-	return scheduled;
-}
-
-/** Only this whole-package chunk can use a second file worker in the shared pool. */
-function hasElasticFulltestFiles(command: TestCommand): boolean {
-	return command.cwd === "packages/ai" && command.parallel !== undefined;
-}
-
-/** Revision history only orders chunks; worktree changes never invalidate test execution. */
-export async function verifiedFulltestRevision(
-	expected: string | undefined,
-	root: string = repoRoot,
-): Promise<string | undefined> {
-	if (!expected || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(expected)) return undefined;
+const requestedCommands = selectShard(await commandsForMode(requestedMode as Mode), Bun.env.OMP_TEST_SHARD);
+const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
+// CI defaults to one process at a time, but memory-sized workflow buckets
+// explicitly opt into bounded process concurrency. Local runs fan out by
+// default and may use the same override. Resolved before the dry-run check so
+// `--dry-run` prints the argv the real run would use, budget included.
+const pooled = requestedCommands.length > 1 && (!isCI() || explicitConcurrency);
+// The sequential path is a pool of one, so a lone chunk keeps the whole budget.
+const poolWidth = pooled
+	? testConcurrency(requestedCommands.length, Bun.env.OMP_TEST_CONCURRENCY, os.availableParallelism())
+	: 1;
+const testCommands = applyChunkBudget(requestedCommands, poolWidth);
+if (isDryRun) {
+	for (const testCommand of testCommands) printCommandHeader(testCommand);
+} else {
+	// Per-command junit reports (see spawnArgv) live only for this run; what they
+	// say is folded into the timing history before they are removed.
+	const junitDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-test-junit-"));
+	const runs: CommandRun[] = [];
 	try {
-		const child = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: root, stdout: "pipe", stderr: "ignore" });
-		const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-		return exitCode === 0 && stdout.trim() === expected ? expected : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-/** The gate publishes only a number, at a fixed location in its isolated home. */
-function sharedFulltestBudgetReader(initial: number): PoolLease<TestCommand>["readBudget"] {
-	const ceiling = Number(Bun.env.OMP_FULLTEST_BUN_MAX_CAPACITY);
-	const home = Bun.env.HOME;
-	if (
-		!Number.isSafeInteger(ceiling) ||
-		ceiling <= initial ||
-		ceiling !== testConcurrencyLimit(os.availableParallelism(), process.platform, String(ceiling)) ||
-		!home ||
-		!path.isAbsolute(home) ||
-		path.basename(home) !== "typescript"
-	)
-		return;
-	const root = path.dirname(home);
-	const name = path.basename(root);
-	if (
-		!name.startsWith(FULLTEST_HOME_PREFIX) ||
-		!/^[A-Za-z0-9]{6}$/.test(name.slice(FULLTEST_HOME_PREFIX.length)) ||
-		fulltestStartupHome !== path.join(root, "typescript-startup")
-	)
-		return;
-	const file = path.join(root, FULLTEST_BUN_CAPACITY_FILE);
-	return () => {
-		try {
-			const stat = lstatSync(file);
-			if (stat.isFile() && stat.size <= ceiling) return stat.size;
-		} catch {
-			// Cleanup can remove the file on cancellation; never increase on a failed read.
+		if (pooled) {
+			await runTestCommandsInParallel(
+				dispatchOrder(testCommands, await getTimingHistory()),
+				poolWidth,
+				junitDir,
+				runs,
+			);
+		} else {
+			await runTestCommandsSequentially(testCommands, junitDir, runs);
 		}
-	};
-}
-
-// Fork gates and changelog tests reuse the child environment and timeout helpers.
-// Importing them must not validate a CLI mode or start the upstream test plan.
-if (import.meta.main) {
-	if (!(requestedMode in validModes)) {
-		throw new Error(
-			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
-		);
-	}
-	const deferStartup = args.includes("--defer-startup");
-	const onlyStartup = args.includes("--only-startup");
-	if (deferStartup && onlyStartup) throw new Error("--defer-startup and --only-startup are mutually exclusive");
-	if ((deferStartup || onlyStartup) && requestedMode !== "local-ts" && requestedMode !== "all")
-		throw new Error("--defer-startup and --only-startup require local-ts or all mode");
-	if (sharedFulltestPool && (requestedMode !== "all" || deferStartup || onlyStartup))
-		throw new Error("--shared-fulltest-pool requires all mode without --defer-startup or --only-startup");
-	const changedArgs = args.filter(arg => arg === "--changed" || arg.startsWith("--changed="));
-	if (changedArgs.length > 1 || changedArgs.some(arg => arg === "--changed="))
-		throw new Error("Expected at most one --changed or --changed=<ref> option");
-	const historyScope =
-		reportScope === "ci-test-ts:local-ts" || reportScope === "ci-test-ts:all" ? reportScope : undefined;
-	const inFulltest = Boolean(
-		(sharedFulltestPool || deferStartup || onlyStartup) &&
-		historyScope &&
-		gateReportsFailures &&
-		(await isActiveBunFulltest(historyScope)),
-	);
-	const commands = await commandsForMode(requestedMode as Mode);
-	// Explicit upstream native mode may require the desktop authorization boundary.
-	if (args.includes("--exclude-desktop") && requestedMode !== "local" && requestedMode !== "local-ts") {
-		const native = commands.find(command => command.cwd === "packages/natives");
-		if (native) {
-			const files: string[] = [];
-			for (const pattern of ["**/*.{test,spec}.{js,jsx,ts,tsx}", "**/*_{test,spec}.{js,jsx,ts,tsx}"]) {
-				for await (const file of new Bun.Glob(pattern).scan({
-					cwd: path.join(repoRoot, native.cwd),
-					onlyFiles: true,
-				})) {
-					const normalized = file.replaceAll("\\", "/");
-					if (normalized !== "test/desktop.test.ts" && !normalized.split("/").includes("node_modules"))
-						files.push(normalized);
-				}
-			}
-			if (!files.length) throw new Error("No native tests remain after excluding desktop input");
-			native.command.push(...[...new Set(files)].sort());
-		}
-	}
-	const localMode = requestedMode === "local" || requestedMode === "local-ts";
-	let requestedCommands =
-		localMode || args.includes("--unsharded") ? commands : selectShard(commands, Bun.env.OMP_TEST_SHARD);
-	if (deferStartup || onlyStartup)
-		requestedCommands = requestedCommands.filter(command => isStartupCommand(command) === onlyStartup);
-	const group = onlyStartup ? "startup" : deferStartup ? "ordinary" : "all";
-	if (deferStartup || onlyStartup)
-		console.log(`test-command-group=${group} chunks=${requestedCommands.length}; partial ${requestedMode} plan`);
-	let selection: BunSelection = changedArgs.length
-		? {
-				tool: "bun",
-				mode: "affected",
-				baseline: changedArgs[0]!.slice("--changed=".length) || undefined,
-				reason: "explicit affected selection",
-			}
-		: localMode
-			? await bunTestSelection()
-			: { tool: "bun", mode: "full", reason: "full selection requested" };
-	if (
-		!changedArgs.length &&
-		selection.mode === "affected" &&
-		!(await bunCanTraceChanges(repoRoot, selection.baseline ?? "HEAD"))
-	) {
-		selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
-	}
-	if (deferStartup || onlyStartup) selection.group = onlyStartup ? "startup" : "ordinary";
-	if (requestedMode === "local-ts") selection.suiteRevision = BUN_FORK_SUITE_REVISION;
-	if (
-		requestedCommands.length &&
-		requestedMode === "local-ts" &&
-		!changedArgs.length &&
-		(await bunCleanBaseline(selection))
-	) {
-		// Ask Bun to confirm the empty selection using one selected fork file.
-		const first = requestedCommands.find(command => command.parallel !== undefined)!;
-		const file = first.command.find(arg => /\.(?:test|e2e)\.tsx?$/.test(arg))!;
-		requestedCommands = [
-			{
-				label: "Bun native empty affected selection",
-				cwd: first.cwd,
-				command: ["bun", "test", ...onlyFailuresArgs, file],
-				parallel: 1,
-				requireNoSelection: true,
-			},
-		];
-	}
-	if (localMode) {
-		const count = requestedCommands.reduce(
-			(sum, command) => sum + command.command.filter(arg => /\.(?:test|e2e)\.tsx?$/.test(arg)).length,
-			0,
-		);
-		console.log(`scope=fork-features selected-files=${count} chunks=${requestedCommands.length}`);
-	}
-	console.log(
-		selection.mode === "affected"
-			? `selection=affected-tests-only tool=bun baseline=${selection.baseline ?? "working-tree"}; not full coverage`
-			: `selection=${group === "all" ? "full" : `full-${group}-group`} tool=bun reason=${selection.reason}`,
-	);
-	const groupedSelection = {
-		startup: { ...selection, group: "startup" as const },
-		ordinary: { ...selection, group: "ordinary" as const },
-	};
-	for (const command of requestedCommands) {
-		if (command.parallel === undefined) continue;
-		command.selection = sharedFulltestPool
-			? groupedSelection[isStartupCommand(command) ? "startup" : "ordinary"]
-			: selection;
-		if (selection.mode === "affected") command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
-	}
-	// Prioritize within the selected shard, without changing shard membership.
-	requestedCommands.sort((a, b) => Number(isIntegrationCommand(b)) - Number(isIntegrationCommand(a)));
-	const scheduledCommands =
-		selection.mode === "full" && inFulltest && historyScope
-			? prioritizeBunCommands(
-					requestedCommands,
-					await latestFulltestBunProducers(
-						historyScope,
-						await verifiedFulltestRevision(Bun.env.OMP_FULLTEST_SOURCE_REVISION),
-					),
-					historyScope,
-				)
-			: requestedCommands;
-	const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
-	// CI defaults to one process at a time, but memory-sized workflow buckets
-	// explicitly opt into bounded process concurrency. Local runs fan out by
-	// default and may use the same override. Resolve before dry-run so it prints
-	// the selected test argv with the CPU budget; reporter paths are live-run only.
-	const pooled = scheduledCommands.length > 1 && (localMode || !isCI() || explicitConcurrency);
-	// The sequential path is a pool of one, so a lone chunk keeps the whole budget.
-	const poolWidth = pooled
-		? testConcurrency(scheduledCommands.length, Bun.env.OMP_TEST_CONCURRENCY, os.availableParallelism())
-		: 1;
-	const cpuBudget = testConcurrencyLimit(os.availableParallelism());
-	const scheduled = sharedFulltestPool
-		? interleaveFulltestCommands(scheduledCommands, poolWidth > 1)
-		: scheduledCommands;
-	for (const command of scheduled) {
-		if (command.parallel !== undefined)
-			command.parallel = sharedFulltestPool ? 1 : budgetedParallel(command.parallel, poolWidth, cpuBudget);
-	}
-	const elasticFiles = (command: TestCommand) => sharedFulltestPool && hasElasticFulltestFiles(command);
-	const lease: PoolLease<TestCommand> = {
-		budget: cpuBudget,
-		readBudget:
-			sharedFulltestPool && inFulltest && pooled && !isDryRun && Bun.env.OMP_TEST_CONCURRENCY === "all"
-				? sharedFulltestBudgetReader(cpuBudget)
-				: undefined,
-		slots: command => {
-			const files = command.parallel ?? 1;
-			const preferred = elasticFiles(command) ? 2 : 1;
-			return [files, Math.min(cpuBudget, Math.max(files, preferred))];
-		},
-	};
-	const materialize = (command: TestCommand, slots: number) =>
-		applyChunkBudget(command, elasticFiles(command) ? slots : (command.parallel ?? 1), inFulltest);
-	const run = isDryRun ? undefined : await beginTestRun(reportScope);
-	let failed = false;
-	const handleReportFinalizationFailure = (error: unknown): void => {
-		if (failed || process.exitCode) console.error("Failed to finalize test report:", error);
-		else throw error;
-	};
-	try {
-		const exitCode =
-			pooled && !isDryRun
-				? await runTestCommandsInParallel(scheduled, poolWidth, lease, materialize)
-				: await runTestCommands(scheduled.map(command => materialize(command, lease.slots(command)[1])));
-		if (exitCode) {
-			failed = true;
-			process.exitCode = exitCode;
-		}
-	} catch (error) {
-		failed = true;
-		throw error;
 	} finally {
-		if (run) {
-			try {
-				await endTestRun(run, Number(process.exitCode) || (failed ? 1 : 0));
-			} catch (error) {
-				handleReportFinalizationFailure(error);
-			}
-		}
+		await recordTimingHistory(runs);
+		await fs.rm(junitDir, { recursive: true, force: true });
 	}
 }

@@ -215,7 +215,7 @@ export function resolveTeamParticipantsForSession(session: AgentSession, setting
 	const sessionModel = session.model;
 	const configuredMembers = settings.rawValue(cfgTeamMembers);
 	if (configuredMembers !== undefined && !Array.isArray(configuredMembers)) {
-		return { ok: false, error: "team.members 必须是模型选择器数组；请在 config.yml 修正。" };
+		return { ok: false, error: "team.members must be an array of model selectors. Fix it in config.yml." };
 	}
 	const availableModels = filterAvailableModelsByEnabledPatterns(
 		session.modelRegistry.getAvailable(),
@@ -289,7 +289,7 @@ async function startTeamDiscussionImpl(
 	args: StartTeamDiscussionArgs,
 ): Promise<StartTeamDiscussionResult> {
 	const { session, settings, hooks, signal: requestSignal } = args;
-	if (requestSignal?.aborted) return { started: false, message: "/team 已取消。" };
+	if (requestSignal?.aborted) return { started: false, message: "/team cancelled." };
 	const sessionId = session.sessionManager.getSessionId();
 	let sessionChanged = false;
 	const isCurrentSession = (): boolean => !sessionChanged && session.sessionManager.getSessionId() === sessionId;
@@ -330,7 +330,7 @@ async function startTeamDiscussionImpl(
 			result: "rejected",
 			rejection_category: "session_model_missing",
 		});
-		const message = "/team 需要一个当前会话模型（主代理），但当前会话未选择模型。";
+		const message = "/team requires a session model as its main agent, but no model is selected.";
 		await report(message);
 		return { started: false, message };
 	}
@@ -360,7 +360,8 @@ async function startTeamDiscussionImpl(
 			result: "rejected",
 			rejection_category: "job_manager_missing",
 		});
-		const message = "后台任务不可用：/team 依赖会话的 async job 能力来承载多阶段讨论。";
+		const message =
+			"Background jobs are unavailable: /team requires an async job manager for multi-stage discussions.";
 		await report(message);
 		return { started: false, message };
 	}
@@ -544,7 +545,7 @@ async function startTeamDiscussionImpl(
 						});
 						if (!signal.aborted && !deliveryCompleted) {
 							const reason = error instanceof Error ? error.message : String(error);
-							const message = `/team 任务 ${owningJobId} 失败，结果仍可经 proc://${owningJobId} 恢复：${reason}`;
+							const message = `/team job ${owningJobId} failed. The result is still available at proc://${owningJobId}: ${reason}`;
 							await emitOutput(message);
 							try {
 								if (isCurrentSession()) hooks.showError?.(message);
@@ -585,9 +586,9 @@ async function startTeamDiscussionImpl(
 		// an actionable /team message instead of the raw internal error.
 		const reason = error instanceof Error ? error.message : String(error);
 		const message = [
-			"无法启动 /team：后台任务注册失败。",
+			"Could not start /team: background job registration failed.",
 			reason,
-			"请等待现有后台任务完成，或经 Agent Hub / hub cancel 取消后重试。",
+			"Wait for existing jobs to finish or cancel them through Agent Hub or `hub cancel`, then retry.",
 		].join("\n");
 		await report(message);
 		if (registrationAttempted && jobId === undefined) return { started: false, registrationRefused: true, message };
@@ -603,9 +604,9 @@ async function startTeamDiscussionImpl(
 	});
 	const distinctModelCount = new Set(participants.map(participant => participant.modelPattern)).size;
 	const dispatchNotice = [
-		`/team 多代理讨论已启动（任务 ${jobId}，${participants.length} 个独立代理，${distinctModelCount} 个不同模型）。`,
-		"阶段进度见状态提示，子代理明细可在 Agent Hub 查看；取消经后台任务取消入口（hub cancel）执行。",
-		`原始问题：${previewQuestion(question)}`,
+		`/team discussion started (job ${jobId}, ${participants.length} independent agents, ${distinctModelCount} distinct models).`,
+		"Follow progress in the status updates, view subagent details in Agent Hub, and cancel the background job with `hub cancel`.",
+		`Original question: ${previewQuestion(question)}`,
 		`[team-dispatch ${jobId}]`,
 	].join("\n");
 	const followupStarted = performance.now();
@@ -672,8 +673,10 @@ async function startTeamDiscussionImpl(
 		// failed dispatch breadcrumb must not reject the command — the caller
 		// would lose the submitted question and surface an unhandled rejection.
 		const reason = error instanceof Error ? error.message : String(error);
-		const failure = noticeDispatchCompleted ? "派发通知已记录，但刷新界面失败" : "但写入派发通知失败";
-		await report(`/team 已启动（任务 ${jobId}），${failure}：${reason}`);
+		const failure = noticeDispatchCompleted
+			? "the dispatch notice was saved, but the UI update failed"
+			: "the dispatch notice could not be saved";
+		await report(`/team started (job ${jobId}), but ${failure}: ${reason}`);
 	}
 
 	return { started: true, jobId, message: dispatchNotice };

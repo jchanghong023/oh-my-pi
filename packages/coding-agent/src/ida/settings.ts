@@ -13,7 +13,7 @@ export const cfgIdaPython = register({
 		tab: "tools",
 		group: "IDA Pro",
 		label: "IDA Python",
-		description: "可导入 ida_domain 和 idapro 的 Python 解释器；留空则自动检测",
+		description: "Python interpreter that can import ida_domain and idapro; empty auto-detects",
 	},
 });
 
@@ -25,7 +25,8 @@ export const cfgIdaInstallDir = register({
 	ui: {
 		tab: "tools",
 		group: "IDA Pro",
-		label: "IDA 安装目录",
-		description: "包含 libidalib 的目录，将导出为 IDADIR；留空则自动检测（$IDADIR、ida-config.json、标准安装路径）",
+		label: "IDA Install Dir",
+		description:
+			"Directory containing libidalib, exported as IDADIR; empty auto-detects ($IDADIR, ida-config.json, standard install paths)",
 	},
 });

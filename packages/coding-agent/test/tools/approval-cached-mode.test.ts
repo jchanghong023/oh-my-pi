@@ -280,8 +280,8 @@ describe("grant choices in the prompt", () => {
 		await requestApproval(ui, pathTool("read", "read", desktop), { path: "notes.txt" }, { grants: true });
 		const label = shortenPath(approvalDirectoryKey(desktop).replace(/[\\/]+$/, ""));
 		expect(prompts[0]!.grants).toEqual([
-			{ scope: "folder", label: `允许目录：${label}`, alwaysLabel: `始终允许目录：${label}` },
-			{ scope: "target", label: "允许文件", alwaysLabel: "始终允许文件" },
+			{ scope: "folder", label: `Approve Directory: ${label}`, alwaysLabel: `Always Approve Directory: ${label}` },
+			{ scope: "target", label: "Approve File", alwaysLabel: "Always Approve File" },
 		]);
 		expect(prompts[0]!.full.split("\n")).toEqual([
 			"Allow tool: read",
@@ -507,8 +507,8 @@ describe("always-ask-cached wrapper cycle", () => {
 			"session",
 		);
 		const select = vi.fn<ExtensionUIContext["select"]>(async (_title, choices) => {
-			expect(choices).toEqual(["允许", "拒绝"]);
-			return "允许";
+			expect(choices).toEqual(["Approve", "Deny"]);
+			return "Approve";
 		});
 		const wrapper = new ExtensionToolWrapper(tool, runnerWith(session, select));
 		const ctx = {
@@ -588,7 +588,7 @@ describe("always-ask-cached wrapper cycle", () => {
 		const args = { path: "a.txt" };
 		const prompt = await promptFor(tool, args, { grants: false });
 		const select = vi.fn<ExtensionUIContext["select"]>(async (title, choices, options) => {
-			expect(choices).toEqual(["允许", "拒绝"]);
+			expect(choices).toEqual(["Approve", "Deny"]);
 			return chooseAnswer(prompt, "once")(title, choices, options);
 		});
 		const wrapper = new ExtensionToolWrapper(tool, runnerWith(session, select));

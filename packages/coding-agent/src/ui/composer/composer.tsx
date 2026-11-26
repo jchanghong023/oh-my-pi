@@ -119,8 +119,8 @@ export interface ComposerState {
 	 */
 	readonly viewing?: readonly string[];
 	/**
-	 * Sending the draft skips the ask waiting above the composer: natively a warning chip leads
-	 * the input and the send action changes to `omp.composer.skip`.
+	 * Sending the draft skips the ask waiting above the composer: natively a `skips ask` chip leads
+	 * the input and Send reads Skip & send (`omp.composer.skip`).
 	 */
 	readonly skipsAsk?: boolean;
 }
@@ -301,7 +301,7 @@ export interface ComposerOptions {
 	readonly onSubmit?: (text: string) => void;
 }
 
-const NATIVE_PLACEHOLDER = "输入消息…";
+const NATIVE_PLACEHOLDER = "What are we cooking?";
 const HISTORY_LIMIT = 100;
 const SHELL_SIGIL = /^\s*(?:!!?|\$\$?|\?)[ \t]?/;
 const SHELL_TITLES: Record<"bash" | "python" | "btw", string> = {
@@ -1912,7 +1912,7 @@ export class Composer {
 						role="omp.composer.mode"
 						align="center"
 						gap="xs"
-						title={`正在询问旁支问题 · 返回对话  ${key}`}
+						title={`Asking the side question · back to the chat  ${key}`}
 						actions={{ click: "interrupt" }}
 					>
 						<text key="label" spans={[{ s: "accent", t: "btw" }]} wrap="none" />
@@ -1927,17 +1927,17 @@ export class Composer {
 						tone="warning"
 						align="center"
 						gap="xs"
-						title="发送这条消息将跳过上方的问题"
+						title="Sending this message skips the questions above"
 					>
-						<text key="label" spans={[{ s: "warning", t: "跳过提问" }]} wrap="none" />
+						<text key="label" spans={[{ s: "warning", t: "skips ask" }]} wrap="none" />
 					</row>
 				);
 			}
 			if (!s) return null;
-			const title = s.excluded ? `${SHELL_TITLES[s.kind]} · 不发送给模型` : SHELL_TITLES[s.kind];
+			const title = s.excluded ? `${SHELL_TITLES[s.kind]} · not sent to the model` : SHELL_TITLES[s.kind];
 			return (
 				<row key="mode" role="omp.composer.mode" align="center" gap="xs" title={title}>
-					{s.excluded && <icon key="excluded" name="eye-off" title="不发送给模型" />}
+					{s.excluded && <icon key="excluded" name="eye-off" title="Not sent to the model" />}
 					<text key="label" spans={[{ s: `${s.kind}Mode`, t: s.kind }]} wrap="none" />
 				</row>
 			);
@@ -1957,17 +1957,17 @@ export class Composer {
 					role="omp.composer.focus"
 					align="center"
 					gap="xs"
-					title={`正在查看 Subagent ${agent}，发送的消息将交给它`}
+					title={`Viewing subagent ${agent}: what you send goes to it`}
 				>
 					<icon key="icon" name="eye" />
-					<text key="label" text="正在查看" wrap="none" />
+					<text key="label" text="Viewing" wrap="none" />
 					{viewing.slice(0, -1).map(id => (
 						<text
 							key={`crumb:${id}`}
 							role="omp.composer.crumb"
 							text={id}
 							wrap="none"
-							title={`查看 ${id}`}
+							title={`View ${id}`}
 							actions={{ click: `${FOCUS_ACTION}${id}` }}
 						/>
 					))}
@@ -1977,11 +1977,11 @@ export class Composer {
 						role="omp.composer.exit"
 						align="center"
 						gap="xs"
-						title={`返回主会话  ${back}`}
+						title={`Back to the main session  ${back}`}
 						actions={{ click: `${FOCUS_ACTION}${MAIN_AGENT_ID}` }}
 					>
 						<kbd key="key" keys={actionKbd("app.interrupt", "escape")} />
-						<text key="label" text="主会话" wrap="none" />
+						<text key="label" text="main" wrap="none" />
 					</row>
 				</row>
 			);
@@ -1992,8 +1992,8 @@ export class Composer {
 					key="skip"
 					actions={{ click: "submit" }}
 					role="omp.composer.skip"
-					text="跳过并发送"
-					title={`发送这条消息而不回答上方的问题  ${formatTooltipKey("enter")}`}
+					text="Skip & send"
+					title="Send this message instead of answering the questions  ⏎"
 					tone="warning"
 				/>
 			) : this.#state().running ? (
@@ -2001,8 +2001,8 @@ export class Composer {
 					key="stop"
 					actions={{ click: "interrupt" }}
 					role="omp.composer.stop"
-					text="停止"
-					title="停止  esc"
+					text="Stop"
+					title="Stop  esc"
 					tone="error"
 				/>
 			) : (
@@ -2012,7 +2012,7 @@ export class Composer {
 					keys={["enter"]}
 					role="omp.composer.send"
 					tone={this.#options.dictating?.() ? "muted" : undefined}
-					title={this.#options.dictating?.() ? "请先结束语音输入" : "发送  ⏎"}
+					title={this.#options.dictating?.() ? "Finish dictation before sending" : "Send  ⏎"}
 				/>
 			);
 		const popup = (): JSXNode => {
@@ -2032,7 +2032,7 @@ export class Composer {
 					<col role="omp.select">
 						<list
 							key="list"
-							empty="暂无选项"
+							empty="No items"
 							max={{ lines: this.#autocompleteMaxVisible() }}
 							selected={open.items[open.selected]?.value}
 							onSelect={pick}

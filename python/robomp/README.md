@@ -87,21 +87,6 @@ Build invalidation is bounded: editing roboomp Python touches only the
 runtime layer; editing pi source rebuilds `oh-my-pi/pi:dev`, which
 roboomp's `Dockerfile.robomp` extends via `FROM ${PI_BASE}`.
 
-### Local Python tests
-
-Robomp targets POSIX, not native Windows (its cache uses `fcntl.flock`).
-On Windows run the suites in a Linux environment such as WSL. From the
-monorepo root, install both local packages and the robomp development
-dependencies into the Python interpreter used by the test runner:
-
-```bash
-python -m pip install -e sdk/python/omp-rpc -e "python/robomp[dev]"
-bun scripts/test-report-py.ts
-```
-
-The ordinary suites do not require a live model or GitHub service. The
-separate `integration` runner opts into the external smoke test.
-
 ### Native artifact cache
 
 The shared native cache is stored in `/data/natives-cache`, inaccessible to slot
@@ -184,12 +169,15 @@ bun run test:py                         # complete ordinary SDK and robomp suite
 bun run robomp:test:integration         # explicit full integration smoke test
 ```
 
-`bun run test:py` runs both ordinary suites on supported platforms. Python suites
-are excluded from default `bun run fulltest`; `bun run fulltest --full` includes the
-current platform's supported Python suites. The manual CI workflow builds and
-packages without running tests. The integration test is never enabled by the
-ordinary runner; it spawns a real `omp --mode rpc` against an `httpx.MockTransport`
-GitHub and a local bare repo, so it needs `omp` on `PATH`.
+Run `bun run test:py` from the repository root for both ordinary suites. For
+a focused run, use `python3 -m pytest python/robomp/tests/<file>.py` or select a
+file under `sdk/python/omp-rpc/tests/`. RoboOMP requires POSIX; on Windows use an
+existing WSL environment explicitly. The root `bun run test` and
+`bun run test:ts` do not run these Python suites.
+
+The integration test is opt-in. It spawns a real `omp --mode rpc` against an
+`httpx.MockTransport` GitHub and a local bare repo, so it needs `omp` on `PATH`.
+The fork's manual release workflow builds and packages without running tests.
 
 ## Security posture
 

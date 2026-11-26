@@ -72,10 +72,11 @@ describe("/display slash command", () => {
 		}
 		expect(h.prompt).not.toHaveBeenCalled();
 		expect(h.showWarning).not.toHaveBeenCalled();
-		for (const [status] of h.showStatus.mock.calls) {
-			expect(status).toMatch(/[\u4e00-\u9fff]/);
-			expect(status).not.toMatch(/[\r\n]/);
-		}
+		expect(h.showStatus.mock.calls).toEqual([
+			["Display mode: clean"],
+			["Display mode: detailed"],
+			["Display mode: compact; tool details: /display detailed"],
+		]);
 	});
 
 	it("cycles a fresh compact profile through detailed, clean and compact", async () => {
@@ -124,8 +125,7 @@ describe("/display slash command", () => {
 		}
 		expect(h.showWarning).toHaveBeenCalledTimes(3);
 		for (const [warning] of h.showWarning.mock.calls) {
-			expect(warning).toContain("/display");
-			expect(warning).toMatch(/[\u4e00-\u9fff]/);
+			expect(warning).toBe("Usage: /display [clean|compact|detailed]");
 		}
 		expect(h.showStatus).not.toHaveBeenCalled();
 		expect(h.prompt).not.toHaveBeenCalled();
@@ -149,9 +149,9 @@ describe("/display slash command", () => {
 			const warning = h.showWarning.mock.calls.at(-1)?.[0];
 			// Both visible presets must report a blocked thinking preference.
 			expect(warning).toContain("display.mode");
-			expect(warning).toContain("运行时");
+			expect(warning).toContain("runtime");
 			expect(warning).toContain("hideThinkingBlock");
-			expect(warning).toMatch(/实时思考窗口隐藏.*工具隐藏/);
+			expect(warning).toMatch(/live thinking window hidden.*tool activity hidden/);
 		}
 	});
 
@@ -177,7 +177,7 @@ describe("/display slash command", () => {
 		expect(h.showWarning).toHaveBeenCalledTimes(1);
 		const warning = h.showWarning.mock.calls[0]?.[0];
 		expect(warning).toContain("hideThinkingBlock");
-		expect(warning).toContain("项目配置");
+		expect(warning).toContain("project settings");
 		await settings.flush();
 	});
 

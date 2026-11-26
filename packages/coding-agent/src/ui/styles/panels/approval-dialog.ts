@@ -58,7 +58,7 @@ defineRolePainter("col", "omp.editor.ask.approval", (node, cx): Block => {
 		const props = propsOf<TspItemProps & { tone?: string }>(choice);
 		let label = plainText(props.label);
 		const id = choice.key();
-		if (id === "deny" && term.drafting) label = "拒绝并发送消息";
+		if (id === "deny" && term.drafting) label = "Deny and send message";
 		if (id === selected)
 			content.push(
 				theme.style(
@@ -68,19 +68,24 @@ defineRolePainter("col", "omp.editor.ask.approval", (node, cx): Block => {
 			);
 		else content.push(`  ${label}`);
 	}
-	const approve = `${keyLabels(theme, appApproveKeys())} 允许`;
-	const deny = `${bindingGlyph("tui.select.cancel", "escape", theme)} 拒绝`;
+	const approve = `${keyLabels(theme, appApproveKeys())} approve`;
+	const deny = `${bindingGlyph("tui.select.cancel", "escape", theme)} deny`;
 	const hints = term.drafting
-		? [`${bindingGlyph("tui.input.submit", "enter", theme)} 拒绝并发送`, approve, deny]
-		: [`${selectNavGlyphs(theme)} 浏览`, `${bindingGlyph("tui.select.confirm", "enter", theme)} 选择`, approve, deny];
-	if (term.expandable) hints.push(`${expandKeyLabel(theme)} ${term.expanded ? "收起" : "详情"}`);
+		? [`${bindingGlyph("tui.input.submit", "enter", theme)} deny and send`, approve, deny]
+		: [
+				`${selectNavGlyphs(theme)} choose`,
+				`${bindingGlyph("tui.select.confirm", "enter", theme)} select`,
+				approve,
+				deny,
+			];
+	if (term.expandable) hints.push(`${expandKeyLabel(theme)} ${term.expanded ? "less" : "details"}`);
 	// A draft holds the keys: no scrolling, and typing already steers.
 	if (!term.drafting) {
 		if (lines.length > DETAIL_ROWS)
 			hints.push(
-				`${bindingGlyph("tui.select.pageUp", "pageUp", theme)}/${bindingGlyph("tui.select.pageDown", "pageDown", theme)} 滚动`,
+				`${bindingGlyph("tui.select.pageUp", "pageUp", theme)}/${bindingGlyph("tui.select.pageDown", "pageDown", theme)} scroll`,
 			);
-		if (term.draftHost) hints.push("输入以拒绝并引导 Agent");
+		if (term.draftHost) hints.push("type to deny and steer");
 	}
 	const box = theme.symbols.box;
 	const rows = boxRows(

@@ -62,7 +62,7 @@ When authorized to create or edit a contributor-submitted PR, follow the checkli
   ```
   When the process was started from the omp CLI — source `cli.ts`, npm-bundle `dist/cli.js`, or compiled binary — `workerHostEntry()` is `Bun.main` and the worker re-enters the single entry module, so no per-worker `--compile` entrypoints or bundle entries exist. Outside a CLI host (`bun test`, SDK embedding, standalone `omp-stats`) it returns `null` and the direct-module fallback loads the worker source. New worker kinds MUST add their selector to the dispatch table in `cli.ts` and keep the fallback branch.
   History: `with { type: "file" }` only copied the entry as a raw asset (workers crashed silently in compiled binaries — issues #1011, #1027), and the later literal-path + extra-entrypoint pattern required keeping spawn literals and two build scripts in sync (issue #1150). The smoke probe below is the live validation of this contract.
-  Validate any new worker with the dedicated smoke probe: `omp --smoke-test` spawns the stats sync worker and the tiny-model subprocess, pings them, and exits — it's wired into `ci:test:smoke` and `scripts/install-tests/run-ci.sh` so binary, source-link, and tarball installs all exercise it. Add a sibling smoke if the new worker is on a different module graph.
+  Validate any new worker with the dedicated smoke probe: `omp --smoke-test` spawns the stats sync worker and the tiny-model subprocess, pings them, and exits. Run `bun run ci:test:smoke` for the source CLI; the separate `bun run ci:test:install-methods` exercises binary and tarball installs. Add a sibling smoke if the new worker is on a different module graph.
 
 ## Central Utilities
 
@@ -261,10 +261,10 @@ For the bash tool specifically:
 ## Commands
 
 - MUST run requested project commands with their existing defaults. NEVER append flags or positional arguments unless the user explicitly requests those arguments.
-- `跑 full` / `运行 fulltest` means `bun run fulltest`; `跑 fast` means `bun run fastcheck`. NEVER infer `--full` or other flags from command names or words such as “完整” and “全量”.
+- Prefer explicit, scoped tests, such as `bun test ./packages/<package>/test/<file>.test.ts`. For broader local validation, use `bun run check` (static checks), `bun run test:ts` (TypeScript suites), `bun run test` (TypeScript and the upstream Rust task), or the applicable `bun run ci:test:*` entrypoint. Run broad suites only when explicitly authorized for this task; see [verification requirements](openspec/specs/fork-verification-gates/spec.md).
 - NEVER commit unless asked.
-- Never use `tsc`/`npx tsc` — always `bun check`.
-- NEVER run `cargo test` directly for Rust tests — use `bun run test:rs`. The default Rust gate (`rust-fork-features`), including the Rust stage of default `fulltest` and `slowtest`, has no selected tests after the local Markdown index retirement. Explicit `bun run test:rs --full` or `bun run fulltest --full` still runs workspace-wide Nextest and Cargo doctests; static checks and compilation retain their full scope.
+- Never use `tsc`/`npx tsc` for monorepo typechecking; use `bun run check:ts` or the package's `check:types` script.
+- Use `bun run test:rs` for Rust workspace tests (Nextest and Cargo doctests). The upstream Rust task may skip when Git shows no Rust-affecting changes; a skip is not a pass. Do not run `cargo test` directly.
 - Merge commits (maintainer merges of PRs) follow: `Merge PR #<number>: <conventional PR subject> (@<author>)` — e.g. `Merge PR #6386: feat(catalog): add native Meta Model API provider (@eggpeat)`.
 
 ## Rust Build Profiles
@@ -318,6 +318,7 @@ Test the contract the system exposes — not the easiest internal detail to asse
 - **Never source-grep.** A test that reads an implementation file (`.ts`/`.rs`/build script) and asserts on its _text_ — `expect(src).toContain("someCall()")`, `.toMatch(/import .../)`, `.not.toContain("oldName")`, or "comment must say X" — is banned. It tests how code _looks_, not what it _does_: it breaks on harmless refactors (comment reflow, rename, import reorder) and passes while the behavior is broken. Assert the observable contract instead (run the code, check output/state/error), use the runtime smoke probe for wiring you cannot exercise in-process, and enforce structural invariants (no value-import of X, no self-import) with a type test or an oxlint rule — never a string scan of the source. (Reading a file your code _wrote_ — apply-patch result, generated bundle, temp fixture — and asserting on that output is fine; that is behavior, not a source grep.)
 - Don't add tests for tiny low-risk changes unless they protect a real contract or fix a regression-prone edge case.
 - Prefer focused package-local verification for the changed area.
+- Place fork behavior coverage in the relevant upstream test directory or native suite and keep it discoverable by that suite. Do not add a fork-specific runner, discovery path, allowlist, or test entrypoint.
 
 ## Changelog
 
@@ -349,7 +350,7 @@ Fork releases require explicit user authorization and use the manual CI workflow
 
 ## Fork Requirements and Additional Runbooks
 
-- [已批准需求](openspec/specs/)是 fork 的权威需求目录；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-product-scope/spec.md)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证门禁](openspec/specs/fork-verification-gates/spec.md)和[上游基线](openspec/specs/fork-upstream-baseline/spec.md)分别维护相关约束；适用的 fork 约束优先于上游通用约定。
+- [已批准需求](openspec/specs/)是 fork 的权威需求目录；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-product-scope/spec.md)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证要求](openspec/specs/fork-verification-gates/spec.md)和[上游基线](openspec/specs/fork-upstream-baseline/spec.md)分别维护相关约束；适用的 fork 约束优先于上游通用约定。
 - 每次功能性改动都 MUST 核对[内网快速指南](docs-zh-CN/quick-start-intranet.md)，在同一变更中更新受影响的现有说明，使其与实际代码一致。指南面向用户快速上手，不要求覆盖所有功能，不要求更新提交数和上游 PR数；新增内容只写上手所需的用法与注意事项，完整需求以 `openspec/specs/` 为准。
 - `ask` 沿用上游 HTML 表单及宿主协议，不保留 `questions[]` 兼容层；活跃 `/goal-autopilot` 的静默超时例外见 [上游继承边界](openspec/specs/fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。
 - OpenSpec 2.0 随 OMP 内置全部 12 项 Skill；任意目录原生发现／补全，使用 `/skill:<name>` 调用及 `skill://<name>` 按需读取，MUST 保留项目／用户同名覆盖机制及 Superpowers／JCH 原有规则。所有执行入口 MUST 使用 `omp openspec ...`，NEVER 要求独立安装 OpenSpec／Node。
@@ -366,13 +367,6 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - [OpenWiki](openspec/specs/openwiki/spec.md) 通过 `vendor/openwiki` 子模块维护；`omp openwiki` 默认使用 OMP 的 `default` 模型，内置 `openwiki_*` 查询工具只读。修改子模块源码、技能或资源依赖后运行 `bun run gen:openwiki-resources`；资源指纹不匹配时不得使用旧资源。
 - 父仓静态检查与测试发现 MUST 排除 `vendor/openwiki` 子模块；OMP 宿主集成测试不受此限制。
 - [python/robomp/AGENTS.md](python/robomp/AGENTS.md) 是 GitHub triage/fix bot 子树的架构、命令、开发约定及验证规则。
-
-<!-- OPENWIKI:START -->
-
-## OpenWiki
-
-This repository has a generated `openwiki/` knowledge base. Use it as optional context when investigating unfamiliar architecture or behavior, or when source inspection leaves an important uncertainty. Use `openwiki_search` and `openwiki_read` to find relevant sections; if those tools are unavailable, consult `openwiki/quickstart.md` and its links. Source code and tests are authoritative when the Wiki is outdated.
-<!-- OPENWIKI:END -->
 
 - 原生 TUI `/todoloop <Markdown 路径> [--check]` 支持首个 checkbox 前置标题层级推断及 Superpowers Step，采用组级编排和组内连续执行；有剩余组时程序先做一次只读 scout 调研，实际结清后通过原生 context 供全部组及接续复用，准备失败即停止，不限制执行 task 自主派生或更改原生缓存策略。实现位于 `packages/coding-agent/src/todoloop/`，命令入口位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；现行需求见[个人命令规格](openspec/specs/personal-commands/spec.md)，操作说明见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。
 

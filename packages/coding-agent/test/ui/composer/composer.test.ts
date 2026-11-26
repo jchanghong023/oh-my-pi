@@ -610,7 +610,7 @@ describe("a composer talking to a /btw note", () => {
 		const [chip, field] = line ? line.children() : [];
 		expect(chip?.props()).toMatchObject({
 			role: "omp.composer.mode",
-			title: "正在询问旁支问题 · 返回对话  esc",
+			title: "Asking the side question · back to the chat  esc",
 			actions: { click: "interrupt" },
 		});
 		expect(chip?.children()[0]?.props()).toMatchObject({ spans: [{ s: "accent", t: "btw" }] });

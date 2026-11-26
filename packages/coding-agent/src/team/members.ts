@@ -55,7 +55,7 @@ export function teamModelCapabilityIssue(model: Model): { code: string; message:
 	if (model.supportsTools === false || (model.kind !== undefined && model.kind !== "chat")) {
 		return {
 			code: "missing_capability",
-			message: `模型 ${modelKey(model)} 不支持 Team 必需的聊天工具与结构化 yield。`,
+			message: `Model ${modelKey(model)} does not support the chat tools and structured yield required by Team.`,
 		};
 	}
 	return undefined;
@@ -93,24 +93,27 @@ export function resolveTeamMemberReference(
 export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersResult {
 	const sessionModel = input.sessionModel;
 	if (!sessionModel) {
-		return { ok: false, error: "/team 需要一个当前会话模型（主代理），但当前会话未选择模型。" };
+		return { ok: false, error: "/team requires a session model as its main agent, but no model is selected." };
 	}
 
 	// Settings only validate array-ness, not element types: a numeric/boolean/
 	// null entry in config.yml must fail with the offending index instead of a
-	// bare `entry.trim is not a function` TypeError (§2.2/§2.8: 报错指出具体项).
+	// bare `entry.trim is not a function` TypeError (§2.2/§2.8: identify the offending entry).
 	for (const [index, entry] of (input.configuredMembers as readonly unknown[]).entries()) {
 		if (typeof entry !== "string") {
 			return {
 				ok: false,
-				error: `team.members[${index}] 必须是字符串（模型选择器），实际是 ${describeConfiguredEntry(entry)}；请在 config.yml 修正。`,
+				error: `team.members[${index}] must be a string (model selector), but got ${describeConfiguredEntry(entry)}. Fix it in config.yml.`,
 			};
 		}
 	}
 	const entries = input.configuredMembers.map(entry => entry.trim());
 	const emptyIndex = entries.findIndex(entry => entry.length === 0);
 	if (emptyIndex !== -1) {
-		return { ok: false, error: `team.members[${emptyIndex}] 为空；显式配置的参与模型不能为空。` };
+		return {
+			ok: false,
+			error: `team.members[${emptyIndex}] is empty; configured model selectors must not be blank.`,
+		};
 	}
 	const availableModels = [...input.availableModels];
 	const resolvedMembers: Model[] = [];
@@ -120,10 +123,10 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 			return {
 				ok: false,
 				error: [
-					`team.members 中的模型不可用：${entry}`,
+					`Model in team.members is unavailable: ${entry}`,
 					"",
-					"请修正或移除该项后重试。/team 不会静默剔除不可用模型后继续。",
-					"可运行的模型可用 `omp models` 查看。",
+					"Fix or remove this entry and retry. /team will not silently drop unavailable models.",
+					"Run `omp models` to see available models.",
 				].join("\n"),
 			};
 		}
@@ -149,13 +152,13 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 					model.id.toLowerCase().includes(sessionModel.id.toLowerCase()),
 			);
 			const suggestion = resolvedKey ?? (sibling ? modelKey(sibling) : undefined);
-			const fuzzyNote = suggestion ? `（存在相近的可用模型 ${suggestion}，但 /team 不会用它替代会话模型）` : "";
+			const fuzzyNote = suggestion ? ` (similar available model: ${suggestion}; /team will not substitute it)` : "";
 			return {
 				ok: false,
 				error: [
-					`当前会话模型 ${sessionKey} 不在可用模型列表中${fuzzyNote}，无法作为 /team 的主代理（对齐与综合子调用依赖它）。`,
+					`Session model ${sessionKey} is not available${fuzzyNote} and cannot act as the main agent for /team alignment and synthesis.`,
 					"",
-					"请先切换到可用模型（`omp models` 查看可运行模型）后重试；/team 不会静默跳过会话模型。",
+					"Switch to an available model (see `omp models`) and retry. /team will not silently skip the session model.",
 				].join("\n"),
 			};
 		}

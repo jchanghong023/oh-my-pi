@@ -27,7 +27,7 @@ OMP MUST 按同一 operation_id 记录安全的阶段、结果与时长；offlin
 - 离线 models/bench 的 cache-only 日志仅描述目录发现/刷新，不代表模型请求离线；初始化及后续 selector-miss 刷新保留起止关联。WSL helper 预检拒绝记录有界原因码，不复制 helper 输出正文。
 - 凭据、Authorization/Cookie、URL 认证与敏感查询参数、用户输入、提示词、源码、文档/响应正文 MUST NOT 直接入日志。仅记录有界、脱敏的类型、代码、状态、计数、长度和必要栈帧；不得无限复制 stdout/stderr 或大对象。
 - 日志目录不可写时 MUST 尝试合理的用户级目录回退；仍失败则向 stderr 有界报告日志初始化故障；日志失败不能递归、掩盖业务结果或使业务崩溃。启动/退出须可追踪并刷新关键记录。
-- 本契约覆盖已保留的 fork 功能及其公共边界：team、Goal、knowledge、AST 通知、company 与向量请求、门禁和安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
+- 本契约覆盖已保留的 fork 功能及其公共边界：team、Goal、knowledge、AST 通知、company 与向量请求、安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
 
 #### Scenario: offline 默认过滤 INFO／DEBUG
 
@@ -118,10 +118,10 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
-- 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 仅执行构建、打包及其必要准备，不运行单元、集成、冒烟或安装测试；发布 MUST 等待版本元数据、全部二进制和浏览器扩展构建成功，不依赖测试作业。本地测试入口保留，按用户明确授权单独运行。发布须单独明确授权，`bun run slowtest` 仅做本机及适用 WSL 本地验证，NEVER 自动推送、触发/等待 CI 或创建 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
+- 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 仅执行构建、打包及其必要准备，不运行单元、集成、冒烟或安装测试；发布 MUST 等待版本元数据、全部二进制和浏览器扩展构建成功，不依赖测试作业。验证按[验证要求](../fork-verification-gates/spec.md)独立执行，不自动推送、触发／等待 CI、启动 WSL 或创建 Release；发布须单独明确授权。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
 - 本地开发分发额外提供 `bun run local`（Windows 本机编译并直接替换安装目录中的 `omp.exe`：旧可执行文件先改名，再换入新版，不杀任何已有进程；换入失败恢复旧文件，仍被旧进程占用的映像保留）和 `bun run cnb`（先在 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行安全的 `git pull --ff-only`，确认两端工作区干净且 Git 提交一致，再并行构建两平台产物，并行上传到已有 CNB Release；默认目标为 `jchanghong/bin` 仓库的 `omp` 标签，可用 `--repo`、`--tag` 显式覆盖，无需交互输入）。`bun run cnb` MUST 覆盖 `omp-windows-x64.exe`、`omp-linux-x64`、`omp-sdk-win32-x64.zip`、`omp-sdk-linux-x64.zip` 并取得四次上传成功确认，缓存命中也不跳过上传；不另行确认，不修改其他附件，不提供冗余的 `--overwrite` 参数。不上传独立源码归档，不推送 Git 源码，不替代 GitHub 正式 Release，也不改变安装器或 `omp update` 的 GitHub 来源。
 - `local`、`cnb` 和手动发布 CI 的分发构建 MUST NOT 运行任何测试、冒烟、worker 探测、native 加载探测或构建产物试运行。CNB 不执行全仓源码哈希扫描、重复 WSL 预检、Release 附件竞态检查或发布后重复查询；只保留干净工作区、Git 提交一致性、Bun 版本、构建输出及上传接口所必需的检查和确认。WSL 源码及构建脚本 MUST 只通过 Git 远端同步，不通过 stdin 传脚本，也不复制、移动、打补丁或清理用户文件绕过脏工作区检查。两端 Bun 版本 MUST 一致；保留构建资源所必需的 Export viewer 精确字节元数据校验；遗留 `tool-views.generated.js` 仅作为忽略的生成产物保留。
-- 仓库仅启用 `.github/workflows/ci.yml`（手动构建发布），不提供 CNB 源码同步工作流；`nix.yml` 与 `bun-cache-warm.yml` 以 `.disabled` 后缀停用，不参与任何触发。fork 不提供 Nix 发布与独立的 Bun 缓存预热工作流；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
+- 仓库仅启用 `.github/workflows/ci.yml`（手动构建发布），不提供 CNB 源码同步工作流。其他上游工作流（`nix.yml`、`bun-cache-warm.yml`、`stale.yml`）保留上游内容，仅追加 `.disabled` 停用，不参与任何触发；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
 - CNB 与手动发布 CI 的 native 入口直接构建并写入版本戳，不加载 addon；`bun run local` 安装 native 时继续显式跳过宿主加载探测（`--skip-load-probe`）。普通 `bun run build:native` 的默认加载探测行为不变。
 - 二进制必须携带 fork 版本和更新仓库信息。
 - `PI_UPDATE_REPOSITORY` MUST 可覆盖 `omp update` 使用的更新仓库；未设置时固定为本 fork 仓库。该变量 MUST NOT 写入配置文件或构建产物。
@@ -169,7 +169,7 @@ OMP MUST 在 CNB 与手动发布 CI 中共用宿主原生 Cargo 构建及二进�
 - **WHEN** 上述任一宿主执行分发构建
 - **THEN** native 入口 MUST 自动选择本节固定目标，向绝对路径 `OMP_RELEASE_NATIVE_DIR`（默认 `packages/natives/native`）输出唯一所选 canonical addon 及版本戳；二进制入口 MUST 从该目录读取 addon，并按可选 `OMP_RELEASE_BINARY_DIR` 输出既有附件文件名。
 - **AND** native MUST 固定使用 Cargo `local` profile、`CARGO_PROFILE_LOCAL_STRIP=symbols`、thin LTO、16 codegen units 与增量编译；源码及依赖新鲜度由 Cargo 判断，不建立额外 native 源码指纹缓存或全仓扫描。
-- **AND** MUST 复用 Cargo registry／git／target、Bun 依赖及构建资源缓存；配置 `OMP_BUILD_CACHE_DIR` 时允许复用相同字节的 zstd 资源帧。CNB 的持久缓存及构建输出 MUST 位于源码树外，不依赖 Docker，不缓存门禁结果。
+- **AND** MUST 复用 Cargo registry／git／target、Bun 依赖及构建资源缓存；配置 `OMP_BUILD_CACHE_DIR` 时允许复用相同字节的 zstd 资源帧。CNB 的持久缓存及构建输出 MUST 位于源码树外，不依赖 Docker，不缓存检查或测试结果。
 - **AND** MUST NOT 运行测试、冒烟、worker 探测、native 加载探测或构建产物试运行；其他平台的既有构建入口与普通 `bun run build:native` 的默认加载探测不在本次切换范围。
 
 #### Scenario: 手动 CI 使用两个宿主而非 Bazel artifact 汇总
@@ -200,7 +200,7 @@ OMP MUST 在保留 Git-only 源码同步和干净提交边界的前提下并行�
 
 - **WHEN** 缓存缺失、二进制或 SDK ZIP 不完整、上次构建未成功完成，或提交、Bun、目标及相关发布环境任一项不匹配
 - **THEN** MUST 将该宿主视为缓存未命中，使用共享入口完成真实构建及打包；未完成或失败产物 MUST NOT 被复用或上传。
-- **AND** MUST 仅在成功完成构建及打包后记录可复用的完整产物；仍可由 Cargo 及资源缓存独立复用有效中间结果，不缓存门禁通过结果。
+- **AND** MUST 仅在成功完成构建及打包后记录可复用的完整产物；仍可由 Cargo 及资源缓存独立复用有效中间结果，不缓存检查或测试通过结果。
 
 #### Scenario: SDK ZIP 复用同宿主发布 addon
 
@@ -272,7 +272,7 @@ OMP MUST 只允许手动触发发布工作流，并对并发与令牌权限做�
 - 仓库唯一的发布工作流 MUST 只由 `workflow_dispatch` 触发，MUST NOT 配置推送、标签、定时或上游默认触发。
 - 并发组 MUST 为 `<工作流名>-<ref>`，MUST NOT 取消进行中的运行；同一 ref 的多次手动运行排队执行，不并发改写同一版本的产出。
 - 工作流默认权限 MUST 为 `contents: read`；只有实际创建 Release 的发布 job MAY 提升到 `contents: write`，其他 job（元数据、构建、产物汇总及测试）MUST NOT 获得写权限。
-- 工作流只运行版本元数据、构建、打包和发布所需步骤，不运行测试、冒烟、native／worker 探测或产物试运行；本地 fulltest 验证独立执行，不以工作流构建成功替代测试结果。构建产物可在未选择发布时下载，发布依赖版本元数据、全部二进制和浏览器扩展构建成功，不增加测试框架或 push／PR 触发。
+- 工作流只运行版本元数据、构建、打包和发布所需步骤，不运行测试、冒烟、native／worker 探测或产物试运行；本地验证独立执行，不以工作流构建成功替代测试结果。构建产物可在未选择发布时下载，发布依赖版本元数据、全部二进制和浏览器扩展构建成功，不增加测试框架或 push／PR 触发。
 
 #### Scenario: 发布 CI 的触发、并发与权限的可观察行为
 

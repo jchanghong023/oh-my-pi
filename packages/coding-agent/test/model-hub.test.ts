@@ -782,7 +782,7 @@ describe("ModelHub", () => {
 			const { hub: bareHub } = createHub({ models: [model], scoped: true });
 			bareHub.handleInput(UP); // All models → Roles (since Recent is removed)
 			bareHub.handleInput("\n"); // dive into rows
-			expect(footerLine(bareHub.render(220))).not.toContain("s ");
+			expect(footerLine(bareHub.render(220))).not.toContain(" · s save preset");
 			const bareFooter = footerLine(bareHub.render(220));
 
 			bareHub.handleInput("s");
@@ -1412,7 +1412,7 @@ describe("ModelHub", () => {
 			enterRolesView(hub);
 			hub.handleInput("f"); // add a fallback for the first role (default)
 			const rendered = normalize(hub.render(220));
-			expect(rendered).toContain("添加回退：");
+			expect(rendered).toContain("Adding fallback for");
 			expect(rendered).toContain("chat-model");
 			expect(rendered).not.toContain("image-model");
 		});
@@ -1428,7 +1428,7 @@ describe("ModelHub", () => {
 			hub.handleInput(LEFT); // fallbacks:test/*
 			hub.handleInput("\n");
 			const rendered = normalize(hub.render(220));
-			expect(rendered).toContain("添加回退： test/*");
+			expect(rendered).toContain("Adding fallback for test/*");
 			expect(rendered).toContain("image-model");
 		});
 

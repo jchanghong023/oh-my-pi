@@ -80,14 +80,14 @@ import { extensionOverlay } from "./extension-ui-blocks";
  * the keys, so the host can't know its bindings: advertise the defaults.
  */
 function guestAskHelpText(enterAction: string, extra = ""): string {
-	return `${formatKeyHints(["up", "down"])} 导航  ${formatKeyHint("enter")} ${enterAction}  ${extra}${formatKeyHint("escape")} 取消`;
+	return `${formatKeyHints(["up", "down"])} navigate  ${formatKeyHint("enter")} ${enterAction}  ${extra}${formatKeyHint("escape")} cancel`;
 }
 
-const ASK_OTHER_OPTION = "其他（自行输入）";
-const ASK_CHAT_OPTION = "讨论此问题";
-const ASK_NEXT_OPTION = "下一步 →";
+const ASK_OTHER_OPTION = "Other (type your own)";
+const ASK_CHAT_OPTION = "Chat about this";
+const ASK_NEXT_OPTION = "Next →";
 /** What an inline ask warns while sending the composer's draft would skip it. */
-const ASK_SKIP_NOTICE = "发送消息会跳过这些问题";
+const ASK_SKIP_NOTICE = "Sending your message skips these questions";
 
 /** The local ask shown above the composer (`#mountAsk`). */
 interface MountedAsk {
@@ -1507,10 +1507,10 @@ export class ExtensionUiController {
 		message: string,
 		dialogOptions?: InteractiveSelectorDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showHookSelector(`${title}\n${message}`, ["是", "否"], dialogOptions, {
+		const result = await this.showHookSelector(`${title}\n${message}`, ["Yes", "No"], dialogOptions, {
 			kind: "permission",
 		});
-		return result === "是";
+		return result === "Yes";
 	}
 
 	/**

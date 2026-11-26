@@ -182,7 +182,7 @@ describe("timeline tool details", () => {
 		const h = setup();
 		try {
 			h.term.press("alt+enter");
-			for (const marker of ["状态：成功", "ARGS-alpha", "RESULT-alpha", "TAIL-alpha"])
+			for (const marker of ["Status: Success", "ARGS-alpha", "RESULT-alpha", "TAIL-alpha"])
 				expect(h.text()).toContain(marker);
 			expect(h.text()).not.toContain("RESULT-bravo");
 			expect(h.switched).toEqual([]);
@@ -194,7 +194,7 @@ describe("timeline tool details", () => {
 			expect(h.props().selected).toBe("bravo");
 			expect(h.text()).not.toContain("RESULT-");
 			h.detailsNative();
-			for (const marker of ["状态：失败", "ARGS-bravo", "RESULT-bravo", "TAIL-bravo"])
+			for (const marker of ["Status: Failed", "ARGS-bravo", "RESULT-bravo", "TAIL-bravo"])
 				expect(h.text()).toContain(marker);
 			expect(h.text()).not.toContain("RESULT-alpha");
 			h.term.press("up");

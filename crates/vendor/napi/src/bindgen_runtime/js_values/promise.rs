@@ -20,7 +20,7 @@ use super::{CallbackContext, FromNapiValue, PromiseRaw, TypeName, Unknown, Valid
 ///
 /// example:
 ///
-/// ```rust,ignore
+/// ```no_run
 /// #[napi]
 /// pub fn await_promise_in_rust(promise: Promise<u32>) {
 ///   let value = promise.await.unwrap();

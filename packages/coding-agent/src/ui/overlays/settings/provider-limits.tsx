@@ -65,10 +65,10 @@ export function createProviderLimitsEditor(
 		const out: Choice[] = ids.map(id => ({
 			value: id,
 			label: id,
-			detail: current[id] === undefined ? "无限制" : `上限：${current[id]}`,
+			detail: current[id] === undefined ? "Unlimited" : `Limit: ${current[id]}`,
 		}));
 		if (Object.keys(current).length > 0)
-			out.push({ value: CLEAR_ALL, label: "清除所有限制", detail: "取消所有 Provider 的并发上限" });
+			out.push({ value: CLEAR_ALL, label: "Clear all limits", detail: "Make every provider unlimited" });
 		return out;
 	};
 	const list = signal(choices());
@@ -150,24 +150,24 @@ export function createProviderLimitsEditor(
 				if (editing !== null)
 					return (
 						<Field
-							label={`最大并发请求数：${editing}`}
-							description="输入正数，小数向下取整。清空此字段可取消该 Provider 的限制。"
+							label={`Max In-Flight Requests: ${editing}`}
+							description="Enter a positive number. Decimals round down. Clear the field to make this provider unlimited."
 							control={
 								<input text={() => line().text} cursor={() => line().cursor} prompt="> " sendable={false} />
 							}
 							error={error}
-							hint={`  ${bindingGlyph("tui.input.submit", "enter")} 保存 · ${bindingGlyph("tui.select.cancel", "escape")} 取消 · 清空以取消设置`}
+							hint={`  ${bindingGlyph("tui.input.submit", "enter")} to save · ${bindingGlyph("tui.select.cancel", "escape")} to cancel · Clear field to unset`}
 						/>
 					);
 				return (
 					<Field
-						label="最大并发请求数"
-						description="选择 Provider，输入正数来限制并发 LLM 请求数；清空则不限制。"
+						label="Max In-Flight Requests"
+						description="Select a provider, enter a positive number to cap concurrent LLM requests, or clear it for unlimited."
 						control={
 							<col role="omp.select">
 								<list
 									key="list"
-									empty="暂无选项"
+									empty="No items"
 									max={() => ({ lines: Math.min(list().length || 1, LIST_ROWS) })}
 									selected={() => list()[selected()]?.value ?? null}
 								>
@@ -184,7 +184,7 @@ export function createProviderLimitsEditor(
 							</col>
 						}
 						error={error}
-						hint={`  ${bindingGlyph("tui.select.confirm", "enter")} 编辑 Provider · ${bindingGlyph("tui.select.cancel", "escape")} 返回`}
+						hint={`  ${bindingGlyph("tui.select.confirm", "enter")} to edit provider · ${bindingGlyph("tui.select.cancel", "escape")} to go back`}
 					/>
 				);
 			}}

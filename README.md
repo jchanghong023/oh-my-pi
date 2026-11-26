@@ -3,12 +3,12 @@
 </p>
 
 <p align="center">
-  <strong>把 IDE 接进终端的编码 agent。</strong>
+  <strong>A coding agent with the IDE wired in.</strong>
   <strong><a href="https://omp.sh">omp.sh</a></strong>
 </p>
 
 <p align="center">
-  语言：<strong>简体中文</strong> | <a href="docs-zh-CN/README.upstream.md">English</a>
+  Language: <strong>English</strong> | <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -26,62 +26,82 @@
   Built by <a href="https://stencil.so">Stencil Labs</a> · Fork of <a href="https://github.com/badlogic/pi-mono">Pi</a> by <a href="https://github.com/mariozechner">@mariozechner</a>
 </p>
 
-目前能力最完整的 agent 界面。由真实使用持续打磨 —— 开箱即用，且从里到外开放。
+The most capable agent surface that ships. Continuously tuned by real-world use — complete out of the box, open all the way down.
 
-**60+** 个 provider · **31** 个内置工具 · **14** 个 lsp 操作 · **28** 个 dap 操作 · 约 **80k** 行 Rust 核心。
+**60+** providers · **31** built-in tools · **14** lsp ops · **28** dap ops · **~80k** lines of Rust core.
 
 > [!NOTE]
-> Pull Request 目前**暂时对所有人开放**，作为一次试验。此前我们要求先获得
-> 担保才接受 PR；该要求现已解除，以便评估开放贡献的效果。视结果而定，
-> 担保制度可能恢复。
+> Pull requests are **temporarily open to everyone** as a trial. We previously
+> required a vouch before accepting PRs; that requirement is lifted for now
+> while we evaluate how open contributions go. Depending on the results, the
+> vouch system may return.
 
+## Install
 
-
-## 安装
-
-红区按[内网快速指南](docs-zh-CN/quick-start-intranet.md)设置 `OMP_OFFLINE` 和 `OMP_CONFIG_ROOT`；下面的在线安装方式不适用于无公网环境。
-
-本 Fork 优先从 [CNB Releases](https://cnb.cool/jchanghong/bin/-/releases) 下载二进制，定期同步到 [GitHub Releases](https://github.com/jchanghong023/oh-my-pi/releases)。以下在线安装命令只使用本 Fork 的 GitHub 资产，不会安装上游发行版。
-
-**Linux（glibc x64）**
+**macOS · Linux**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.sh | sh -s -- --binary
+curl -fsSL https://omp.sh/install | sh
 ```
 
-**Windows x64 (PowerShell)**
+The install scripts fetch the prebuilt binary from `build.stencil.so` and check its SHA-256 before installing it; pass `--source` (PowerShell: `-Source`) to install the package with bun instead. Pin a release with `curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v<version>` (PowerShell: `-Binary -Ref v<version>`).
+
+> **Alpine / musl:** the prebuilt musl binary links `libstdc++`/`libgcc` dynamically, which stock Alpine does not ship. Install them first: `apk add libstdc++ libgcc`.
+
+**Homebrew**
+
+```sh
+brew install can1357/tap/omp
+```
+
+**Bun (recommended)**
+
+```sh
+bun install -g @oh-my-pi/pi-coding-agent
+```
+
+**Nix**
+
+```sh
+# Run without installing
+nix run github:can1357/oh-my-pi
+
+# Or install into the active profile (Nix < 2.30: `nix profile install`)
+nix profile add github:can1357/oh-my-pi
+```
+
+Flake consumers can use `packages.<system>.omp`, `overlays.default`, `nixosModules.default`, or `homeManagerModules.default`. A Home Manager configuration can install OMP and own its settings declaratively:
+
+```nix
+{
+  inputs.omp.url = "github:can1357/oh-my-pi";
+
+  # In your Home Manager module:
+  imports = [ inputs.omp.homeManagerModules.default ];
+  programs.omp = {
+    enable = true;
+    settings.startup.quiet = true;
+  };
+}
+```
+
+**Windows (PowerShell)**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary
+irm https://omp.sh/install.ps1 | iex
 ```
 
-**Windows x64（CMD，先下载再交给同一安装器执行）**
+**Pinned versions (mise)**
 
-```bat
-curl -fsSL -o "%TEMP%\install-omp.ps1" https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\install-omp.ps1" -Binary
+```sh
+mise use -g github:can1357/oh-my-pi
 ```
 
-安装脚本在运行时解析最新发布的 fork release。若要安装指定的 fork release，请在 Linux 上通过 `--ref` 传入其 tag，在 Windows 上通过 `-Ref` 传入。
+macOS · Linux · Windows · bun ≥ 1.4.4
 
-fork 发布版二进制报告的版本号为 `omp/<upstream-version>+fork.<build-number>`。工作区包版本仍与上游兼容，因为本 fork 不向 npm 发布包。
+### Shell completions
 
-本 fork 的预编译二进制仅支持 Linux glibc x64 与 Windows x64；不提供 Linux arm64、musl、macOS 或 Windows arm64 的新版本资产。Linux 安装器会在 macOS 联网前拒绝安装。
-
-安装器获取 Release 元数据时验证 TLS 证书；如果企业代理拦截 TLS，安装器使用的客户端必须信任该代理的 CA。二进制资产下载保留原有传输兼容性，但在运行下载文件前，安装器会将其 SHA-256 与上述元数据中同名资产的摘要比对。摘要缺失或不匹配时，不运行下载文件并保留旧安装。摘要匹配后才运行 `omp --version`，确认与所选 Release 完全一致后再替换旧安装；已安装所选版本时仍跳过下载。
-
-OMP 运行时的 HTTPS 请求不沿用上述安装器规则：本 fork 在未显式设置 `NODE_TLS_REJECT_UNAUTHORIZED` 时，默认关闭 `fetch` 的 TLS 证书验证。在可能被劫持的网络上，凭据有被截获的风险。启动 OMP 前设置 `NODE_TLS_REJECT_UNAUTHORIZED=1` 可恢复严格校验；如使用企业代理，客户端仍需信任其 CA。
-
-运行中的会话通常继续使用旧映像，安装后退出并重新打开才能使用新版本；Windows 仅在旧映像无法重命名时回退为按安装路径匹配的进程终止。已有 fork 二进制可用 `omp update --stable` 更新，完成后运行 `omp --version` 核对 PATH 实际命中的版本。
-
-如果旧版 `-fork.N` 安装（构建号 35 或更早）运行 `omp update` 时报告 `Invalid fork release tag`，请用上面的安装器重装。这些旧版本不识别当前的 `+fork.N` 标签，无法自行更新。
-
-Windows 二进制下载在未设置代理环境变量时自动使用当前用户的系统代理；显式的 `HTTPS_PROXY` / `ALL_PROXY` 仍优先，curl 下载遵循 `NO_PROXY`。下载完成后的校验、替换或 PATH 配置失败时，安装器会打印失败阶段、具体错误、相关文件和日志路径，以及可复制执行的恢复、重试和版本核对命令。已验证但未换入的下载文件会保留；旧映像清理失败只提示警告，不代表新版安装失败。
-
-
-
-### Shell 补全
-
-`omp` 依据实时的命令/flag 元数据，自行生成 **bash**、**zsh** 与 **fish** 的补全脚本，因此永远不会与真实 CLI 脱节。子命令、flag 与枚举值静态补全；模型名（`--model`、`--smol`、`--slow`、`--plan`）基于内置模型目录解析，`--resume` 则基于磁盘上的 session 解析。
+`omp` generates its own completion scripts for **bash**, **zsh**, and **fish** from the live command/flag metadata, so they never drift from the actual CLI. Subcommands, flags, and enum values complete statically; model names (`--model`, `--smol`, `--slow`, `--plan`) resolve against the bundled model catalog and `--resume` against your on-disk sessions.
 
 ```sh
 # zsh — add to ~/.zshrc (or write the output into a file on your $fpath)
@@ -94,460 +114,432 @@ eval "$(omp completions bash)"
 omp completions fish > ~/.config/fish/completions/omp.fish
 ```
 
-## 每个工具，都_性能拉满_。
+## Every tool, _benchmaxxed_.
 
-编辑一次到位。读取只给摘要，而不是倾倒整个文件内容。搜索瞬间返回。随便挑哪个模型 —— omp 都能做对。
+Edits that land on the first attempt. Reads that summarize files instead of dumping their content. Searches that return instantly. Pick any model — omp will get it right.
 
 | model            | metric       | what                                                                  |
 | ---------------- | ------------ | --------------------------------------------------------------------- |
-| Grok Code Fast 1 | 6.7% → 68.3% | 编辑格式一旦不再拖垮模型，提升立现十倍。 |
-| Gemini 3 Flash   | +5 pp        | 相对 str_replace —— 比 Google 针对该格式的最佳尝试还强。 |
-| Grok 4 Fast      | −61% tokens  | 一旦坏 diff 引发的重试循环消失，输出量随之骤降。 |
-| MiniMax          | 2.1×         | 通过率翻了一倍多。同样的权重，同样的 prompt。 |
+| Grok Code Fast 1 | 6.7% → 68.3% | Tenfold lift the moment the edit format stops eating the model alive. |
+| Gemini 3 Flash   | +5 pp        | Over str_replace — beats Google's own best attempt at the format.     |
+| Grok 4 Fast      | −61% tokens  | Output collapses once the retry loop on bad diffs disappears.         |
+| MiniMax          | 2.1×         | Pass rate more than doubles. Same weights, same prompt.               |
 
-- `read`：摘要化片段 · 理想默认值 · 选择器命中率
-- `grep`：西部最快
-- `lsp`：你的 IDE 知道的一切，agent 都知道
-- `prompts`：针对每个模型反复调校
+- `read` : summarized snippets · ideal defaults · selector hit rate
+- `grep` : fastest in the west
+- `lsp` : everything your IDE knows, the agent knows
+- `prompts` : adjusted relentlessly for each model
 
-[阅读完整博文 ↗](https://blog.can.ac/2026/02/12/the-harness-problem/)
+[Read the full post ↗](https://blog.can.ac/2026/02/12/the-harness-problem/)
 
+## The Pi _you love_, with **batteries included**.
 
-## 你_喜爱_的 Pi，**开箱即用**。
+Originally built on [Mario Zechner](https://github.com/mariozechner)'s wonderful [Pi](https://github.com/badlogic/pi-mono), omp adds everything you're missing.
 
-omp 最初构建在 [Mario Zechner](https://github.com/mariozechner) 出色的 [Pi](https://github.com/badlogic/pi-mono) 之上，并补上了你所缺的一切。
+### 01 · Code execution w/ tool-calling
 
-### 01 · 带工具调用的代码执行
+Most harnesses give the agent a Python sandbox and call it done. Ours runs persistent Python and a Bun worker, and either kernel can call back into the agent's own tools — read, search, task — over a loopback bridge. The agent loads a CSV with tool.read from inside Python, charts it from JavaScript, and never leaves the cell.
 
-Eval 默认支持持久化的 Python 内核和 JavaScript 单元，两者都可通过 `tool.read` 等接口调用 Agent 工具。可设置 `eval.js: false` 或用 `PI_JS=0` 关闭 JavaScript 后端。
+![omp TUI running Python code and rendering a chart.](assets/python.webp)
 
-![omp TUI 正在运行 Python 代码并绘制图表。](assets/python.webp)
+### 02 · LSP wired into every write
 
-### 02 · LSP 辅助重命名
+Ask for a rename and you get a rename. The call goes through workspace/willRenameFiles, so re-exports, barrel files, and aliased imports update before the file moves. Everything your IDE knows, the agent knows.
 
-在启用了 LSP 的宿主中，重命名文件时，相关语言服务器若支持 `workspace/willRenameFiles`，OMP 会应用服务器返回的导入和重新导出修改；没有服务器支持时，导入不会自动更新。
+![omp TUI with TypeScript and Biome language servers active.](assets/lspv.webp)
 
-![omp TUI 中 TypeScript 与 Biome 语言服务器已激活。](assets/lspv.webp)
+_[Read the LSP config docs](docs/lsp-config.md)_
 
-_[阅读 LSP 配置文档](docs/lsp-config.md)_
+### 03 · Drives a real debugger
 
-### 03 · 驱动真正的调试器
+A C binary segfaults: the agent attaches lldb, steps to the bad pointer, reads the frame. A Go service hangs: it attaches dlv and walks the goroutines. A Python process is wedged: debugpy, pause, inspect, evaluate. Most agents are still sprinkling print statements.
 
-`debug` 工具默认开启。调试时需要目标语言对应的调试适配器，例如 Python 的 `debugpy`。可设置 `debug.enabled: false` 关闭该工具。
+![omp TUI: a live lldb-dap session against a native binary at /tmp/omp-native/demo. Adapter=lldb-dap, Status=stopped, Frame=xorshift32, Instruction pointer 0x10000055C, Location demo.c:6:10. Debug scopes and Debug variables cards show locals (x = 57351) and the agent confirms the math: x went from 7 → 57351 (= 7 ^ (7<<13)).](https://omp.sh/clips/dap-poster.webp)
 
-C 二进制段错误：agent 挂上 lldb，单步走到出错的指针，读取栈帧。Go 服务卡住：它挂上 dlv，遍历 goroutine。Python 进程僵死：debugpy，暂停、检查、求值。而多数 agent 还在到处撒 print。
+_[Watch the capture ↗](https://omp.sh/clips/dap.mp4)_
 
-![omp TUI：针对 /tmp/omp-native/demo 处原生二进制的实时 lldb-dap 会话。Adapter=lldb-dap，Status=stopped，Frame=xorshift32，指令指针 0x10000055C，位置 demo.c:6:10。Debug scopes 与 Debug variables 卡片显示局部变量（x = 57351），agent 核对了这段计算：x 从 7 → 57351（= 7 ^ (7<<13)）。](https://omp.sh/clips/dap-poster.webp)
+### 04 · Time-traveling stream rules
 
-_[观看录屏 ↗](https://omp.sh/clips/dap.mp4)_
+Your rules sit dormant until the model goes off-script. A regex match aborts the stream mid-token, injects the rule as a system reminder, and retries from the same point. You get course-correction without paying context tax on every turn. Injections survive compaction, so the fix sticks.
 
-### 04 · 会时间旅行的流式规则
+![omp TUI: agent reading src.rs and about to write Box::leak when the request aborts (red `Error: Request was aborted`), an amber `⚠ Injecting rule: box-leak` card injects the rule body `Don't reach for Box::leak in production code paths`, and the agent then course-corrects by proposing `Arc<str>` and asking the user to confirm.](https://omp.sh/clips/ttsr-poster.webp)
 
-你的规则一直休眠，直到模型开始跑偏。一次正则匹配就会在 token 中途中止流，把规则作为系统提醒注入，并从同一位置重试。你获得了纠偏能力，却不必每一轮都付上下文税。注入内容能挺过压缩，所以修正真正生效。
+_[Watch the capture ↗](https://omp.sh/clips/ttsr.mp4)_
 
-![omp TUI：agent 正在读取 src.rs 并准备写入 Box::leak，此时请求中止（红色 `Error: Request was aborted`），一张琥珀色的 `⚠ Injecting rule: box-leak` 卡片注入规则正文 `Don't reach for Box::leak in production code paths`，随后 agent 纠正方向，改提议 `Arc<str>` 并请用户确认。](https://omp.sh/clips/ttsr-poster.webp)
+### 05 · First-class subagents
 
-_[观看录屏 ↗](https://omp.sh/clips/ttsr.mp4)_
+Split a job across workers and get typed results back. task fans out into isolated worktrees, each worker runs its own tool surface, and the final yield is a schema-validated object the parent reads directly. No prose to parse, no merge conflicts between siblings, no orphaned edits.
 
-### 05 · 一等公民级的子 agent
+![omp TUI showing `task` spawning two subagents `ComponentsExports` and `RoutesExports`, the constraints block requiring an IRC DM between peers, the per-subagent status cards with cost and duration, and a final Findings section listing both exports plus an honest 'IRC coordination note' about a one-sided handshake.](https://omp.sh/clips/irc-poster.webp)
 
-把工作拆给多个 worker，拿回带类型的结果。task 会扇出到相互隔离的工作树，每个 worker 运行自己的工具集，最终 yield 出的是一个通过 schema 校验的对象，父 agent 可直接读取。无需解析散文，兄弟 agent 之间不会产生合并冲突，也不会留下孤儿改动。
+_[Watch the capture ↗](https://omp.sh/clips/irc.mp4)_
 
-![omp TUI 展示 `task` 派生两个子 agent `ComponentsExports` 与 `RoutesExports`，constraints 区块要求同级 agent 之间互发 IRC 私信，每个子 agent 的状态卡带有成本与耗时，最后的 Findings 章节列出两处导出，并附一条坦白的“IRC 协调说明”，指出握手是单向的。](https://omp.sh/clips/irc-poster.webp)
+Watch the fan-out while it runs: `Alt+A` opens [Agent Hub](docs/agent-hub.md), where the roster shows current activity and usage for every subagent. Open one to read its live transcript, type a steering message, revive a parked worker, or kill a stuck one without aborting the parent session.
 
-_[观看录屏 ↗](https://omp.sh/clips/irc.mp4)_
+### 06 · A second model, watching every turn.
 
-想边跑边看扇出过程：`Alt+A` 打开 [Agent Hub](docs/agent-hub.md)，其中的名册会显示每个子 agent 的当前活动与用量。点开一个就能读它的实时转录、输入一条引导消息、唤醒已挂起的 worker，或在不必中止父会话的情况下杀掉卡死的 worker。
+Pair a reviewer model to the 'advisor' role and it reads every turn the main agent takes, injecting notes inline — a quiet aside, a concern, or a hard blocker. It runs on its own context and its own model, so it catches what the doer rushed past. The main agent sees the note and course-corrects, or tells you why it won't.
 
-### 06 · 第二个模型，盯住每一轮。
+![omp TUI: /advisor status shows the advisor running on openai-codex/gpt-5.5; after the main agent scopes a catch to ENOENT instead of swallowing every error, an amber 'Advisor 1 note (concern)' card warns the fix no longer matches the user's literal acceptance criterion.](https://omp.sh/clips/advisor-poster.webp)
 
-把一个 reviewer 模型配对到 'advisor' 角色，它会读主 agent 走的每一轮，并就地注入笔记——一句轻声提醒、一点担忧，或一个硬性阻断。它跑在自己的上下文和自己的模型上，因此能抓住干活者匆匆略过的东西。主 agent 看到笔记后会纠偏，或者告诉你它为何不纠。
+_[Watch the capture ↗](https://omp.sh/clips/advisor.mp4)_
 
-![omp TUI：/advisor 状态显示 advisor 运行在 openai-codex/gpt-5.5 上；主 agent 把一处 catch 收窄为只处理 ENOENT（而不是吞掉所有错误）之后，一张琥珀色的 “Advisor 1 note (concern)” 卡片提醒该修复已不再匹配用户字面上的验收标准。](https://omp.sh/clips/advisor-poster.webp)
+### 07 · Hand someone the link, they're in.
 
-_[观看录屏 ↗](https://omp.sh/clips/advisor.mp4)_
+/collab puts your live session on a relay and hands back a link — and a QR. A teammate joins from another terminal with omp join, or just opens it in a browser. Share read-write to pair on the same agent, or /collab view for a read-only link anyone can watch but no one can steer. Frames are sealed client-side; the relay never sees your keys.
 
-### 07 · 把链接递出去，人就进来了。
+![omp TUI: /collab view prints 'Collab session started!' with an omp join command, a my.omp.sh browser link, the note 'Anyone with this link can watch the session but cannot prompt the agent', and a large scannable QR code.](https://omp.sh/clips/collab-poster.webp)
 
-/collab 把你的实时会话放到中继上，返回一个链接——外加一个二维码。队友用 omp join 从另一个终端加入，或者直接在浏览器里打开。以读写方式共享，就能和同一个人在同一个 agent 上结对；或者用 /collab view 生成只读链接，任何人都能看，但谁都改不了。帧在客户端加密，中继永远看不到你的密钥。
+_[Watch the capture ↗](https://omp.sh/clips/collab.mp4)_
 
-![omp TUI：/collab 视图打印 'Collab session started!'，并给出 omp join 命令、my.omp.sh 浏览器链接、'Anyone with this link can watch the session but cannot prompt the agent' 的说明，以及一个可扫描的大二维码。](https://omp.sh/clips/collab-poster.webp)
+### 08 · Read a pdf on arxiv, why not?
 
-_[观看录屏 ↗](https://omp.sh/clips/collab.mp4)_
+web_search chains twenty-five ranked providers and hands whatever URLs it finds straight to read. Arxiv PDFs, GitHub pages, Stack Overflow threads come back as structured markdown with anchors intact — the same tool surface you use on local files. Cite, follow, quote, never lose where you came from.
 
-### 08 · 直接读 arxiv 上的 pdf，有何不可？
+![omp TUI: web_search returns 10 ranked Perplexity sources for inference-time compute scaling, the agent picks an arxiv paper, calls read https://arxiv.org/pdf/2604.10739v1, and summarizes the paper's headline result with real numbers.](https://omp.sh/clips/web-poster.webp)
 
-web_search 串联二十五个经过排序的 provider，把找到的 URL 直接交给 read。arxiv PDF、GitHub 页面、Stack Overflow 帖子都会以带完整锚点的结构化 markdown 返回——和你处理本地文件用的是同一套工具。可引用、可跟进、可摘录，永远不丢来路。
+_[Watch the capture ↗](https://omp.sh/clips/web.mp4)_
 
-![omp TUI：web_search 针对 inference-time compute scaling 返回 10 条排好序的 Perplexity 来源，agent 选中一篇 arxiv 论文，调用 read https://arxiv.org/pdf/2604.10739v1，并用真实数字总结该论文的核心结果。](https://omp.sh/clips/web-poster.webp)
+### 09 · Unapologetically native. Even on Windows.
 
-_[观看录屏 ↗](https://omp.sh/clips/web.mp4)_
+Other agents shell out to rg, grep, find, and bash. On many machines those binaries don't exist, and on the ones where they do, every call costs a fork-exec round-trip. omp links the real implementations into the process. ripgrep, glob, find: in-process. The bash is our own bash 5.3 engine — with sessions that survive across calls, and 58 command-line utilities (ls, sed, sort, xargs, even jq) ported into the builtins crate and run in-process, zero fork/exec. The same omp binary runs on macOS, Linux, and Windows — no WSL bridge.
 
-### 09 · 不折不扣的原生，Windows 上也是。
+### 10 · Code review with priorities and a verdict
 
-别的 agent 靠 shell 调用 rg、grep、find 和 bash。在很多机器上这些二进制根本不存在；即便存在，每次调用也要付出一次 fork-exec 往返的代价。omp 把真正的实现链接进进程。ripgrep、glob、find：进程内。bash 使用我们自研的 bash 5.3 引擎——它的会话能跨调用存活，另有 58 个命令行工具（ls、sed、sort、xargs，甚至 jq）被移植进 builtins crate 并在进程内运行，零 fork/exec。同一个 omp 二进制跑在 macOS、Linux 和 Windows 上——无需 WSL 桥。
+Get a clear verdict on whether the change ships, with every issue ranked P0 through P3 and scored for confidence. [/review](docs/slash-command-internals.md#15-bundled-command-note-review) spawns dedicated reviewer subagents that sweep branches, single commits, or uncommitted work in parallel. You tackle what blocks release first; nothing important hides in a wall of prose.
 
-### 10 · 带优先级和结论的代码审查
+Want to steer the review yourself? `/annotate code-review` opens the diff so you can pin notes to lines before the reviewers run. `/annotate` also takes the latest reply, a session message, a file, or quoted text and pastes your notes into the prompt. See [`/annotate`](docs/slash-command-internals.md#12-bundled-command-note-annotate).
 
-对这次改动能否发布给出明确结论，每个问题都按 P0 到 P3 分级并标注置信度。[/review](docs/slash-command-internals.md#15-bundled-command-note-review) 会派出专门的 reviewer 子 agent，并行扫描分支、单个 commit 或未提交的改动。你先处理阻塞发布的问题；重要的事不会淹没在一整面散文中。
+### 11 · Hashline: edit by content hash
 
-想自己掌舵这次审查？`/annotate code-review` 会打开 diff，让你在 reviewer 跑之前把批注钉到具体行上。`/annotate` 也接受最新回复、某条会话消息、一个文件或引用的文本，把你的批注粘进提示词。见 [`/annotate`](docs/slash-command-internals.md#12-bundled-command-note-annotate)。
+Perfect edits, fewer tokens. The model points at anchors instead of retyping the lines it wants to change, so whitespace battles and string-not-found loops just stop happening. Edit a stale file and the anchors diverge — we reject the patch before it corrupts anything. Grok 4 Fast spends 61% fewer output tokens on the same work.
 
-### 11 · Hashline：按内容哈希编辑
+### 12 · GitHub is just another filesystem
 
-完美的编辑，更少的 token。模型只需指向锚点，而不用重新打出想改的那些行，于是空白字符之争和「找不到字符串」的死循环从此消失。编辑一个已过期的文件时锚点会对不上——我们会在补丁破坏任何东西之前拒绝它。同样的工作，Grok 4 Fast 的输出 token 少了 61%。
+Other harnesses bolt on gh_issue_view, gh_pr_view, gh_search — each with its own parameters the agent has to learn and you have to debug. We skipped that. read already handles paths; PRs are paths. One interface to teach the model, one surface to keep correct.
 
-### 12 · GitHub 不过是另一个文件系统
+### 13 · Memory the agent curates
 
-别的 harness 外挂了 gh_issue_view、gh_pr_view、gh_search——每个都有自己的参数，agent 得学，你得出力调试。我们跳过了这一步。read 本来就处理路径；PR 也是路径。只需教模型一个接口，只需维护一个正确的面。
+The agent remembers your codebase between sessions. It writes facts mid-run with retain, captures reusable lessons with learn, pulls them back with recall, and compresses each session into a mental model that loads on the first turn of the next one. Pick the engine with `memory.backend` — local, Hindsight, or Mnemopi. Project-scoped by default, so what it learns about this repo stays with this repo.
 
-### 13 · 由 agent 亲自打理的记忆
+### 14 · ACP: editor-drivable agent
 
-agent 会跨会话记住你的代码库。它在运行中用 retain 写入事实，用 learn 记下可复用的经验，再用 recall 把它们取回来，并把每个会话压缩成一份心智模型，在下一个会话的第一轮加载。用 `memory.backend` 选择引擎——local、Hindsight 或 Mnemopi。默认按项目隔离，因此它学到的关于这个仓库的东西就留在这个仓库里。
+Run omp inside Zed and you get the same agent you drive from the terminal — reading the buffer you're actually looking at, writing through the editor's save path, spawning shells in the editor's terminal. Destructive tools pause for a permission prompt you can answer once and forget. No bridge, no plugin, no second brain to keep in sync.
 
-### 14 · ACP：可由编辑器驱动的 agent
+### 15 · Inherits what your other tools already wrote
 
-在 Zed 里运行 omp，你得到的是和终端里驱动的一模一样的 agent——它读你正看着的那个缓冲区，通过编辑器的保存路径写入，在编辑器的终端里启动 shell。破坏性工具会停下来弹出权限提示，你回答一次就可以忘了它。没有桥、没有插件，也没有需要保持同步的第二个大脑。
+Every other agent ships an importer and expects you to convert. omp reads the eight formats already on disk in their native shape — Cursor MDC, Cline .clinerules, Codex AGENTS.md, Copilot applyTo, and the rest. No migration script, no YAML-to-TOML port, no "supported subset" footnotes. The config your team wrote last quarter still works tonight.
 
-### 15 · 直接继承你其他工具已写下的东西
+### 16 · omp commit: atomic splits, validated messages
 
-其他 agent 都附带一个导入器，指望你去做转换。omp 直接以原生形态读取磁盘上已有的八种格式——Cursor MDC、Cline .clinerules、Codex AGENTS.md、Copilot applyTo，以及其他。不需要迁移脚本，不需要 YAML 转 TOML，也没有 "受支持的子集" 这类脚注。你们团队上个季度写下的配置，今晚照样能用。
+omp reads the working tree through git_overview, git_file_diff, and git_hunk, then splits unrelated changes into atomic commits ordered by their dependencies. Cycles are rejected before anything is written. Source files score above tests, docs, and configs, so the headline commit is the one that matters. Lock files are excluded from analysis entirely.
 
-### 16 · omp commit：原子拆分，经过校验的提交信息
+### 17 · Read PRs. _Walk skills._ Pull JSON out of subagents.
 
-omp 通过 git_overview、git_file_diff 和 git_hunk 读取工作区，然后把互不相关的改动拆成按依赖关系排序的原子 commit。存在环的会被拒绝，任何东西都不会被写入。源文件的权重高于测试、文档和配置，因此头条 commit 就是真正重要的那个。锁文件完全排除在分析之外。
+Sixteen internal schemes — `pr://`, `issue://`, `agent://`, `skill://`, `ssh://`, and the rest — resolve transparently inside every FS-shaped tool the agent already calls. `read pr://1428` returns the same shape as `read src/foo.ts`. `grep` walks a diff like a directory. `agent://<id>/findings.0.path` pulls a field out of a subagent's output by path.
 
-### 17 · 读 PR。_遍历 skills。_ 从子 agent 里取出 JSON。
+### 18 · Conflict resolution, made easy.
 
-十六种内部 scheme——`pr://`、`issue://`、`agent://`、`skill://`、`ssh://` 等等——会在 agent 已经调用的每个 FS 形态的工具中透明解析。`read pr://1428` 返回的形状与 `read src/foo.ts` 一致。`grep` 能像遍历目录一样遍历 diff。`agent://<id>/findings.0.path` 按路径从子 agent 的输出中取出某个字段。
+Each merge conflict becomes one URL. The agent writes `@theirs`, `@ours`, or `@base` to `conflict://N` and the file resolves cleanly. Bulk form: `conflict://*`.
 
-### 18 · 冲突解决，从此简单。
+![omp TUI: ✓ Read src/session.ts (⚠ 1 conflict), then ✓ Write conflict://1 · 1 line with content @theirs, then a confirmation 'Resolved.'](https://omp.sh/clips/conflict-poster.webp)
 
-每个合并冲突都变成一个 URL。agent 把 `@theirs`、`@ours` 或 `@base` 写入 `conflict://N`，文件就干净地解决了。批量形式：`conflict://*`。
+_[Watch the capture ↗](https://omp.sh/clips/conflict.mp4)_
 
-![omp TUI：✓ Read src/session.ts（⚠ 1 处冲突），随后 ✓ Write conflict://1 · 1 line，内容为 @theirs，最后给出确认 'Resolved.'](https://omp.sh/clips/conflict-poster.webp)
+### 19 · Preview, then accept.
 
-_[观看录屏 ↗](https://omp.sh/clips/conflict.mp4)_
+`ast_edit` returns a _(proposed)_ card with the replacement count. The change is staged. The agent runs `resolve "<reason>"`; the TUI turns it into an **Accept** card and the disk move happens — atomic, all or nothing.
 
-### 19 · 先预览，再接受。
+![omp TUI: ✓ AST Edit: console.log($X) (proposed) 3 replacements · 1 file, then ✓ Accept: 3 replacements in 1 file (AST Edit), followed by 'Applied 3 replacements in src/auth.ts.'](https://omp.sh/clips/codemod-poster.webp)
 
-`ast_edit` 会返回一张 _(proposed)_ 卡片，附上替换数量。改动处于暂存状态。agent 运行 `resolve "<reason>"`；TUI 把它变成一张 **Accept** 卡片，随后才原子写入磁盘——要么全部成功，要么不写入。
+_[Watch the capture ↗](https://omp.sh/clips/codemod.mp4)_
 
-![omp TUI：✓ AST Edit: console.log($X)（proposed）3 replacements · 1 file，随后 ✓ Accept: 3 replacements in 1 file (AST Edit)，最后显示 'Applied 3 replacements in src/auth.ts.'](https://omp.sh/clips/codemod-poster.webp)
+### 20 · Drives a _real browser_. _Or your Slack?_
 
-_[观看录屏 ↗](https://omp.sh/clips/codemod.mp4)_
+Eval's `browser.open(...)` returns a tab handle with direct navigation, inspection, interaction, and element helpers; `tab.run(...)` handles custom JavaScript. It drives Chromium or Electron in an isolated tab runtime. Stealth is on by default, while the browser relay can adopt Chrome tabs you already have open without stealing focus.
 
-### 20 · 驱动_真正的浏览器_。_或者你的 Slack？_
+### 21 · Hands on the desktop itself
 
-Eval 的 `browser.open(...)` 返回一个 tab 句柄，带有直接的导航、检查、交互和元素操作辅助方法；`tab.run(...)` 负责自定义 JavaScript。自动选择自管后端时，OMP 在 WebKit 可用且满足窗口要求时优先使用它，否则使用 Chromium；也可通过 CDP 接入 Electron 应用。自管 Chromium 默认使用独立的临时用户数据目录；浏览器 relay 接入已有 Chrome 标签页时，会沿用该标签页的会话状态，不抢走焦点。
+Eval's `computer` helpers — `computer.window(...)`, `win.screenshot()`, `win.ax()`, `el.press()`, plus `computer.run(fnOrCode, options)` for multi-step scripts — control the real host: enumerate windows and displays, capture screenshots, send native input, walk the OS accessibility tree, and use the clipboard. It exposes no browser DOM.
 
-### 21 · 亲手接管桌面本身
+## Whatever the task needs, _it's already in the box_.
 
-Eval 的 `computer` 辅助方法——`computer.window(...)`、`win.screenshot()`、`win.ax()`、`el.press()`，外加用于多步脚本的 `computer.run(fnOrCode, options)`——控制真实主机：枚举窗口与显示器、截取屏幕、发送原生输入、遍历操作系统无障碍树，并使用剪贴板。它不暴露任何浏览器 DOM。
+Core tools live in the same namespace as `read` and `bash`. Pin the active set with `--tools read,edit,bash,…`; rarely used discoverable tools mount as bash commands when `tools.commands` is enabled — run `<tool> <args>` with the bash tool, and `<tool> --help` for schema-derived usage instead of schemas shipped on every request.
 
+**Files & search**
 
-## 无论任务需要什么，_它都已经内置_。
+- `read` — files, dirs, archives, SQLite, PDFs, notebooks, URLs, remote `ssh://` paths, and internal `://` schemes through one path.
+- `write` — create or overwrite a file, archive entry, or SQLite row.
+- `edit` — hashline patches with content-hash anchors and stale-anchor recovery.
+- `ast_edit` — structural rewrites previewed before apply, via ast-grep.
+- `ast_grep` — structural code queries over 50+ tree-sitter grammars.
+- `grep` — regex over files, globs, and internal URLs.
+- `glob` — glob-based path lookup; reach for `grep` when you need content matches.
 
-核心工具与 `read`、`bash` 处于同一命名空间。用 `--tools read,edit,bash` 选择内置工具；这不是工具白名单，不会因此禁用已配置的 MCP 工具。启用 `tools.commands` 时，不常用的可发现工具挂载为 Bash 命令：用 Bash 工具运行 `<tool> <args>`，用 `<tool> --help` 查看由 schema 生成的用法，无需在每次模型请求中附带 schema。
+**Runtime**
 
-**文件与搜索**
+- `bash` — workspace shell with 46 in-process coreutils, optional PTY, and background-job dispatch.
+- `eval` — persistent Python and JavaScript cells with shared prelude and tool re-entry.
 
-- `read` — 通过一个路径读取文件、目录、压缩包、SQLite、PDF、notebook、URL、远程 `ssh://` 路径以及内部 `://` 协议。
-- `write` — 创建或覆盖文件、压缩包条目或 SQLite 行。
-- `edit` — 带内容哈希锚点与陈旧锚点恢复的 hashline 补丁。
-- `ast_edit` — 借助 ast-grep 做结构化重写，应用前先预览。
-- `ast_grep` — 基于 50+ tree-sitter 语法的结构化代码查询。
-- `grep` — 在文件、glob 与内部 URL 上做正则匹配。
-- `glob` — 基于 glob 的路径查找；需要内容匹配时改用 `grep`。
+**Code intelligence**
 
-**运行时**
+- `lsp` — diagnostics, navigation, symbols, renames, code actions, raw requests.
+- `debug` — drive a DAP session — breakpoints, stepping, threads, stack, variables.
+- `security_scan` — plan and run native security reviews; drives Codex Security cloud scans.
 
-- `bash` — 工作区 shell，内置 46 个进程内 coreutils，可选 PTY，支持后台任务派发。
-- `eval` — 持久化的 Python 与 JavaScript 单元，共享 prelude 并支持工具重入。
+**Coordination**
 
-**代码智能**
+- `task` — fan out subagents in parallel, optionally workspace-isolated.
+- `wait` — block until the next background result, peer message, or steering interrupt; message peers and control jobs via `agent://` and `proc://`.
+- `todo` — ordered mutations over the session todo list with phase tracking.
+- `ask` — HTML form follow-ups (radios, checkboxes, selects, text) for interactive runs.
 
-- `lsp` — 诊断、导航、符号、重命名、代码操作、原始请求。
-- `debug` — 驱动 DAP 会话 —— 断点、单步、线程、栈、变量。
-- `security_scan` — 规划并运行原生安全审查；驱动 Codex Security 云端扫描。
+**Desktop & web**
 
-**协调**
+- `browser` — Puppeteer tabs over headless Chromium, CDP-attached apps, or your own Chrome via the relay.
+- `computer` — persistent JS against the host desktop: windows, screenshots, native input, AX tree, clipboard.
+- `web_search` — one query across configured providers, returning answer plus citations.
+- `github` — GitHub CLI ops — repo, PR, issues, code search, Actions run-watch.
+- `generate_image` — generate or edit raster images via Gemini, GPT, or xAI Grok image models.
+- `tts` — text-to-speech via xAI Grok Voice — five built-in voices, WAV or MP3.
 
-- `task` — 并行展开子 agent，可选工作区隔离。
-- `wait` — 阻塞到下一个后台结果、同伴消息或转向中断；通过 `agent://` 与 `proc://` 给同伴发消息并控制任务。
-- `todo` — 对会话 todo 列表做有序变更，并跟踪阶段。
-- `ask` — 面向交互式运行的 HTML 表单追问（单选、多选、下拉与文本）。
+**Memory & skills**
 
-**桌面与 Web**
+- `checkpoint` — mark conversation state for a later collapse-and-report.
+- `rewind` — prune exploratory context, keep a concise report.
+- `retain` — queue durable facts into the active memory bank.
+- `recall` — search the memory bank for raw memories.
+- `reflect` — synthesize an answer over the bank.
+- `memory_edit` — update, forget, or invalidate stored memories by id.
+- `learn` — capture a reusable lesson; optionally promote it into a managed skill.
+- `manage_skill` — create, update, or delete an isolated managed skill.
 
-- `browser`（`eval` 命名空间）— 操作自管 WebKit 或 Chromium、通过 CDP 接入的应用，或经 relay 使用已有 Chrome 标签页。
-- `computer`（`eval` 命名空间）— 用持久化 JavaScript 操作宿主桌面：窗口、截图、原生输入、无障碍树和剪贴板。
+Setting-gated, off by default: `github`, `security_scan`, `generate_image`, `tts`, `checkpoint`, `rewind`, and the memory tools (`retain`/`recall`/`reflect`/`memory_edit`, per `memory.backend`).
 
-`browser` 和 `computer` 都通过 `eval` 使用，不是可用 `--tools` 单独启用的顶层工具。
+[Full reference →](https://omp.sh/docs/tools)
 
-- `web_search` — 按顺序尝试搜索后端，返回首个可用结果及其引用（如有）。
-- `github` — GitHub CLI 操作 —— 仓库、PR、issue、代码搜索、Actions 运行监视。
-- `generate_image` — 通过 Gemini、GPT 或 xAI Grok 图像模型生成或编辑位图。
-- `tts` — 按 `speech` 模型角色合成语音：本机 Phonon 输出 WAV，xAI Grok Voice 或 OpenAI 语音后端可输出 WAV 或 MP3。
+### Prompt controls
 
-**记忆与 skills**
+Standalone, lowercase words opt a turn into specialized agent behavior:
 
-- `checkpoint` — 标记对话状态，以便之后折叠并汇报。
-- `rewind` — 裁剪探索性上下文，保留一份简明报告。
-- `retain` — 把持久事实排入当前 memory bank。
-- `recall` — 在 memory bank 中检索原始记忆。
-- `reflect` — 基于 memory bank 综合作答。
-- `memory_edit` — 按 id 更新、遗忘或作废已存储的记忆。
-- `learn` — 记录可复用的经验；可选将其提升为受管理的 skill。
-- `manage_skill` — 创建、更新或删除一个隔离的受管理 skill。
+- `ultrathink` — request careful multi-step reasoning and the highest supported automatic thinking effort.
+- `chillax` — request brief reasoning; on models with per-message effort, drop thinking to the lowest effort, even mid-turn.
+- `orchestrate` — run substantial independent work through parallel subagents and verify each phase.
+- `workflowz` — build a deterministic multi-subagent workflow with the active `task` tool.
 
-需要相应设置才启用，默认关闭：`github`、`security_scan`、`generate_image`、`tts`、`checkpoint`、`rewind`，以及各记忆工具（`retain`/`recall`/`reflect`/`memory_edit`，取决于 `memory.backend`）。
+They trigger only in prose, not inside code spans, fenced code blocks, XML/HTML sections, identifiers, or paths. See [Magic keywords](docs/magic-keywords.md) for exact matching rules and configuration.
 
-[完整参考 →](https://omp.sh/docs/tools)
+### Session controls
 
-### 提示词控制
+Slash commands shift how a whole session runs:
 
-独立的小写单词可让某一轮对话切换到专门的 agent 行为：
+- `/vibe` — enter [Vibe mode](docs/vibe-mode.md): act as a director driving persistent `fast`/`good` worker sessions with a `read`-only toolset.
+- `/fresh` — reset the provider stream state (stale prompt cache, wedged stream) without changing the local transcript. See [Session operations](docs/session-operations-export-share-fork-resume.md#fresh).
 
-- `ultrathink` — 要求谨慎的多步推理，并使用所支持的最高自动思考强度。
-- `chillax` — 要求简短推理；对于支持逐消息思考强度的模型，将强度降至最低，轮次执行中也可生效。
-- `orchestrate` — 通过并行子 agent 执行大量独立工作，并逐阶段验证。
-- `workflowz` — 用当前 `task` 工具构建确定性的多子 agent 工作流。
+## Sixty-plus providers, a thousand models, _one /model away_.
 
-它们只在正文中触发，出现在行内代码、围栏代码块、XML/HTML 区段、标识符或路径中都不会触发。精确的匹配规则与配置见 [魔法关键词](docs/magic-keywords.md)。
+Nine roles route work by intent. `default` for normal turns. `smol` for cheap subagent fan-out. `slow` for deep reasoning. `plan` for plan mode. `commit` for changelogs. Plus `vision`, `task`, `advisor`, and `tiny` for their namesakes. Override at launch with `--smol`, `--slow`, or `--plan`; cycle through the configured models for the active role with `Ctrl+P`. Swap the active model mid-session with the `/model` slash command.
 
-### 会话控制
+Auth tags below: `oauth` signs in with your provider account, `plan` routes through a coding-plan subscription, `local` runs against a local server with the key optional.
 
-斜杠命令会改变整个会话的运行方式：
+### Frontier APIs
 
-- `/vibe` — 进入 [Vibe 模式](docs/vibe-mode.md)：充当导演，驱动持久化的 `fast`/`good` 工作会话，且只使用 `read` 工具集。
-- `/fresh` — 重置 provider 流状态（过期的 prompt 缓存、卡住的流），但不改变本地对话记录。见[会话操作](docs/session-operations-export-share-fork-resume.md#fresh)。
-
-
-## 六十多个 provider，上千个模型，_只差一个 /model_。
-
-九个角色按意图路由工作。`default` 用于常规轮次。`smol` 用于廉价的子 agent 扇出。`slow` 用于深度推理。`plan` 用于计划模式。`commit` 用于变更日志。另有与名字对应的 `vision`、`task`、`advisor` 和 `tiny`。启动时可用 `--smol`、`--slow` 或 `--plan` 覆盖；用 `Ctrl+P` 在当前角色已配置的模型之间循环。会话中可用 `/model` 斜杠命令切换当前模型。
-
-下文认证标签：`oauth` 用你的 provider 账号登录，`plan` 经由 coding plan 订阅路由，`local` 连接本地服务器运行、密钥可选。
-
-### 前沿 API
-
-直连 API 与网关。可按角色混用 provider。
+Direct APIs and gateways. Mix providers per role.
 
 Anthropic `oauth` · OpenAI · OpenAI Codex `oauth` · Google Gemini · Google Vertex · Google Antigravity `oauth` · xAI · SuperGrok `oauth` · DeepSeek · Mistral · Groq · Cerebras · SambaNova · Fireworks · Together · Modular · Baseten · Chutes · DeepInfra · ArkaneCloud · Hugging Face · NVIDIA · Meta · Inception · Amazon Bedrock · Azure OpenAI · SiliconFlow · GMI Cloud · CoreWeave · Sakana AI · Command Code · Charm Hyper · StepFun · Helmcode · OpenRouter · Synthetic · Vercel AI Gateway · Cloudflare AI Gateway · Wafer Serverless · Scaleway · Otari · Refuseless
 
-### 编码套餐
+### Coding plans
 
-走订阅路由。`/login` 会把会话绑定到订阅。
+Subscription-routed. `/login` attaches the session.
 
 Cursor `oauth` · GitHub Copilot `oauth` · GitLab Duo · Devin `oauth` · Kiro `oauth` · Kimi Code `plan` · Moonshot · MiniMax Coding Plan `plan` · MiniMax Coding Plan CN `plan` · Alibaba Coding Plan `plan` · Qwen Portal `oauth` · Z.AI / GLM Coding Plan `plan` · Zhipu Coding Plan `plan` · Xiaomi MiMo · Qianfan · Umans `plan` · NanoGPT · Novita · Venice · Kilo · ZenMux · OpenCode Go · OpenCode Zen
 
-### 自行运行
+### Run it yourself
 
-兼容 OpenAI 的 `/v1/models`。本地实例无需密钥。
+OpenAI-compatible `/v1/models`. Local instances skip the key.
 
 Ollama `local` · Ollama Cloud · LM Studio `local` · llama.cpp `local` · vLLM `local` · LiteLLM · Bifrost
 
-### 自定义 OpenAI 兼容 provider
+### Custom OpenAI-compatible providers
 
-在 `~/.omp/agent/models.yml` 中定义自定义 provider：
+Define custom providers in `~/.omp/agent/models.yml`:
 
 ```yaml
 providers:
-  spark:
-    baseUrl: http://192.168.10.223:8000/v1
-    api: openai-completions
-    apiKey: dummy
-    models:
-      - id: minimax-m3
-        name: MiniMax M3
-        contextWindow: 100000
-        maxTokens: 32000
+   spark:
+      baseUrl: http://192.168.10.223:8000/v1
+      api: openai-completions
+      apiKey: dummy
+      models:
+         - id: minimax-m3
+           name: MiniMax M3
+           contextWindow: 100000
+           maxTokens: 32000
 ```
 
-运行 `omp models spark` 验证能否发现模型。然后运行 `omp setup`，在默认模型步骤里选中它；也可以在会话中打开 `/model`，把它指派给 `default` 角色。
+Run `omp models spark` to verify discovery. Then run `omp setup` and choose the model in the default-model step, or open `/model` in a session and assign it to the `default` role.
 
-若想跳过选择器直接预设默认模型，把选择器写入 `~/.omp/agent/config.yml`：
+To preconfigure the default without the picker, add the selector to `~/.omp/agent/config.yml`:
 
 ```yaml
 modelRoles:
-  default: spark/minimax-m3
+   default: spark/minimax-m3
 ```
 
-### 让路由好用的四个开关
+### Four knobs that make routing useful
 
-- **自定义 provider** — 任何使用 `openai-completions`、`openai-responses`、`openai-codex-responses`、`azure-openai-responses`、`anthropic-messages`、`bedrock-converse-stream`、`google-generative-ai`、`google-gemini-cli`、`google-vertex`、`typesafe`、`openrouter-decisions`、`openai-decisions` 或 `workers-ai-systemone`（后四个是 judge API）协议的端点，都能在 `~/.omp/agent/models.yml` 中声明。
-- **回退链** — 在 `retry.fallbackChains` 下按角色或按模型配置链。主 provider 抛出 429 或撞上配额墙时，链中下一项接管本轮剩余部分——冷却结束后恢复。
-- **按路径限定模型** — 给 `enabledModels` 和 `disabledProviders` 的条目加上 `path:` 前缀，就能只对某个仓库固定另一套模型，而不必改动全局配置。限定条目覆盖该路径及其下所有内容。
-- **轮换凭据** — 为同一个 provider 堆叠多个 API key，运行时按会话亲和性轮换，并对单个凭据退避。当一个 key 撑不到中午就会烧光配额时尤其有用。
+- **Custom providers** — Declare anything that speaks `openai-completions`, `openai-responses`, `openai-codex-responses`, `azure-openai-responses`, `anthropic-messages`, `bedrock-converse-stream`, `google-generative-ai`, `google-gemini-cli`, `google-vertex`, `typesafe`, `openrouter-decisions`, `openai-decisions`, or `workers-ai-systemone` (the judge APIs) in `~/.omp/agent/models.yml`.
+- **Fallback chains** — Per-role or per-model chains under `retry.fallbackChains`. When the primary throws 429s or hits a quota wall, the next entry takes the rest of the turn — restored on cooldown.
+- **Path-scoped models** — Scope `enabledModels` and `disabledProviders` entries to a `path:` prefix to pin a different model set on one repo without touching the global config. Scoped entries cover the path and everything under it.
+- **Round-robin credentials** — Stack API keys per provider and the runtime rotates with session affinity and per-credential backoff. Useful when one key would burn its quota by lunch.
 
-完整的 provider 与路由参考见 [omp.sh/docs/providers](https://omp.sh/docs/providers)。
+Full provider & routing reference at [omp.sh/docs/providers](https://omp.sh/docs/providers).
 
-## 二十五个后端。_一个 agent 早就会用的工具_。
+## Twenty-five backends. _One tool the agent already knows_.
 
-`web_search` 是内置的，不是外挂上去的。`auto` 会依次走过一个二十五个 provider 组成的链路；如果你已经在为某家付费，可以按名字固定它。每一次命中背后，站点感知的抽取都会把 GitHub、各类 registry、arXiv、Stack Overflow 和文档转成结构化 markdown——锚点与链接目标都得以保留。
+`web_search` is built in, not bolted on. `auto` walks a twenty-five-provider chain; pin one by name if you already pay for it. Behind every hit, site-aware extraction turns GitHub, registries, arXiv, Stack Overflow, and docs into structured markdown — anchors and link targets survive.
 
-### 搜索 provider
+### Search providers
 
-二十五个后端。固定其中一个，或让 `auto` 按顺序走完整条链路。
+Twenty-five backends. Pin one, or let `auto` walk the chain in order.
 
-| provider     | 认证                                      |
+| provider     | auth                                      |
 | ------------ | ----------------------------------------- |
-| `auto`       | 链路                                      |
-| `perplexity` | `PERPLEXITY_API_KEY`（匿名回退）          |
+| `auto`       | chain                                     |
+| `perplexity` | `PERPLEXITY_API_KEY` (anonymous fallback) |
 | `gemini`     | oauth                                     |
 | `anthropic`  | oauth                                     |
 | `codex`      | oauth                                     |
-| `xai`        | oauth 或 `XAI_API_KEY`                    |
+| `xai`        | oauth or `XAI_API_KEY`                    |
 | `zai`        | `ZAI_API_KEY`                             |
-| `exa`        | `EXA_API_KEY`（或 mcp）                   |
+| `exa`        | `EXA_API_KEY` (or mcp)                    |
 | `tinyfish`   | `TINYFISH_API_KEY`                        |
-| `keenable`   | `KEENABLE_API_KEY`（无密钥回退）         |
+| `keenable`   | `KEENABLE_API_KEY` (keyless fallback)     |
 | `sofya`      | `SOFYA_API_KEY`                           |
 | `jina`       | `JINA_API_KEY`                            |
 | `kagi`       | `KAGI_API_KEY`                            |
 | `tavily`     | `TAVILY_API_KEY`                          |
-| `firecrawl`  | `FIRECRAWL_API_KEY`（无密钥回退）         |
+| `firecrawl`  | `FIRECRAWL_API_KEY` (keyless fallback)    |
 | `brave`      | `BRAVE_API_KEY`                           |
-| `kimi`       | `/login kimi-code` 或搜索密钥             |
+| `kimi`       | `/login kimi-code` or search key          |
 | `parallel`   | `PARALLEL_API_KEY`                        |
 | `synthetic`  | `SYNTHETIC_API_KEY`                       |
-| `searxng`    | 自托管                                    |
-| `duckduckgo` | 无密钥                                    |
-| `startpage`  | 无密钥                                    |
-| `google`     | 无密钥（浏览器）                          |
-| `ecosia`     | 无密钥（浏览器）                          |
-| `mojeek`     | 无密钥（浏览器）                          |
-| `public`     | 无密钥（聚合以上全部）                    |
+| `searxng`    | self-hosted                               |
+| `duckduckgo` | no key                                    |
+| `startpage`  | no key                                    |
+| `google`     | no key (browser)                          |
+| `ecosia`     | no key (browser)                          |
+| `mojeek`     | no key (browser)                          |
+| `public`     | no key (all of the above, consolidated)   |
 
-Exa 也支持通过 `/login exa` 保存 API key；显式选择无密钥时会走 public MCP 回退。
+Exa also accepts a stored API key through `/login exa`; explicit keyless selection uses the public MCP fallback.
 
-### 专用处理器
+### Specialised handlers
 
-agent 拿到的是结构化内容，而不是被剥光的 HTML。
+The agent gets structured content, not stripped HTML.
 
-- **代码托管** — github, gitlab
-- **包仓库** — npm, PyPI, crates.io, Hex, Hackage, NuGet, Maven, RubyGems, Packagist, pub.dev, Go packages
-- **研究来源** — arxiv, semantic scholar
-- **论坛** — stack overflow, reddit, hn
-- **文档** — mdn, readthedocs, docs.rs
+- **Code hosts** — github, gitlab
+- **Package registries** — npm, PyPI, crates.io, Hex, Hackage, NuGet, Maven, RubyGems, Packagist, pub.dev, Go packages
+- **Research sources** — arxiv, semantic scholar
+- **Forums** — stack overflow, reddit, hn
+- **Docs** — mdn, readthedocs, docs.rs
 
-页面会转成 markdown，链接结构保持完整。agent 可以引用、跟进和摘录，而不会丢失锚点。
+Pages convert to markdown with link structure intact. The agent can cite, follow, and quote without losing anchors.
 
-### 安全数据库
+### Security databases
 
-漏洞查询返回的是厂商数据，而不是博客摘要。
+Vuln lookups answer with vendor data, not blog summaries.
 
-- **NVD** — 美国国家漏洞数据库
-- **OSV** — 开源漏洞源
-- **CISA KEV** — 已知被利用漏洞
+- **NVD** — national vulnerability database
+- **OSV** — open source vuln feed
+- **CISA KEV** — known exploited vulns
 
-[`web_search` 参考 ↗](https://omp.sh/docs/tools#web_search)
+[`web_search` reference ↗](https://omp.sh/docs/tools#web_search)
 
+## Roughly **~80,000** lines of Rust, doing the work other harnesses shell out for.
 
-## 约 **~80,000** 行 Rust 代码，包办了其他 harness 靠 shell 出去完成的工作。
+Six crates, one platform-tagged N-API addon. Search, shell, AST, highlight, PTY, desktop control, image decode, BPE counting — all in-process on the libuv pool. No fork/exec on the hot path. The shell is our own bash 5.3 engine, and 58 command-line utilities — coreutils, findutils, sed, jq, ripgrep-backed grep, fd, diff, moreutils — are ported into the builtins crate and compiled straight into the shell.
 
-六个 crate，一个带平台标签的 N-API addon。搜索、shell、AST、高亮、PTY、桌面控制、图片解码、BPE 计数 —— 全部在进程内、跑在 libuv 线程池上。热路径上没有 fork/exec。shell 使用我们自研的 bash 5.3 引擎，58 个命令行工具 —— coreutils、findutils、sed、jq、ripgrep 驱动的 grep、fd、diff、moreutils —— 全部移植进 builtins crate，直接编译进 shell。
+- Crates: `omp-natives`, `omp-shell`, `omp-ast`, `omp-iso`, `omp-voice`, `omp-xfs`
+- Platforms: `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `win32-x64`, `win32-arm64` — x64 ships dual AVX2 and baseline binaries
 
-- Crates：`omp-natives`、`omp-shell`、`omp-ast`、`omp-iso`、`omp-voice`、`omp-xfs`
-- Platforms：`linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`、`win32-x64`、`win32-arm64` —— x64 同时提供 AVX2 与 baseline 两种二进制
+Per crate, code lines only:
 
-按 crate 统计，只算代码行：
-| Crate         | 作用                                                                                   |   ~LoC |
-| ------------- | -------------------------------------------------------------------------------------- | -----: |
-| omp-shell   | 内嵌 bash 引擎 · 持久会话 · 进程内 coreutils 调度 · 输出 minimizer | 38,000 |
-| omp-natives | N-API 接口层 —— 即下表所有模块 | 25,000 |
-| omp-xfs     | 并行遍历 · 目录列表缓存 · glob · 供 natives 与 shell rg/grep/fd 共用的正则搜索 | 11,400 |
-| omp-iso     | 工作区隔离 · apfs · btrfs · zfs · reflink · overlayfs · projfs · rcopy | 3,300 |
-| omp-ast     | tree-sitter + ast-grep 匹配、代码块定位、结构化摘要 | 2,900 |
-| omp-voice   | 音频采集/播放 · Opus · 实时 WebRTC | 1,000 |
+| Crate      | What it does                                                                           |   ~LoC |
+| ---------- | -------------------------------------------------------------------------------------- | -----: |
+| omp-shell   | Embedded bash engine · persistent sessions · in-process coreutils dispatch · minimizer | 38,000 |
+| omp-natives | The N-API surface — every module in the table below                                    | 25,000 |
+| omp-xfs  | Parallel walker · listing cache · glob · regex search for natives and shell rg/grep/fd | 11,400 |
+| omp-iso     | Workspace isolation · apfs · btrfs · zfs · reflink · overlayfs · projfs · rcopy        |  3,300 |
+| omp-ast     | tree-sitter + ast-grep matching, block resolution, structural summaries                |  2,900 |
+| omp-voice   | Audio capture/playback · Opus · live WebRTC                                            |  1,000 |
 
-`omp-natives` 内部的逐模块拆分（省略胶水代码与测试）：
+Inside `omp-natives`, the per-module breakdown (glue and tests omitted):
 
-| Module        | 作用                                                                              | 依赖                                |   ~LoC |
+| Module        | What it does                                                                      | Powered by                                |   ~LoC |
 | ------------- | --------------------------------------------------------------------------------- | ----------------------------------------- | -----: |
-| desktop       | 窗口/显示器枚举 · 截图 · 原生输入 · 供 `computer` 使用的 AX 树                   | xcap · enigo · OS AX FFI                  | 10,600 |
-| grep          | 正则搜索 · 并行/串行 · glob 与类型过滤 · 模糊查找             | grep-regex · grep-searcher                |  3,280 |
-| text          | 感知 ANSI 的宽度计算 · 截断 · 按列切分 · 保留 SGR 的换行                  | unicode-width · segmentation              |  2,070 |
-| snapcompact   | 为上下文压缩做位图帧栅格化 + PNG 编码                   | image · png                               |  1,760 |
-| keys          | Kitty 键盘协议，回退到 xterm · PHF 完美哈希查找             | phf                                       |  1,740 |
-| ast           | ast-grep 模式匹配与结构化重写                                 | ast-grep-core                             |  1,510 |
-| diff          | 供工具与预览使用的结构化文件 diff                                    | in-tree                                   |  1,030 |
-| pty           | 为 sudo · ssh 交互式提示分配原生 PTY                          | portable-pty                              |    630 |
-| crash_handler | 原生崩溃捕获与上报                                                | in-tree                                   |    610 |
-| highlight     | 语法高亮 · 11 个语义类别 · 30+ 个别名                        | syntect                                   |    550 |
-| appearance    | Mode 2031 + 通过 CoreFoundation FFI 获取 macOS 原生深色/浅色                        | core-foundation                           |    450 |
-| task          | 在 libuv 线程池上跑阻塞工作 · 取消 · 超时 · 性能剖析           | tokio · napi                              |    440 |
-| glob          | 用 glob 做发现 · 类型过滤 · 按 mtime 排序 · 遵循 gitignore               | ignore · globset                          |    430 |
-| fd            | 用于替代 find 工具的文件系统遍历器                                       | ignore                                    |    385 |
-| clipboard     | 系统剪贴板文本复制与图片读取 · 无需 xclip/pbcopy                  | arboard                                   |    370 |
-| workspace     | 一次遍历完成工作区遍历、gitignore 与 AGENTS.md 发现                 | ignore                                    |    275 |
-| power         | macOS 电源断言 API，阻止空闲/系统/显示器休眠                | IOKit FFI                                 |    270 |
-| prof          | 环形缓冲性能剖析器，输出 folded-stack 与 SVG 火焰图              | inferno                                   |    240 |
-| file_lock     | 跨进程建议性文件锁                                               | in-tree                                   |    210 |
-| ps            | 跨平台进程树终止与后代列举                           | libc · libproc · CreateToolhelp32Snapshot |    195 |
-| tokens        | O200k / Cl100k BPE token 计数 · 两张表均内嵌                          | tiktoken-rs                               |     70 |
-| html          | HTML 转 Markdown，可选内容清理                                   | html-to-markdown-rs                       |     60 |
-| sixel         | 终端图片渲染 · 解码 PNG · JPEG · WebP · GIF · 缩放 · SIXEL 编码 | icy_sixel · image                         |     55 |
+| desktop       | Window/display enumeration · screenshot · native input · AX tree for `computer`   | xcap · enigo · OS AX FFI                  | 10,600 |
+| grep          | Regex search · parallel/sequential · glob & type filters · fuzzy find             | grep-regex · grep-searcher                |  3,280 |
+| text          | ANSI-aware width · truncation · column slicing · SGR-preserving wrap              | unicode-width · segmentation              |  2,070 |
+| snapcompact   | Bitmap-frame rasterization + PNG encode for context compression                   | image · png                               |  1,760 |
+| keys          | Kitty keyboard protocol with xterm fallback · PHF perfect-hash lookup             | phf                                       |  1,740 |
+| ast           | ast-grep pattern matching and structural rewrites                                 | ast-grep-core                             |  1,510 |
+| diff          | Structured file diffing for tools and previews                                    | in-tree                                   |  1,030 |
+| pty           | Native PTY allocation for sudo · ssh interactive prompts                          | portable-pty                              |    630 |
+| crash_handler | Native crash capture and reporting                                                | in-tree                                   |    610 |
+| highlight     | Syntax highlighting · 11 semantic categories · 30+ aliases                        | syntect                                   |    550 |
+| appearance    | Mode 2031 + native macOS dark/light via CoreFoundation FFI                        | core-foundation                           |    450 |
+| task          | Blocking work on libuv thread pool · cancellation · timeout · profiling           | tokio · napi                              |    440 |
+| glob          | Discovery with glob · type filters · mtime sort · gitignore respect               | ignore · globset                          |    430 |
+| fd            | Filesystem walker for find-tool replacement                                       | ignore                                    |    385 |
+| clipboard     | Text copy and image read from system clipboard · no xclip/pbcopy                  | arboard                                   |    370 |
+| workspace     | Workspace walker with gitignore + AGENTS.md discovery in one pass                 | ignore                                    |    275 |
+| power         | macOS power-assertion API for idle/system/display-sleep prevention                | IOKit FFI                                 |    270 |
+| prof          | Circular buffer profiler with folded-stack and SVG flamegraph output              | inferno                                   |    240 |
+| file_lock     | Cross-process advisory file locking                                               | in-tree                                   |    210 |
+| ps            | Cross-platform process-tree kill and descendant listing                           | libc · libproc · CreateToolhelp32Snapshot |    195 |
+| tokens        | O200k / Cl100k BPE token counting · both tables embedded                          | tiktoken-rs                               |     70 |
+| html          | HTML to Markdown with optional content cleaning                                   | html-to-markdown-rs                       |     60 |
+| sixel         | Terminal image rendering · decode PNG · JPEG · WebP · GIF · resize · SIXEL encode | icy_sixel · image                         |     55 |
 
+## Four entry points: _interactive_, _one-shot_, RPC, and ACP.
 
-## 四个入口：_交互式_、_一次性_、RPC 与 ACP。
+Same engine, four wrappers. `omp` runs the TUI. `omp -p` answers a single prompt and exits. The Node SDK embeds the session in your process. `omp --mode rpc` and `omp acp` hand the wheel to another program over stdio.
 
-同一个引擎，四层外壳。`omp` 运行 TUI。`omp -p` 回答单条 prompt 后退出。Node SDK 把 session 嵌进你的进程。`omp --mode rpc` 与 `omp acp` 通过 stdio 把控制权交给另一个程序。
+### Interactive — when in doubt, the agent asks
 
-### Interactive — 拿不准时，agent 会问你
+The TUI is the default surface. Tool calls render as cards, edits preview before they land, and ambiguity routes through the `ask` tool — a form the agent can put up mid-turn, with its recommendation preselected. The keyboard handles the rest.
 
-TUI 是默认界面。工具调用以卡片形式渲染，编辑在落地前先预览，语义不明时经由 `ask` 工具处理——那是 agent 可以在回合中途调用的表单，并预选推荐值。其余交给键盘。
+The same forms surface over ACP as elicitations, so editors get them without writing a dialog.
 
-同一套表单也会通过 ACP 作为 elicitation 提供，因此编辑器无需自己实现对话框。
+![omp TUI showing a multi-select field of an ask form.](assets/ask.webp)
 
-![omp TUI 展示 ask 表单中的多选字段。](assets/ask.webp)
-
-### SDK — 嵌入 Node
+### SDK — embed in Node
 
 `@oh-my-pi/pi-coding-agent`
 
-Node 与 TypeScript 宿主可直接把引擎接入自己的进程。该包导出 `ModelRegistry`、`SessionManager`、`createAgentSession` 与 `discoverAuthStorage`；session 会发出类型化事件，供你订阅。
+Node and TypeScript hosts pull the engine in directly. The package exposes `ModelRegistry`, `SessionManager`, `createAgentSession`, and `discoverAuthStorage`; the session emits typed events you subscribe to.
 
 ```ts
-import {
-  ModelRegistry,
-  SessionManager,
-  createAgentSession,
-  discoverAuthStorage,
-} from "@oh-my-pi/pi-coding-agent";
+import { ModelRegistry, SessionManager, createAgentSession, discoverAuthStorage } from "@oh-my-pi/pi-coding-agent";
 
 const auth = await discoverAuthStorage();
 const models = new ModelRegistry(auth);
 await models.refresh();
 
 const { session } = await createAgentSession({
-  sessionManager: SessionManager.inMemory(),
-  authStorage: auth,
-  modelRegistry: models,
+	sessionManager: SessionManager.inMemory(),
+	authStorage: auth,
+	modelRegistry: models,
 });
 await session.prompt("list .ts files");
 ```
 
-#### Windows / Linux x64 SDK 构建包
-
-CNB 的 `omp` 发布提供 `omp-sdk-win32-x64.zip`（Windows，要求 AVX2）和 `omp-sdk-linux-x64.zip`（Linux baseline，面向 glibc 2.17，不要求 AVX2）。两包都用于编译嵌入 OMP 的宿主，不是安装包。
-
-如需自行打包，在已初始化 `vendor/openwiki` 且准备好本平台 native addon 的工作区运行：
-
-```bash
-bun run pack:sdk
-```
-
-`pack:sdk` 将工作区构建输入、锁文件、编译入口和预编译 `.node` 写入 `dist/omp-sdk-<version>-<platform>-x64.zip`，并输出 SHA-256。Windows 用 `tar.exe`，可先运行 `bun run build:native`；Linux 用 `zip`，先运行 `bun scripts/build-release-native.ts` 生成 glibc 2.17 baseline addon。ZIP 不包含 CLI、已安装依赖或个人设置。打包读取当前跟踪文件的工作树内容；发布时从干净提交构建。
-
-解包后，以 `omp-sdk.json` 中指定的 Bun 版本运行 `bun scripts/compile-sdk-host.ts <entry.ts> <output>`（Windows 输出名使用 `.exe`）。入口放在解包目录下，使用上例的包根入口导入 `SessionManager`、`ModelRegistry` 等 API。脚本按锁文件安装依赖、生成 OMP 资源并嵌入预编译原生模块，不调用 Rust 编译器；Linux 使用 Bun 的 x64 baseline 运行时。
-
-### RPC — 通过 stdio 驱动
+### RPC — drive over stdio
 
 `omp --mode rpc`
 
-适合非 Node 的嵌入方，或当你需要进程隔离时使用。输入 NDJSON 命令，输出响应帧与事件帧；每条 prompt 都以自己的 `prompt_result` 结束。`--mode rpc-ui` 会把工具卡片、选择器与对话框作为 `extension_ui_request` 帧下发，宿主必须作答；`--no-ui` 则让宿主即使没有任何 UI，也不会在协议上出现扩展对话框。
+For non-Node embedders, or when you want process isolation. NDJSON commands in, response and event frames out; each prompt ends with its own `prompt_result`. `--mode rpc-ui` adds tool cards, selectors, and dialogs as `extension_ui_request` frames the host must answer; `--no-ui` keeps even extension dialogs off the wire for hosts with no UI.
 
 ```
 $ omp --mode rpc --no-session
@@ -557,81 +549,76 @@ $ omp --mode rpc --no-session
 > {"id":"r3","type":"abort"}
 ```
 
-### ACP — 与编辑器对话
+### ACP — speak to editors
 
 `omp acp`
 
-基于 JSON-RPC 的 [Agent Client Protocol](https://github.com/zed-industries/agent-client-protocol)。当编辑器声明能力后，工具 I/O 会经由它路由，写入则由 `session/request_permission` 把关。
+The [Agent Client Protocol](https://github.com/zed-industries/agent-client-protocol) over JSON-RPC. When the editor advertises capabilities, tool I/O routes through it and writes are gated by `session/request_permission`.
 
-| omp 工具     | ACP 路由                           |
+| omp tool     | ACP route                           |
 | ------------ | ----------------------------------- |
 | `bash`       | `terminal/create + terminal/output` |
 | `read`       | `fs/read_text_file`                 |
 | `write`      | `fs/write_text_file`                |
 | `edit, bash` | `session/request_permission`        |
 
-完整参考：[omp.sh/docs/sdk](https://omp.sh/docs/sdk)。
+Full reference: [omp.sh/docs/sdk](https://omp.sh/docs/sdk).
 
+## A harness worth keeping is one you _don't_ outgrow.
 
-## 值得留下的 harness，是你 _不会用尽_ 的那个。
+Pick it up at **[omp.sh](https://omp.sh)**.
 
-上手入口：**[omp.sh](https://omp.sh)**。
+omp is a fork of [Pi](https://github.com/badlogic/pi-mono) by [Mario Zechner](https://github.com/mariozechner), rewritten as a coding-first surface: sessions, subagents, slash commands, extensions — all TypeScript, all MIT, all on [GitHub](https://github.com/can1357/oh-my-pi). Shape it from config, hook it from outside, or read the source when you need to.
 
-omp 是 [Mario Zechner](https://github.com/mariozechner) 的 [Pi](https://github.com/badlogic/pi-mono) 的 fork，被重写为一个以编码为先的界面：sessions、subagents、slash commands、extensions —— 全部 TypeScript，全部 MIT，全部在 [GitHub](https://github.com/can1357/oh-my-pi) 上。你可以用配置塑造它，从外部 hook 它，或者在需要时直接读源码。
+### Primitives
 
-### 原语
+An extension is a TypeScript module. Same tool API, same slash-command registry, same hotkey table, same TUI primitives the built-ins use. Nothing is reserved.
 
-extension 就是一个 TypeScript 模块。与内置功能相同的 tool API、相同的 slash-command 注册表、相同的快捷键表、相同的 TUI 原语。没有任何东西是保留的。
+### Discovery
 
-### 发现
+On first run omp inherits whatever is already on disk: rules, skills, and MCP servers from `.claude`, `.cursor`, `.windsurf`, `.gemini`, `.codex`, `.cline`, `.github/copilot`, and `.vscode`. No migration script.
 
-首次运行时，omp 会继承磁盘上已有的东西：来自 `.claude`、`.cursor`、`.windsurf`、`.gemini`、`.codex`、`.cline`、`.github/copilot` 和 `.vscode` 的 rules、skills 与 MCP servers。不需要迁移脚本。
+### Extensibility
 
-### 可扩展性
+Ask omp to write the piece you're missing, then `/reload-plugins`. Keep it local, ship it in a `marketplace`, or publish it to npm.
 
-让你缺的那块直接由 omp 写出来，然后 `/reload-plugins`。可以留在本地，放进 `marketplace` 分发，或者发布到 npm。
+## Philosophy
 
-## 设计哲学
+omp is a fork of [pi-mono](https://github.com/badlogic/pi-mono) by [Mario Zechner](https://github.com/mariozechner), extended with a batteries-included coding workflow.
 
-omp 是 [Mario Zechner](https://github.com/mariozechner) 的 [pi-mono](https://github.com/badlogic/pi-mono) 的 fork，并扩展出一套开箱即用的编码工作流。
+Key ideas:
 
-核心理念：
+- Keep interactive terminal-first UX for real coding work
+- Include practical built-ins (tools, sessions, branching, subagents, extensibility)
+- Make advanced behavior configurable rather than hidden
 
-- 为真实的编码工作保留交互式、终端优先的 UX
-- 内置实用能力（tools、sessions、branching、subagents、extensibility）
-- 让高级行为可配置，而不是隐藏起来
+### Project inputs and trust
 
-### 项目输入与信任
-
-打开一个仓库时，CLI 按各自的规则加载项目设置、tools、命令、skills、规则以及项目 MCP 配置。普通和 offline 启动都默认跳过扩展自动发现。如果某次调用要排除项目的 `.mcp.json`，传入 `--config <file>` 指向一个使用嵌套键的 YAML overlay（单行的 `mcp.enableProjectConfig: false` 会被忽略）：
+Opening a repository loads its project inputs by design: settings, extensions, hooks, tools, commands, skills, rules, and project MCP configuration. To exclude project `.mcp.json` for one invocation, pass `--config <file>` pointing at a YAML overlay with nested keys (a flat `mcp.enableProjectConfig: false` line is ignored):
 
 ```yaml
 mcp:
-  enableProjectConfig: false
+   enableProjectConfig: false
 ```
 
-CLI 默认按 `--no-extensions` 运行，不需要再传这个参数。可用 `-e`／`--extension` 或 `--hook` 显式加载，也可改用 `--trusted-extension /absolute/path/to/file.ts` 指定精确的扩展白名单。这个默认行为不会一并禁用 Skills 或 MCP。`--no-tools` 会禁用内置工具，但项目 tool 模块仍是独立的发现面。这些旗标只收窄输入，不改变仓库信任模型。
+Use `--no-extensions` to skip ambient extension discovery; or use `--trusted-extension /absolute/path/to/file.ts` for an exact extension allowlist. `--no-tools` disables built-in tools, but project tool modules remain a separate discovery surface. These flags narrow inputs without changing the repository-trust model.
 
 ---
 
-## 开发
+## Development
 
-### 从源码开始
+### Getting started from source
 
-全新克隆的仓库需要先装好 workspace 依赖并构建本地 Rust/N-API addon，源码 CLI 才能启动。
-
-`bun setup` 还会更新 Bun 全局 bin 目录中的 `omp` 入口，可能覆盖该目录里已有的入口。如果这个目录在 `PATH` 中优先，之后直接运行 `omp` 可能启动开发版而非发行版。
+Fresh clones need both workspace dependencies and the local Rust/N-API addon before the source CLI can start.
 
 ```sh
 bun setup
 bun dev
 ```
 
-`bun setup` 会安装 Bun workspaces 并构建 `@oh-my-pi/pi-natives`。改动 Rust crates 或 `packages/natives` 后，重新运行 `bun run build:native`。
+`bun setup` installs Bun workspaces and builds `@oh-my-pi/pi-natives`. Re-run `bun run build:native` after changing Rust crates or `packages/natives`.
 
-需要在源码版使用 OpenWiki 时，请先运行 `git submodule update --init -- vendor/openwiki`，再运行 `bun setup`。如果已经在缺少子模块的情况下完成了 `bun setup`，初始化子模块后，从仓库根目录运行 `bun run gen:openwiki-resources`。发行版二进制已内嵌这些资源，无需执行这两步。
-
-Nix 用户可以直接获得锁定版本的 Bun 与 Rust 工具链，以及所有原生构建依赖：
+Nix users get the pinned Bun and Rust toolchains plus all native build dependencies:
 
 ```sh
 nix develop
@@ -639,88 +626,95 @@ bun setup
 bun dev
 ```
 
-用 `nix build .#omp` 构建可分发的 Nix 包并做冒烟测试。Wayland screencast 支持默认关闭（将 libpipewire 加入插件的库搜索路径会让运行时闭包增加约 750 MB）；可用 `omp.override { withWaylandScreencast = true; }` 启用。发布构建以 fat LTO 链接 `omp-natives`；本地可用 `omp.override { withFatLto = false; }` 改用 thin LTO，大幅加快重新构建。Rust 依赖与 native addon 在独立 derivation 中构建，因此修改 Rust 时可复用已编译依赖，修改 TypeScript 时可复用 addon。`nix/bun.nix` 只在 `bun.lock` 变化时生成；发版时会自动重新生成。若改动了依赖，请运行：
+Build and smoke-test the distributable Nix package with `nix build .#omp`. Wayland screencast support is off by default (putting libpipewire on the addon's library path adds ~750 MB of runtime closure); enable it with `omp.override { withWaylandScreencast = true; }`. Release builds link `omp-natives` with fat LTO; `omp.override { withFatLto = false; }` uses thin LTO for much faster local rebuilds. Rust dependencies and the native addon build in separate derivations, so Rust edits reuse compiled dependencies and TypeScript edits reuse the addon. `nix/bun.nix` is generated only when `bun.lock` changes; releases regenerate it automatically. For dependency changes, run:
 
 ```sh
 bun run gen:nix
 ```
 
-该命令在可用时使用 `nix develop` 中的 `bun2nix`，否则通过 Nix 进入开发 shell，最后回退到锁定版本的 `bunx bun2nix@2.1.2`。不要手动编辑 `nix/bun.nix`。
+The command uses `bun2nix` from `nix develop` when available, otherwise enters the development shell through Nix, then falls back to the pinned `bunx bun2nix@2.1.2`. Do not edit `nix/bun.nix` manually.
 
-非交互式冒烟检查：
+For a non-interactive smoke check:
 
 ```sh
 bun dev -- --version
 ```
 
-#### Apple Silicon Nix 构建
+#### Apple Silicon Nix builds
 
-在 Apple Silicon 上，`nix build .#omp` 使用 nixpkgs 的 Swift 编译器和
-`apple-sdk_27` 编译 Apple Foundation Models bridge；不使用宿主 Xcode 或
-Command Line Tools，且构建会失败而不是在缺少 bridge 时继续交付。
-两者都仅为构建依赖。使用模型仍需要 macOS 27+、符合条件的设备以及已启用的
-Apple Intelligence。若要不带 bridge 构建，使用
-`omp.override { withAppleFm = false; }`。
+On Apple Silicon, `nix build .#omp` compiles the Apple Foundation Models bridge
+with nixpkgs' Swift compiler and `apple-sdk_27`; host Xcode or Command Line Tools
+are never used, and the build fails rather than shipping without the bridge.
+Both are build-only dependencies. Using the models still requires macOS 27+, an
+eligible device, and Apple Intelligence enabled. To build without the bridge, use
+`omp.override { withAppleFm = false; }`.
 
-### Debug 命令
+### Debug Command
 
-`/debug` 会打开用于调试、问题上报与性能剖析的工具。
+`/debug` opens tools for debugging, reporting, and profiling.
 
-架构说明与贡献指南见 [packages/coding-agent/DEVELOPMENT.md](packages/coding-agent/DEVELOPMENT.md)。
+For architecture and contribution guidelines, see [packages/coding-agent/DEVELOPMENT.md](packages/coding-agent/DEVELOPMENT.md).
 
 ---
 
-## Monorepo 包
+## Monorepo Packages
 
-| 包 | 说明 |
+| Package                                                                       | Description                                                                 |
 | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **[@oh-my-pi/collab-web](packages/collab-web)**                               | 协作实时会话的浏览器访客客户端、mock host 与本地中继 |
-| **[@oh-my-pi/pi-ai](packages/ai)**                                            | 支持流式输出与模型/provider 集成的多 provider LLM 客户端 |
-| **[@oh-my-pi/pi-catalog](packages/catalog)**                                  | 模型目录：内置模型数据库、provider 描述符与身份信息 |
-| **[@oh-my-pi/pi-agent-core](packages/agent)**                                 | 带工具调用与状态管理的 agent 运行时 |
-| **[@oh-my-pi/pi-coding-agent](packages/coding-agent)**                        | 交互式编码 agent 的 CLI 与 SDK |
-| **[@oh-my-pi/pi-tui](packages/tui)**                                          | 终端 UI 库：同一视图树可渲染为终端文本行或原生 TSP |
-| **[@oh-my-pi/pi-natives](packages/natives)**                                  | grep、shell、image、text、语法高亮等能力的 N-API 绑定 |
-| **[@oh-my-pi/omp-stats](packages/stats)**                                     | 面向 AI 使用统计的本地可观测性面板 |
-| **[@oh-my-pi/omptype](packages/omptype)**                                     | 兼容 ArkType 的 schema 校验，带惰性 JIT 编译 |
-| **[@oh-my-pi/pi-utils](packages/utils)**                                      | 共享工具（日志、流、目录/环境变量/进程辅助） |
-| **[@oh-my-pi/pi-wire](packages/wire)**                                        | 协作实时会话的共享协议类型与中继常量 |
-| **[@oh-my-pi/pi-mnemopi](packages/mnemopi)**                                  | 面向 omp agents 的本地 SQLite 记忆引擎 |
-| **[@oh-my-pi/snapcompact](packages/snapcompact)**                             | 位图帧上下文压缩包与 SQuAD 评测套件 |
-| **[@oh-my-pi/browser-relay](packages/browser-relay)**                         | 让 Eval browser API 驱动你现有标签页的 Chrome 扩展 |
-| **[@oh-my-pi/pi-metaharness](packages/metaharness)**                          | 统一的 benchmark 运行器、Harbor 运行记录存储、REST/SSE API 与实时面板 |
-| **[@oh-my-pi/typescript-edit-benchmark](packages/typescript-edit-benchmark)** | 基于 TypeScript 源码变异的编辑 benchmark 套件 |
+| **[@oh-my-pi/collab-web](packages/collab-web)**                               | Browser guest client, mock host, and local relay for collab live sessions   |
+| **[@oh-my-pi/pi-ai](packages/ai)**                                            | Multi-provider LLM client with streaming and model/provider integration     |
+| **[@oh-my-pi/pi-catalog](packages/catalog)**                                  | Model catalog: bundled model database, provider descriptors, and identity   |
+| **[@oh-my-pi/pi-agent-core](packages/agent)**                                 | Agent runtime with tool calling and state management                        |
+| **[@oh-my-pi/pi-coding-agent](packages/coding-agent)**                        | Interactive coding agent CLI and SDK                                        |
+| **[@oh-my-pi/pi-tui](packages/tui)**                                            | Terminal UI library: one component tree, rendered as rows or natively (TSP) |
+| **[@oh-my-pi/pi-natives](packages/natives)**                                  | N-API bindings for grep, shell, image, text, syntax highlighting, and more  |
+| **[@oh-my-pi/omp-stats](packages/stats)**                                     | Local observability dashboard for AI usage statistics                       |
+| **[@oh-my-pi/omptype](packages/omptype)**                                     | ArkType-compatible schema validation with lazy JIT compilation              |
+| **[@oh-my-pi/pi-utils](packages/utils)**                                      | Shared utilities (logging, streams, dirs/env/process helpers)               |
+| **[@oh-my-pi/pi-wire](packages/wire)**                                        | Shared collab live-session protocol types and relay constants               |
+| **[@oh-my-pi/pi-mnemopi](packages/mnemopi)**                                  | Local SQLite memory engine for omp agents                                   |
+| **[@oh-my-pi/snapcompact](packages/snapcompact)**                             | Bitmap-frame context compression package and SQuAD eval suite               |
+| **[@oh-my-pi/browser-relay](packages/browser-relay)**                         | Chrome extension that lets the Eval browser API drive your existing tabs    |
+| **[@oh-my-pi/pi-metaharness](packages/metaharness)**                          | Unified benchmark runners, Harbor run storage, REST/SSE API, live dashboard |
+| **[@oh-my-pi/typescript-edit-benchmark](packages/typescript-edit-benchmark)** | Edit benchmark suite built on TypeScript source mutations                   |
 
 ### Rust Crates
 
-| Crate | 说明 |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| **[omp-natives](crates/natives)** | `@oh-my-pi/pi-natives` 使用的核心 Rust 原生 addon（N-API `cdylib`）；聚合下列 crates |
-| **[omp-shell](crates/shell)** | 内嵌 bash 5.3 引擎（解析器、VM、进程创建、会话）、PTY 与进程管理 |
-| **[omp-ast](crates/ast)** | 基于 tree-sitter 的代码摘要器与 AST 工具（50+ 语言语法） |
-| **[omp-iso](crates/iso)** | 任务隔离后端解析器：APFS clones、btrfs/zfs reflinks、overlayfs、projfs、rcopy |
-| **[omp-voice](crates/voice)** | 音频采集/播放、Opus 编解码与实时 WebRTC 流式原语 |
-| **[omp-xfs](crates/xfs)** | 供 natives 与 shell 共用的并行忽略规则感知遍历器、目录列表缓存、glob 与内容搜索 |
-| **[omp-edit](crates/edit)** | `edit` 工具背后的编辑引擎：基于行的 patch/hashline 模式、流式预览、原子应用 |
-| **[omp-builtins](crates/builtins)** | 67 个进程内命令行工具及进程 builtins（ps、top、pgrep、pkill 等） |
+| Crate                                      | Description                                                                                              |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| **[omp-natives](crates/natives)**        | Core Rust native addon (N-API `cdylib`) used by `@oh-my-pi/pi-natives`; aggregates the crates below      |
+| **[omp-shell](crates/shell)**            | Embedded bash 5.3 engine (parser, VM, process spawning, sessions), PTY, and process management           |
+| **[omp-ast](crates/ast)**                | tree-sitter-based code summarizer and AST utilities (50+ language grammars)                              |
+| **[omp-iso](crates/iso)**                | Task isolation backend resolver: APFS clones, btrfs/zfs reflinks, overlayfs, projfs, rcopy               |
+| **[omp-voice](crates/voice)**            | Audio capture/playback, Opus codecs, and live WebRTC streaming primitives                                |
+| **[omp-xfs](crates/xfs)**          | Parallel ignore-aware walker, directory-listing cache, glob, and content search for natives + shell      |
+| **[omp-edit](crates/edit)**              | Edit engine behind the `edit` tool: line-anchored patch/hashline modes, streaming previews, atomic apply |
+| **[omp-builtins](crates/builtins)**      | 67 in-process command-line utilities plus process builtins (ps, top, pgrep, pkill, …)                    |
 
-## 贡献
+## Contributing
 
-Issues 与 pull requests 对所有人开放。目前的开放 PR 仍属**试行**——我们先前的 vouch 要求已暂时取消，以便观察效果，之后可能恢复。贡献指南见 **[CONTRIBUTING.md](CONTRIBUTING.md)**。
+Issues and pull requests are open to everyone. Open PRs are currently a
+**trial** — the previous vouch requirement is lifted while we evaluate how it
+goes, and it may return. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for
+guidelines on contributing.
 
 ---
 
-## 许可证
+## License
 
-OMP 基于 [MIT License](LICENSE) 授权。
+OMP is licensed under the [MIT License](LICENSE).
 
-第三方与 vendor 代码（包括 `crates/builtins/LICENSE` 中标明的第三方部分）仍遵循各自的上游许可证。每个分发组件均带有自己的 `THIRD-PARTY-NOTICES.txt`：CLI（`packages/coding-agent`）、原生 addon（`packages/natives`）和 robomp（`python/robomp`）。`omp --license` 会打印 CLI 与 addon 的声明。
+Third-party and vendored code, including the third-party portions identified
+in `crates/builtins/LICENSE`, remains under its respective upstream license.
+Each shipped component carries its own `THIRD-PARTY-NOTICES.txt`: the CLI
+(`packages/coding-agent`), the native addon (`packages/natives`), and robomp
+(`python/robomp`). `omp --license` prints the CLI's and the addon's.
 
-© 2025 Mario Zechner
-© 2025-2026 Can Bölük
+© 2025 Mario Zechner  
+© 2025-2026 Can Bölük  
 © 2026 [Stencil Labs, Inc.](https://stencil.so)
 
-_为常开的终端而生_
+_made for terminals that stay open_
 
 - [omp.sh](https://omp.sh)
 - [Stencil Labs](https://stencil.so)

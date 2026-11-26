@@ -24,10 +24,10 @@ export function SessionAccountSelector(props: SessionAccountSelectorProps): JSXN
 	const active = props.accounts.find(account => account.active);
 	return (
 		<SelectSheet
-			title={`${props.provider} 账户`}
-			subtitle="指定此会话发送请求时使用的账户"
+			title={`${props.provider} account`}
+			subtitle="Pin the account this session sends its requests with"
 			icon="key-round"
-			noun="账户"
+			noun="accounts"
 			items={props.accounts.map(account => ({
 				id: String(account.credentialId),
 				label: account.label,
@@ -36,15 +36,15 @@ export function SessionAccountSelector(props: SessionAccountSelectorProps): JSXN
 			}))}
 			initial={active ? String(active.credentialId) : undefined}
 			current={active ? [String(active.credentialId)] : []}
-			confirmLabel="固定"
+			confirmLabel="Pin"
 			// Natively the active account carries the current check; the terminal list says it in words.
 			term={{
-				title: `选择此会话使用的 ${props.provider.replace(/\s+/g, " ")} 账户`,
+				title: `Select a ${props.provider.replace(/\s+/g, " ")} account for this session`,
 				hint: null,
 				labels: Object.fromEntries(
 					props.accounts.map(account => [
 						String(account.credentialId),
-						{ label: account.label, detail: account.active ? "当前会话正在使用" : undefined },
+						{ label: account.label, detail: account.active ? "active for this session" : undefined },
 					]),
 				),
 			}}

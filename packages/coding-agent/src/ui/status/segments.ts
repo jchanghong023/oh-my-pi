@@ -421,7 +421,7 @@ function gitSeg(input: SegInput): SegView | null {
 	const branch = opts?.showBranch === false ? null : git.branch;
 	if (!branch && count === 0) return null;
 	const color = count > 0 ? "statusLineGitDirty" : "statusLineGitClean";
-	const text = `git${branch ? ` ${branch}` : ""}${count > 0 ? `${branch ? " · " : " "}改动${count}` : ""}`;
+	const text = `git${branch ? ` ${branch}` : ""}${count > 0 ? `${branch ? " · " : " "}Changes: ${count}` : ""}`;
 	return view(input, [span(text, color)], [{ t: text, s: color }], undefined, count > 0 ? "warning" : undefined);
 }
 

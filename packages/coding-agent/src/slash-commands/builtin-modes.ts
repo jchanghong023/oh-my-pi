@@ -465,22 +465,23 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "display",
 		icon: "settings",
-		description: "切换界面显示模式：干净、紧凑或详细",
+		description: "Switch between clean, compact, and detailed display modes",
 		allowArgs: true,
 		subcommandOptional: true,
 		subcommands: [
-			{ name: "clean", description: "隐藏思考与工具活动" },
+			{ name: "clean", description: "Hide thinking and tool activity" },
 			{
 				name: "compact",
-				description: "隐藏普通工具历史卡片，在输入框上方显示本轮文件差异、两行活动和最近工具输出",
+				description:
+					"Hide tool history cards; show this turn's file diffs, two activity lines, and recent tool output above the composer",
 			},
-			{ name: "detailed", description: "沿用上游完整思考与工具显示" },
+			{ name: "detailed", description: "Show full thinking and tool activity" },
 		],
 		handleTui: async (command, runtime) => {
 			const { settings } = runtime.ctx;
 			const mode = command.args.trim() || nextDisplayMode(settings);
 			if (mode !== "clean" && mode !== "compact" && mode !== "detailed") {
-				runtime.ctx.showWarning("用法：/display [clean|compact|detailed]");
+				runtime.ctx.showWarning("Usage: /display [clean|compact|detailed]");
 				clearSubmittedText(runtime);
 				return;
 			}

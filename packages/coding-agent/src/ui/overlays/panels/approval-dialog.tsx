@@ -132,12 +132,12 @@ export function ApprovalDialog(props: ApprovalDialogProps): JSXNode {
 	const selected = signal("once");
 	const drafting = () => options.draft?.hasDraft() ?? false;
 	const current = () => (drafting() ? "deny" : selected());
-	const onceLabel = grants.length > 0 ? "仅允许本次" : "允许";
+	const onceLabel = grants.length > 0 ? "Approve Once" : "Approve";
 	const expandKey = actionKeyId("app.tools.expand", "ctrl+o");
 	const labelOf = (id: string): string => {
 		if (id === "remember") {
 			const glyph = currentTheme().symbols.symbol(remember() ? "checkbox.checked" : "checkbox.unchecked");
-			return `${glyph} 跨会话记住`;
+			return `${glyph} Remember across sessions`;
 		}
 		if (id.startsWith("grant")) {
 			const grant = grants[Number(id.slice(5))]!;
@@ -145,7 +145,7 @@ export function ApprovalDialog(props: ApprovalDialogProps): JSXNode {
 		}
 		if (id === "once") return onceLabel;
 		if (id === "session") return options.session!.label;
-		return "拒绝";
+		return "Deny";
 	};
 	const armed = () => now() - openedAt >= APPROVE_ARM_MS;
 	const choose = (id: string) => {
@@ -304,22 +304,22 @@ export function ApprovalDialog(props: ApprovalDialogProps): JSXNode {
 				{full && (
 					<ActionButton
 						id="expand"
-						label={() => (expanded() ? "收起" : "详情")}
-						title={() => `${expanded() ? "收起调用详情" : "查看完整调用详情"}  ${keyTitle(expandKey)}`}
+						label={() => (expanded() ? "Less" : "Details")}
+						title={() => `${expanded() ? "Summarize" : "Show every detail of"} this call  ${keyTitle(expandKey)}`}
 						keys={kbdOf(expandKey)}
 					/>
 				)}
 				<ActionButton
 					id="deny"
-					label="拒绝"
-					title={`拒绝本次调用  ${keyTitle(actionKeyId("tui.select.cancel", "escape"))}`}
+					label="Deny"
+					title={`Deny this call  ${keyTitle(actionKeyId("tui.select.cancel", "escape"))}`}
 					tone="error"
 					keys={cancelKbd()}
 				/>
 				<ActionButton
 					id="approve"
 					label={onceLabel}
-					title={`允许本次调用  ${keyTitle(appApproveKeys()[0] ?? "ctrl+enter")}`}
+					title={`Approve this call  ${keyTitle(appApproveKeys()[0] ?? "ctrl+enter")}`}
 					tone="accent"
 					keys={kbdOf(appApproveKeys()[0] ?? "ctrl+enter")}
 				/>

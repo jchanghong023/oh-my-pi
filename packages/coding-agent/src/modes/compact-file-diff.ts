@@ -22,7 +22,7 @@ function displayPath(cwd: string, file: string): string {
 }
 
 function fileAction(change: TurnToolDiff): string {
-	return change.op === "create" ? "新增" : change.op === "delete" ? "删除" : "修改";
+	return change.op === "create" ? "Added" : change.op === "delete" ? "Deleted" : "Edited";
 }
 
 function filePathLabel(cwd: string, change: TurnToolDiff): string {

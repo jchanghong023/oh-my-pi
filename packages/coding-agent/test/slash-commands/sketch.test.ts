@@ -16,10 +16,8 @@ import { imageAttachmentSource } from "@oh-my-pi/pi-coding-agent/utils/image-sou
 import * as open from "@oh-my-pi/pi-coding-agent/utils/open";
 import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
 import { jsx } from "@oh-my-pi/pi-tui/jsx-runtime";
-import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { initTheme } from "../../src/ui/theme/service";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 const PNG = encodeRawPng(Uint8Array.of(0, 0, 0, 255), 1, 1, 4);
 
@@ -74,6 +72,7 @@ function harness(artifactsDir: string, streaming = false) {
 	let disposed = false;
 	let focusedAgentId: string | undefined;
 	const ctx = createInteractiveModeContext({
+		settings: Settings.isolated(),
 		get focusedAgentId() {
 			return focusedAgentId;
 		},
@@ -142,15 +141,11 @@ function oldImage(): ImageContent {
 
 describe("native /sketch", () => {
 	let dir: string;
-	let settingsState: SettingsTestState | undefined;
 	const cleanup: Array<() => void> = [];
 
 	beforeAll(() => initTheme());
 	beforeEach(async () => {
-		settingsState = beginSettingsTest();
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-sketch-command-"));
-		setAgentDir(dir);
-		await Settings.init({ inMemory: true });
 		spyOn(open, "openPath").mockImplementation(() => {});
 		spyOn(args, "offlineFromEnv").mockReturnValue(false);
 		spyOn(clipboard, "requestOfflineBrowserUrlCopy").mockReturnValue(false);
@@ -159,8 +154,6 @@ describe("native /sketch", () => {
 		for (const dispose of cleanup.splice(0)) dispose();
 		vi.restoreAllMocks();
 		await fs.rm(dir, { recursive: true, force: true });
-		restoreSettingsTestState(settingsState);
-		settingsState = undefined;
 	});
 
 	function createHarness(artifactsDir = dir, streaming = false) {

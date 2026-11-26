@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,14 +9,11 @@ import {
 	__resetProjectDirCacheForTests,
 	directoryExists,
 	getAgentDir,
-	getBaseConfigRoot,
 	getConfigRootDir,
 	getDocumentConversionCacheDir,
 	getDaemonDir,
 	getLogsDir,
 	getPluginsDir,
-	getProfileRootDir,
-	getWorktreesDir,
 	getPuppeteerDir,
 	getSessionsDir,
 	directoryIsMissing,
@@ -38,7 +35,7 @@ describe("persistent root lexical identity", () => {
 			`${root}${path.sep.repeat(3)}`,
 			`${root}${path.sep}nested${path.sep}..${path.sep}`,
 		]) {
-			const env = { OMP_CONFIG_ROOT: override };
+			const env = { OMP_CONFIG_ROOT: override, PI_CONFIG_DIR: ".legacy" };
 			expect(resolvePersistentRoot(env)).toBe(root);
 			expect(env.OMP_CONFIG_ROOT).toBe(override);
 		}
@@ -52,12 +49,17 @@ describe("persistent root lexical identity", () => {
 		}
 	});
 
-	it("canonicalizes the default-root result and tilde-expanded overrides", () => {
+	it("expands home-relative roots and falls back to the home config for unqualified overrides", () => {
 		const home = path.resolve("fixture", "home");
 		const homeEnv = process.platform === "win32" ? { USERPROFILE: home } : { HOME: home };
-		expect(resolvePersistentRoot({ ...homeEnv, PI_CONFIG_DIR: `data-root${path.sep.repeat(3)}` })).toBe(
-			path.join(home, "data-root"),
-		);
+		expect(resolvePersistentRoot(homeEnv)).toBe(path.join(home, ".omp"));
+		const legacyEnv = { ...homeEnv, PI_CONFIG_DIR: `legacy${path.sep.repeat(3)}` };
+		expect(resolvePersistentRoot({ ...legacyEnv, OMP_CONFIG_ROOT: "relative/root" })).toBe(path.join(home, "legacy"));
+		if (process.platform === "win32") {
+			expect(resolvePersistentRoot({ ...legacyEnv, OMP_CONFIG_ROOT: "\\drive-relative" })).toBe(
+				path.join(home, "legacy"),
+			);
+		}
 		expect(resolvePersistentRoot({ ...homeEnv, OMP_CONFIG_ROOT: "~/data-root///" })).toBe(
 			path.join(home, "data-root"),
 		);
@@ -177,13 +179,11 @@ describe("dated log path", () => {
 	});
 });
 
-describe("OMP_CONFIG_ROOT relocation", () => {
-	const ENV_KEYS = [
+it("keeps profile data, caches, and shared runtime state under the explicit root despite initialized XDG paths", () => {
+	const keys = [
 		"OMP_CONFIG_ROOT",
 		"OMP_CACHE_DIR",
 		"OMP_OFFLINE",
-		"OMP_WORKTREE_DIR",
-		"PI_CONFIG_DIR",
 		"PI_CODING_AGENT_DIR",
 		"OMP_PROFILE",
 		"PI_PROFILE",
@@ -191,103 +191,45 @@ describe("OMP_CONFIG_ROOT relocation", () => {
 		"XDG_STATE_HOME",
 		"XDG_CACHE_HOME",
 	] as const;
-	let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
-
-	beforeEach(() => {
-		originalEnv = {};
-		for (const key of ENV_KEYS) originalEnv[key] = process.env[key];
-		for (const key of ENV_KEYS) delete process.env[key];
-		__resetDirsFromEnvForTests();
-	});
-
-	afterEach(() => {
-		for (const key of ENV_KEYS) {
-			const value = originalEnv[key];
-			if (value === undefined) delete process.env[key];
-			else process.env[key] = value;
-		}
-		__resetDirsFromEnvForTests();
-	});
-
-	it("defaults to ~/.omp under the home directory", () => {
-		expect(getBaseConfigRoot()).toBe(path.join(os.homedir(), ".omp"));
-		expect(getAgentDir()).toBe(path.join(os.homedir(), ".omp", "agent"));
-	});
-
-	it("relocates the base root and every derived directory", () => {
-		const root = path.join(os.tmpdir(), "omp-config-root-fixture");
+	const originalEnv = new Map(keys.map(key => [key, process.env[key]] as const));
+	const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "omp-root-xdg-"));
+	try {
+		const root = path.join(fixture, "config");
+		const xdg = path.join(fixture, "xdg");
+		fs.mkdirSync(path.join(xdg, "omp", "profiles", "work"), { recursive: true });
 		process.env.OMP_CONFIG_ROOT = root;
+		delete process.env.OMP_CACHE_DIR;
+		delete process.env.OMP_OFFLINE;
+		delete process.env.PI_CODING_AGENT_DIR;
+		process.env.OMP_PROFILE = "";
+		process.env.XDG_DATA_HOME = xdg;
+		process.env.XDG_STATE_HOME = xdg;
+		process.env.XDG_CACHE_HOME = xdg;
 		__resetDirsFromEnvForTests();
 
-		expect(getBaseConfigRoot()).toBe(root);
 		expect(getConfigRootDir()).toBe(root);
 		expect(getAgentDir()).toBe(path.join(root, "agent"));
 		expect(getPluginsDir()).toBe(path.join(root, "plugins"));
 		expect(getLogsDir()).toBe(path.join(root, "logs"));
-		expect(getWorktreesDir()).toBe(path.join(root, "wt"));
-	});
+		expect(getPuppeteerDir()).toBe(path.join(root, "puppeteer"));
+		expect(getSessionsDir()).toBe(path.join(root, "agent", "sessions"));
+		expect(getDocumentConversionCacheDir()).toBe(path.join(root, "agent", "cache", "document-conversions"));
+		expect(getDaemonDir()).toBe(path.join(root, "run", "daemon"));
 
-	it("expands a home-relative root for derived agent state", () => {
-		process.env.OMP_CONFIG_ROOT = "~/omp-config-root-fixture";
+		setProfile("work");
+		const profileRoot = path.join(root, "profiles", "work");
+		expect(getConfigRootDir()).toBe(profileRoot);
+		expect(getLogsDir()).toBe(path.join(profileRoot, "logs"));
+		expect(getSessionsDir()).toBe(path.join(profileRoot, "agent", "sessions"));
+		expect(getDaemonDir()).toBe(path.join(root, "run", "daemon"));
+	} finally {
+		for (const [key, value] of originalEnv) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
 		__resetDirsFromEnvForTests();
-
-		expect(getBaseConfigRoot()).toBe(path.join(os.homedir(), "omp-config-root-fixture"));
-		expect(getAgentDir()).toBe(path.join(os.homedir(), "omp-config-root-fixture", "agent"));
-	});
-
-	it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
-		"keeps data, caches, and global runtime state inside the explicit root despite initialized XDG paths",
-		() => {
-			const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "omp-root-xdg-"));
-			const root = path.join(fixture, "config");
-			const xdg = path.join(fixture, "xdg");
-			fs.mkdirSync(path.join(xdg, "omp", "profiles", "work"), { recursive: true });
-			process.env.OMP_CONFIG_ROOT = root;
-			process.env.XDG_DATA_HOME = xdg;
-			process.env.XDG_STATE_HOME = xdg;
-			process.env.XDG_CACHE_HOME = xdg;
-			__resetDirsFromEnvForTests();
-			try {
-				expect(getPluginsDir()).toBe(path.join(root, "plugins"));
-				expect(getLogsDir()).toBe(path.join(root, "logs"));
-				expect(getPuppeteerDir()).toBe(path.join(root, "puppeteer"));
-				expect(getSessionsDir()).toBe(path.join(root, "agent", "sessions"));
-				expect(getDocumentConversionCacheDir()).toBe(path.join(root, "agent", "cache", "document-conversions"));
-				expect(getDaemonDir()).toBe(path.join(root, "run", "daemon"));
-
-				setProfile("work");
-				expect(getLogsDir()).toBe(path.join(root, "profiles", "work", "logs"));
-				expect(getSessionsDir()).toBe(path.join(root, "profiles", "work", "agent", "sessions"));
-				expect(getDaemonDir()).toBe(path.join(root, "run", "daemon"));
-			} finally {
-				fs.rmSync(fixture, { recursive: true, force: true });
-			}
-		},
-	);
-
-	it("anchors named profiles under the relocated root", () => {
-		const root = path.join(os.tmpdir(), "omp-config-root-fixture");
-		process.env.OMP_CONFIG_ROOT = root;
-		__resetDirsFromEnvForTests();
-
-		expect(getProfileRootDir("work")).toBe(path.join(root, "profiles", "work"));
-	});
-
-	it("ignores a relative value instead of re-anchoring onto cwd", () => {
-		process.env.OMP_CONFIG_ROOT = path.join("relative", "omp");
-		__resetDirsFromEnvForTests();
-
-		expect(getBaseConfigRoot()).toBe(path.join(os.homedir(), ".omp"));
-	});
-
-	it("wins over the PI_CONFIG_DIR name for the root location", () => {
-		const root = path.join(os.tmpdir(), "omp-config-root-fixture");
-		process.env.OMP_CONFIG_ROOT = root;
-		process.env.PI_CONFIG_DIR = ".omp-alt";
-		__resetDirsFromEnvForTests();
-
-		expect(getBaseConfigRoot()).toBe(root);
-	});
+		fs.rmSync(fixture, { recursive: true, force: true });
+	}
 });
 
 describe("getTestTempDir", () => {

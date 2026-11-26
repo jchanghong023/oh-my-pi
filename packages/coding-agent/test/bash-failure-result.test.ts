@@ -6,29 +6,27 @@ import { agentLoop } from "@oh-my-pi/pi-agent-core/agent-loop";
 import type { AgentEvent, AgentMessage } from "@oh-my-pi/pi-agent-core/types";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { formatRawOutputNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta-format";
+import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
 import { Shell } from "@oh-my-pi/pi-natives";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { toolText } from "./helpers/tool-text";
 
 let cwd: string;
 
-// `executeBash` calls `Settings.init()` unconditionally; without an in-memory
-// instance the load reaches the host's real agent.db, so a corrupted or
-// concurrently written ~/.omp fails otherwise unrelated assertions.
 beforeEach(async () => {
-	resetSettingsForTest();
-	await Settings.init({ inMemory: true });
+	// The executor loads settings and a shell snapshot; these tests need neither host config nor shell rc files.
+	spyOn(Settings, "init").mockResolvedValue(Settings.isolated({ "bash.direnv": "off" }));
+	spyOn(shellSnapshot, "getOrCreateSnapshot").mockResolvedValue(null);
 	cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bash-failure-result-")));
 });
 
 afterEach(async () => {
 	mock.restore();
-	resetSettingsForTest();
 	await fs.rm(cwd, { recursive: true, force: true });
 });
 

@@ -210,7 +210,7 @@ describe("effective team rosters", () => {
 			expect(result.ok).toBe(false);
 			if (!result.ok) {
 				expect(result.error).toContain(MODEL_PATTERN);
-				expect(result.error).toContain("主代理");
+				expect(result.error).toContain("cannot act as the main agent");
 			}
 		},
 	);
@@ -236,8 +236,7 @@ describe("team controller dispatch", () => {
 		});
 		expect(result.started).toBe(false);
 		expect(result.jobId).toBeUndefined();
-		expect(result.message).toContain("后台任务不可用");
-		expect(result.message).toContain("async job");
+		expect(result.message).toContain("/team requires an async job manager");
 		expect(output).toEqual([result.message]);
 		expect(discussion).not.toHaveBeenCalled();
 	});
@@ -579,7 +578,7 @@ describe("team controller dispatch", () => {
 		expect(jobManager.acknowledged).toHaveLength(0);
 		expect(sent).toHaveLength(0);
 		expect(output).toHaveLength(1);
-		expect(output[0]).toContain("无法启动 /team");
+		expect(output[0]).toContain("background job registration failed");
 		expect(output[0]).toContain("Background job limit reached");
 		expect(output[0]).toContain("hub cancel");
 	});
@@ -681,7 +680,7 @@ describe("team controller dispatch", () => {
 		});
 		expect(result.started).toBe(true);
 		expect(sent).toHaveLength(1);
-		expect(sent[0]!.content).toContain(`原始问题：${prefix}`);
+		expect(sent[0]!.content).toContain(`Original question: ${prefix}…`);
 		expect(sent[0]!.content).not.toContain("PRIVATE_TAIL");
 	});
 
@@ -702,8 +701,8 @@ describe("team controller dispatch", () => {
 		});
 		expect(result.started).toBe(true);
 		expect(sent).toHaveLength(1);
-		expect(sent[0]!.content).toContain("4 个独立代理");
-		expect(sent[0]!.content).toContain("2 个不同模型");
+		expect(sent[0]!.content).toContain("4 independent agents");
+		expect(sent[0]!.content).toContain("2 distinct models");
 	});
 
 	it("keeps a rejecting output hook from turning into an unhandled rejection", async () => {
@@ -723,7 +722,7 @@ describe("team controller dispatch", () => {
 			},
 		});
 		expect(result.started).toBe(false);
-		expect(result.message).toContain("无法启动 /team");
+		expect(result.message).toContain("Background job limit reached (15).");
 	});
 
 	it("still reports a started job when sending the dispatch breadcrumb rejects", async () => {
@@ -774,7 +773,10 @@ describe("team controller dispatch", () => {
 			expect(jobManager.registerCalls).toBe(1);
 			expect(jobManager.acknowledged).toEqual([]);
 			expect(calls).toEqual(["notice_dispatch", "showError", "output"]);
-			expect(errors).toEqual([`/team 已启动（任务 ${result.jobId}），但写入派发通知失败：${reason}`]);
+			expect(errors).toHaveLength(1);
+			expect(errors[0]).toContain(result.jobId!);
+			expect(errors[0]).toContain("dispatch notice could not be saved");
+			expect(errors[0]).toContain(reason);
 			expect(output).toEqual(errors);
 			expectDispatchFollowupFailure(events, "notice_dispatch", [
 				question,
@@ -848,7 +850,10 @@ describe("team controller dispatch", () => {
 					"showError",
 					"output",
 				]);
-				expect(errors).toEqual([`/team 已启动（任务 ${result.jobId}），派发通知已记录，但刷新界面失败：${reason}`]);
+				expect(errors).toHaveLength(1);
+				expect(errors[0]).toContain(result.jobId!);
+				expect(errors[0]).toContain("dispatch notice was saved, but the UI update failed");
+				expect(errors[0]).toContain(reason);
 				expect(output).toEqual(errors);
 				expectDispatchFollowupFailure(events, failedStage, [question, "UI_ERROR_CANARY", cwd, sent[0]!.content]);
 			} finally {

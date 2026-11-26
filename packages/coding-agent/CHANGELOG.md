@@ -21,6 +21,7 @@
 ### Breaking Changes
 ### Changed
 
+- Built-in TUI navigation, settings, pickers, prompts, and status labels use English again. The startup tips, Tip and New badges, and font reminder remain in Chinese. User, model, and tool content and the default dictation language are unchanged.
 - JavaScript Eval and archive queries are enabled by default again, binary analysis defaults to automatic backend selection, and offline sessions honor `fetch.enabled` for URL reads.
 - The `debug` tool is enabled by default again.
 - OpenWiki query tools are off by default and can be enabled together with `openwiki.tools.enabled`.

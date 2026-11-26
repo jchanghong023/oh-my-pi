@@ -21,7 +21,7 @@ OMP MUST 应用下列设置的缺省值；显式配置和环境变量仍按原�
 - `commit.enabled=false`：`/commit` 与 eval `commit` 选择性提交默认关闭；显式开启后沿用上游行归属、私有索引构建及“合并／变基等操作进行中拒绝提交”的行为。
 - `providers.thinkingProbe=false`：未知模型的思考能力探测默认关闭，不为内网、自有 Provider 或自定义模型额外发送探测请求；显式开启后沿用上游探测、持久化与等级收敛行为。
 - `async.maxJobs=32`；后台任务的硬上限及计数边界见下文。
-- 欢迎界面的使用提示、字体提醒与提示／新功能标签采用简体中文，展示边界见[简体中文用户界面](../tui-presentation/spec.md)。
+- 欢迎区的既有使用提示、「提示：」徽标、「新功能」标签与字体提醒保留简体中文；其余内置 TUI 文案及原文保留边界见[英文 TUI 界面与中文启动提示](../tui-presentation/spec.md#requirement-英文-tui-界面与中文启动提示)。
 - `startup.setupWizard=false`：不因 setupVersion 落后于当前版本而自动运行或加载完整设置向导；见[全平台轻量启动](../fork-runtime/spec.md#requirement-全平台轻量启动)。
 - `startup.checkUpdate=false`：默认不查询 OMP 新版本；仅普通交互启动可显式开启。`OMP_OFFLINE` 始终跳过检查，不影响手动更新。
 - `marketplace.autoUpdate=off`：默认不自动刷新市场目录、检查或升级插件；普通模式可显式开启，`OMP_OFFLINE` 仍只允许手动更新。详见[插件市场更新](../fork-runtime/spec.md#requirement-插件市场更新)。

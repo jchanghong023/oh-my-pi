@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -21,19 +21,6 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const cleanupDirs: string[] = [];
-
-const originalOfflineEnv = process.env.OMP_OFFLINE;
-
-// parseArgs reads OMP_OFFLINE at call time; a machine-level export (the company
-// setup fork.md recommends) must not flip this file's online-path assertions.
-beforeEach(() => {
-	delete process.env.OMP_OFFLINE;
-});
-
-afterEach(() => {
-	if (originalOfflineEnv === undefined) delete process.env.OMP_OFFLINE;
-	else process.env.OMP_OFFLINE = originalOfflineEnv;
-});
 
 afterEach(async () => {
 	await Promise.all(cleanupDirs.splice(0).map(dir => removeWithRetries(dir)));
@@ -81,7 +68,7 @@ describe("readPipedInput", () => {
 describe("applyResolvedSystemPromptInputs", () => {
 	it("routes SYSTEM.md content through template-aware session options", () => {
 		const options: CreateAgentSessionOptions = {};
-		const parsed = parseArgs([]);
+		const parsed = { ...parseArgs([]), intranetOffline: undefined };
 
 		applyResolvedSystemPromptInputs(options, "project system prompt", "append prompt", parsed);
 
@@ -92,7 +79,7 @@ describe("applyResolvedSystemPromptInputs", () => {
 
 	it("keeps the offline notice out of the append prompt without offline mode", () => {
 		const options: CreateAgentSessionOptions = {};
-		const parsed = parseArgs([]);
+		const parsed = { ...parseArgs([]), intranetOffline: undefined };
 
 		applyResolvedSystemPromptInputs(options, undefined, undefined, parsed);
 

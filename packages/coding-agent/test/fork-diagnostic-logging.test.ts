@@ -16,28 +16,27 @@ type RecordLine = {
 	[key: string]: unknown;
 };
 
-const repository = path.resolve(import.meta.dir, "../../..");
+const cliEntry = path.resolve(import.meta.dir, "../src/cli.ts");
 const profile = "diagnostic-acceptance";
 
 async function sandbox() {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fork-diagnostic-"));
 	const root = path.join(directory, "project");
 	const home = path.join(directory, "home");
-	const configRoot = path.join(directory, "config");
 	const cacheRoot = path.join(directory, "cache");
-	const profileRoot = path.join(configRoot, "profiles", profile);
-	const agent = path.join(profileRoot, "agent");
-	await Promise.all([root, home, agent].map(dir => fs.mkdir(dir, { recursive: true, mode: 0o700 })));
-	await fs.writeFile(path.join(agent, "config.yml"), "startup:\n  setupWizard: false\n");
-	// Do not inherit credentials, provider URLs, profiles, package/config overrides,
-	// or another test's logger controls. Keep only OS executable-loading necessities.
+	await Promise.all([root, home].map(dir => fs.mkdir(dir, { recursive: true, mode: 0o700 })));
+	// Keep OS executable-loading variables and the gate's Bun transpiler cache, not application state.
 	const env: Record<string, string> = {};
 	for (const [key, value] of Object.entries(process.env)) {
-		if (/^(?:path|systemroot|windir|comspec|pathext|systemdrive|lang|lc_all)$/i.test(key) && value !== undefined)
+		if (
+			/^(?:path|systemroot|windir|comspec|pathext|systemdrive|lang|lc_all|bun_runtime_transpiler_cache_path)$/i.test(
+				key,
+			) &&
+			value !== undefined
+		)
 			env[key] = value;
 	}
 	Object.assign(env, {
-		OMP_CONFIG_ROOT: configRoot,
 		OMP_CACHE_DIR: cacheRoot,
 		HOME: home,
 		USERPROFILE: home,
@@ -46,13 +45,6 @@ async function sandbox() {
 		TEMP: directory,
 		APPDATA: path.join(home, "AppData", "Roaming"),
 		LOCALAPPDATA: path.join(home, "AppData", "Local"),
-		XDG_CONFIG_HOME: path.join(home, "xdg-config"),
-		XDG_DATA_HOME: path.join(home, "xdg-data"),
-		XDG_STATE_HOME: path.join(home, "xdg-state"),
-		XDG_CACHE_HOME: path.join(home, "xdg-cache"),
-		OMP_PROFILE: profile,
-		PI_PROFILE: profile,
-		PI_CODING_AGENT_DIR: "",
 		OMP_OFFLINE: "1",
 		OMP_LOG_LEVEL: "error",
 	});
@@ -77,9 +69,9 @@ async function sandbox() {
 		expect(records.length).toBeGreaterThan(0);
 		return { raw, records };
 	}
-	async function run(command: string[]) {
-		const child = Bun.spawn([process.execPath, ...command], {
-			cwd: repository,
+	async function run(args: string[]) {
+		const child = Bun.spawn([process.execPath, cliEntry, "--profile", profile, ...args], {
+			cwd: root,
 			env,
 			stdin: "ignore",
 			stdout: "pipe",
@@ -110,9 +102,10 @@ async function sandbox() {
 	}
 	return {
 		root,
+		home,
 		logsDir,
 		logs,
-		cli: (args: string[]) => run(["run", "dev", "--profile", profile, "--cwd", root, ...args]),
+		cli: run,
 		async cleanup() {
 			await fs.rm(directory, { recursive: true, force: true });
 		},
@@ -124,9 +117,10 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 		"P2-40 writes offline CLI errors to primary logs when fallback-logs is a regular file",
 		async () => {
 			const box = await sandbox();
-			const fallback = path.join(path.dirname(box.logsDir), "fallback-logs");
+			const fallback = path.join(box.home, ".local", "state", "omp", "logs");
 			try {
 				await fs.mkdir(box.logsDir, { recursive: true, mode: 0o700 });
+				await fs.mkdir(path.dirname(fallback), { recursive: true, mode: 0o700 });
 				await fs.writeFile(fallback, "unavailable fallback");
 				const failed = await box.cli([
 					"models",

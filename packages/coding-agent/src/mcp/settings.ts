@@ -11,9 +11,9 @@ export const cfgMcpEnableProjectConfig = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "MCP 项目配置",
-		description: "从项目根目录加载 .mcp.json/mcp.json",
+		group: "Discovery & MCP",
+		label: "MCP Project Config",
+		description: "Load .mcp.json/mcp.json from project root",
 	},
 });
 
@@ -23,9 +23,9 @@ export const cfgMcpStartupTimeoutMs = register({
 	default: 250,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "MCP 启动等待时间",
-		description: "首次发现 MCP 工具时等待的毫秒数；0 表示等待连接稳定",
+		group: "Discovery & MCP",
+		label: "MCP Startup Window",
+		description: "Wait this many milliseconds for initial MCP tool discovery; 0 waits until connections settle",
 	},
 });
 
@@ -35,10 +35,10 @@ export const cfgMcpShared = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "共享 MCP 服务器",
+		group: "Discovery & MCP",
+		label: "Shared MCP Servers",
 		description:
-			"由守护进程托管 MCP 服务器，多个 OMP 实例可共享服务器进程与工具目录缓存；维护会话状态的服务器仍为每个实例单独运行。守护进程不可用时回退到独立服务器。",
+			"Run MCP servers through the daemon so every omp instance shares one process per server and a cached tool catalog. Servers that hold a session keep one process per instance (falls back to private servers when unavailable)",
 	},
 });
 
@@ -48,9 +48,9 @@ export const cfgMcpIdleStopMinutes = register({
 	default: 5,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "MCP 空闲停止时间",
-		description: "共享 MCP 服务器空闲达到此分钟数后停止，下次请求时重新启动。",
+		group: "Discovery & MCP",
+		label: "MCP Idle Stop",
+		description: "Stop a shared MCP server after this many minutes without use; it restarts on the next request",
 	},
 });
 
@@ -86,9 +86,9 @@ export const cfgMcpRenderMarkdownResults = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "MCP Markdown 结果",
-		description: "在对话记录中将非 JSON 的 MCP 文本结果渲染为 Markdown",
+		group: "Discovery & MCP",
+		label: "MCP Markdown Results",
+		description: "Render non-JSON MCP text results as Markdown in the transcript",
 	},
 });
 
@@ -98,9 +98,9 @@ export const cfgMcpNotifications = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "注入 MCP 更新",
-		description: "将 MCP 资源更新注入 Agent 对话",
+		group: "Discovery & MCP",
+		label: "MCP Update Injection",
+		description: "Inject MCP resource updates into the agent conversation",
 	},
 });
 
@@ -110,8 +110,9 @@ export const cfgMcpNotificationDebounceMs = register({
 	default: 500,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "MCP 通知防抖",
-		description: "MCP 资源更新注入对话前的防抖等待时间（毫秒）",
+		group: "Discovery & MCP",
+		label: "MCP Notification Debounce",
+		description:
+			"Debounce window in milliseconds for MCP resource updates before injecting them into the conversation",
 	},
 });

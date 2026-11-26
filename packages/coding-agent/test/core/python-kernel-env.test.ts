@@ -135,15 +135,17 @@ describe("enumeratePythonRuntimes", () => {
 	const systemPy = path.join(path.sep, "usr", "bin", "python3");
 	const offlinePy = "/software/public/python/3.11.4/bin/python3.11";
 
-	it("keeps the Eval-only fixed interpreter out of shared discovery for active environments", () => {
-		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+	it.each(["linux", "win32"] as const)("excludes Eval's fixed Python from active discovery on %s", platform => {
+		Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
 		const activeDir = path.join(path.sep, "business", ".venv");
-		const activePy = path.join(activeDir, "bin", "python");
-		const linuxManagedPy = path.join(managedDir, "bin", "python");
+		const binDir = platform === "win32" ? "Scripts" : "bin";
+		const executable = platform === "win32" ? "python.exe" : "python";
+		const activePy = path.join(activeDir, binDir, executable);
+		const candidateManagedPy = path.join(managedDir, binDir, executable);
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
 		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
 		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
-			[offlinePy, activePy, linuxManagedPy].includes(String(candidate)),
+			[offlinePy, activePy, candidateManagedPy].includes(String(candidate)),
 		);
 		const baseEnv = {
 			OMP_OFFLINE: "1",
@@ -159,56 +161,12 @@ describe("enumeratePythonRuntimes", () => {
 
 		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), baseEnv);
 
-		expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([activePy, linuxManagedPy, systemPy]);
+		expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([activePy, candidateManagedPy, systemPy]);
 		expect(runtimes[0].venvPath).toBe(activeDir);
 		expect(runtimes[0].env.VIRTUAL_ENV).toBe(activeDir);
 		expect(runtimes[0].env.PYTHONPATH).toBe(baseEnv.PYTHONPATH);
 		expect(runtimes[2].env).toEqual(baseEnv);
 		expect(baseEnv).toEqual(originalEnv);
-	});
-
-	it("keeps active, managed, and system fallback order when the fixed offline interpreter is absent", () => {
-		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
-		const activeDir = path.join(path.sep, "business", ".venv");
-		const activePy = path.join(activeDir, "bin", "python");
-		const linuxManagedPy = path.join(managedDir, "bin", "python");
-		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
-		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
-			[activePy, linuxManagedPy].includes(String(candidate)),
-		);
-
-		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), {
-			OMP_OFFLINE: "1",
-			VIRTUAL_ENV: activeDir,
-		});
-
-		expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([activePy, linuxManagedPy, systemPy]);
-	});
-
-	it.each([
-		["linux", undefined],
-		["linux", "0"],
-		["linux", "true"],
-		["darwin", "1"],
-		["win32", "1"],
-	] as const)("preserves existing runtime order on %s with OMP_OFFLINE=%s", (platform, offline) => {
-		Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-		const activeDir = path.join(path.sep, "business", ".venv");
-		const binDir = platform === "win32" ? "Scripts" : "bin";
-		const executable = platform === "win32" ? "python.exe" : "python";
-		const activePy = path.join(activeDir, binDir, executable);
-		const candidateManagedPy = path.join(managedDir, binDir, executable);
-		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
-		vi.spyOn(fs, "existsSync").mockReturnValue(true);
-		const baseEnv = { OMP_OFFLINE: offline, VIRTUAL_ENV: activeDir, PYTHONPATH: "/business/modules" };
-
-		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), baseEnv);
-
-		expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([activePy, candidateManagedPy, systemPy]);
-		expect(runtimes[0].env.PYTHONPATH).toBe(baseEnv.PYTHONPATH);
-		expect(runtimes[2].env).toEqual(baseEnv);
 	});
 
 	it("keeps an explicit interpreter ahead of offline discovery without changing its environment", () => {

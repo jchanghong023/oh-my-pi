@@ -235,7 +235,9 @@ fn configure_rayon_pool() {
 			return;
 		},
 	};
-	omp_shell::set_rayon_global_pool_available(result.is_ok());
+	if result.is_ok() {
+		omp_shell::set_rayon_global_pool_available(true);
+	}
 }
 
 /// Build the custom Tokio runtime napi-rs uses on Windows, sized to what the

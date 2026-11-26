@@ -23,6 +23,8 @@ import { clearSubmittedText, restoreDetachedDraft } from "../slash-commands/help
 import { showTeamConfig } from "../team/config-ui";
 
 const USAGE = "用法：/team <问题或需求> — 用一段自然语言描述要分析的问题、需求或设计取舍。不猜测你要分析什么。";
+const TUI_USAGE =
+	"Usage: /team <question or requirement> — Describe the question, requirement, or design trade-off to analyze.";
 
 /**
  * Detach the submission's attachments before dispatch can await persistence,
@@ -92,11 +94,12 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "team",
 		icon: "agents",
-		description: "Team：至少三个代理独立调查、交叉审查与方案汇总（只读规划）",
+		description:
+			"Read-only planning: at least three agents investigate independently, cross-review, and synthesize options",
 		allowArgs: true,
-		inlineHint: "<问题或需求>",
+		inlineHint: "<question or requirement>",
 		subcommandOptional: true,
-		subcommands: [{ name: "configure", description: "编辑 Team 有序模型槽位（不调用模型）" }],
+		subcommands: [{ name: "configure", description: "Edit ordered Team model slots (no model calls)" }],
 		handle: handleTeamCommand,
 		handleTui: async (command, runtime: TuiSlashCommandRuntime) => {
 			const question = command.args.trim();
@@ -108,7 +111,7 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				return { consumed: true };
 			}
 			if (!question) {
-				ctx.showStatus(USAGE);
+				ctx.showStatus(TUI_USAGE);
 				return { consumed: true };
 			}
 			const draftDetached = runtime.draftDetached || detachSubmittedImages(runtime);

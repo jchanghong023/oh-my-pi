@@ -100,13 +100,13 @@ describe("status line VCS refresh", () => {
 
 		const text = lineText(line);
 		expect(text).toContain("cold-branch");
-		expect(text).toContain("改动5");
-		expect(text).not.toContain("改动6");
+		expect(text).toContain("Changes: 5");
+		expect(text).not.toContain("Changes: 6");
 
 		line.previewSettings({ ...gitSegment, segmentOptions: { git: { showUntracked: false } } });
-		expect(lineText(line)).toContain("改动2");
+		expect(lineText(line)).toContain("Changes: 2");
 		line.previewSettings({ ...gitSegment, segmentOptions: { git: { showStaged: false, showUnstaged: false } } });
-		expect(lineText(line)).toContain("改动3");
+		expect(lineText(line)).toContain("Changes: 3");
 	});
 
 	it("shows the jj status fallback once its cold read resolves", async () => {
@@ -123,11 +123,11 @@ describe("status line VCS refresh", () => {
 			} as unknown as VcsRepo,
 		});
 		const line = statusLine(statusSession(), gitSegment);
-		expect(lineText(line)).not.toContain("改动");
+		expect(lineText(line)).not.toContain("Changes:");
 		status.resolve({ staged: 0, unstaged: 2, untracked: 3 });
 		await flushStatus();
 		expect(lineText(line)).toContain("jj-bookmark");
-		expect(lineText(line)).toContain("改动5");
+		expect(lineText(line)).toContain("Changes: 5");
 	});
 
 	it("reads nothing while the terminal shows the checkout itself", async () => {
@@ -164,7 +164,7 @@ describe("status line VCS refresh", () => {
 
 		lineText(line);
 		await flushStatus();
-		expect(lineText(line)).toContain("改动1");
+		expect(lineText(line)).toContain("Changes: 1");
 
 		// Repaints and other session events reuse the facts.
 		line.refresh();
@@ -180,7 +180,7 @@ describe("status line VCS refresh", () => {
 		lineText(line);
 		await flushStatus();
 		expect(counts).toHaveBeenCalledTimes(2);
-		expect(lineText(line)).toContain("改动7");
+		expect(lineText(line)).toContain("Changes: 7");
 
 		vi.advanceTimersByTime(READ_INTERVAL_MS);
 		emit("agent_start");
@@ -188,18 +188,13 @@ describe("status line VCS refresh", () => {
 		lineText(line);
 		await flushStatus();
 		expect(counts).toHaveBeenCalledTimes(3);
-		expect(lineText(line)).toContain("改动3");
+		expect(lineText(line)).toContain("Changes: 3");
 	});
 
 	it.each([
 		["linux", "1", 60_000],
-		["linux", " TRUE ", 60_000],
-		["linux", "yes", 60_000],
-		["linux", "On", 60_000],
-		["linux", "false", 10_000],
-		["linux", "", 10_000],
-		["win32", "1", 10_000],
-		["darwin", "on", 10_000],
+		["linux", "0", READ_INTERVAL_MS],
+		["win32", "1", READ_INTERVAL_MS],
 	] as const)("limits event-driven reads with %s offline=%s", async (platform, offline, interval) => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 		const originalOffline = process.env.OMP_OFFLINE;
@@ -217,14 +212,14 @@ describe("status line VCS refresh", () => {
 			const line = statusLine(session, gitSegment);
 			lineText(line);
 			await flushStatus();
-			expect(lineText(line)).toContain("改动2");
+			expect(lineText(line)).toContain("Changes: 2");
 			expect(counts).toHaveBeenCalledTimes(1);
 
 			vi.advanceTimersByTime(interval - 1);
 			emit("turn_end");
 			emit("agent_end");
 			await flushStatus();
-			expect(lineText(line)).toContain("改动2");
+			expect(lineText(line)).toContain("Changes: 2");
 			await flushStatus();
 			expect(counts).toHaveBeenCalledTimes(1);
 
@@ -232,9 +227,8 @@ describe("status line VCS refresh", () => {
 			lineText(line);
 			await flushStatus();
 			expect(counts).toHaveBeenCalledTimes(2);
-			expect(lineText(line)).toContain("改动7");
+			expect(lineText(line)).toContain("Changes: 7");
 		} finally {
-			disposeStatusLines();
 			Object.defineProperty(process, "platform", originalPlatform);
 			if (originalOffline === undefined) delete process.env.OMP_OFFLINE;
 			else process.env.OMP_OFFLINE = originalOffline;
@@ -267,7 +261,7 @@ describe("status line VCS refresh", () => {
 		lineText(line);
 		await flushStatus();
 		expect(counts).toHaveBeenCalledTimes(2);
-		expect(lineText(line)).toContain("改动4");
+		expect(lineText(line)).toContain("Changes: 4");
 	});
 
 	it("re-reads git facts after a user command", async () => {

@@ -7,18 +7,19 @@ import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls/l
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import * as uiHelpers from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as sessionPaths from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { imageAttachmentSource } from "@oh-my-pi/pi-coding-agent/utils/image-source";
 import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
-import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { signal } from "@oh-my-pi/pi-tui";
 import { jsx } from "@oh-my-pi/pi-tui/jsx-runtime";
+import * as piUtils from "@oh-my-pi/pi-utils";
 import { createInteractiveModeContext, type ContextOverrides } from "./helpers/interactive-mode-context";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 const TINY_PNG = encodeRawPng(Uint8Array.of(0, 0, 0, 255), 1, 1, 4).toString("base64");
+const imageSettings = Settings.isolated({ "images.autoResize": false });
 
-function createContext(sessionManager: SessionManager, overrides: ContextOverrides = {}) {
-	return createInteractiveModeContext({ sessionManager, ...overrides });
+function createContext(sessionManager: SessionManager) {
+	return createInteractiveModeContext({ sessionManager, settings: imageSettings });
 }
 
 function expectUntouched({ composer, showStatus }: ReturnType<typeof createContext>) {
@@ -67,16 +68,12 @@ function pausePromptDimensions() {
 }
 
 describe("guarded image path paste ownership", () => {
-	let settingsState: SettingsTestState | undefined;
 	let tmpDir: string;
 	let imagePath: string;
 	let sessionManager: SessionManager;
 
 	beforeEach(async () => {
-		settingsState = beginSettingsTest();
-		await Settings.init({ inMemory: true, overrides: { "images.autoResize": false } });
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-image-ownership-"));
-		setAgentDir(tmpDir);
 		sessionManager = SessionManager.inMemory(tmpDir);
 		imagePath = path.join(tmpDir, "sketch.png");
 		await Bun.write(imagePath, Buffer.from(TINY_PNG, "base64"));
@@ -85,8 +82,6 @@ describe("guarded image path paste ownership", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		await fs.rm(tmpDir, { recursive: true, force: true });
-		restoreSettingsTestState(settingsState);
-		settingsState = undefined;
 	});
 
 	it("does not append images, links, atoms or text when ownership expires during dimensions", async () => {
@@ -141,6 +136,8 @@ describe("guarded image path paste ownership", () => {
 	});
 
 	it("loads guarded local URLs from the owning session and keeps the relocation-safe source", async () => {
+		spyOn(piUtils, "getBlobsDir").mockReturnValue(path.join(tmpDir, "blobs"));
+		spyOn(sessionPaths, "writeTerminalBreadcrumb").mockImplementation(() => {});
 		const owningSession = SessionManager.create(tmpDir, path.join(tmpDir, "sessions"));
 		const source = "local://sketch-owned.png";
 		const sourcePath = resolveLocalUrlToPath(source, {
@@ -186,6 +183,7 @@ describe("guarded image path paste ownership", () => {
 			const target = signal<ContextOverrides["promptPasteTarget"]>(undefined);
 			const ctx = createInteractiveModeContext({
 				sessionManager,
+				settings: imageSettings,
 				get promptPasteTarget() {
 					return target();
 				},

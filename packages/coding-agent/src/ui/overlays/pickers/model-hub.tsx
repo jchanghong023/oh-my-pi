@@ -78,12 +78,12 @@ function pickerScopes(hub: ModelHubState): TspPickerScope[] {
 			case "separator":
 				break;
 			case "roles":
-				scopes.push({ id: entry.id, label: "角色", icon: "sparkles", count: hub.visibleRoleIds().length });
+				scopes.push({ id: entry.id, label: "Roles", icon: "sparkles", count: hub.visibleRoleIds().length });
 				break;
 			case "all":
 				scopes.push({
 					id: entry.id,
-					label: "所有模型",
+					label: "All models",
 					icon: "list",
 					count: counts ? hub.searchTotal : hub.availableItems.length,
 				});
@@ -91,7 +91,7 @@ function pickerScopes(hub: ModelHubState): TspPickerScope[] {
 			case "recent":
 				scopes.push({
 					id: entry.id,
-					label: "最近使用",
+					label: "Recent",
 					icon: "clock",
 					count: counts ? hub.recentSearchCount : hub.recentItems.length,
 				});
@@ -105,12 +105,12 @@ function pickerScopes(hub: ModelHubState): TspPickerScope[] {
 						id: entry.id,
 						label: entry.label,
 						mark,
-						group: "未登录",
+						group: "Not signed in",
 						disabled: oauth.has(providerId)
-							? "使用 /login 登录"
+							? "Sign in with /login"
 							: envVars.length > 0
-								? `设置 ${envVars.join(" 或 ")} 即可登录`
-								: "在配置中添加 API 密钥以登录",
+								? `Set ${envVars.join(" or ")} to sign in`
+								: "Add an API key in config to sign in",
 						dot: "muted",
 					});
 					break;
@@ -120,7 +120,7 @@ function pickerScopes(hub: ModelHubState): TspPickerScope[] {
 					id: entry.id,
 					label: entry.label,
 					mark,
-					group: "Provider",
+					group: "Providers",
 					count: counts ? (counts.get(providerId) ?? 0) : Number(entry.annotation ?? 0),
 					...(dot ? { dot } : {}),
 				});
@@ -206,61 +206,61 @@ function pickerActions(hub: ModelHubState): TspPickerAction[] {
 			);
 		const compaction =
 			hub.callbacks.onCompactionPointChange && hub.roleRowModel()
-				? action("compaction", "压缩阈值", "k")
+				? action("compaction", "Compaction limit", "k")
 				: undefined;
 		const actions: (TspPickerAction | undefined)[] = [];
 		switch (row?.kind) {
 			case "role": {
 				const assigned = hub.roles[row.role];
 				actions.push(
-					action("pick", "选择模型", "enter", true),
-					action("fallback", "添加回退", "f"),
-					assigned && !assigned.autoSelected ? action("clear", "清除", "x") : undefined,
-					hub.roleThinkingTarget(row.role) ? action("thinking", "思考级别", "t") : undefined,
+					action("pick", "Pick model", "enter", true),
+					action("fallback", "Add fallback", "f"),
+					assigned && !assigned.autoSelected ? action("clear", "Clear", "x") : undefined,
+					hub.roleThinkingTarget(row.role) ? action("thinking", "Thinking", "t") : undefined,
 					compaction,
-					action("cycle", hub.cycleOrder().includes(row.role) ? "移出循环" : "加入循环", "c"),
-					action("new", "新建角色", "n"),
-					hub.callbacks.onSavePreset ? action("save", "保存预设", "s") : undefined,
-					hub.presets().names.length > 0 ? action("nextPreset", "下一预设", "p") : undefined,
+					action("cycle", hub.cycleOrder().includes(row.role) ? "Leave cycle" : "Add to cycle", "c"),
+					action("new", "New role", "n"),
+					hub.callbacks.onSavePreset ? action("save", "Save preset", "s") : undefined,
+					hub.presets().names.length > 0 ? action("nextPreset", "Next preset", "p") : undefined,
 				);
 				break;
 			}
 			case "fallback":
 				actions.push(
-					action("pick", "替换", "enter", true),
-					action("fallback", "继续添加", "f"),
-					action("clear", "移除", "x"),
-					hub.resolveFallbackEntry(row.role, row.chainIndex) ? action("thinking", "思考级别", "t") : undefined,
+					action("pick", "Replace", "enter", true),
+					action("fallback", "Add another", "f"),
+					action("clear", "Remove", "x"),
+					hub.resolveFallbackEntry(row.role, row.chainIndex) ? action("thinking", "Thinking", "t") : undefined,
 					compaction,
-					action("earlier", "上移", "["),
-					action("later", "下移", "]"),
+					action("earlier", "Earlier", "["),
+					action("later", "Later", "]"),
 				);
 				break;
 			case "chainKey":
-				actions.push(action("pick", "添加回退", "enter", true), action("clear", "清除回退链", "x"));
+				actions.push(action("pick", "Add fallback", "enter", true), action("clear", "Clear chain", "x"));
 				break;
 			case "newFallback":
-				actions.push(action("pick", "新建回退链", "enter", true));
+				actions.push(action("pick", "New fallback chain", "enter", true));
 				break;
 			case "newRole":
-				actions.push(action("pick", "新建角色", "enter", true));
+				actions.push(action("pick", "New role", "enter", true));
 				break;
 		}
-		return [...actions, closeAction("关闭")].filter((value): value is TspPickerAction => value !== undefined);
+		return [...actions, closeAction()].filter((value): value is TspPickerAction => value !== undefined);
 	}
 	if (hub.lockedView())
 		return entry.oauth
-			? [pickerAction("login", "登录", confirmKbd(), { primary: true }), closeAction("关闭")]
-			: [closeAction("关闭")];
+			? [pickerAction("login", "Log in", confirmKbd(), { primary: true }), closeAction()]
+			: [closeAction()];
 	return [
 		pickerAction(
 			"assign",
-			"分配角色",
+			"Assign role",
 			"enter",
-			hub.browser.pickerSelected ? { primary: true } : { primary: true, disabled: "未选择模型" },
+			hub.browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 		),
 		refresh,
-		hub.browser.query.length > 0 ? cancel("清除搜索") : closeAction("关闭"),
+		hub.browser.query.length > 0 ? cancel("Clear search") : closeAction(),
 	].filter((value): value is TspPickerAction => value !== undefined);
 }
 
@@ -508,40 +508,45 @@ function hubProps(hub: ModelHubState): TspPickerProps {
 	const rolesView = hub.rolesView();
 	const strip = hub.strip;
 	const subtitle = (): TspPickerProps["subtitle"] => {
-		if (hub.assignmentPending) return "正在应用模型…";
+		if (hub.assignmentPending) return "Applying model…";
 		const assigning = hub.assigning;
 		if (assigning !== null) {
-			if (assigning.kind === "fallbackKey") return "新建回退链：选择需要回退的模型";
+			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
 			const info = hub.source.getRoleInfo(assigning.role);
 			const verb =
-				assigning.kind === "role" ? "正在分配" : assigning.index === null ? "添加回退模型：" : "替换回退模型：";
+				assigning.kind === "role"
+					? "Assigning"
+					: assigning.index === null
+						? "Adding fallback for"
+						: "Replacing fallback of";
 			return [{ t: `${verb} ` }, { s: "strong", t: info.tag ?? info.name ?? assigning.role }];
 		}
 		if (hub.configError && entry.kind !== "provider") return [{ s: "error", t: hub.configError }];
-		if (entry.kind === "provider" && hub.isRefreshing(entry.providerId)) return `${entry.label} · 正在刷新模型列表…`;
+		if (entry.kind === "provider" && hub.isRefreshing(entry.providerId))
+			return `${entry.label} · refreshing model list…`;
 		const presets = rolesView ? hub.presets() : undefined;
 		if (presets && presets.names.length > 0)
 			return [
-				{ s: "muted", t: "预设 " },
-				presets.active ? { s: "strong", t: presets.active } : { s: "muted", t: "自定义" },
-				{ s: "muted", t: hub.scoped ? " · --models 范围" : " · 清除角色后自动选择" },
+				{ s: "muted", t: "Preset " },
+				presets.active ? { s: "strong", t: presets.active } : { s: "muted", t: "custom" },
+				{ s: "muted", t: hub.scoped ? " · --models scope" : " · Cleared roles fall back to auto-selection" },
 			];
-		if (hub.scoped) return "--models 范围";
-		if (rolesView) return "清除角色后自动选择";
+		if (hub.scoped) return "--models scope";
+		if (rolesView) return "Cleared roles fall back to auto-selection";
 		return undefined;
 	};
 	const base: TspPickerProps = {
-		title: "模型",
+		title: "Models",
 		subtitle: subtitle(),
 		icon: "cpu",
-		noun: rolesView ? "角色" : "模型",
+		noun: rolesView ? "roles" : "models",
 		size: "lg",
 		layout: "rows",
 		preview: "side",
 		// The Roles rows' letter commands own printable keys until a query is live.
 		query: rolesView && hub.browser.query.length === 0 ? null : hub.browser.query,
 		cursor: hub.browser.cursor,
-		placeholder: "搜索模型…",
+		placeholder: "Search models…",
 		scopes: pickerScopes(hub),
 		scope: entry.id,
 		actions: pickerActions(hub),
@@ -554,7 +559,7 @@ function hubProps(hub: ModelHubState): TspPickerProps {
 			...base,
 			tabs: ROLE_TABS.map(tab => ({
 				id: tab,
-				label: tab === "all" ? "全部" : tab === "chat" ? "对话" : "类型",
+				label: tab === "all" ? "All" : tab === "chat" ? "Chat" : "Kinds",
 				count: hub.visibleRoleIds().filter(role => tab === "all" || hub.source.getRoleInfo(role).section === tab)
 					.length,
 			})),

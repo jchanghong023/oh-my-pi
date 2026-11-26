@@ -8,14 +8,14 @@ export interface SettingsPage {
 }
 
 export const SETTINGS_PAGES: Readonly<Record<SettingTab, SettingsPage>> = {
-	appearance: { label: "外观", lead: "主题、输入区、状态栏及对话记录的显示方式。" },
-	model: { label: "模型", lead: "思考、采样、系统 Prompt、重试及辅助模型。" },
-	interaction: { label: "交互", lead: "输入、授权、通知、语音及启动行为。" },
-	context: { label: "上下文", lead: "模型能看到的内容，以及压缩对话的时机与方式。" },
-	memory: { label: "记忆", lead: "OMP 跨会话记住的内容及其保存位置。" },
-	files: { label: "文件", lead: "文件读取、摘要、编辑及语言服务器。" },
-	shell: { label: "Shell", lead: "Bash 工具与 Eval 运行时。" },
-	tools: { label: "工具", lead: "模型可用的工具、限制及外部集成。" },
-	tasks: { label: "任务", lead: "模式、Subagent、隔离与自定义命令。" },
-	providers: { label: "Provider", lead: "服务、Provider 协议、超时及隐私。" },
+	appearance: { label: "Appearance", lead: "Theme, composer, status line and how the transcript renders." },
+	model: { label: "Model", lead: "Thinking, sampling, the system prompt, retries and the helper models." },
+	interaction: { label: "Interaction", lead: "Input, approvals, notifications, speech and what happens at startup." },
+	context: { label: "Context", lead: "What the model sees, and when and how the conversation compacts." },
+	memory: { label: "Memory", lead: "What omp remembers across sessions and where it keeps it." },
+	files: { label: "Files", lead: "How files are read, summarized and edited, and the language servers." },
+	shell: { label: "Shell", lead: "The bash tool and the eval runtimes." },
+	tools: { label: "Tools", lead: "Which tools the model has, their limits and the external integrations." },
+	tasks: { label: "Tasks", lead: "Modes, subagents, isolation and custom commands." },
+	providers: { label: "Providers", lead: "Services, provider protocols, timeouts and privacy." },
 };

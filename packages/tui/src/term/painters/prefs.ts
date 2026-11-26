@@ -162,7 +162,7 @@ export function selectList(
 	hover?: number,
 	column?: { readonly min: number; readonly max: number },
 ): { rows: string[]; first: number } {
-	if (options.length === 0) return { rows: [theme.fg("muted", "  暂无选项")], first: 0 };
+	if (options.length === 0) return { rows: [theme.fg("muted", "  No items")], first: 0 };
 	const budget = Math.max(1, Math.min(options.length, max));
 	const cursor = theme.symbols.symbol("nav.cursor") || ">";
 	const overflow = options.length > budget;
@@ -203,7 +203,7 @@ export function selectList(
 		rows.push(row);
 	}
 	const out = scrolled(theme, rows, options.length, first, width, rows.length, "muted");
-	if (overflow) out.push(theme.fg("muted", truncate("  输入以搜索", Math.max(1, width - 2), "")));
+	if (overflow) out.push(theme.fg("muted", truncate("  Type to search", Math.max(1, width - 2), "")));
 	return { rows: out, first };
 }
 
@@ -228,7 +228,7 @@ function formField(
 	}
 	if (parts.preview) {
 		rows.push("");
-		rows.push(...wrap(theme.fg("muted", "预览："), width));
+		rows.push(...wrap(theme.fg("muted", "Preview:"), width));
 		rows.push(...parts.preview);
 	}
 	rows.push("");
@@ -390,7 +390,7 @@ function settingsList(
 	const rows = geometry.rows;
 	const searching = isSearching(props);
 	if (items.length === 0) {
-		rows.push(theme.fg("dim", searching ? "  没有匹配的设置" : "  暂无设置"));
+		rows.push(theme.fg("dim", searching ? "  No matching settings" : "  No settings available"));
 		return geometry;
 	}
 	const runs = prefsRuns(items, props);
@@ -442,7 +442,7 @@ function splitList(
 	maxVisible: number,
 	hover: string | undefined,
 ): ListGeometry | null {
-	const names = runs.map(run => run.name || "其他");
+	const names = runs.map(run => run.name || "Other");
 	let nameWidth = 0;
 	for (const name of names) nameWidth = Math.max(nameWidth, visibleWidth(name));
 	const sidebar = term?.sidebar ?? Math.min(22, nameWidth) + 4;
@@ -545,7 +545,7 @@ function choiceEditor(
 		description: row.hint,
 		preview,
 		control: list.rows,
-		hint: `  ${caps("select.confirm")} 选择 · ${caps("select.cancel")} 返回`,
+		hint: `  ${caps("select.confirm")} to select · ${caps("select.cancel")} to go back`,
 	});
 	return {
 		rows: field.rows,
@@ -579,10 +579,10 @@ function multiEditor(
 		control.options.findIndex(candidate => candidate.value === option),
 	);
 	const list = selectList(theme, options, selected, width, MULTI_ROWS, hover);
-	const back = `${caps("select.cancel")} 返回`;
+	const back = `${caps("select.cancel")} to go back`;
 	const hint = ordered
-		? `  点击切换 · 拖动已选项排序 · ←/→ 移动 · 1–9 定位 · ${back}`
-		: `  点击/${caps("select.confirm")}/␣ 切换 · ${back}`;
+		? `  Click to toggle · drag selected items to reorder · ←/→ move · 1-9 place · ${back}`
+		: `  Click/${caps("select.confirm")}/␣ to toggle · ${back}`;
 	const field = formField(theme, width, { label: row.label, description: row.hint, control: list.rows, hint });
 	return {
 		rows: field.rows,
@@ -605,7 +605,7 @@ function textEditor(
 		description: row.hint,
 		control: [inputLine(draft, cursor ?? draft.length, width)],
 		error,
-		hint: `  ${caps("select.confirm")} 保存 · ${caps("select.cancel")} 取消 · 清空以取消设置`,
+		hint: `  ${caps("select.confirm")} to save · ${caps("select.cancel")} to cancel · Clear field to unset`,
 	});
 	return { rows: field.rows };
 }
@@ -622,13 +622,13 @@ function caps(action: WidgetAction): string {
 function footerHint(props: TspPrefsProps, term: PrefsTerm | undefined, runs: readonly PrefsRun[]): string {
 	if (term?.hint !== undefined) return term.hint;
 	const confirm = caps("select.confirm");
-	const close = `${caps("select.cancel")} 关闭`;
-	if (isSearching(props)) return `${confirm} 修改 · ⇥ 切换分类 · ${caps("select.cancel")} 退出搜索`;
-	if (term?.body) return `⇥ 切换分类 · ${close}`;
+	const close = `${caps("select.cancel")} to close`;
+	if (isSearching(props)) return `${confirm} to change · ⇥ to jump tabs · ${caps("select.cancel")} to exit search`;
+	if (term?.body) return `⇥ to switch tabs · ${close}`;
 	if (term?.sectionFocus)
-		return `${caps("select.up")}/${caps("select.down")} 切换分组 · ⇥/${confirm} 返回设置 · ←/→ 切换分类 · ${close}`;
-	const nav = runs.length >= 2 ? "⇥ 切换分组 · ←/→ 切换分类" : "⇥ 切换分类";
-	return `${confirm}/␣ 修改 · ${nav} · 输入以搜索 · ${close}`;
+		return `${caps("select.up")}/${caps("select.down")} to jump sections · ⇥/${confirm} to settings · ←/→ to switch tabs · ${close}`;
+	const nav = runs.length >= 2 ? "⇥ to jump sections · ←/→ to switch tabs" : "⇥ to switch tabs";
+	return `${confirm}/␣ to change · ${nav} · Type to search · ${close}`;
 }
 
 // ─── Page strip ─────────────────────────────────────────────────────────────
@@ -663,7 +663,7 @@ function searchBanner(theme: Theme, props: TspPrefsProps, cursor: number | undef
 	let count = 0;
 	for (const section of props.sections) count += section.rows.length;
 	const icon = theme.symbols.icon("search");
-	const countText = `${count} 项匹配`;
+	const countText = count === 1 ? "1 match" : `${count} matches`;
 	const prefix = ` ${theme.fg("accent", icon)} `;
 	const inputWidth = Math.max(4, width - visibleWidth(prefix) - (visibleWidth(countText) + 1) - 1);
 	const query = props.query ?? "";
@@ -695,7 +695,7 @@ function paintWindow(node: UiNode, cx: PaintContext): Block {
 		nodeState(node, PREFS_TAB_HOVER, () => undefined as string | undefined)(),
 	);
 	const preview = previewNode && !searching ? cx.paint(previewNode, inner).rows : undefined;
-	const previewRows = preview ? ["", theme.fg("muted", "预览："), ...preview] : [];
+	const previewRows = preview ? ["", theme.fg("muted", "Preview:"), ...preview] : [];
 	const fixed = 1 + strip.rows.length + 1 + (searching ? 1 : 0) + 3;
 	const contentRows = Math.max(7, height - fixed - previewRows.length);
 	const maxVisible = Math.max(3, contentRows - 4);

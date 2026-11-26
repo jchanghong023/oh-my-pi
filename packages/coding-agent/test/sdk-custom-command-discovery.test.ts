@@ -6,19 +6,15 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let tempDir: TempDir;
-let state: SettingsTestState;
 let authStorage: AuthStorage;
 let session: AgentSession | undefined;
 
 beforeEach(async () => {
-	state = beginSettingsTest();
 	tempDir = TempDir.createSync("omp-sdk-command-discovery-");
-	setAgentDir(tempDir.join("agent"));
 	authStorage = createInMemoryAuthStorage();
 	await Bun.write(
 		tempDir.join("agent", "commands", "external-fixture", "index.js"),
@@ -33,17 +29,17 @@ afterEach(async () => {
 	} finally {
 		session = undefined;
 		authStorage.close();
-		restoreSettingsTestState(state);
 		await tempDir.remove();
 	}
 });
 
 async function createSession(restrictToolNames: boolean): Promise<AgentSession> {
+	const settings = Settings.isolated({ "compaction.enabled": false });
 	const result = await createAgentSession({
 		cwd: tempDir.path(),
 		agentDir: tempDir.join("agent"),
 		authStorage,
-		modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+		modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml"), { settings }),
 		model: buildModel({
 			id: "command-discovery-model",
 			name: "Command discovery fixture",
@@ -56,7 +52,8 @@ async function createSession(restrictToolNames: boolean): Promise<AgentSession> 
 			contextWindow: 4096,
 			maxTokens: 1024,
 		}),
-		settings: Settings.isolated({ "compaction.enabled": false }),
+		settings,
+		bindProcessState: false,
 		sessionManager: SessionManager.inMemory(tempDir.path()),
 		disableExtensionDiscovery: true,
 		restrictToolNames,

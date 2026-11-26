@@ -151,10 +151,7 @@ describe("symbols", () => {
 		expect(dark.symbols.spinnerFrames).toEqual(["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]);
 	});
 
-	it.each([
-		["0", ["🧹", "🩺", "🧩", "🧭", "⏻", "🪙", "🪝"]],
-		["1", ["×", "✚", "⊞", "→", "■", "#", "↪"]],
-	] as const)("limits offline glyph substitutions to the Unicode preset (offline=%s)", (offline, expected) => {
+	it("limits offline glyph substitutions to the Unicode preset", () => {
 		const previous = process.env.OMP_OFFLINE;
 		const keys = [
 			"cmd.eraser",
@@ -171,14 +168,15 @@ describe("symbols", () => {
 		};
 		try {
 			process.env.OMP_OFFLINE = "0";
+			expect(glyphs("unicode")).toEqual(["🧹", "🩺", "🧩", "🧭", "⏻", "🪙", "🪝"]);
 			const nerd = glyphs("nerd");
 			const ascii = glyphs("ascii");
-			process.env.OMP_OFFLINE = offline;
-			expect(glyphs("unicode")).toEqual([...expected]);
+			process.env.OMP_OFFLINE = "1";
+			expect(glyphs("unicode")).toEqual(["×", "✚", "⊞", "→", "■", "#", "↪"]);
 			expect(glyphs("nerd")).toEqual(nerd);
 			expect(glyphs("ascii")).toEqual(ascii);
 			const { symbols } = createTheme(builtinThemes().dark!, { symbolPreset: "unicode" });
-			expect(symbols.icon("eraser")).toBe(expected[0]);
+			expect(symbols.icon("eraser")).toBe("×");
 			expect(symbols.icon("gear")).toBe("⚙");
 			expect(symbols.icon("fast")).toBe("⚡");
 		} finally {

@@ -73,7 +73,7 @@ export interface OAuthSelectorProps {
 }
 
 const MAX_VISIBLE = 10;
-const UNAVAILABLE = "此环境中无法使用该 Provider。";
+const UNAVAILABLE = "Provider unavailable in this environment.";
 
 /** Compact tag of each credential origin. */
 const ORIGIN_LABELS: Readonly<Record<string, string>> = {
@@ -200,20 +200,20 @@ export function OAuthSelector(props: OAuthSelectorProps): JSXNode {
 						? "success"
 						: "muted";
 		const source = sourceLabel(provider.id);
-		const detail = source
-			? origin?.kind === "oauth"
-				? `已登录 · ${source}`
-				: `API 密钥 · ${source}`
-			: storedCatalogue
-				? "已存凭据"
-				: "未配置";
+		const detail = !source
+			? storedCatalogue
+				? "Stored credentials"
+				: "Not configured"
+			: origin?.kind === "oauth"
+				? `Signed in · ${source}`
+				: `API key · ${source}`;
 		return {
 			id: provider.id,
 			label: provider.name,
 			detail,
 			mark: { text: initials(provider.name), seed: provider.id },
 			dot,
-			...(provider.available ? {} : { disabled: UNAVAILABLE }),
+			...(provider.available ? {} : { disabled: "Provider unavailable in this environment" }),
 		};
 	};
 	const items = computed(() => {
@@ -225,11 +225,11 @@ export function OAuthSelector(props: OAuthSelectorProps): JSXNode {
 		return [
 			pickerAction(
 				"confirm",
-				login ? "登录" : "退出登录",
+				login ? "Sign in" : "Sign out",
 				"enter",
 				login ? { primary: true } : { primary: true, danger: true },
 			),
-			sheet ? pickerAction(sheet.leave.id, sheet.leave.label, cancelKbd(), { end: true }) : closeAction("关闭"),
+			sheet ? pickerAction(sheet.leave.id, sheet.leave.label, cancelKbd(), { end: true }) : closeAction(),
 		];
 	};
 	const term = (): OAuthLookTerm => {
@@ -255,12 +255,12 @@ export function OAuthSelector(props: OAuthSelectorProps): JSXNode {
 		const empty =
 			providers().length === 0
 				? login
-					? "没有可用的 OAuth Provider"
-					: "没有可退出登录的已存 Provider 凭据"
-				: "没有匹配的 Provider";
+					? "No OAuth providers available"
+					: "No stored provider credentials to log out"
+				: "No matching providers";
 		return {
 			look: "omp.oauth",
-			title: login ? "选择要登录的 Provider" : "选择要退出登录的 Provider",
+			title: login ? "Select provider to login" : "Select provider to logout",
 			maxRows: rows(),
 			statuses,
 			sources,
@@ -280,21 +280,21 @@ export function OAuthSelector(props: OAuthSelectorProps): JSXNode {
 			<picker
 				key={PICKER_KEY}
 				role={() => sheetProp("role")}
-				title={() => sheetProp("title") ?? (login ? "登录" : "退出登录")}
-				subtitle={() => sheetProp("subtitle") ?? (login ? "选择 Provider" : "移除已存凭据")}
+				title={() => sheetProp("title") ?? (login ? "Sign in" : "Sign out")}
+				subtitle={() => sheetProp("subtitle") ?? (login ? "Pick a provider" : "Remove stored credentials")}
 				icon="key-round"
-				noun="Provider"
+				noun="providers"
 				size={() => sheetProp("size") ?? "md"}
 				layout="cards"
 				preview="none"
 				query={() => (showSearch() ? search().text : null)}
 				cursor={() => (showSearch() ? search().cursor : undefined)}
-				placeholder="搜索 Provider…"
+				placeholder="Search providers…"
 				items={items}
 				order={() => (search().text.length > 0 ? visible().map(provider => provider.id) : undefined)}
 				selected={selected}
 				total={() => providers().length}
-				empty={login ? "没有可用的 OAuth Provider" : "没有可退出登录的已存 Provider 凭据"}
+				empty={login ? "No OAuth providers available" : "No stored provider credentials to log out"}
 				message={() => status() ?? undefined}
 				strip={() => {
 					const label = sheetProp("status");

@@ -537,9 +537,9 @@ const JUDGMENT_BATCH_PROGRESS_RETAIN_MS = 1_000;
 /** A transcript action naming an agent to view (a live task card's agent row). */
 const SUBAGENT_FOCUS_ACT = "subagents.focus=";
 /** The composer's hint while an ask waits above it. */
-const ASK_COMPOSER_HINT = "↑ 回答上方问题，或在此输入以跳过";
+const ASK_COMPOSER_HINT = "↑ answer the questions above, or type here to skip them";
 /** Tern's placeholder while an ask waits above the composer. */
-const NATIVE_ASK_PLACEHOLDER = "回答上方问题，或在此输入以跳过";
+const NATIVE_ASK_PLACEHOLDER = "Answer above, or type here to skip the questions";
 /** Slash-command type glyph for the autocomplete icon column; none under ASCII symbols. */
 function slashCommandIcon(name: string): string | undefined {
 	const symbols = currentTheme().symbols;
@@ -4214,10 +4214,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#nativeComposerPlaceholder(): TspText | undefined {
 		this.#composerHintRevision();
-		if (this.isBtwFocused) return "询问此内容…";
+		if (this.isBtwFocused) return "Ask about this…";
 		if (this.#extensionUiController.composerAsk()) return NATIVE_ASK_PLACEHOLDER;
 		const agent = this.focusedAgentId;
-		if (agent !== undefined) return `向 ${agent} 发送消息`;
+		if (agent !== undefined) return `Message ${agent}`;
 		const title = this.sessionManager.getSessionName();
 		return title ? [{ t: `“${title}”`, s: "em" }] : undefined;
 	}

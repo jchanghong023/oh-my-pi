@@ -6,6 +6,7 @@ import { initTheme } from "../src/ui/theme/service";
 import type { LocalAgentSessionEvent as AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { vocalizer } from "@oh-my-pi/pi-coding-agent/tts/vocalizer";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
+import { restoreEnvValue } from "./helpers/settings-test-state";
 
 import { cfgSpeechEnabled, cfgSpeechMode } from "@oh-my-pi/pi-coding-agent/tts/settings";
 
@@ -38,8 +39,6 @@ function messageUpdate(text: string): Extract<AgentSessionEvent, { type: "messag
 	} as unknown as Extract<AgentSessionEvent, { type: "message_update" }>;
 }
 
-const ONLINE_WINDOW_MS = 50;
-
 function createStreamingFixture() {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const ctx = createInteractiveModeContext({
@@ -70,64 +69,62 @@ beforeAll(async () => {
 });
 
 describe("EventController message_update coalescing", () => {
-	let previousOffline: string | undefined;
-
 	beforeEach(async () => {
-		previousOffline = process.env.OMP_OFFLINE;
-		delete process.env.OMP_OFFLINE;
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true, overrides: { "display.smoothStreaming": false } });
 		vi.useFakeTimers();
 	});
 
 	afterEach(() => {
-		if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
-		else process.env.OMP_OFFLINE = previousOffline;
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		resetSettingsForTest();
 	});
 
+	it("runs the streaming rebuild once per window instead of once per delta, applying the latest snapshot", async () => {
+		const { ctx, draws, emit } = createStreamingFixture();
+
+		emit(messageUpdate("tok1"));
+		emit(messageUpdate("tok1 tok2"));
+		emit(messageUpdate("tok1 tok2 tok3"));
+		emit(messageUpdate("tok1 tok2 tok3 tok4"));
+		emit(messageUpdate("tok1 tok2 tok3 tok4 tok5"));
+
+		expect(draws).not.toHaveBeenCalled();
+		vi.runOnlyPendingTimers();
+		await flushMicrotasks();
+		expect(draws).toHaveBeenCalledTimes(1);
+		expect(ctx.streamingMessage?.content).toEqual([{ type: "text", text: "tok1 tok2 tok3 tok4 tok5" }]);
+
+		emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6"));
+		emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6 tok7"));
+		vi.runOnlyPendingTimers();
+		await flushMicrotasks();
+		expect(draws).toHaveBeenCalledTimes(2);
+		expect(ctx.streamingMessage?.content).toEqual([{ type: "text", text: "tok1 tok2 tok3 tok4 tok5 tok6 tok7" }]);
+	});
+
 	it.each([
-		["0", ONLINE_WINDOW_MS],
+		["0", 50],
 		[" YeS ", 100],
-	] as const)(
-		"coalesces each window and immediately flushes the final snapshot (offline=%s)",
-		async (offline, interval) => {
+	] as const)("uses the selected coalescing window (OMP_OFFLINE=%s)", async (offline, interval) => {
+		const previousOffline = process.env.OMP_OFFLINE;
+		let fixture: ReturnType<typeof createStreamingFixture>;
+		try {
 			process.env.OMP_OFFLINE = offline;
-			const { ctx, draws, emit } = createStreamingFixture();
+			fixture = createStreamingFixture();
+		} finally {
+			restoreEnvValue("OMP_OFFLINE", previousOffline);
+		}
+		const { draws, emit } = fixture;
 
-			for (const text of [
-				"tok1",
-				"tok1 tok2",
-				"tok1 tok2 tok3",
-				"tok1 tok2 tok3 tok4",
-				"tok1 tok2 tok3 tok4 tok5",
-			]) {
-				emit(messageUpdate(text));
-			}
-			vi.advanceTimersByTime(interval - 1);
-			expect(draws).not.toHaveBeenCalled();
-			vi.advanceTimersByTime(1);
-			await flushMicrotasks();
-			expect(draws).toHaveBeenCalledTimes(1);
-			expect(ctx.streamingMessage?.content).toEqual([{ type: "text", text: "tok1 tok2 tok3 tok4 tok5" }]);
-
-			emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6"));
-			emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6 tok7"));
-			vi.advanceTimersByTime(interval);
-			await flushMicrotasks();
-			expect(draws).toHaveBeenCalledTimes(2);
-			expect(ctx.streamingMessage?.content).toEqual([{ type: "text", text: "tok1 tok2 tok3 tok4 tok5 tok6 tok7" }]);
-
-			emit(messageUpdate("final snapshot"));
-			emit({ type: "message_end", message: assistantMessage("final snapshot") } as Extract<
-				AgentSessionEvent,
-				{ type: "message_end" }
-			>);
-			expect(ctx.streamingMessage?.content).toEqual([{ type: "text", text: "final snapshot" }]);
-		},
-	);
+		emit(messageUpdate("snapshot"));
+		vi.advanceTimersByTime(interval - 1);
+		expect(draws).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		await flushMicrotasks();
+		expect(draws).toHaveBeenCalledTimes(1);
+	});
 
 	it("flushes the pending snapshot before a subsequent non-update event", async () => {
 		const { ctx, emit } = createStreamingFixture();
@@ -146,7 +143,7 @@ describe("EventController message_update coalescing", () => {
 
 	it("speaks every delta exactly once even when intermediate snapshots are coalesced away", async () => {
 		const { emit } = createStreamingFixture();
-		const pushDelta = vi.spyOn(vocalizer, "pushDelta");
+		const pushDelta = vi.spyOn(vocalizer, "pushDelta").mockImplementation(() => {});
 		cfgSpeechEnabled.set(settings, true);
 		cfgSpeechMode.set(settings, "assistant");
 
@@ -154,7 +151,7 @@ describe("EventController message_update coalescing", () => {
 		emit(messageUpdate("one two "));
 		emit(messageUpdate("one two three "));
 
-		vi.advanceTimersByTime(ONLINE_WINDOW_MS);
+		vi.runOnlyPendingTimers();
 		await flushMicrotasks();
 
 		expect(pushDelta).toHaveBeenCalledTimes(3);
@@ -179,7 +176,7 @@ describe("EventController message_update coalescing", () => {
 		});
 
 		emit(messageUpdate("tok1 tok2"));
-		vi.advanceTimersByTime(ONLINE_WINDOW_MS); // window fires; flush suspends on init (call 1)
+		vi.runOnlyPendingTimers(); // window fires; flush suspends on init (call 1)
 
 		emit({ type: "message_end", message: assistantMessage("tok1 tok2") } as Extract<
 			AgentSessionEvent,
@@ -214,7 +211,7 @@ describe("EventController message_update coalescing", () => {
 		});
 
 		emit(messageUpdate("tok1"));
-		vi.advanceTimersByTime(ONLINE_WINDOW_MS); // window fires; flush run 1 suspends on gate 1
+		vi.runOnlyPendingTimers(); // window fires; flush run 1 suspends on gate 1
 
 		// Two non-update events land while the flush is still suspended.
 		emit({ type: "message_end", message: assistantMessage("tok1") } as Extract<

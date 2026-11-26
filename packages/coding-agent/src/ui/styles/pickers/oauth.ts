@@ -78,13 +78,13 @@ function paintOAuth(node: UiNode, cx: PaintContext): Block {
 		let state = "";
 		switch (term.statuses[id]) {
 			case "checking":
-				state = theme.style("warning", ` ${spinnerFrame(cx)} 正在检查`) + source;
+				state = theme.style("warning", ` ${spinnerFrame(cx)} checking`) + source;
 				break;
 			case "invalid":
-				state = theme.style("error", ` ${theme.symbols.symbol("status.error")} 凭据无效`) + source;
+				state = theme.style("error", ` ${theme.symbols.symbol("status.error")} invalid`) + source;
 				break;
 			case "valid":
-				state = theme.style("success", ` ${theme.symbols.symbol("status.enabled")} 已登录`) + source;
+				state = theme.style("success", ` ${theme.symbols.symbol("status.enabled")} logged in`) + source;
 				break;
 		}
 		let line: string;
@@ -101,8 +101,8 @@ function paintOAuth(node: UiNode, cx: PaintContext): Block {
 	if (term.searchLine !== undefined) {
 		const line =
 			term.searchLine === null
-				? theme.style("muted", "输入以搜索")
-				: theme.style("muted", "搜索：") +
+				? theme.style("muted", "Type to search")
+				: theme.style("muted", "Search: ") +
 					caretLine(term.searchLine.text, term.searchLine.cursor, s => theme.style("inverse", s));
 		body.push(truncate(line, inner, theme.symbols.ellipsis));
 	}

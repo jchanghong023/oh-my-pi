@@ -222,11 +222,11 @@ function dialogHeight(theme: Theme, model: AskDialogModel, width: number, termin
 }
 
 function title(model: AskDialogModel): string {
-	const head = model.remaining === undefined ? "提问" : `提问（${model.remaining}s）`;
+	const head = model.remaining === undefined ? "Ask" : `Ask (${model.remaining}s)`;
 	const total = model.questions.length;
 	if (total < 2) return head;
 	const answered = model.questions.filter((_, index) => model.answered(index)).length;
-	return `${head} · 已回答 ${answered}/${total}`;
+	return `${head} · ${answered} of ${total} answered`;
 }
 
 const looks = new Map<string, Painter>();
@@ -251,11 +251,11 @@ defineRolePainter("col", "omp.ask.card", (node: UiNode, cx): Block => {
 	if (model.hidden) {
 		const label = theme.fg(
 			"accent",
-			`${model.remaining === undefined ? "提问" : `提问（${model.remaining}s）`}已隐藏：`,
+			`${model.remaining === undefined ? "Ask" : `Ask (${model.remaining}s)`} hidden:`,
 		);
-		const more = model.questions.length > 1 ? theme.fg("dim", `（另有 ${model.questions.length - 1} 项）`) : "";
+		const more = model.questions.length > 1 ? theme.fg("dim", ` (+${model.questions.length - 1} more)`) : "";
 		const show = `${bindingGlyph("app.ask.hide", "alt+h")}/${bindingGlyph("tui.select.confirm", "enter")}`;
-		const hint = theme.fg("dim", ` · ${show} 显示 · ${bindingGlyph("tui.select.cancel", "escape")} 返回输入区`);
+		const hint = theme.fg("dim", ` · ${show} show · ${bindingGlyph("tui.select.cancel", "escape")} composer`);
 		const room = Math.max(1, cx.width - visibleWidth(label) - visibleWidth(more) - visibleWidth(hint) - 1);
 		const summary = truncate(inlineText(model.questions[model.current]?.question ?? ""), room, "…");
 		return { rows: [truncate(`${label} ${theme.fg("muted", summary)}${more}${hint}`, cx.width, "…")] };

@@ -858,8 +858,8 @@ function approvalGrantChoices(
 	if (folder) {
 		grants.push({
 			scope: "folder",
-			label: `允许目录：${folder.label}`,
-			alwaysLabel: `始终允许目录：${folder.label}`,
+			label: `Approve Directory: ${folder.label}`,
+			alwaysLabel: `Always Approve Directory: ${folder.label}`,
 		});
 	}
 	const targets = approvalCacheTargets(tool, args);
@@ -867,8 +867,8 @@ function approvalGrantChoices(
 		const files = targets.every(approvalTargetNamesFile);
 		grants.push({
 			scope: "target",
-			label: files ? "允许文件" : "允许",
-			alwaysLabel: files ? "始终允许文件" : "始终允许",
+			label: files ? "Approve File" : "Approve",
+			alwaysLabel: files ? "Always Approve File" : "Always Approve",
 		});
 	}
 	return grants;
@@ -899,7 +899,7 @@ export async function requestApproval(
 	const { reason, appendix = [], sessionSubject, signal } = options;
 	const header = approvalHeader(tool, reason);
 	const details = approvalDetails(tool, args);
-	const session = sessionSubject === undefined ? undefined : `本会话内允许 ${sessionSubject}`;
+	const session = sessionSubject === undefined ? undefined : `Approve ${sessionSubject} for this session`;
 	const folder = options.grants ? approvalFolderCandidate(tool, args) : undefined;
 	const grants = options.grants ? approvalGrantChoices(tool, args, folder) : [];
 	// A directory answer names what it covers: the folder's own entries, listed in the prompt.
@@ -935,9 +935,9 @@ export async function requestApproval(
 	return approvalAnswerForChoice(choices, await ui.select(full, approvalChoiceLabels(choices), dialogOptions));
 }
 
-/** The approve-this-call-only label, distinguished from grants that remember more. */
+/** The approve-this-call-only label: "Approve", or "Approve Once" beside grants that remember more. */
 export function approvalOnceLabel(prompt: Pick<ExtensionApprovalPrompt, "grants">): string {
-	return prompt.grants?.length ? "仅允许一次" : "允许";
+	return prompt.grants?.length ? "Approve Once" : "Approve";
 }
 
 /**
@@ -952,7 +952,7 @@ export function approvalChoiceLabels(prompt: Pick<ExtensionApprovalPrompt, "sess
 		...grants.map(grant => grant.alwaysLabel),
 		approvalOnceLabel(prompt),
 		...(prompt.session ? [prompt.session] : []),
-		"拒绝",
+		"Deny",
 	];
 }
 

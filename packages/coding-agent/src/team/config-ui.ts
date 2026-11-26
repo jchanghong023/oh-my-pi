@@ -11,7 +11,7 @@ import { cfgTeamMembers } from "./settings";
 type DraftMember = (TeamModelRef & { originalSelector?: string }) | { rawSelector: string };
 
 function printable(value: unknown): string {
-	return sanitizeText(typeof value === "string" ? value : (JSON.stringify(value) ?? "未读取")).replaceAll(
+	return sanitizeText(typeof value === "string" ? value : (JSON.stringify(value) ?? "Not read")).replaceAll(
 		"\t",
 		"    ",
 	);
@@ -45,7 +45,7 @@ class TeamConfigPanel {
 	#readGeneration = 0;
 	#saving = false;
 	#confirmDiscard = false;
-	#message = "正在读取配置（Esc 可关闭，不等待存储 IO）…";
+	#message = "Reading configuration (Esc closes without waiting for I/O)…";
 
 	constructor(private readonly ctx: InteractiveModeContext) {
 		this.#session = ctx.session;
@@ -101,8 +101,8 @@ class TeamConfigPanel {
 			() => {
 				if (!this.#current()) return;
 				this.#message = this.#dirty()
-					? "检测到外部配置变化；保留草稿。R 重读并比较后才可基于新版本保存。"
-					: "检测到外部配置变化；正在重读。";
+					? "Configuration changed elsewhere. Draft kept. Press R to reread and compare before saving."
+					: "Configuration changed elsewhere. Rereading…";
 				this.#refresh();
 				void this.#read(false);
 			},
@@ -147,17 +147,20 @@ class TeamConfigPanel {
 				this.#followSelection = true;
 				this.#baseline = JSON.stringify(this.#draft);
 				this.#revision = snapshot.revision;
-				this.#message = first ? "本地有序草稿；重复模型是独立代理槽位，保存后供后续讨论使用。" : "已重读外部配置。";
+				this.#message = first
+					? "Changes are local until saved. Duplicate models run as independent agents in future discussions."
+					: "External configuration reloaded.";
 			} else if (adoptRevision) {
 				this.#revision = snapshot.revision;
-				this.#message = "已重读当前两端原值供比较；草稿保持不变。再次 S 将使用本次读取的版本。";
+				this.#message =
+					"Latest values loaded for comparison. Draft unchanged. Press S to save against this version.";
 			} else if (snapshot.revision !== this.#revision) {
-				this.#message = "外部版本已改变；草稿保留。R 重读比较后再保存。";
+				this.#message = "Configuration version changed. Draft kept. Press R to reread and compare before saving.";
 			}
 			if (refreshDraft) void this.#preview();
 		} catch (error) {
 			if (this.#current() && generation === this.#readGeneration)
-				this.#message = `读取失败：${printable(error instanceof Error ? error.message : error)}`;
+				this.#message = `Read failed: ${printable(error instanceof Error ? error.message : error)}`;
 		}
 		if (this.#current()) this.#refresh();
 	}
@@ -176,11 +179,12 @@ class TeamConfigPanel {
 				snapshot.preview?.clientRevision !== String(this.#clientRevision)
 			)
 				return;
-			if (this.#revision !== snapshot.revision) this.#message = "外部版本已改变；草稿保留。R 重读比较后再保存。";
+			if (this.#revision !== snapshot.revision)
+				this.#message = "Configuration version changed. Draft kept. Press R to reread and compare before saving.";
 			this.#snapshot = snapshot;
 		} catch (error) {
 			if (this.#current() && generation === this.#readGeneration && clientRevision === String(this.#clientRevision))
-				this.#message = `预览失败：${printable(error instanceof Error ? error.message : error)}`;
+				this.#message = `Preview failed: ${printable(error instanceof Error ? error.message : error)}`;
 		}
 		if (this.#current()) this.#refresh();
 	}
@@ -231,7 +235,7 @@ class TeamConfigPanel {
 							this.#selected = draft.length - 1;
 						}
 						this.#draft = draft;
-						this.#message = "已加入独立槽位；仅修改草稿，尚未保存。";
+						this.#message = "Independent slot added to the draft. Not saved yet.";
 						this.#changed();
 					}
 					resume();
@@ -243,17 +247,17 @@ class TeamConfigPanel {
 	async #save(): Promise<void> {
 		if (!this.#snapshot || this.#saving) return;
 		if (!this.#revision || !this.#snapshot.writableScopes.includes("user")) {
-			this.#message = "当前配置不可安全写入，请先修复读取问题并 R 重读。";
+			this.#message = "Cannot write this configuration safely. Fix the read issue and press R to reread.";
 			this.#refresh();
 			return;
 		}
 		if (this.#draft?.some(member => "rawSelector" in member)) {
-			this.#message = "旧槽位尚未解析：请替换或删除后保存。";
+			this.#message = "Replace or remove unresolved slots before saving.";
 			this.#refresh();
 			return;
 		}
 		if (this.#snapshot.revision !== this.#revision) {
-			this.#message = "版本冲突：草稿保留。请 R 重读并比较后再保存。";
+			this.#message = "Version conflict. Draft kept. Press R to reread and compare before saving.";
 			this.#refresh();
 			return;
 		}
@@ -266,14 +270,14 @@ class TeamConfigPanel {
 		this.#saving = true;
 		++this.#clientRevision;
 		++this.#readGeneration;
-		this.#message = "正在保存；Esc 可退出。退出不代表撤销已提交写入，请重新打开核实结果。";
+		this.#message = "Saving… Esc closes the panel but does not undo the write. Reopen to verify the result.";
 		this.#refresh();
 		try {
 			const result = await this.#service.setConfig({ scope: "user", expectedRevision: this.#revision, members });
 			if (!this.#current()) return;
 			++this.#readGeneration;
 			this.#snapshot = result.config;
-			this.#message = `${result.saveState}：${result.effectiveMatchesRequested ? "保存且生效" : "已保存但未生效"}；${printable(result.write)} ${result.effectiveNote ?? ""}`;
+			this.#message = `${result.saveState}: ${result.effectiveMatchesRequested ? "Saved and effective" : "Saved but not effective"}; ${printable(result.write)} ${result.effectiveNote ?? ""}`;
 			this.#baseline = JSON.stringify(this.#draft);
 			this.#revision = result.config.revision;
 		} catch (error) {
@@ -282,12 +286,12 @@ class TeamConfigPanel {
 			if (error instanceof TeamConfigError && error.data?.config) this.#snapshot = error.data.config;
 			if (error instanceof TeamConfigError) {
 				const write = error.data
-					? `${error.data.write.status === "saved" ? "写入已提交；" : ""}${printable(error.data.write)}`
+					? `${error.data.write.status === "saved" ? "Write committed; " : ""}${printable(error.data.write)}`
 					: "";
-				const issues = error.data?.issues?.map(issue => issue.message).join("；");
-				this.#message = `${error.code}：${error.message}；${write}${issues ? `；${issues}` : ""}。草稿保留；R 重读比较，禁止自动重试。`;
+				const issues = error.data?.issues?.map(issue => issue.message).join("; ");
+				this.#message = `${error.code}: ${error.message}${write ? `; ${write}` : ""}${issues ? `; ${issues}` : ""}. Draft kept. Press R to reread and compare; do not retry automatically.`;
 			} else {
-				this.#message = `保存结果未知：${printable(error instanceof Error ? error.message : error)}。请重读核实，勿盲目重试。`;
+				this.#message = `Save result unknown: ${printable(error instanceof Error ? error.message : error)}. Reread to verify before retrying.`;
 			}
 		} finally {
 			this.#saving = false;
@@ -334,7 +338,7 @@ class TeamConfigPanel {
 			else if (data === "r") void this.#read(true);
 			else if (data === "0") {
 				this.#draft = [];
-				this.#message = "恢复默认 []（尚未保存）。";
+				this.#message = "Reset to default [] (not saved).";
 				this.#changed();
 			} else if (draft.length && data === "c") {
 				draft.splice(this.#selected + 1, 0, { ...draft[this.#selected]! });
@@ -364,17 +368,17 @@ class TeamConfigPanel {
 		const lines: string[] = [];
 		const add = (line: string) => lines.push(...wrapChars(printable(line), Math.max(1, width)));
 		const snapshot = this.#snapshot;
-		add(`Team 配置 ${this.#dirty() ? "[未保存]" : ""}`);
+		add(`Team configuration${this.#dirty() ? " [unsaved]" : ""}`);
 		add(this.#message);
 		if (snapshot) {
 			if (snapshot.source === "project" || snapshot.source === "overlay" || snapshot.source === "runtime")
-				add(`覆盖提示：${snapshot.source} 层高于用户层；保存用户名单不会移除此覆盖。`);
-			for (const issue of snapshot.issues) add(`问题 [${issue.target}]: ${issue.message}`);
+				add(`Override: ${snapshot.source} takes precedence over user settings. Saving won't remove this override.`);
+			for (const issue of snapshot.issues) add(`Issue [${issue.target}]: ${issue.message}`);
 		}
-		add("── 有序草稿（添加/复制同模型 = 另一个独立代理）──");
+		add("── Ordered draft (adding or copying a model creates a separate agent slot) ──");
 		let selectedRow = lines.length;
-		if (this.#draft === null) add("未配置成员；0 恢复默认（需保存）");
-		else if (!this.#draft.length) add("[] 默认回退，需保存才生效");
+		if (this.#draft === null) add("No members configured. Press 0 to reset to default (save required).");
+		else if (!this.#draft.length) add("[] Default fallback (save required)");
 		for (const [index, member] of (this.#draft ?? []).entries()) {
 			if (index === this.#selected) selectedRow = lines.length;
 			const selector =
@@ -382,7 +386,7 @@ class TeamConfigPanel {
 					? member.rawSelector
 					: (member.originalSelector ?? `${member.provider}/${member.modelId}`);
 			add(
-				`${index === this.#selected ? "▶" : " "} ${index + 1}. ${selector}${"rawSelector" in member ? " [旧槽位未解析：替换/删除]" : ""}`,
+				`${index === this.#selected ? "▶" : " "} ${index + 1}. ${selector}${"rawSelector" in member ? " [unresolved slot: replace or delete]" : ""}`,
 			);
 			const slot =
 				snapshot?.preview?.clientRevision === String(this.#clientRevision)
@@ -394,35 +398,35 @@ class TeamConfigPanel {
 				add(
 					`   ${slot.name ?? ""} ${slot.model ? `${slot.model.provider}/${slot.model.modelId}` : ""} [${slot.status}] ${slot.reason ?? ""}`,
 				);
-			else add("   [尚未取得当前草稿预览；状态以共享服务结果为准]");
+			else add("   [Preview pending; the configuration service determines slot status]");
 		}
 		if (snapshot?.preview?.clientRevision === String(this.#clientRevision)) {
 			const preview = snapshot.preview;
-			for (const issue of preview.issues) add(`草稿问题: ${issue.message}`);
+			for (const issue of preview.issues) add(`Draft issue: ${issue.message}`);
 		}
 		if (this.#showAdvanced && snapshot) {
-			add("── 高级详情（只读）──");
+			add("── Advanced details (read-only) ──");
 			add(`profile: ${snapshot.profile ?? "default"} | source: ${snapshot.source} | ${snapshot.storage.readState}`);
 			const showSlots = (name: string, slots: readonly TeamMemberSlot[] | null | undefined) => {
 				add(
-					`${name}: ${slots === undefined ? "不可读/不适用" : slots === null ? "缺失" : slots.length === 0 ? "[]" : ""}`,
+					`${name}: ${slots === undefined ? "Unavailable or not applicable" : slots === null ? "Missing" : slots.length === 0 ? "[]" : ""}`,
 				);
 				for (const slot of slots ?? [])
 					add(`  ${slot.index + 1}. ${slot.rawSelector} [${slot.status}] ${slot.reason ?? ""}`);
 			};
-			showSlots(`用户原值 [${snapshot.storage.readState}]`, snapshot.userMembers);
-			showSlots("当前有效名单", snapshot.effectiveMembers);
-			add(`实际运行槽位（只读预览）: ${printable(snapshot.participants)}`);
+			showSlots(`Stored user value [${snapshot.storage.readState}]`, snapshot.userMembers);
+			showSlots("Current effective roster", snapshot.effectiveMembers);
+			add(`Current run slots (read-only preview): ${printable(snapshot.participants)}`);
 			if (snapshot.preview?.clientRevision === String(this.#clientRevision)) {
 				const preview = snapshot.preview;
-				add(`拟保存用户名单: ${printable(preview.userMembers)}`);
-				add(`预计有效来源: ${preview.source}；有效名单: ${printable(preview.effectiveMembers)}`);
-				add(`预计运行槽位: ${printable(preview.participants)}`);
+				add(`User roster to save: ${printable(preview.userMembers)}`);
+				add(`Projected source: ${preview.source}; effective roster: ${printable(preview.effectiveMembers)}`);
+				add(`Projected run slots: ${printable(preview.participants)}`);
 			}
 		}
 		const footer = this.#confirmDiscard
-			? "放弃草稿并退出？Y 放弃 / N 留在面板（保存中退出不撤销写入）"
-			: `↑↓ 槽位 a 添加 e 替换 u 上移 j 下移 c 复制 d 删除 | 0 默认[] s 保存 r 重读比较 Esc 取消 | v 高级详情（${this.#showAdvanced ? "收起" : "展开"}） PgUp/PgDn 滚动`;
+			? "Discard draft and exit? Y discard / N stay (exiting during save does not undo the write)"
+			: `↑↓ Select | a Add e Replace u Up j Down c Copy d Delete | 0 Default [] s Save r Reread Esc Cancel | v ${this.#showAdvanced ? "Hide" : "Show"} details PgUp/PgDn Scroll`;
 		const footerLines = wrapChars(footer, Math.max(1, width));
 		const capacity = Math.max(1, height - footerLines.length);
 		if (this.#followSelection) {

@@ -24,7 +24,7 @@
 #### Scenario: 选择开发平台和工具链
 
 - **WHEN** 开发或维护本 fork
-- **THEN** 日常平台为 Windows x64（PowerShell），同时支持 Linux x64 与 Ubuntu-24.04 WSL2；工具链跟随仓库固定版本，不单独升级；`scripts/` 承载门禁和安装器，`openspec/` 承载需求
+- **THEN** 日常平台为 Windows x64（PowerShell），同时支持 Linux x64 与 Ubuntu-24.04 WSL2；工具链跟随仓库固定版本，不单独升级；测试沿用上游脚本，`openspec/` 承载需求
 
 ### Requirement: 上游同步与基线
 
@@ -54,7 +54,7 @@
 
 - **WHEN** 执行上游同步检查，或冲突重建需要验证
 - **THEN** 仅做 staged Git 检查与必要的语义审查，必要时最多一次 `bun run check:tools`；缺依赖只允许 `bun install --frozen-lockfile --ignore-scripts`；首轮失败仅修复本次相关问题并复验失败项一次，仍失败则中止、不提交
-- **AND** 不运行编译、类型检查、测试、UI/browser/heavy、Docker、benchmark、打包、发布、任何 Rust/native 检查与构建或 fastcheck/fulltest/slowtest；冲突重建需 UT 与真实入口 E2E 而未获额外验证授权时中止并报告未验证，不以未验证重建宣称同步完成
+- **AND** 不运行编译、类型检查、测试（含任何 `ci:test:*`）、UI/browser/heavy、Docker、benchmark、打包、发布或任何 Rust/native 检查与构建；冲突重建需 UT 与真实入口 E2E 而未获额外验证授权时中止并报告未验证，不以未验证重建宣称同步完成
 
 ### Requirement: Fork 文档维护
 
@@ -81,7 +81,7 @@ OMP MUST Git 钩子保持禁用，提交和推送不自动运行检查。
 
 - 本 fork 不保留或使用任何 Git 钩子，包括提交、推送、签出及外部工具跟踪钩子；安装、开发和上游同步不得恢复钩子或其自动安装步骤。
 - 现有 checkout 删除全部钩子文件，并在本仓库设置 `git config --local core.hooksPath /dev/null`；不修改用户全局 Git 配置。
-- `git commit` 与 `git push` 不自动运行检查或外部跟踪程序。既有验证命令及通过标准保持不变，仅按任务授权显式执行。
+- `git commit` 与 `git push` 不自动运行检查或外部跟踪程序。验证按[验证要求](../fork-verification-gates/spec.md)及任务授权显式执行。
 
 #### Scenario: Git 钩子的可观察行为
 

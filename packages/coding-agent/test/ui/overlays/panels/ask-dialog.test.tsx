@@ -63,7 +63,7 @@ panelSuite({
 			{
 				onSubmit() {},
 				onCancel() {},
-				onPrompt: async prompt => (prompt.title.endsWith(" 的备注") ? "a note\twith tab" : "custom 🚀 answer"),
+				onPrompt: async prompt => (prompt.title.startsWith("Note for ") ? "a note\twith tab" : "custom 🚀 answer"),
 				...(caseName === "image-draft" ? { onImagePrompt: async () => ({ draft: { text: "kept draft" } }) } : {}),
 			},
 			options,
@@ -108,7 +108,7 @@ panelSuite({
 	},
 });
 
-test("keeps localized note labels and a raw answer distinct from its normalized twin", async () => {
+test("shows the note label and keeps a raw answer distinct from its normalized twin", async () => {
 	const onPrompt = vi.fn(async () => "retain exact row");
 	const onSubmit = vi.fn();
 	const model = new AskDialogModel(
@@ -132,10 +132,10 @@ test("keeps localized note labels and a raw answer distinct from its normalized 
 				if (child) return child;
 			}
 		};
-		expect(find(term.surface.main())?.props()).toMatchObject({ value: [{ t: "推荐" }] });
+		expect(find(term.surface.main())?.props()).toMatchObject({ value: [{ t: "Recommended" }] });
 		model.action("note", "q0/option:0");
 		await settle();
-		expect(onPrompt).toHaveBeenCalledWith({ title: "Retry now 的备注", question: "Proceed?" }, undefined);
+		expect(onPrompt).toHaveBeenCalledWith({ title: "Note for Retry now", question: "Proceed?" }, undefined);
 		model.rowEvent("activate", "q0", "option:0");
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		expect(onSubmit).toHaveBeenCalledWith({

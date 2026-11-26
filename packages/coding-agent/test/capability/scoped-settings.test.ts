@@ -4,13 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type ContextFile, contextFileCapability } from "@oh-my-pi/pi-coding-agent/capability/context-file";
 import { cfgDisabledProviders, cfgEnabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
-import { resetSettingsForTest, Settings, withActiveSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings, withActiveSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	getDisabledProviders,
 	getEnabledProviders,
 	initializeWithSettings,
 	loadCapability,
-	resetCapabilityForTests,
 	setDisabledProviders,
 	setEnabledProviders,
 } from "@oh-my-pi/pi-coding-agent/discovery";
@@ -22,8 +21,6 @@ describe("session-scoped capability discovery", () => {
 	const releases: Array<() => void> = [];
 
 	beforeEach(async () => {
-		resetCapabilityForTests();
-		resetSettingsForTest();
 		root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-capability-scope-"));
 		homeSpy = spyOn(os, "homedir").mockReturnValue(root);
 		await fs.mkdir(path.join(root, ".gemini"), { recursive: true });
@@ -32,8 +29,6 @@ describe("session-scoped capability discovery", () => {
 
 	afterEach(async () => {
 		for (const release of releases.splice(0).reverse()) release();
-		resetCapabilityForTests();
-		resetSettingsForTest();
 		homeSpy.mockRestore();
 		await removeWithRetries(root);
 	});

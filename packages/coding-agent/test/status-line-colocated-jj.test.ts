@@ -150,8 +150,8 @@ describe("status line display detector", () => {
 		expect(vcs.repoForDisplay).toHaveBeenCalled();
 		const content = painted;
 		expect(content).toContain("my-bookmark");
-		expect(content).toContain("改动2");
-		expect(content).not.toContain("改动4");
+		expect(content).toContain("Changes: 2");
+		expect(content).not.toContain("Changes: 4");
 	});
 
 	it("keeps the git branch for a nested git checkout under an outer jj workspace", async () => {

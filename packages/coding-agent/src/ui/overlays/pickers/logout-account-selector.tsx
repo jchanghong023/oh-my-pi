@@ -20,14 +20,14 @@ export interface LogoutAccountSelectorProps {
 }
 
 const actions = (): TspPickerAction[] => [
-	pickerAction("confirm", "退出登录", confirmKbd(), { primary: true, danger: true }),
-	closeAction("关闭"),
+	pickerAction("confirm", "Sign out", confirmKbd(), { primary: true, danger: true }),
+	closeAction(),
 ];
 
 /** The terminal row of an account: label, `(active)`, then its detail. */
 function accountRow(account: LogoutAccount): TspSpan[] {
 	const spans: TspSpan[] = [{ t: account.label }];
-	if (account.active) spans.push({ t: "（正在使用）", s: "muted" });
+	if (account.active) spans.push({ t: " (active)", s: "muted" });
 	if (account.detail) spans.push({ t: `  ${account.detail}`, s: "dim" });
 	return spans;
 }
@@ -52,7 +52,7 @@ export function LogoutAccountSelector(props: LogoutAccountSelectorProps): JSXNod
 		id: String(account.credentialId),
 		label: account.label,
 		...(account.detail ? { detail: account.detail } : {}),
-		badges: [{ text: account.type === "oauth" ? "OAuth 登录" : "API 密钥" }],
+		badges: [{ text: account.type === "oauth" ? "login" : "api key" }],
 	}));
 	const rows: Record<string, TspSpan[]> = {};
 	for (const account of accounts) rows[String(account.credentialId)] = accountRow(account);
@@ -60,10 +60,10 @@ export function LogoutAccountSelector(props: LogoutAccountSelectorProps): JSXNod
 		<col>
 			<picker
 				key={PICKER_KEY}
-				title={`${props.provider} 账户`}
-				subtitle="选择要退出登录的账户"
+				title={`${props.provider} accounts`}
+				subtitle="Pick the account to sign out"
 				icon="key-round"
-				noun="账户"
+				noun="accounts"
 				size="md"
 				layout="cards"
 				preview="none"
@@ -71,13 +71,13 @@ export function LogoutAccountSelector(props: LogoutAccountSelectorProps): JSXNod
 				items={items}
 				current={accounts.filter(account => account.active).map(account => String(account.credentialId))}
 				selected={selected}
-				empty="没有可退出登录的已存账户"
+				empty="No stored accounts to log out"
 				actions={actions}
 				term={{
-					title: `选择要退出登录的 ${props.provider} 账户`.replace(/\s+/g, " "),
+					title: `Select ${props.provider} account to log out`.replace(/\s+/g, " "),
 					rows,
-					empty: [{ t: "没有可退出登录的已存账户", s: "muted" }],
-					hint: `${selectNavGlyphs()} 浏览 · ${bindingGlyph("tui.select.confirm", "enter")} 退出登录 · ${bindingGlyph("tui.select.cancel", "escape")} 取消`,
+					empty: [{ t: "No stored accounts to log out", s: "muted" }],
+					hint: `${selectNavGlyphs()} select · ${bindingGlyph("tui.select.confirm", "enter")} log out account · ${bindingGlyph("tui.select.cancel", "escape")} cancel`,
 					wrap: true,
 				}}
 				onSelect={id => pick(id, false)}

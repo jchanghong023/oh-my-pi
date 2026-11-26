@@ -24,10 +24,8 @@ jobs:
       name: Resolve fork release metadata
       runs-on: ubuntu-22.04
       outputs:
-         is-release: "true"
          release-tag: ${{ steps.detect.outputs.release-tag }}
          version: ${{ steps.detect.outputs.version }}
-         channel: "stable"
       steps:
          - name: Reject release publication outside main
            if: ${{ inputs.publish_release && github.ref != 'refs/heads/main' }}

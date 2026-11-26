@@ -46,7 +46,7 @@
 		"check": "oxlint . && oxfmt --check --no-error-on-unmatched-pattern 'src/**/*.{ts,tsx}' '{test,bench,examples,scripts}/**/*.{ts,tsx}' '*.ts' && bun run check:types",
 		"check:types": "bun check --no-script -p tsconfig.json",
 		"lint": "oxlint .",
-		"test": "bun ../../scripts/test-report-bun.ts --parallel test/",
+		"test": "bun test --parallel test/",
 		"fix": "oxlint --fix --fix-suggestions . && bun run fmt",
 		"fmt": "oxfmt --no-error-on-unmatched-pattern 'src/**/*.{ts,tsx}' '{test,bench,examples,scripts}/**/*.{ts,tsx}' '*.ts'",
 		"gen:glyphs": "bun scripts/gen-glyphs.ts",

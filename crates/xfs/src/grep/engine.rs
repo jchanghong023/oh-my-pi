@@ -109,51 +109,6 @@ pub fn pcre2_jit_enabled(setting: Option<&str>) -> bool {
 	}
 }
 
-/// Both engine errors from compiling an unchanged documentation expression.
-#[derive(Debug)]
-pub struct StrictMatcherError {
-	rust: grep_regex::Error,
-	pcre: grep_pcre2::Error,
-}
-
-impl fmt::Display for StrictMatcherError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "Invalid documentation grep regex: {}; PCRE2: {}", self.rust, self.pcre)
-	}
-}
-
-impl std::error::Error for StrictMatcherError {}
-
-/// Compile an unchanged expression, falling back from Rust regex to PCRE2.
-///
-/// # Errors
-/// Returns both engine errors if neither can compile the expression.
-pub fn build_strict_matcher(
-	pattern: &str,
-	ignore_case: bool,
-) -> Result<Engine, StrictMatcherError> {
-	let build = |line_terminated| {
-		let mut builder = RegexMatcherBuilder::new();
-		builder.case_insensitive(ignore_case).multi_line(false);
-		if line_terminated {
-			builder.line_terminator(Some(b'\n'));
-		}
-		builder.build(pattern)
-	};
-	match build(true).or_else(|_| build(false)) {
-		Ok(matcher) => Ok(Engine::Rust(matcher)),
-		Err(rust) => PcreMatcherBuilder::new()
-			.caseless(ignore_case)
-			.multi_line(false)
-			.utf(true)
-			.ucp(true)
-			.jit_if_available(*PCRE2_JIT)
-			.build(pattern)
-			.map(Engine::Pcre)
-			.map_err(|pcre| StrictMatcherError { rust, pcre }),
-	}
-}
-
 impl Engine {
 	/// Compiles `pattern` in the agent dialect: braces that open no
 	/// repetition or braced escape are literal (`${x}`), then Rust `regex`

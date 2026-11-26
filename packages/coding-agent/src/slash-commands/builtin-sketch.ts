@@ -144,9 +144,9 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const copyRequested = requestOfflineBrowserUrlCopy(server.url);
 				const offline = offlineFromEnv();
 				const hint = copyRequested
-					? "已尝试复制完整绘图地址，可在浏览器地址栏粘贴；未生效时请手动复制此地址"
+					? "attempted to copy the full URL; paste it into your browser's address bar or copy it manually"
 					: offline
-						? "offline 模式不自动打开浏览器；请手动打开此地址"
+						? "offline mode does not launch a browser; open this URL manually"
 						: "open this URL if the browser does not launch";
 				ctx.showStatus(`Sketch canvas: ${server.url} (${hint})`);
 				if (!offline) openPath(server.url);

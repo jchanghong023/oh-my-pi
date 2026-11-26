@@ -8,7 +8,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
-import { withCompilerActivity } from "../../../scripts/test-gate-events";
 import {
 	stampRelayExtensionManifest,
 	stampRelayExtensionScript,
@@ -128,17 +127,15 @@ async function buildId(extensionDir: string, files: readonly string[]): Promise<
 }
 
 async function bundle(outDir: string, entry: string, name: string, format: "iife" | "esm"): Promise<void> {
-	const result = await withCompilerActivity(() =>
-		Bun.build({
-			entrypoints: [path.join(source, entry)],
-			outdir: outDir,
-			target: "browser",
-			format,
-			naming: { entry: `${name}.[ext]` },
-			minify: name === "panel",
-			define: { "process.env.NODE_ENV": JSON.stringify("production") },
-		}),
-	);
+	const result = await Bun.build({
+		entrypoints: [path.join(source, entry)],
+		outdir: outDir,
+		target: "browser",
+		format,
+		naming: { entry: `${name}.[ext]` },
+		minify: name === "panel",
+		define: { "process.env.NODE_ENV": JSON.stringify("production") },
+	});
 	if (!result.success) throw new AggregateError(result.logs, `Failed to bundle ${entry}`);
 	if (!(await Bun.file(path.join(outDir, `${name}.js`)).exists())) {
 		throw new Error(`Bundling ${entry} did not produce ${name}.js`);

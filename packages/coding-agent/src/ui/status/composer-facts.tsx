@@ -178,12 +178,12 @@ export function composerFacts(props: {
 		const capacity = window > 0 ? formatNumber(window) : undefined;
 		const percentage = percent === null ? undefined : `${Math.round(percent)}%`;
 		const lines = [
-			percentage === undefined ? "上下文用量未知" : `已使用 ${percentage} 上下文`,
-			capacity ? `${formatNumber(tokens)} / ${capacity} Token` : "无上下文窗口",
+			percentage === undefined ? "Context usage unknown" : `Context ${percentage} used`,
+			capacity ? `${formatNumber(tokens)} of ${capacity} tokens` : "No context window",
 		];
-		if (boundaries) lines.push(`在 ${Math.round(boundaries.thresholdPercent)}% 自动压缩`);
-		if (state.speculation === "running") lines.push("正在生成压缩摘要");
-		else if (state.speculation === "armed") lines.push("压缩摘要已就绪");
+		if (boundaries) lines.push(`Auto-compact at ${Math.round(boundaries.thresholdPercent)}%`);
+		if (state.speculation === "running") lines.push("Compaction summary in progress");
+		else if (state.speculation === "armed") lines.push("Compaction summary ready");
 		const used = percent === null ? null : Math.min(1, percent / 100);
 		const speculationAt =
 			boundaries?.speculationPercent == null ? null : Math.min(1, boundaries.speculationPercent / 100);
@@ -193,14 +193,14 @@ export function composerFacts(props: {
 				marks.push({
 					at: speculationAt,
 					icon: "context.speculation",
-					title: `在 ${Math.round(speculationAt * 100)}% 开始生成压缩摘要`,
+					title: `Compaction summary starts at ${Math.round(speculationAt * 100)}%`,
 					...(state.speculation && state.speculation !== "idle" ? { tone: "accent" as const } : {}),
 				});
 			}
 			marks.push({
 				at: Math.min(1, boundaries.thresholdPercent / 100),
 				icon: "context.compaction",
-				title: `在 ${Math.round(boundaries.thresholdPercent)}% 自动压缩`,
+				title: `Auto-compact at ${Math.round(boundaries.thresholdPercent)}%`,
 			});
 		}
 		return {

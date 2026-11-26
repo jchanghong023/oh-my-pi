@@ -12,7 +12,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check:types": "bun check --no-script",
-    "test": "bun ../../../scripts/test-report-bun.ts"
+    "test": "bun test"
   },
   "dependencies": {
     "solid-js": "catalog:"

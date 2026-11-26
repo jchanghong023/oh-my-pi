@@ -19,8 +19,9 @@ export const cfgSkillsRegistryUrl = register({
 	ui: {
 		tab: "interaction",
 		group: "Skills",
-		label: "Skill 注册中心",
-		description: "`omp skill` 安装、搜索和发布 Skills 时使用的 Skillshare 注册中心（https://host[:port]）",
+		label: "Skill Registry",
+		description:
+			"Skillshare registry used by `omp skill` to install, search, and publish skills (https://host[:port])",
 	},
 });
 
@@ -33,9 +34,9 @@ export const cfgSkillsEnableSkillCommands = register({
 	default: true,
 	ui: {
 		tab: "tasks",
-		group: "命令与 Skills",
-		label: "Skill 命令",
-		description: "将 Skills 注册为 /skill:name 命令",
+		group: "Commands & Skills",
+		label: "Skill Commands",
+		description: "Register skills as /skill:name commands",
 	},
 });
 
@@ -112,9 +113,9 @@ export const cfgCommandsEnableClaudeUser = register({
 	default: false,
 	ui: {
 		tab: "tasks",
-		group: "命令与 Skills",
-		label: "Claude 用户命令",
-		description: "从 ~/.claude/commands/ 加载命令",
+		group: "Commands & Skills",
+		label: "Claude User Commands",
+		description: "Load commands from ~/.claude/commands/",
 	},
 });
 
@@ -124,9 +125,9 @@ export const cfgCommandsEnableClaudeProject = register({
 	default: true,
 	ui: {
 		tab: "tasks",
-		group: "命令与 Skills",
-		label: "Claude 项目命令",
-		description: "从 .claude/commands/ 加载命令",
+		group: "Commands & Skills",
+		label: "Claude Project Commands",
+		description: "Load commands from .claude/commands/",
 	},
 });
 
@@ -136,9 +137,9 @@ export const cfgCommandsEnableOpencodeUser = register({
 	default: false,
 	ui: {
 		tab: "tasks",
-		group: "命令与 Skills",
-		label: "OpenCode 用户命令",
-		description: "从 ~/.config/opencode/commands/ 加载命令",
+		group: "Commands & Skills",
+		label: "OpenCode User Commands",
+		description: "Load commands from ~/.config/opencode/commands/",
 	},
 });
 
@@ -148,9 +149,9 @@ export const cfgCommandsEnableOpencodeProject = register({
 	default: true,
 	ui: {
 		tab: "tasks",
-		group: "命令与 Skills",
-		label: "OpenCode 项目命令",
-		description: "从 .opencode/commands/ 加载命令",
+		group: "Commands & Skills",
+		label: "OpenCode Project Commands",
+		description: "Load commands from .opencode/commands/",
 	},
 });
 
@@ -160,10 +161,10 @@ export const cfgExtensionHandlersToolCallTimeoutMs = register({
 	default: 30_000,
 	ui: {
 		tab: "tools",
-		group: "扩展",
-		label: "工具调用处理器超时（毫秒）",
+		group: "Extensions",
+		label: "Tool Call Handler Timeout (ms)",
 		description:
-			"扩展 tool_call 处理器的有效工作超时，须为正有限值；无效值使用 30000 毫秒，等待 OMP 对话框的时间不计入",
+			"Positive finite active-work timeout for extension tool_call handlers; invalid values use 30000ms, and time awaiting OMP-owned dialogs does not count",
 	},
 });
 
@@ -173,7 +174,7 @@ export const cfgExtensionHandlersModeControl = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "扩展",
+		group: "Extensions",
 		label: "Extension Mode Control",
 		description:
 			"Let extensions enter and exit plan, vibe, goal, and loop modes via ctx.sessionModes.set(); reading mode state stays available",
@@ -186,10 +187,10 @@ export const cfgExtensionAssistantTextRenderers = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "扩展",
+		group: "Extensions",
 		label: "Extension Reply Renderers",
 		description:
-			"允许扩展调整助手回复的显示、原地重绘回复，并接收其专属链接的点击；会话、导出和模型上下文仍保留原始回复",
+			"Let extensions change how assistant replies are drawn, redraw a reply in place, and receive clicks on their own links; the session, exports and model context keep the reply as written",
 	},
 });
 

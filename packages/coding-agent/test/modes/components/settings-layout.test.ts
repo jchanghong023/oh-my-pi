@@ -104,10 +104,10 @@ describe("settings layout", () => {
 			context: { settings: host },
 			callbacks: { onChange: (path, value) => changes.push([path, value]) },
 		});
-		term.type("输入区形状");
+		term.type("Composer Shape");
 		term.press("enter");
 		const rendered = settingsScreen(term);
-		expect(rendered).toContain("输入区形状");
+		expect(rendered).toContain("Composer Shape");
 		expect(rendered).toContain("Rounded Box");
 		expect(rendered).toContain("Claude Code");
 		expect(rendered).toContain("Preview:");
@@ -131,8 +131,8 @@ describe("settings layout", () => {
 		bubbleEvent([root], { type: "action", key: "", act: "page", value: "interaction", mods: [] });
 		bubbleEvent([root], { type: "action", key: "", act: "edit", value: path, mods: [] });
 		const rendered = settingsScreen(term);
-		expect(rendered).toContain("当前目录");
-		expect(rendered).toContain("仓库工作树");
+		expect(rendered).toContain("This Directory");
+		expect(rendered).toContain("Repository Worktrees");
 		term.press("up");
 		term.press("enter");
 		expect(host.get(path)).toBe("directory");

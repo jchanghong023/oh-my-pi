@@ -14,7 +14,6 @@ import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
-import { withCompilerActivity } from "../../../scripts/test-gate-events";
 
 const packageDir = path.join(import.meta.dir, "..");
 const defaultOutDir = path.join(packageDir, "dist");
@@ -133,29 +132,27 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		// the bundled CLI entrypoint, and written to dist/docs-index.generated.txt so
 		// SDK consumers importing `@oh-my-pi/pi-coding-agent/*` (TypeScript source, no
 		// build-time embed) can still resolve omp:// docs (see src/internal-urls/docs-index.ts).
-		const vendorBundle = await withCompilerActivity(() =>
-			Bun.build({
-				entrypoints: [path.join(packageDir, "scripts/openwiki-vendor-entry.ts")],
-				outdir: outDir,
-				naming: "openwiki-vendor.js",
-				target: "bun",
-				external: [
-					...ALWAYS_EXTERNAL,
-					...RUNTIME_EXTERNAL,
-					"@langchain/core",
-					"@langchain/core/*",
-					"@langchain/openai",
-					"@langchain/openai/*",
-					"deepagents",
-					"deepagents/*",
-					"langchain",
-					"langchain/*",
-					"zod",
-					"zod/*",
-				],
-				throw: false,
-			}),
-		);
+		const vendorBundle = await Bun.build({
+			entrypoints: [path.join(packageDir, "scripts/openwiki-vendor-entry.ts")],
+			outdir: outDir,
+			naming: "openwiki-vendor.js",
+			target: "bun",
+			external: [
+				...ALWAYS_EXTERNAL,
+				...RUNTIME_EXTERNAL,
+				"@langchain/core",
+				"@langchain/core/*",
+				"@langchain/openai",
+				"@langchain/openai/*",
+				"deepagents",
+				"deepagents/*",
+				"langchain",
+				"langchain/*",
+				"zod",
+				"zod/*",
+			],
+			throw: false,
+		});
 		if (!vendorBundle.success) {
 			throw new Error(`OpenWiki vendor bundle failed:\n${vendorBundle.logs.map(log => log.message).join("\n")}`);
 		}
@@ -164,7 +161,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		// Build in-process: the docs embed payload is far larger than Linux's
 		// 128KiB per-argv-string cap, so it can never be passed as a CLI
 		// `--define` (posix_spawn fails with E2BIG).
-		const buildOptions: Bun.BuildConfig = {
+		const output = await Bun.build({
 			entrypoints: [path.join(packageDir, "src/cli.ts")],
 			outdir: outDir,
 			target: "bun",
@@ -190,8 +187,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 				keepNames: true,
 			},
 			throw: false,
-		};
-		const output = await withCompilerActivity(() => Bun.build(buildOptions));
+		});
 		if (!output.success) {
 			throw new Error(`CLI bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
 		}

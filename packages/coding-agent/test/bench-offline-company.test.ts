@@ -10,6 +10,7 @@ import type { BenchSummary } from "../src/cli/bench-cli";
  * subprocesses because the company lane snapshot is process-global and read once.
  */
 const RUNTIME_MODULE = path.join(import.meta.dir, "../src/cli/bench-runtime.ts");
+const COMPANY_PROVIDER_MODULE = path.join(import.meta.dir, "../src/config/company-provider.ts");
 const SETTINGS_MODULE = path.join(import.meta.dir, "../src/config/settings.ts");
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
 const COMPANY_TOKEN = "fixture-token";
@@ -25,7 +26,9 @@ afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
-async function isolatedEnv(companyUrl: string | null = "http://company.invalid"): Promise<Record<string, string>> {
+async function isolatedEnv(
+	companyUrl: string | null = "http://company.invalid",
+): Promise<Record<string, string | undefined>> {
 	const home = await tempDir("omp-bench-home-");
 	const claudeDir = path.join(home, "claude");
 	if (companyUrl !== null) {
@@ -35,23 +38,26 @@ async function isolatedEnv(companyUrl: string | null = "http://company.invalid")
 			JSON.stringify({ env: { ANTHROPIC_BASE_URL: companyUrl, ANTHROPIC_AUTH_TOKEN: COMPANY_TOKEN } }),
 		);
 	}
-	const agentDir = path.join(home, "agent");
-	await fs.mkdir(agentDir, { mode: 0o700 });
 	return {
 		PATH: process.env.PATH ?? "",
-		SystemRoot: process.env.SystemRoot ?? "",
+		SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "",
+		BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
 		HOME: home,
 		USERPROFILE: home,
+		APPDATA: path.join(home, "AppData", "Roaming"),
+		LOCALAPPDATA: path.join(home, "AppData", "Local"),
+		TMPDIR: home,
+		TEMP: home,
+		TMP: home,
 		OMP_CONFIG_ROOT: path.join(home, ".omp"),
+		OMP_CACHE_DIR: path.join(home, "cache"),
 		CLAUDE_CONFIG_DIR: claudeDir,
-		PI_CODING_AGENT_DIR: agentDir,
-		PI_CONFIG_DIR: ".omp",
 		OMP_OFFLINE: "1",
 		NO_COLOR: "1",
 	};
 }
 
-async function probeBenchRuntime(env: Record<string, string>, checks: string): Promise<void> {
+async function probeBenchRuntime(env: Record<string, string | undefined>, checks: string): Promise<string> {
 	const script = `
 		import assert from "node:assert/strict";
 
@@ -60,18 +66,19 @@ async function probeBenchRuntime(env: Record<string, string>, checks: string): P
 		// Install the guard before importing the runtime and its providers.
 		const { createDefaultBenchRuntime, resolveBenchTargets } = await import(${JSON.stringify(RUNTIME_MODULE)});
 		const { Settings } = await import(${JSON.stringify(SETTINGS_MODULE)});
+		const { setCompanyOfflineEnabled } = await import(${JSON.stringify(COMPANY_PROVIDER_MODULE)});
 		const withRuntime = async (options, check) => {
 			const runtime = await createDefaultBenchRuntime(options);
 			try { await check(runtime); } finally { runtime.close?.(); }
 		};
-		const hasCompany = runtime => runtime.modelRegistry.getAvailable().some(model => model.provider === "company");
 		const resolve = async (runtime, selector) => {
 			const [target] = await resolveBenchTargets([selector], runtime.modelRegistry, runtime.settings, () => {});
 			return \`\${target.model.provider}/\${target.model.id}\`;
 		};
 		${checks}
+		assert.equal(requests, 0);
 	`;
-	const child = Bun.spawn([process.execPath, "--eval", script], {
+	const child = Bun.spawn([process.execPath, "--no-env-file", "--eval", script], {
 		cwd: env.HOME,
 		env,
 		stdin: "ignore",
@@ -80,13 +87,16 @@ async function probeBenchRuntime(env: Record<string, string>, checks: string): P
 	});
 	const stderr = await new Response(child.stderr).text();
 	expect(await child.exited, stderr).toBe(0);
+	return stderr;
 }
 
 describe("OMP_OFFLINE=1 omp bench company environment", () => {
 	it("inherits the offline lane without leaking its role defaults into later runtimes", async () => {
 		const env = await isolatedEnv();
+		const agentDir = path.join(env.OMP_CONFIG_ROOT!, "agent");
+		await fs.mkdir(agentDir, { recursive: true });
 		await fs.writeFile(
-			path.join(env.PI_CODING_AGENT_DIR!, "models.yml"),
+			path.join(agentDir, "models.yml"),
 			JSON.stringify({
 				providers: {
 					"probe-gateway": {
@@ -104,19 +114,14 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 			const host = await Settings.init({ cwd: process.cwd() });
 			const publicModel = "deepseek/deepseek-v4-flash";
 			host.setModelRoleDefaults({ smol: publicModel });
-			await withRuntime({ offline: true }, async runtime => {
-				assert.equal(await resolve(runtime, "GLM-5.2-public"), "company/GLM-5.2-public");
-			});
+			await setCompanyOfflineEnabled(true);
 			await withRuntime(undefined, async runtime => {
-				assert.ok(hasCompany(runtime));
 				assert.equal(await resolve(runtime, "@smol"), "company/Qwen3.8-27B");
 				assert.ok(runtime.modelRegistry.getDiscoverableProviders().includes("probe-gateway"));
 				await assert.rejects(() => resolve(runtime, "probe-gateway/offline-probe-missing"), /Could not resolve model/);
-				assert.equal(requests, 0);
 			});
 			assert.equal(host.getModelRole("smol"), publicModel);
 			await withRuntime({ offline: false }, async runtime => {
-				assert.ok(!hasCompany(runtime));
 				assert.equal(await resolve(runtime, "@smol"), publicModel);
 			});
 		`,
@@ -124,36 +129,16 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 	}, 30_000);
 
 	it("keeps company selectors unavailable without a company config under OMP_OFFLINE", async () => {
-		await probeBenchRuntime(
+		const stderr = await probeBenchRuntime(
 			await isolatedEnv(null),
 			`
 			await withRuntime({ offline: true }, async runtime => {
-				assert.ok(!hasCompany(runtime));
 				assert.equal(runtime.settings.getModelRole("smol") ?? null, null);
 				await assert.rejects(() => resolve(runtime, "company/GLM-5.2-public"), /Could not resolve model/);
-				assert.equal(requests, 0);
 			});
 		`,
 		);
-	}, 30_000);
-
-	it("honors configured and explicitly cleared roles instead of applying company defaults", async () => {
-		const env = await isolatedEnv();
-		const configPath = path.join(env.HOME!, "roles.yml");
-		const config = "modelRoles:\n  default: null\n  smol: null\n  tiny: deepseek/deepseek-v4-flash\n";
-		await fs.writeFile(configPath, config);
-		env.PI_CONFIG_FILES = configPath;
-		await probeBenchRuntime(
-			env,
-			`
-			await withRuntime({ offline: true }, async runtime => {
-				assert.equal(await resolve(runtime, "@tiny"), "deepseek/deepseek-v4-flash");
-				assert.equal(runtime.settings.getModelRole("smol") ?? null, null);
-				assert.ok(!(await resolve(runtime, "@smol")).startsWith("company/"));
-			});
-		`,
-		);
-		expect(await fs.readFile(configPath, "utf8")).toBe(config);
+		expect(stderr).toContain("Company provider unavailable: cannot read");
 	}, 30_000);
 
 	it("does not install company role defaults when the provider is disabled", async () => {
@@ -165,7 +150,6 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 			env,
 			`
 			await withRuntime({ offline: true }, async runtime => {
-				assert.ok(!hasCompany(runtime));
 				assert.equal(runtime.settings.getModelRole("smol") ?? null, null);
 				await assert.rejects(() => resolve(runtime, "company/GLM-5.2-public"), /Could not resolve model/);
 			});
@@ -241,7 +225,20 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 			`,
 			);
 			const child = Bun.spawn(
-				[process.execPath, "--preload", guard, CLI, "bench", selector, "--runs", "1", "--par", "1", "--json"],
+				[
+					process.execPath,
+					"--no-env-file",
+					"--preload",
+					guard,
+					CLI,
+					"bench",
+					selector,
+					"--runs",
+					"1",
+					"--par",
+					"1",
+					"--json",
+				],
 				{
 					cwd: env.HOME,
 					env,

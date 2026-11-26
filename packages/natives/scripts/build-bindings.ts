@@ -13,7 +13,6 @@ import * as path from "node:path";
 import { $ } from "bun";
 import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/host-detect";
 import { stampNativeVersion } from "../../../scripts/stamp-native-version";
-import { withRustCompilerEvents } from "../../../scripts/test-gate-native-events";
 import { ensureWindowsBuildTools } from "../../../scripts/windows-build-tools";
 import { generateEnumExports } from "./gen-enums";
 import { matchesInstalledFile } from "./installed-file";
@@ -220,9 +219,7 @@ export async function buildBindings(): Promise<void> {
 
 	try {
 		// Use this Bun, not an old system Node selected by a shebang.
-		const buildResult = await withRustCompilerEvents(process.env as Record<string, string>, async env =>
-			$`${process.execPath} ${napiBin} ${napiArgs}`.env(env).nothrow(),
-		);
+		const buildResult = await $`${process.execPath} ${napiBin} ${napiArgs}`.nothrow();
 		if (buildResult.exitCode !== 0) {
 			const stdout = buildResult.stdout?.toString("utf-8") ?? "";
 			const stderr = buildResult.stderr?.toString("utf-8") ?? "";

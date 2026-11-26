@@ -16,10 +16,10 @@ import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-sess
 import type { BlobPutOptions, BlobPutResult } from "@oh-my-pi/pi-coding-agent/session/blob-store";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { commandUsage } from "@oh-my-pi/pi-coding-agent/utils/usage-counter";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Composer } from "../src/ui/composer/composer";
 import { createInputHarness } from "./helpers/input-harness";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 const ENTER = "enter";
 const FOLLOW_UP = "ctrl+enter";
@@ -170,16 +170,10 @@ function replaceImages(composer: Composer, images: ImageContent[], links: (strin
 	composer.pendingImageLinks.splice(0, composer.pendingImageLinks.length, ...links);
 }
 
-let settingsState: SettingsTestState | undefined;
-beforeEach(async () => {
-	settingsState = beginSettingsTest();
-	await Settings.init({ inMemory: true });
+beforeEach(() => {
+	vi.spyOn(commandUsage, "record").mockImplementation(() => {});
 });
-afterEach(() => {
-	vi.restoreAllMocks();
-	restoreSettingsTestState(settingsState);
-	settingsState = undefined;
-});
+afterEach(() => vi.restoreAllMocks());
 
 describe("interactive native input ingress", () => {
 	for (const key of [ENTER, FOLLOW_UP]) {
@@ -277,7 +271,7 @@ describe("interactive native input ingress", () => {
 		expect(Array.from(restored.matchAll(/\[Image #(\d+)/g), match => Number(match[1]))).toEqual([2, 1]);
 		expect(h.editor.pendingImages).toEqual([pasted, originalImage]);
 		expect(h.editor.pendingImageLinks).toEqual([imagePath, "local://original.png"]);
-		expect(h.ctx.showError).toHaveBeenCalledWith(expect.stringContaining("会话模型"));
+		expect(h.ctx.showError).toHaveBeenCalledWith(expect.stringContaining("/team requires a session model"));
 		expect(h.prompt).not.toHaveBeenCalled();
 	});
 

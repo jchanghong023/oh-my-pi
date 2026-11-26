@@ -1,19 +1,7 @@
 #!/usr/bin/env bun
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { $ } from "bun";
-import { windowsTestTempOverride } from "./windows-test-temp";
-import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
-import { forwardNextestOutput, withRustCompilerEvents } from "./test-gate-native-events";
-import { testConcurrencyLimit } from "./test-gate-scheduler";
-import {
-	beginTestRun,
-	endTestRun,
-	recordTestProducer,
-	recordUnselectedRustForkTests,
-	testReportPath,
-} from "./test-reporting";
 import { ensureWindowsBuildTools } from "./windows-build-tools";
 
 const RUST_AFFECTING_FILE_NAMES = [
@@ -57,21 +45,10 @@ const LINT_EXEMPT_FORK_EXCLUDES = [
 	"--exclude",
 	"grep-searcher",
 ] as const satisfies readonly string[];
-const CLIPPY_COMMAND = [
-	"cargo",
-	"clippy",
-	"--workspace",
-	...LINT_EXEMPT_FORK_EXCLUDES,
-	"--no-deps",
-	"--",
-	"-D",
-	"warnings",
-] as const satisfies readonly string[];
 const TASK_COMMANDS = {
 	"check:rs": [
 		["cargo", "fmt", "--all", "--", "--check"],
-		["cargo", "build", "--workspace", ...VENDORED_FORK_EXCLUDES],
-		CLIPPY_COMMAND,
+		["cargo", "clippy", "--workspace", ...LINT_EXEMPT_FORK_EXCLUDES, "--no-deps", "--", "-D", "warnings"],
 	],
 	"fix:rs": [
 		["cargo", "fmt", "--all"],
@@ -88,110 +65,52 @@ const TASK_COMMANDS = {
 		],
 	],
 	"fmt:rs": [["cargo", "fmt", "--all"]],
-	"lint:rs": [CLIPPY_COMMAND],
-	"test:rs": [],
-} as const satisfies Record<string, readonly (readonly string[])[]>;
-const FULL_TEST_COMMANDS = [
-	[
-		"cargo",
-		"nextest",
-		"run",
-		"--workspace",
-		`--test-threads=${testConcurrencyLimit()}`,
-		"--no-fail-fast",
-		"--message-format=libtest-json-plus",
-		"--message-format-version=0.1",
-		"--status-level=fail",
-		"--final-status-level=fail",
+	"lint:rs": [["cargo", "clippy", "--workspace", ...LINT_EXEMPT_FORK_EXCLUDES, "--no-deps", "--", "-D", "warnings"]],
+	"test:rs": [
+		[
+			"cargo",
+			"nextest",
+			"run",
+			"--workspace",
+			...VENDORED_FORK_EXCLUDES,
+			"--status-level=fail",
+			"--final-status-level=fail",
+		],
+		// nextest cannot run doctests (no stable libtest-json interface for
+		// them), so they need their own libtest pass. It runs every runnable
+		// doctest in the workspace's lib crates; today that is tree-sitter-go's
+		// one example, since omp-natives is a `cdylib`, which rustdoc refuses to
+		// collect doctests from, and omp-builtins' 16 examples are `ignore`d
+		// vendored uutils docs. `--doc` overrides a crate's own
+		// `doctest = false`, so a vendored crate whose examples do not compile
+		// (napi-rs's) has to be in VENDORED_FORK_EXCLUDES.
+		["cargo", "test", "--doc", "--workspace", ...VENDORED_FORK_EXCLUDES],
 	],
-	// --doc overrides Cargo's doctest=false; napi's vendored examples cannot run.
-	["cargo", "test", "--workspace", "--exclude", "napi", "--doc", "--no-fail-fast"],
-] as const satisfies readonly (readonly string[])[];
+} as const satisfies Record<string, readonly (readonly string[])[]>;
 
 type RustTaskName = keyof typeof TASK_COMMANDS;
 
 const repoRoot = path.join(import.meta.dir, "..");
+const cargoBinary = await resolveCargoBinary();
 const taskName = process.argv[2];
-let cargoBinary: string | undefined;
 
 if (!isRustTaskName(taskName)) {
 	console.error(`Unknown Rust task: ${taskName ?? "(missing)"}`);
 	process.exit(1);
 }
 
-const full = taskName === "test:rs" && process.argv.length === 4 && process.argv[3] === "--full";
-if (process.argv.length > 3 && !full) {
-	console.error(`Unknown Rust task argument: ${process.argv[3]}`);
-	process.exit(1);
-}
-
-if (taskName !== "test:rs" && taskName !== "fmt:rs") {
+if (taskName !== "fmt:rs") {
 	const decision = await decideWhetherToRun();
 	console.log(`${decision.run ? "Running" : "Skipping"} ${taskName}: ${decision.reason}`);
 	if (!decision.run) process.exit(0);
 }
 
-if (taskName !== "test:rs" || full) {
-	Object.assign(process.env, windowsTestTempOverride());
-	// Leave missing Visual Studio tools to Cargo's diagnostics in the Rust gate.
-	ensureWindowsBuildTools({ tolerateProbeFailure: true });
-}
-const commands = full ? FULL_TEST_COMMANDS : TASK_COMMANDS[taskName];
-await runCommands(commands, taskName === "test:rs" ? (full ? "rust-workspace" : "rust-fork-features") : undefined);
-
-async function runCommands(commands: readonly (readonly string[])[], scope?: string): Promise<void> {
-	const run = scope ? await beginTestRun(scope) : undefined;
-	let exitCode = 0;
-	try {
-		if (scope === "rust-fork-features") {
-			console.log("Skipping test:rs: no fork-owned Rust tests configured (use --full for workspace tests)");
-			await recordUnselectedRustForkTests();
-		}
-		for (const command of commands) {
-			let commandExitCode: number;
-			try {
-				commandExitCode = await runCommand(command, scope);
-			} catch (error) {
-				commandExitCode = 1;
-				const failure = new GateCommandError(`${command.join(" ")} failed: ${String(error)}`, commandExitCode);
-				console.error(failure.message);
-				reportGateFailure(failure);
-			}
-			if (exitCode === 0) exitCode = commandExitCode;
-			if (commandExitCode !== 0 && !scope) break;
-		}
-	} catch (error) {
-		exitCode = 1;
-		throw error;
-	} finally {
-		if (run) {
-			try {
-				await endTestRun(run, exitCode);
-			} catch (error) {
-				console.warn(
-					`Warning: unable to finalize Rust test timing: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
+ensureWindowsBuildTools({ tolerateProbeFailure: true });
+for (const command of TASK_COMMANDS[taskName]) {
+	const exitCode = await runCommand(command);
+	if (exitCode !== 0) {
+		process.exit(exitCode);
 	}
-	if (exitCode !== 0) process.exit(exitCode);
-}
-
-async function ensureCargoBinary(): Promise<string> {
-	cargoBinary ??= await resolveCargoBinary();
-	return cargoBinary;
-}
-
-function cargoEnvironment(binary: string): Record<string, string> {
-	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-	const toolchainBin = path.dirname(binary);
-	const pathSep = process.platform === "win32" ? ";" : ":";
-	const currentPath = env.PATH ?? env.Path ?? "";
-	env.PATH = currentPath === "" ? toolchainBin : `${toolchainBin}${pathSep}${currentPath}`;
-	// Rustup's cargo subcommand proxies must use the same toolchain as cargo.
-	const toolchain = toolchainOfCargo(binary);
-	if (toolchain !== undefined) env.RUSTUP_TOOLCHAIN = toolchain;
-	return env;
 }
 
 function isRustTaskName(value: string | undefined): value is RustTaskName {
@@ -208,10 +127,13 @@ type GitResult = { ok: true; text: string } | { ok: false; error: string };
 
 /**
  * Runs unless the branch provably changed nothing Rust builds from since its merge base with a trunk.
- * Preserve the fork's existing CI override.
+ * `CI` is not read: omp exports `CI=true` into every agent command. GitHub Actions and
+ * `OMP_FORCE_RUST_TASKS=1` force a run.
  */
 async function decideWhetherToRun(): Promise<RunDecision> {
-	if (isEnabled(Bun.env.CI)) return { run: true, reason: "CI is set." };
+	if (isEnabled(Bun.env.OMP_FORCE_RUST_TASKS)) return { run: true, reason: "OMP_FORCE_RUST_TASKS is set." };
+	// A CI job on `main` has an empty branch diff by definition and must still check everything.
+	if (Bun.env.GITHUB_ACTIONS === "true") return { run: true, reason: "running in GitHub Actions." };
 	const changed = await changedPathsSinceTrunk();
 	if (typeof changed === "string")
 		return { run: true, reason: `cannot tell what this checkout changed (${changed}).` };
@@ -219,7 +141,8 @@ async function decideWhetherToRun(): Promise<RunDecision> {
 	if (rust.length === 0) {
 		return {
 			run: false,
-			reason: "no Rust-affecting change since the merge base with main.",
+			reason:
+				"no Rust-affecting change since the merge base with main. Set OMP_FORCE_RUST_TASKS=1 to run it anyway.",
 		};
 	}
 	return {
@@ -298,9 +221,10 @@ function isRustAffectingPath(changedPath: string): boolean {
 	const fileName = normalized.slice(normalized.lastIndexOf("/") + 1);
 	return (
 		normalized.endsWith(".rs") ||
-		// Crate fixtures, included data, and build inputs can affect Rust.
+		// Everything under crates/ feeds a crate: fixtures, include_bytes! data, grammars build.rs compiles.
 		normalized.startsWith("crates/") ||
 		normalized.startsWith(".cargo/") ||
+		// `test:rs` is `cargo nextest run`, which reads its filters and scheduling from here.
 		normalized === ".config/nextest.toml" ||
 		isOneOf(fileName, RUST_AFFECTING_FILE_NAMES)
 	);
@@ -329,15 +253,6 @@ async function resolveCargoBinary(): Promise<string> {
 	return "cargo";
 }
 
-function toolVersion(command: string[], env: Record<string, string>): string | undefined {
-	try {
-		const result = Bun.spawnSync(command, { cwd: repoRoot, env, stdout: "pipe", stderr: "ignore" });
-		return result.exitCode === 0 ? result.stdout.toString().trim() : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 /**
  * The rustup toolchain a resolved cargo belongs to, read from its path
  * (`<RUSTUP_HOME>/toolchains/<toolchain>/bin/cargo`), or `undefined` when the
@@ -350,108 +265,35 @@ function toolchainOfCargo(cargo: string): string | undefined {
 	return path.basename(toolchainDir);
 }
 
-async function runCommand(command: readonly string[], scope?: string): Promise<number> {
+async function runCommand(command: readonly string[]): Promise<number> {
 	const [head, ...rest] = command;
 	const isCargo = head === "cargo";
-	const isNextest = isCargo && rest[0] === "nextest" && rest[1] === "run";
-	const isDoctest = isCargo && rest[0] === "test" && rest.includes("--doc");
-	const executable = isCargo ? await ensureCargoBinary() : head;
-	const argv = [executable, ...rest];
-	const env = isCargo ? cargoEnvironment(executable) : { ...(process.env as Record<string, string>) };
-	if (isNextest) env.NEXTEST_EXPERIMENTAL_LIBTEST_JSON = "1";
-	const reportPath = scope && isNextest ? testReportPath("rust-nextest") : undefined;
-	let nextestStore: string | undefined;
-	if (reportPath && isNextest) {
-		// Nextest's JUnit path is relative to store.dir/<profile>. A lower-priority
-		// tool config isolates the store for this invocation while leaving Cargo's
-		// stable target directory, build profile and workspace config untouched.
-		nextestStore = `${reportPath}.nextest`;
-		const toolConfigPath = `${reportPath}.nextest.toml`;
-		await Bun.write(toolConfigPath, `[store]\ndir = ${JSON.stringify(nextestStore)}\n`);
-		argv.push("--tool-config-file", `omp-test-report:${toolConfigPath}`);
+	const argv = isCargo ? [cargoBinary, ...rest] : [head, ...rest];
+	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+	if (isCargo) {
+		// Cargo subprocesses (notably `rustc -vV` from `cargo metadata`) resolve
+		// via PATH; ensure the active toolchain bin dir wins over Homebrew's
+		// rustup-init shadow on macOS runners.
+		const toolchainBin = path.dirname(cargoBinary);
+		const pathSep = process.platform === "win32" ? ";" : ":";
+		const currentPath = env.PATH ?? env.Path ?? "";
+		env.PATH = currentPath === "" ? toolchainBin : `${toolchainBin}${pathSep}${currentPath}`;
+		// cargo looks for its `fmt` and `clippy` subcommands in `$CARGO_HOME/bin`
+		// before PATH when PATH does not name that directory, and the rustup
+		// proxies there take their toolchain from RUSTUP_TOOLCHAIN when it is
+		// set. A caller's RUSTUP_TOOLCHAIN (mise exports its global rust pin into
+		// every shell it starts) then runs another toolchain's rustfmt and clippy
+		// than the cargo resolved above. Name that cargo's own toolchain, so one
+		// toolchain runs the whole task.
+		const toolchain = toolchainOfCargo(cargoBinary);
+		if (toolchain !== undefined) env.RUSTUP_TOOLCHAIN = toolchain;
 	}
-	const startedAt = new Date().toISOString();
-	const startedMs = performance.now();
-	const exitCode = await withRustCompilerEvents(env, async compilerEnv => {
-		const proc = Bun.spawn(argv, {
-			cwd: repoRoot,
-			env: compilerEnv,
-			stdin: "inherit",
-			stdout: isNextest ? "pipe" : "inherit",
-			stderr: "inherit",
-		});
-		let reportedFailure = false;
-		const writeOutput = (bytes: Uint8Array) =>
-			new Promise<void>((resolve, reject) => {
-				process.stdout.write(bytes, error => (error ? reject(error) : resolve()));
-			});
-		const output = isNextest
-			? forwardNextestOutput(proc.stdout as ReadableStream<Uint8Array>, writeOutput, error => {
-					reportedFailure = true;
-					reportGateFailure(error);
-				})
-			: Promise.resolve();
-		const [code] = await Promise.all([proc.exited, output]);
-		if (code !== 0 && !reportedFailure) reportGateFailure(new GateCommandError(`${command.join(" ")} failed`, code));
-		return code;
+	const proc = Bun.spawn(argv, {
+		cwd: repoRoot,
+		env,
+		stdin: "inherit",
+		stdout: "inherit",
+		stderr: "inherit",
 	});
-	if (reportPath && scope) {
-		let partial = false;
-		if (nextestStore) {
-			const profile = process.env.NEXTEST_PROFILE || "default";
-			const source = path.join(nextestStore, profile, "junit.xml");
-			try {
-				if (path.basename(profile) !== profile || profile === "." || profile === "..")
-					throw new Error(`Invalid nextest profile path: ${profile}`);
-				await fs.promises.copyFile(source, reportPath);
-				const junit = await Bun.file(reportPath).text();
-				if (!/<testsuites?(?:\s|>)/.test(junit) || !/<\/testsuites?\s*>/.test(junit))
-					throw new Error("Invalid nextest JUnit report");
-			} catch (error) {
-				partial = true;
-				console.warn(
-					`Warning: nextest JUnit report unavailable: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
-		try {
-			await recordTestProducer({
-				producer: "cargo nextest run",
-				command: argv,
-				scope,
-				startedAt,
-				durationSeconds: (performance.now() - startedMs) / 1000,
-				exitCode,
-				reportPath,
-				status: partial ? "partial" : undefined,
-				selection: { tool: "cargo-nextest", mode: "full", reason: "all workspace packages and test namespaces" },
-				timingBasis: "nextest native JUnit case time",
-				runnerVersion: toolVersion([executable, "nextest", "--version"], env),
-			});
-		} catch (error) {
-			// Reporting must not replace the actual Rust test exit status.
-			console.warn(
-				`Warning: unable to record Rust timing metadata: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
-	if (scope && isDoctest) {
-		try {
-			await recordTestProducer({
-				producer: "cargo test --doc",
-				command: argv,
-				scope,
-				startedAt,
-				durationSeconds: (performance.now() - startedMs) / 1000,
-				exitCode,
-				status: exitCode === 0 ? "stage" : "failed",
-				timingBasis: "command wall time; Cargo doctests do not provide standard JUnit reports",
-				selection: { tool: "cargo", mode: "full", reason: "workspace doctests" },
-				runnerVersion: toolVersion([executable, "--version"], env),
-			});
-		} catch (error) {
-			console.warn(`Warning: unable to record Rust doctest timing metadata: ${String(error)}`);
-		}
-	}
-	return exitCode;
+	return proc.exited;
 }

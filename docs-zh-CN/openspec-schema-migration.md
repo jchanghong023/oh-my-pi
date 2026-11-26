@@ -5,7 +5,7 @@
 ## 变更与恢复
 
 - 根 `openspec/config.yaml` 及当时活动 change 的 `.openspec.yaml` 从 `omp-spec` 改为上游 `spec-driven`，创建日期及换行格式保持。
-- 现存的旧 YAML 配置与材料摘要保存在 `openspec/.migration-backup/openspec-2.0/`。需要撤回时，仅恢复对应配置／元数据；回滚名称不会恢复已撤销的包内私有 schema。
+- 旧 YAML 配置与迁移时的材料摘要可从 Git 历史查阅。旧私有 schema 已撤销，恢复旧配置不会恢复该 schema。
 - schema 迁移本身没有生成、删除或改写 proposal、specs、design、tasks；迁移时逐文件摘要验证原有材料保持不变。
 - 不批量改写历史 `changes/archive/`；其中旧 schema 名称保留为历史记录。没有恢复 `mini`／`omp-spec` 兼容 schema 或别名。
 

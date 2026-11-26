@@ -13,7 +13,6 @@ import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
-import { withChargedActivity, withCompilerActivity } from "../../../scripts/test-gate-events";
 
 /**
  * Optional packages resolved at runtime rather than embedded. Ink loads
@@ -66,7 +65,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 	try {
 		const openWikiResources = await buildOpenWikiResources();
 		await writeOpenWikiResources(openWikiResources);
-		const buildOptions: Bun.BuildConfig = {
+		const output = await Bun.build({
 			entrypoints: [options.entrypoint],
 			root: options.repoRoot,
 			external: [...COMPILED_EXTERNAL_DEPENDENCIES],
@@ -120,16 +119,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				autoloadPackageJson: false,
 			},
 			throw: false,
-		};
-		// A cross-runtime template may be downloaded inside Bun.build itself;
-		// no supported API boundary separates that download from compilation.
-		const compilerOnly = options.target === undefined || options.executablePath !== undefined;
-		if (!compilerOnly && process.env.OMP_GATE_EVENT_TOKEN) {
-			console.warn("UNVERIFIED_COMPILATION_ACCOUNTING: cross-target Bun runtime preparation remains charged");
-		}
-		const output = compilerOnly
-			? await withCompilerActivity(() => Bun.build(buildOptions))
-			: await withChargedActivity(() => Bun.build(buildOptions));
+		});
 		if (!output.success) {
 			throw new Error(`Coding-agent binary bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
 		}

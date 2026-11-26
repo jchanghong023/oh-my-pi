@@ -101,9 +101,9 @@ describe("composer under a waiting ask", () => {
 
 		mode.composer.setText("never mind, just ship it");
 		const skipping = composerRoles();
-		expect(skipping.get("omp.composer.skip")?.p).toMatchObject({ text: "跳过并发送", actions: { click: "submit" } });
+		expect(skipping.get("omp.composer.skip")?.p).toMatchObject({ text: "Skip & send", actions: { click: "submit" } });
 		expect(skipping.has("omp.composer.send")).toBe(false);
-		expect(skipping.get("omp.composer.mode")?.c?.[0]?.p).toMatchObject({ spans: [{ t: "跳过提问" }] });
+		expect(skipping.get("omp.composer.mode")?.c?.[0]?.p).toMatchObject({ spans: [{ t: "skips ask" }] });
 
 		// A command is not a message to the agent: it skips nothing.
 		mode.composer.setText("/model");

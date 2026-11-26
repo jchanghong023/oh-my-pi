@@ -19,7 +19,7 @@ export class RerankApiError extends AIError.ProviderHttpError {
 }
 
 const upstreamResponseSchema = type({
-	// Cohere v2 and some compatible gateways omit the model field.
+	// Cohere v2 `/rerank` answers carry no `model` field.
 	"model?": "string",
 	results: type({
 		index: "number",

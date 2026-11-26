@@ -2599,7 +2599,6 @@ export function tryEnforceStrictSchema(schema: Record<string, unknown>): {
 /**
  * Resolve a URI-fragment JSON Pointer against the root schema. Each segment
  * must dereference to a dictionary, as in the OpenAI SDK's `resolve_ref` helper.
- * Percent decoding precedes JSON Pointer token unescaping (RFC 6901 §6).
  */
 function resolveStrictRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | undefined {
 	const pointer = parseLocalRefPointer(ref);

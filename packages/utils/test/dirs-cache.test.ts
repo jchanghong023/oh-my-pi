@@ -178,7 +178,7 @@ describe("cache root", () => {
 
 	it("expands a trimmed home-relative cache selection ahead of offline defaults", () => {
 		process.env.OMP_CACHE_DIR = "  ~/omp-cache-contract  ";
-		process.env.OMP_OFFLINE = " On ";
+		process.env.OMP_OFFLINE = "1";
 		const root = path.join(os.homedir(), "omp-cache-contract");
 		const selected = process.platform === "linux" ? path.join(root, String(process.getuid!())) : root;
 		expect(resolveCacheRoot("work")).toBe(path.join(selected, "profiles", "work"));

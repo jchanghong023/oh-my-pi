@@ -67,16 +67,17 @@ function help(theme: Theme): string {
 		.map(key => keyLabel(theme, canonicalKeyId(key)))
 		.join("/");
 	return [
-		`${bindingGlyph("tui.select.confirm", "enter", theme)}: 切换。`,
-		`${keyLabel(theme, "alt+enter")}: 工具详情，${keyLabels(theme, ["shift+up", "shift+down"])}: 滚动详情。`,
-		`${keyLabels(theme, ["alt+up", "alt+down"])}: 上一轮／下一轮。`,
-		...(branchKeys ? [`${branchKeys}: 上一分支／下一分支。`] : []),
-		`${bindingGlyph("tui.select.pageUp", "pageUp", theme)}/${bindingGlyph("tui.select.pageDown", "pageDown", theme)} (${keyLabels(theme, ["left", "right"])}): 翻页。`,
-		`${keyLabels(theme, ["home", "end"])}: 首项／末项。`,
-		`${keyLabel(theme, "shift+enter")}: 摘要后切换。`,
-		`${keyLabel(theme, "shift+l")}: 标记。`,
-		`${keyLabel(theme, "ctrl+o")}: 筛选。`,
-		"输入以搜索。",
+		`${bindingGlyph("tui.select.confirm", "enter", theme)}: switch.`,
+		`${keyLabel(theme, "alt+enter")}: tool details, ${keyLabels(theme, ["shift+up", "shift+down"])}: scroll details.`,
+		`${keyLabels(theme, ["alt+up", "alt+down"])}: previous/next turn.`,
+		...(branchKeys ? [`${branchKeys}: previous/next branch.`] : []),
+		`${bindingGlyph("tui.select.pageUp", "pageUp", theme)}/${bindingGlyph("tui.select.pageDown", "pageDown", theme)} (${keyLabels(theme, ["left", "right"])}): page.`,
+		`${keyLabels(theme, ["home", "end"])}: first/last item.`,
+		`${keyLabel(theme, "shift+enter")}: summarize & switch.`,
+		`${keyLabel(theme, "shift+l")}: label.`,
+		`${keyLabel(theme, "ctrl+o")}: filter.`,
+		`${keyLabels(theme, ["alt+d", "alt+t", "alt+u", "alt+l", "alt+a"])}: filter.`,
+		"Type to search",
 	].join(" ");
 }
 
@@ -102,7 +103,7 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 	const term = props.term;
 	const inner = Math.max(1, width - 4);
 	const head = ["", truncate(theme.style("muted", help(theme)), inner, theme.symbols.ellipsis)];
-	head.push(caretField(theme, `${theme.style("muted", "搜索：")} `, term.field.text, term.field.cursor, inner));
+	head.push(caretField(theme, `${theme.style("muted", "Search:")} `, term.field.text, term.field.cursor, inner));
 	const body: string[] = [""];
 	const hits: Hit[] = [];
 	if (term.label) {
@@ -179,7 +180,7 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 		body.push(truncate(theme.style("muted", term.filterLabel.trim()), inner, theme.symbols.ellipsis));
 	body.push("");
 	const rows = [
-		boxTop(theme, width, "会话树"),
+		boxTop(theme, width, "Session Tree"),
 		...head.map(row => boxRow(theme, width, row)),
 		boxRule(theme, width),
 		...body.map(row => boxRow(theme, width, row)),

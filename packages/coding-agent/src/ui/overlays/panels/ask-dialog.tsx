@@ -33,14 +33,14 @@ import { getKeybindings } from "../../../config/keybindings/keybindings";
 import { ActionButton } from "./common";
 
 /** Label of the free-text row in the terminal. */
-export const OTHER_OPTION = "其他（自行输入）";
-const RECOMMENDED_SUFFIX = "（推荐）";
+export const OTHER_OPTION = "Other (type your own)";
+const RECOMMENDED_SUFFIX = " (Recommended)";
 /** Native label of the free-text row. */
-const OTHER_LABEL = "其他…";
+const OTHER_LABEL = "Other…";
 /** Widest a folded question's text grows, in cells, before it is cut. */
 const MAX_FOLD_QUESTION_WIDTH = 200;
 /** Rows a guest participant appends; options sanitizing to them disambiguate the same way on both sides. */
-const GUEST_ACTION_LABELS = ["讨论此问题", "下一步 →"];
+const GUEST_ACTION_LABELS = ["Chat about this", "Next →"];
 /** Option pills a folded question shows; the rest fold into `+N`. */
 export const PILL_LIMIT = 4;
 /** Widest a pill's label grows, in cells. */
@@ -272,7 +272,7 @@ export class AskDialogModel {
 		const labels = displayLabels(question);
 		const noteText = submittedNote(question, state)?.text.trim();
 		const note = noteText ? inlineText(noteText) : undefined;
-		const custom = state.customInput === undefined ? undefined : `其他：“${inlineText(state.customInput)}”`;
+		const custom = state.customInput === undefined ? undefined : `Other: “${inlineText(state.customInput)}”`;
 		if (custom !== undefined && !question.multi) return { kind: "answer", text: custom, ...(note ? { note } : {}) };
 		const pills: AskPill[] = question.options.map((option, optionIndex) => ({
 			label: optionLabelSpans(question, optionIndex, labels[optionIndex] ?? option.label)
@@ -517,7 +517,7 @@ export class AskDialogModel {
 					? undefined
 					: { text: state.customInput, images: state.customInputImages });
 			const outcome = promptOutcome(
-				await this.#prompt({ title: "自定义答案", question: question.question }, prefill),
+				await this.#prompt({ title: "Custom answer", question: question.question }, prefill),
 			);
 			if (this.closed) return;
 			if (!outcome.submitted) {
@@ -560,7 +560,7 @@ export class AskDialogModel {
 					? { text: state.note, images: state.noteImages }
 					: undefined;
 			const outcome = promptOutcome(
-				await this.#prompt({ title: `${row.label} 的备注`, question: question.question }, prefill),
+				await this.#prompt({ title: `Note for ${row.label}`, question: question.question }, prefill),
 			);
 			if (this.closed || !outcome.submitted) return;
 			state.note = outcome.text;
@@ -690,7 +690,7 @@ export function FoldSummaryNode(props: {
 					text={`+${hidden}`}
 					size="sm"
 					actions={{ click: props.more }}
-					title="显示所有选项"
+					title="Show every option"
 				/>
 			)}
 			{shown.some(pill => pill.chosen) && note}
@@ -707,7 +707,7 @@ function FoldedQuestion(props: { readonly model: AskDialogModel; readonly index:
 			motionKey={`q${index}`}
 			role="omp.ask.fold"
 			gap="xs"
-			title="回答此问题"
+			title="Answer this question"
 			actions={{ click: `open:${index}` }}
 		>
 			<row role="omp.ask.fold.head" gap="sm" align="baseline">
@@ -757,7 +757,7 @@ function OpenQuestion(props: { readonly model: AskDialogModel; readonly index: n
 							{ s: "em", t: inlineText(state.note) },
 						);
 					}
-					if (detail.length === 0 && row.kind === "other") detail.push({ t: "自行输入答案" });
+					if (detail.length === 0 && row.kind === "other") detail.push({ t: "Type your own answer" });
 					const role =
 						row.kind === "other"
 							? question.multi
@@ -777,7 +777,9 @@ function OpenQuestion(props: { readonly model: AskDialogModel; readonly index: n
 							}
 							detail={detail.length > 0 ? detail : undefined}
 							value={
-								row.kind === "option" && question.recommended === row.optionIndex ? [{ t: "推荐" }] : undefined
+								row.kind === "option" && question.recommended === row.optionIndex
+									? [{ t: "Recommended" }]
+									: undefined
 							}
 							tone={checked ? "accent" : undefined}
 							icon={checked && question.multi ? "check" : undefined}
@@ -829,7 +831,10 @@ export function AskDialog(props: AskDialogProps): JSXNode {
 					<row key="head" motionKey="head" role="omp.ask.card.head" gap="sm" align="baseline" justify="between">
 						<text role="omp.ask.card.tag" spans={[{ s: "accent", t: "ask" }]} />
 						{total > 1 && (
-							<text role="omp.ask.card.progress" spans={[{ s: "muted", t: `已回答 ${answered}/${total}` }]} />
+							<text
+								role="omp.ask.card.progress"
+								spans={[{ s: "muted", t: `${answered} of ${total} answered` }]}
+							/>
 						)}
 					</row>
 				);
@@ -865,9 +870,9 @@ export function AskDialog(props: AskDialogProps): JSXNode {
 					<elapsed format="short" age={-model.options.timeout} />
 				)}
 				<spacer grow={1} />
-				<ActionButton id="note" label="备注" title="为当前答案添加备注  n" keys={["n"]} />
-				<ActionButton id="cancel" label="取消" title="取消，不提交答案" />
-				<ActionButton id="submit" label="提交" title="提交答案" tone="accent" />
+				<ActionButton id="note" label="Note" title="Add a note to the highlighted answer  n" keys={["n"]} />
+				<ActionButton id="cancel" label="Cancel" title="Cancel without answering" />
+				<ActionButton id="submit" label="Submit" title="Submit the answers" tone="accent" />
 			</row>
 		</col>
 	);

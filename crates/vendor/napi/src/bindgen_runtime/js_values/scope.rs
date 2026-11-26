@@ -22,7 +22,7 @@ impl HandleScope {
   ///
   /// For example:
   ///
-  /// ```rust,ignore
+  /// ```no_run
   /// #[napi]
   /// pub fn shorter_scope(env: &Env, arr: Array) -> Result<Vec<u32>> {
   ///   let len = arr.len();

@@ -21,56 +21,65 @@ async function fixture(
 		visionUrl?: string;
 		modelRoles?: Record<string, string>;
 		offline?: boolean;
+		imageQuestion?: boolean;
+		catalogExtension?: boolean;
 	} = {},
 ) {
 	const home = await fs.mkdtemp(path.join(os.tmpdir(), "omp-offline-subcommands-"));
 	tempDirs.push(home);
 	const claudeDir = path.join(home, "claude");
-	await fs.mkdir(claudeDir);
-	const env: Record<string, string> = {
+	const configRoot = path.join(home, "config");
+	const env: Record<string, string | undefined> = {
 		PATH: process.env.PATH ?? "",
-		SystemRoot: process.env.SystemRoot ?? "",
+		SystemRoot: process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "",
+		BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
 		HOME: home,
 		USERPROFILE: home,
-		OMP_CONFIG_ROOT: path.join(home, "config"),
-		PI_CODING_AGENT_DIR: path.join(home, "agent"),
-		OMP_COMMIT_CACHE_DB: path.join(home, "commit-inference.db"),
-		PI_CONFIG_DIR: ".omp",
+		APPDATA: path.join(home, "AppData", "Roaming"),
+		LOCALAPPDATA: path.join(home, "AppData", "Local"),
+		TMPDIR: home,
+		TEMP: home,
+		TMP: home,
+		OMP_CONFIG_ROOT: configRoot,
+		OMP_CACHE_DIR: path.join(home, "cache"),
 		CLAUDE_CONFIG_DIR: claudeDir,
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_GLOBAL: path.join(home, "gitconfig"),
 		NO_COLOR: "1",
 	};
 	if (options.offline !== false) env.OMP_OFFLINE = "1";
-	const agentDir = env.PI_CODING_AGENT_DIR!;
-	await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+	const agentDir = path.join(configRoot, "agent");
 	const companyPath = path.join(claudeDir, "settings.json");
 	const companyText = JSON.stringify({
 		env: { ANTHROPIC_BASE_URL: options.companyUrl, ANTHROPIC_AUTH_TOKEN: "fixture-token" },
 	});
-	if (options.companyUrl) await fs.writeFile(companyPath, companyText);
+	if (options.companyUrl) await Bun.write(companyPath, companyText);
 	const image = path.join(home, "image.png");
-	await fs.writeFile(image, Buffer.from(PNG_1X1, "base64"));
+	if (options.imageQuestion) await fs.writeFile(image, Buffer.from(PNG_1X1, "base64"));
 	const extension = path.join(home, "catalog-extension.ts");
-	await fs.writeFile(
-		extension,
-		`
-		export default function (pi) {
-			pi.registerProvider("opencode-go", {
-				api: "anthropic-messages", baseUrl: "http://discovery.invalid", apiKey: "fixture-key",
-				fetchDynamicModels: async () => {
-					process.stderr.write("UNEXPECTED_EXTENSION_DISCOVERY\\n");
-					throw new Error("fixture forbids catalog discovery");
-				},
-			});
-		}
-	`,
-	);
+	if (options.catalogExtension) {
+		await fs.writeFile(
+			extension,
+			`
+			export default function (pi) {
+				pi.registerProvider("opencode-go", {
+					api: "anthropic-messages", baseUrl: "http://discovery.invalid", apiKey: "fixture-key",
+					fetchDynamicModels: async () => {
+						process.stderr.write("EXTENSION_DISCOVERY\\n");
+						throw new Error("fixture forbids catalog discovery");
+					},
+				});
+			}
+		`,
+		);
+	}
 	const configPath = path.join(agentDir, "config.yml");
 	const configText = JSON.stringify({
-		extensions: [extension],
-		images: { questionTimeoutMs: 5000 },
+		...(options.catalogExtension ? { extensions: [extension] } : {}),
+		...(options.imageQuestion ? { images: { questionTimeoutMs: 5000 } } : {}),
 		...(options.modelRoles ? { modelRoles: options.modelRoles } : {}),
 	});
-	await fs.writeFile(configPath, configText);
+	if (configText !== "{}") await Bun.write(configPath, configText);
 	const modelsPath = path.join(agentDir, "models.yml");
 	const modelsText = JSON.stringify({
 		providers: {
@@ -82,7 +91,7 @@ async function fixture(
 			},
 		},
 	});
-	if (options.visionUrl) await fs.writeFile(modelsPath, modelsText);
+	if (options.visionUrl) await Bun.write(modelsPath, modelsText);
 	const guard = path.join(home, "network-guard.ts");
 	const requestUrl = options.visionUrl ?? options.companyUrl;
 	const endpoint = requestUrl
@@ -105,7 +114,6 @@ async function fixture(
 	return {
 		home,
 		env,
-		agentDir,
 		image,
 		companyPath,
 		companyText,
@@ -113,8 +121,8 @@ async function fixture(
 		configText,
 		modelsPath,
 		modelsText,
-		async run(args: string[], entry = CLI, allowDiscovery = false) {
-			const child = Bun.spawn([process.execPath, "--preload", guard, entry, ...args], {
+		async run(args: string[], entry = CLI, expectExtensionDiscovery = false) {
+			const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", guard, entry, ...args], {
 				cwd: home,
 				env,
 				stdin: "ignore",
@@ -126,16 +134,14 @@ async function fixture(
 				new Response(child.stderr).text(),
 				child.exited,
 			]);
-			if (!allowDiscovery) {
-				expect(stderr).not.toContain("UNEXPECTED_NETWORK_FETCH");
-				expect(stderr).not.toContain("UNEXPECTED_EXTENSION_DISCOVERY");
-			}
+			if (!expectExtensionDiscovery) expect(stderr).not.toContain("UNEXPECTED_NETWORK_FETCH");
+			expect(stderr.includes("EXTENSION_DISCOVERY")).toBe(expectExtensionDiscovery);
 			return { stdout, stderr, exitCode };
 		},
 	};
 }
 
-async function stageCommitFixture(home: string, env: Record<string, string>): Promise<void> {
+async function stageCommitFixture(home: string, env: Record<string, string | undefined>): Promise<void> {
 	await fs.writeFile(path.join(home, "source.ts"), "export const offlineFixture = true;\n");
 	for (const args of [
 		["init", "--initial-branch=main"],
@@ -279,47 +285,6 @@ describe("offline model-dependent subcommands", () => {
 		expect(result.exitCode).not.toBe(0);
 		expect(result.stderr).toContain("OMP_OFFLINE=1");
 		expect(result.stderr).not.toContain("Company provider unavailable");
-		expect(await Bun.file(f.companyPath).exists()).toBe(false);
-		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
-	}, 30_000);
-
-	it("keeps shared SDK initialization off terminal streams when company configuration is invalid", async () => {
-		const f = await fixture({ modelRoles: { default: "ascend/vision" } });
-		await fs.writeFile(f.companyPath, JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "fixture-token" } }));
-		const sourceUrl = (file: string) =>
-			JSON.stringify(pathToFileURL(path.join(import.meta.dir, "../src", file)).href);
-		const script = path.join(f.home, "sdk-company-diagnostics.ts");
-		await fs.writeFile(
-			script,
-			`import { Settings } from ${sourceUrl("config/settings.ts")};
-			import { ModelRegistry } from ${sourceUrl("config/model-registry.ts")};
-			import { getCompanyConfigError } from ${sourceUrl("config/company-provider.ts")};
-			import { discoverAuthStorage, initializeCompanyModelLane, loadCliExtensionProviders } from ${sourceUrl("sdk.ts")};
-			const settings = await Settings.init({ cwd: process.cwd() });
-			const [laneError, auth] = await Promise.all([
-				initializeCompanyModelLane(true),
-				discoverAuthStorage(undefined, { settings }),
-			]);
-			try {
-				const registry = new ModelRegistry(auth, undefined, { settings });
-				await loadCliExtensionProviders(registry, settings, process.cwd(), { discoverModels: false });
-				const nested = await discoverAuthStorage(undefined, { settings });
-				nested.close();
-				process.stdout.write(JSON.stringify({
-					companyAvailable: registry.hasProvider("company"),
-					configError: Boolean(getCompanyConfigError()) && laneError === getCompanyConfigError(),
-					defaultRole: settings.getModelRole("default"),
-				}));
-			} finally { auth.close(); }`,
-		);
-		const result = await f.run([], script);
-		expect(result.exitCode, result.stderr).toBe(0);
-		expect(JSON.parse(result.stdout)).toEqual({
-			companyAvailable: false,
-			configError: true,
-			defaultRole: "ascend/vision",
-		});
-		expect(result.stderr).toBe("");
 	}, 30_000);
 
 	it("activates auth discovery without Settings and refreshes company policy on a prebuilt registry", async () => {
@@ -329,40 +294,29 @@ describe("offline model-dependent subcommands", () => {
 			JSON.stringify(pathToFileURL(path.join(import.meta.dir, "../src", file)).href);
 		await fs.writeFile(
 			script,
-			`import { Database } from "bun:sqlite";
+			`import assert from "node:assert/strict";
+			import { Database } from "bun:sqlite";
 			import { AuthStorage, SqliteAuthCredentialStore } from ${sourceUrl("session/auth-storage.ts")};
 			import { ModelRegistry } from ${sourceUrl("config/model-registry.ts")};
 			import { Settings } from ${sourceUrl("config/settings.ts")};
 			import { getCompanyConfig } from ${sourceUrl("config/company-provider.ts")};
 			import { discoverAuthStorage, loadCliExtensionProviders } from ${sourceUrl("sdk.ts")};
-			import { resolvePrimaryModel } from ${sourceUrl("commit/model-selection.ts")};
 			const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
 			try {
 				const registry = new ModelRegistry(authStorage);
-				registry.getAll();
-				await registry.refresh("online");
+				// Compose the original catalog before activation so policy reload must replace it.
+				assert.ok(!registry.getAll().some(model => model.provider === "company"));
 				const discovered = await discoverAuthStorage();
 				try {
-					if (!getCompanyConfig()) throw new Error("Auth discovery did not load company credentials");
+					assert.ok(getCompanyConfig(), "Auth discovery did not load company credentials");
 				} finally { discovered.close(); }
 				const settings = await Settings.init({ cwd: process.cwd() });
 				await loadCliExtensionProviders(registry, settings, process.cwd());
-				const resolved = await resolvePrimaryModel(undefined, settings, registry);
-				process.stdout.write(JSON.stringify({
-					provider: resolved.model.provider, model: resolved.model.id,
-					defaultRole: settings.getModelRole("default"), commitRole: settings.getModelRole("commit"),
-				}) + "\\n");
+				assert.ok(registry.hasProvider("company"), "The prebuilt registry kept its old catalog");
 			} finally { authStorage.close(); }`,
 		);
 		const result = await f.run([], script);
-		expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
-		expect(JSON.parse(result.stdout)).toEqual({
-			provider: "company",
-			model: "Qwen3.6-35B-A3B",
-			defaultRole: "company/GLM-5.3-public",
-			commitRole: "company/Qwen3.6-35B-A3B",
-		});
-		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
+		expect(result.exitCode, result.stderr).toBe(0);
 	}, 30_000);
 
 	it("compresses through the default company model using only the local company endpoint", async () => {
@@ -391,7 +345,7 @@ describe("offline model-dependent subcommands", () => {
 			},
 		});
 		try {
-			const f = await fixture({ companyUrl: server.url.origin });
+			const f = await fixture({ companyUrl: server.url.origin, catalogExtension: true });
 			const source = path.join(f.home, "source.txt");
 			const text = "The timeout defaults to thirty seconds when the caller does not supply a value.";
 			await fs.writeFile(source, text);
@@ -424,6 +378,7 @@ describe("offline model-dependent subcommands", () => {
 		try {
 			const f = await fixture({
 				companyUrl: server.url.origin,
+				catalogExtension: true,
 				modelRoles: { commit: "company/Qwen3.6-35B-A3B", smol: "company/GLM-5.3-public" },
 			});
 			await stageCommitFixture(f.home, f.env);
@@ -470,7 +425,7 @@ describe("offline model-dependent subcommands", () => {
 			},
 		});
 		try {
-			const f = await fixture({ visionUrl: server.url.origin });
+			const f = await fixture({ visionUrl: server.url.origin, catalogExtension: true });
 			await stageCommitFixture(f.home, f.env);
 			const source = path.join(f.home, "source.txt");
 			await fs.writeFile(source, "The default timeout is thirty seconds.");
@@ -506,14 +461,13 @@ describe("offline model-dependent subcommands", () => {
 			},
 		});
 		try {
-			const f = await fixture({ offline: false, visionUrl: server.url.origin });
+			const f = await fixture({ offline: false, visionUrl: server.url.origin, catalogExtension: true });
 			await stageCommitFixture(f.home, f.env);
 			const result = await f.run(["commit", "--dry-run", "--no-changelog", "--model", "ascend/vision"], CLI, true);
 			expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
 			expect(result.stdout).toContain("vision");
 			expect(result.stdout).toContain("Generated commit message:");
 			expect(result.stdout).toContain("feat: added offline fixture");
-			expect(result.stderr).toContain("UNEXPECTED_EXTENSION_DISCOVERY");
 			expect(result.stderr).not.toContain("Company provider unavailable");
 			expect(new Set(requests)).toEqual(new Set(["vision"]));
 		} finally {
@@ -548,7 +502,11 @@ describe("offline model-dependent subcommands", () => {
 			},
 		});
 		try {
-			const f = await fixture({ companyUrl: `${server.url.origin}/prefix/v1/` });
+			const f = await fixture({
+				companyUrl: `${server.url.origin}/prefix/v1/`,
+				imageQuestion: true,
+				catalogExtension: true,
+			});
 			const result = await f.run(["read", `${f.image}?q=describe this image`]);
 			expect(result.exitCode, result.stderr).toBe(0);
 			expect(result.stdout).toContain("offline vision answer");
@@ -611,10 +569,12 @@ describe("offline model-dependent subcommands", () => {
 		try {
 			const f = await fixture({
 				visionUrl: server.url.origin,
+				imageQuestion: true,
+				catalogExtension: true,
 				modelRoles: { default: "@local", local: "ascend/vision" },
 			});
 			const companyText = "{ invalid JSON";
-			await fs.writeFile(f.companyPath, companyText);
+			await Bun.write(f.companyPath, companyText);
 			const result = await f.run(["read", `${f.image}?q=describe this image`]);
 			expect(result.exitCode, result.stderr).toBe(0);
 			expect(result.stdout).toContain("offline vision answer");
@@ -643,6 +603,8 @@ describe("offline model-dependent subcommands", () => {
 		try {
 			const f = await fixture({
 				visionUrl: server.url.origin,
+				imageQuestion: true,
+				catalogExtension: true,
 				modelRoles: {
 					vision: "@companyVision",
 					companyVision: "company/Qwen3.8-27B",
@@ -650,15 +612,12 @@ describe("offline model-dependent subcommands", () => {
 				},
 			});
 			const companyText = "{ invalid JSON";
-			await fs.writeFile(f.companyPath, companyText);
+			await Bun.write(f.companyPath, companyText);
 			const result = await f.run(["read", `${f.image}?q=describe`]);
 			expect(result.exitCode).not.toBe(0);
 			expect(result.stderr).toContain("Company provider unavailable");
 			expect(result.stderr).toContain("not valid JSON");
 			expect(requests).toBe(0);
-			expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
-			expect(await fs.readFile(f.modelsPath, "utf8")).toBe(f.modelsText);
-			expect(await fs.readFile(f.companyPath, "utf8")).toBe(companyText);
 		} finally {
 			server.stop(true);
 		}
@@ -691,20 +650,18 @@ describe("offline model-dependent subcommands", () => {
 				.join("\n") + "\n";
 		await fs.writeFile(session, source);
 		// The offline render-only UI registry must ignore unrelated broken model config.
-		const modelsPath = path.join(f.agentDir, "models.yml");
 		const modelsText = "{ invalid YAML";
-		await fs.writeFile(modelsPath, modelsText);
+		await Bun.write(f.modelsPath, modelsText);
 		const render = await f.run(["render", session, "--plain", "--width", "80", "--height", "24"]);
 		expect(render.exitCode, render.stderr).toBe(0);
 		expect(render.stdout).toContain("pure offline transcript");
 		expect(render.stderr).not.toContain("Company provider unavailable");
 		expect(await fs.readFile(session, "utf8")).toBe(source);
-		expect(await fs.readFile(modelsPath, "utf8")).toBe(modelsText);
-		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
+		expect(await fs.readFile(f.modelsPath, "utf8")).toBe(modelsText);
 	}, 30_000);
 
 	it("does not treat the default company model as an OAuth account in dry-balance", async () => {
-		const f = await fixture({ companyUrl: "http://company.invalid" });
+		const f = await fixture({ companyUrl: "http://company.invalid", catalogExtension: true });
 		const result = await f.run(["dry-balance", "--count", "1", "--concurrency", "1", "--json"]);
 		expect(result.exitCode).toBe(1);
 		const summary = JSON.parse(result.stdout);
@@ -715,15 +672,16 @@ describe("offline model-dependent subcommands", () => {
 	}, 30_000);
 
 	it("diagnoses unavailable company config for dry-balance and usage without inventing a company usage endpoint", async () => {
-		const missing = await fixture();
+		const missing = await fixture({ catalogExtension: true });
 		const balance = await missing.run(["dry-balance", "company/Qwen3.8-27B", "--count", "1", "--json"]);
 		expect(balance.exitCode).not.toBe(0);
 		expect(balance.stderr).toContain("Company provider unavailable");
-		for (const f of [missing, await fixture({ companyUrl: "http://company.invalid" })]) {
+		for (const f of [missing, await fixture({ companyUrl: "http://company.invalid", catalogExtension: true })]) {
 			const usage = await f.run(["usage", "--provider", "company", "--json"]);
 			expect(usage.exitCode, usage.stderr).toBe(0);
 			expect(JSON.parse(usage.stdout).reports).toEqual([]);
-			expect(usage.stderr.includes("Company provider unavailable")).toBe(f === missing);
+			// The CLI owns the warning; the shared SDK auth and extension paths must stay silent.
+			expect(usage.stderr.match(/Company provider unavailable/g) ?? []).toHaveLength(f === missing ? 1 : 0);
 		}
 	}, 30_000);
 });

@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { signal } from "@oh-my-pi/pi-tui";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, TempDir } from "@oh-my-pi/pi-utils";
 import { parseDocument } from "yaml";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
@@ -11,15 +11,12 @@ import type { InteractiveModeContext } from "../../src/modes/types";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { TeamConfigService } from "../../src/team/config";
 import { showTeamConfig } from "../../src/team/config-ui";
-import { initTheme } from "../../src/ui/theme/service";
 import { createModeTerminal, type ModeTerminal, pressKey } from "../helpers/mode-terminal";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 // Exercise the public overlay consumer with real catalog, YAML, preview and CAS.
 // Drive the real Shell overlay; only the model picker callback is captured.
 const originalGetConfig = TeamConfigService.prototype.getConfig;
 describe("Team configuration editor", () => {
-	let state: SettingsTestState;
 	let temporary: TempDir;
 	let auth: AuthStorage;
 	let settings: Settings;
@@ -34,7 +31,6 @@ describe("Team configuration editor", () => {
 	const second = { provider: "deepseek", modelId: "team-b" };
 
 	beforeEach(async () => {
-		state = beginSettingsTest();
 		temporary = TempDir.createSync("omp-team-panel-");
 		const agentDir = temporary.join("agent");
 		const cwd = temporary.join("project");
@@ -64,7 +60,6 @@ describe("Team configuration editor", () => {
 		settings = await Settings.loadIsolated({ agentDir, cwd });
 		auth = await AuthStorage.create(":memory:");
 		registry = new ModelRegistry(auth, path.join(agentDir, "models.yml"), { settings });
-		initTheme();
 		terminal = createModeTerminal({ columns: 120, rows: 40 });
 		await terminal.start();
 		picker = undefined;
@@ -97,10 +92,10 @@ describe("Team configuration editor", () => {
 		terminal?.frame.shell.overlays.closeAll();
 		await terminal?.frame.shell.stop();
 		terminal?.dispose();
-		vi.restoreAllMocks();
+		reads?.mockRestore();
+		saves?.mockRestore();
 		auth?.close();
-		restoreSettingsTestState(state);
-		AgentStorage.close();
+		AgentStorage.close(getAgentDbPath(temporary.join("agent")));
 		temporary.removeSync();
 	});
 
@@ -128,22 +123,28 @@ describe("Team configuration editor", () => {
 		const before = await Bun.file(file).text();
 		await open();
 		const rendered = await screen();
-		expect(rendered).toContain("有序草稿");
+		expect(rendered).toContain("Ordered draft");
 		expect(rendered).toContain("deepseek/team-a");
-		expect(rendered).not.toContain("用户原值");
-		expect(rendered).not.toContain("实际运行槽位");
-		expect(rendered).not.toContain("拟保存用户名单");
-		expect(rendered).not.toContain("主模型（对齐/综合）");
+		expect(rendered).not.toContain("Stored user value");
+		expect(rendered).not.toContain("Current run slots");
+		expect(rendered).not.toContain("User roster to save");
+		expect(rendered).not.toContain("Main model (alignment/synthesis)");
 		press("v");
 		const expanded = await screen();
-		for (const detail of ["用户原值", "当前有效名单", "实际运行槽位", "拟保存用户名单", "预计运行槽位"]) {
+		for (const detail of [
+			"Stored user value",
+			"Current effective roster",
+			"Current run slots",
+			"User roster to save",
+			"Projected run slots",
+		]) {
 			expect(expanded).toContain(detail);
 		}
-		expect(expanded).not.toContain("主模型（对齐/综合）");
+		expect(expanded).not.toContain("Main model (alignment/synthesis)");
 		press("shift+v");
 		const collapsed = await screen();
-		expect(collapsed).not.toContain("用户原值");
-		expect(collapsed).not.toContain("拟保存用户名单");
+		expect(collapsed).not.toContain("Stored user value");
+		expect(collapsed).not.toContain("User roster to save");
 		expect(saves).not.toHaveBeenCalled();
 		expect(await Bun.file(file).text()).toBe(before);
 	});
@@ -209,7 +210,7 @@ describe("Team configuration editor", () => {
 		await flush();
 		press("escape");
 		expect(ctx.shell.overlays.open()).toBe(true);
-		expect(await screen()).toContain("放弃草稿");
+		expect(await screen()).toContain("Discard draft");
 		press("n");
 		expect(ctx.shell.overlays.open()).toBe(true);
 		press("escape");
@@ -285,7 +286,7 @@ describe("Team configuration editor", () => {
 		release.resolve();
 		expect(await rejectedRead).toMatchObject({ code: "execution_failed" });
 		await Promise.resolve();
-		expect(await screen()).not.toContain("Team 配置");
+		expect(await screen()).not.toContain("Team configuration");
 		press("s");
 		expect(ctx.shell.overlays.open()).toBe(false);
 		expect(saves).not.toHaveBeenCalled();
@@ -315,7 +316,7 @@ describe("Team configuration editor", () => {
 			release.resolve();
 			await flush();
 		}
-		expect(await screen()).not.toContain("Team 配置");
+		expect(await screen()).not.toContain("Team configuration");
 		press("s");
 		expect(ctx.shell.overlays.open()).toBe(false);
 		expect(saves).not.toHaveBeenCalled();

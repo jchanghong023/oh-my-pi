@@ -63,14 +63,14 @@ describe("/team command gates", () => {
 		const { runtime } = tuiRuntime(stubSession());
 		const result = await command.handleTui!({ name: "team", args: "  ", text: "/team" }, runtime);
 		expect(result).toEqual({ consumed: true });
-		expect(runtime.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("用法"));
+		expect(runtime.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("Usage: /team"));
 	});
 
 	it("reports the missing session model without running any stage", async () => {
 		const { runtime, output } = textRuntime(stubSession({ model: undefined }));
 		await command.handle!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
 		expect(output).toHaveLength(1);
-		expect(output[0]).toContain("会话模型");
+		expect(output[0]).toContain("/team requires a session model");
 	});
 
 	it("puts the submission back into the composer when dispatch fails validation", async () => {

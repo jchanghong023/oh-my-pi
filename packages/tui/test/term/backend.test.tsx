@@ -82,9 +82,9 @@ const lines = (prefix: string, count: number): string[] => Array.from({ length: 
 
 describe("TermBackend frame priority", () => {
 	it.each([
-		["linux", " On ", 30, 100],
-		["linux", "yes", 250, 250],
-		["linux", "false", 30, 30],
+		["linux", "1", 30, 100],
+		["linux", "1", 250, 250],
+		["linux", "0", 30, 30],
 		["win32", "1", 30, 30],
 	] as const)(
 		"coalesces only the configured background frames (%s offline=%s cap=%dms)",

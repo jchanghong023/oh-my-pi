@@ -1,18 +1,16 @@
 import * as fs from "node:fs/promises";
-import { withCompilerActivity } from "../../scripts/test-gate-events";
 
 // Clean dist
 await fs.rm("./dist/client", { recursive: true, force: true });
 
 // Bundle the React app. CSS imported from TSX modules is emitted alongside as index.css.
 console.log("Building dashboard client...");
-const buildOptions: Bun.BuildConfig = {
+const result = await Bun.build({
 	entrypoints: ["./src/client/index.tsx"],
 	outdir: "./dist/client",
 	minify: true,
 	naming: "[dir]/[name].[ext]",
-};
-const result = await withCompilerActivity(() => Bun.build(buildOptions));
+});
 
 if (!result.success) {
 	console.error("Build failed");

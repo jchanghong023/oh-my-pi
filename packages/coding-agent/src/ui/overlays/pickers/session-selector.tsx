@@ -154,10 +154,10 @@ function cwdSpans(cwd: string): TspSpan[] {
 }
 
 function dayGroup(modified: number, startOfToday: number): { id: string; label: string } {
-	if (modified >= startOfToday) return { id: "today", label: "今天" };
-	if (modified >= startOfToday - DAY_MS) return { id: "yesterday", label: "昨天" };
-	if (modified >= startOfToday - 6 * DAY_MS) return { id: "week", label: "本周" };
-	return { id: "earlier", label: "更早" };
+	if (modified >= startOfToday) return { id: "today", label: "Today" };
+	if (modified >= startOfToday - DAY_MS) return { id: "yesterday", label: "Yesterday" };
+	if (modified >= startOfToday - 6 * DAY_MS) return { id: "week", label: "This week" };
+	return { id: "earlier", label: "Earlier" };
 }
 
 /** BCP 47 tag from the POSIX locale variables (`LC_ALL`, then `LC_TIME`, then `LANG`), or undefined for the runtime default. */
@@ -391,7 +391,7 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 		if (!global()) {
 			if (!props.loadAllSessions) return;
 			toggling = true;
-			message.set({ kind: "loading", text: "正在加载所有项目…" });
+			message.set({ kind: "loading", text: "Loading all projects…" });
 			try {
 				const listing = await props.loadAllSessions();
 				global.set(listing.sessions);
@@ -498,8 +498,8 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 			const title = session.title?.trim() ?? "";
 			const badges: NonNullable<TspPickerItem["badges"]>[number][] = [];
 			if (session.parentSessionPath)
-				badges.push({ text: "分支", title: `派生自「${parentLabel(session.parentSessionPath)}」` });
-			if (session.path === props.currentSessionPath) badges.push({ text: "当前", tone: "accent" });
+				badges.push({ text: "fork", title: `Forked from “${parentLabel(session.parentSessionPath)}”` });
+			if (session.path === props.currentSessionPath) badges.push({ text: "current", tone: "accent" });
 			const when = pickerDate(session.modified.getTime());
 			const detail = cwd ? (session.cwd ? cwdSpans(session.cwd) : undefined) : title ? first : undefined;
 			const dot = statusTone(session.status);
@@ -520,7 +520,7 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 		if (tokens().length > 0) return list.map(s => s.path);
 		const start = props.dayStart?.() ?? new Date(new Date(now()).toDateString()).getTime();
 		const groups = list.map(s =>
-			pins().has(s.id) ? { id: "pinned", label: "置顶" } : dayGroup(s.modified.getTime(), start),
+			pins().has(s.id) ? { id: "pinned", label: "Pinned" } : dayGroup(s.modified.getTime(), start),
 		);
 		const out: (string | TspPickerGroup)[] = [];
 		for (let i = 0; i < list.length; i++) {
@@ -545,32 +545,33 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 		return out;
 	};
 	const actions = (): TspPickerAction[] => {
-		const out = [pickerAction("resume", "恢复", confirmKbd(), { primary: true })];
+		const out = [pickerAction("resume", "Resume", confirmKbd(), { primary: true })];
 		const [deleteKey] = getKeybindings().keysFor("app.session.delete");
-		if (props.onDelete && deleteKey) out.push(pickerAction("delete", "删除", kbdOf(deleteKey)));
-		if (props.onRename) out.push(pickerAction("rename", "重命名", "f2"));
+		if (props.onDelete && deleteKey) out.push(pickerAction("delete", "Delete", kbdOf(deleteKey)));
+		if (props.onRename) out.push(pickerAction("rename", "Rename", "f2"));
 		const session = selected();
 		if (props.onSetPinned && session) {
 			const pinned = pins().has(session.id);
 			out.push(
 				pickerAction(
 					"pin",
-					pinned ? "取消置顶" : "置顶",
+					pinned ? "Unpin" : "Pin",
 					pinned ? actionKbd("app.session.unpin", "alt+shift+k") : actionKbd("app.session.pin", "alt+k"),
 				),
 			);
 		}
-		if (props.loadAllSessions) out.push(pickerAction("scope", scope() === "all" ? "当前文件夹" : "所有项目", "tab"));
-		out.push(pickerAction("close", "关闭", interruptKbd(), { end: true }));
+		if (props.loadAllSessions)
+			out.push(pickerAction("scope", scope() === "all" ? "This folder" : "All projects", "tab"));
+		out.push(pickerAction("close", "Close", interruptKbd(), { end: true }));
 		return out;
 	};
 	const folder = props.scopeLabel ?? props.projectName;
 	const placeholder = (): string =>
 		message()?.kind === "loading" || scope() === "all"
-			? "搜索所有会话…"
+			? "Search all sessions…"
 			: folder && !props.title
-				? `搜索 ${folder} 中的会话…`
-				: "搜索会话…";
+				? `Search sessions in ${folder}…`
+				: "Search sessions…";
 	const state = (): "ready" | "loading" | "error" =>
 		message()?.kind === "loading" ? "loading" : errorOpen() && message()?.kind === "error" ? "error" : "ready";
 	const preview = (): JSXNode => {
@@ -581,14 +582,14 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 		const shown = titles().has(session.path) ? { ...session, title: titles().get(session.path) } : session;
 		const status = statusSpan(shown.status);
 		const facts: { k: TspSpan[]; v: string | TspSpan[] }[] = [];
-		if (shown.cwd) facts.push({ k: [{ t: "文件夹", s: "muted" }], v: cwdSpans(shown.cwd) });
+		if (shown.cwd) facts.push({ k: [{ t: "Folder", s: "muted" }], v: cwdSpans(shown.cwd) });
 		if (shown.created && !Number.isNaN(shown.created.getTime()))
-			facts.push({ k: [{ t: "创建时间", s: "muted" }], v: pickerDate(shown.created.getTime()) });
-		facts.push({ k: [{ t: "修改时间", s: "muted" }], v: pickerDate(shown.modified.getTime()) });
-		facts.push({ k: [{ t: "大小", s: "muted" }], v: formatBytes(shown.size) });
-		if (status) facts.push({ k: [{ t: "状态", s: "muted" }], v: [status] });
+			facts.push({ k: [{ t: "Created", s: "muted" }], v: pickerDate(shown.created.getTime()) });
+		facts.push({ k: [{ t: "Modified", s: "muted" }], v: pickerDate(shown.modified.getTime()) });
+		facts.push({ k: [{ t: "Size", s: "muted" }], v: formatBytes(shown.size) });
+		if (status) facts.push({ k: [{ t: "Status", s: "muted" }], v: [status] });
 		if (shown.parentSessionPath)
-			facts.push({ k: [{ t: "派生自", s: "muted" }], v: parentLabel(shown.parentSessionPath) });
+			facts.push({ k: [{ t: "Forked from", s: "muted" }], v: parentLabel(shown.parentSessionPath) });
 		const first = shown.firstMessage.trim();
 		const rest = shown.allMessagesText.startsWith(shown.firstMessage)
 			? shown.allMessagesText.slice(shown.firstMessage.length).trim()
@@ -624,9 +625,9 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 			const [pinKey] = keybindings.keysFor(pinned ? "app.session.unpin" : "app.session.pin");
 			if (pinKey) parts.push(`${formatKeyHint(pinKey)} ${pinned ? "unpin" : "pin"}`);
 		}
-		parts.push(`${formatKeyHint("enter")} 选择`);
-		parts.push(`${formatKeyHint("tab")} ${scope() === "all" ? "当前文件夹" : "所有项目"}`);
-		parts.push(`${formatKeyHint(appInterruptKeys(keybindings)[0] ?? "escape")} 取消`);
+		parts.push(`${formatKeyHint("enter")} select`);
+		parts.push(`${formatKeyHint("tab")} ${scope() === "all" ? "current folder" : "all projects"}`);
+		parts.push(`${formatKeyHint(appInterruptKeys(keybindings)[0] ?? "escape")} cancel`);
 		return `[${parts.join(" · ")}]`;
 	};
 	const term = (): SessionsLookTerm => {
@@ -636,7 +637,9 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 		const dialog = rename();
 		return {
 			look: "omp.sessions",
-			title: props.title ?? `恢复会话（${props.scopeLabel ?? (scope() === "all" ? "所有项目" : "当前文件夹")}）`,
+			title:
+				props.title ??
+				`Resume Session (${props.scopeLabel ?? (scope() === "all" ? "all projects" : "current folder")})`,
 			field: search(),
 			sessions: visible().map(session => ({
 				id: session.path,
@@ -654,7 +657,7 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 			message: message(),
 			...(choice ? { confirm: { name: sessionLabel(choice), answer: deleteAnswer() } } : {}),
 			...(dialog ? { rename: dialog.line } : {}),
-			empty: cwd ? "未找到会话" : `当前文件夹没有会话。按 ${formatKeyHint("tab")} 查看所有会话。`,
+			empty: cwd ? "No sessions found" : `No sessions in current folder. Press ${formatKeyHint("tab")} to view all.`,
 			hints: hints(),
 			budget: lineBudget(),
 			...(props.fillHeight ? { fill: terminalRows() } : {}),
@@ -695,7 +698,7 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 		);
 		return (
 			<card
-				head={props.title ?? (props.scopeLabel ? `恢复会话（${props.scopeLabel}）` : "恢复会话")}
+				head={props.title ?? (props.scopeLabel ? `Resume Session (${props.scopeLabel})` : "Resume Session")}
 				role="omp.overlay.sessions"
 				term={term}
 				onKey={onKey}
@@ -704,15 +707,15 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 					<tabs
 						key="scope"
 						items={[
-							{ id: "folder", label: "当前文件夹" },
-							{ id: "all", label: "所有项目" },
+							{ id: "folder", label: "Current folder" },
+							{ id: "all", label: "All projects" },
 						]}
 						active={scope}
 					/>
 				)}
-				<card head="重命名会话" role="omp.overlay">
+				<card head="Rename Session" role="omp.overlay">
 					<col gap="sm" role="omp.form.field">
-						<text spans={[{ t: "重命名会话", s: "strong" }]} />
+						<text spans={[{ t: "Rename session", s: "strong" }]} />
 						<input
 							text={() => rename()?.line.text ?? ""}
 							cursor={() => rename()?.line.cursor ?? 0}
@@ -729,12 +732,12 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 					</col>
 				</card>
 				<row key="hints" gap="md" role="omp.overlay.hints" wrap={true}>
-					{hint(getKeybindings().keysFor("app.session.delete").map(kbdOf), "删除")}
-					{hint([["f2"]], "重命名")}
-					{hint([actionKbd("app.session.pin", "alt+k")], "置顶")}
-					{hint([confirmKbd()], "选择")}
-					{hint([["tab"]], "所有项目")}
-					{hint([interruptKbd()], "取消")}
+					{hint(getKeybindings().keysFor("app.session.delete").map(kbdOf), "delete")}
+					{hint([["f2"]], "rename")}
+					{hint([actionKbd("app.session.pin", "alt+k")], "pin")}
+					{hint([confirmKbd()], "select")}
+					{hint([["tab"]], "all projects")}
+					{hint([interruptKbd()], "cancel")}
 				</row>
 			</card>
 		);
@@ -747,7 +750,7 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 		) : (
 			<picker
 				icon="history"
-				noun="会话"
+				noun="sessions"
 				size={props.standalone ? "screen" : "lg"}
 				layout="cards"
 				preview="side"
@@ -767,14 +770,16 @@ export function SessionSelector(props: SessionSelectorProps): JSXNode {
 				actions={actions}
 				state={state}
 				message={() => (state() !== "ready" ? message()?.text : undefined)}
-				empty={() => (scope() === "all" || !props.loadAllSessions ? "暂无会话" : "此文件夹暂无会话")}
+				empty={() =>
+					scope() === "all" || !props.loadAllSessions ? "No sessions yet" : "No sessions in this folder yet"
+				}
 				confirm={() => {
 					const choice = confirmDelete();
 					return choice
 						? {
-								text: `删除「${sessionLabel(choice)}」？这将移除会话文件。`,
+								text: `Delete “${sessionLabel(choice)}”? This removes the session file.`,
 								act: "delete-confirm",
-								label: "删除",
+								label: "Delete",
 							}
 						: null;
 				}}

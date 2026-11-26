@@ -72,9 +72,9 @@ const MIN_VISIBLE = 5;
 /** Share of the terminal the sheet takes. */
 const HEIGHT_FRACTION = 0.4;
 
-const STATUS_HINT = "仅切换当前会话，角色模型不变";
-const QUICK_ROLE_HINT = "快速切换角色，应用其模型与思考级别";
-const TASK_HINT = "仅为当前会话的 Task Subagent 切换模型";
+const STATUS_HINT = "Session-only switch — role models stay unchanged";
+const QUICK_ROLE_HINT = "Quick role switch — applies its model and thinking for this session";
+const TASK_HINT = "Task subagent switch — spawned task agents use this model (session-only)";
 
 /** The scope listing every model. */
 const ALL_SCOPE = "all";
@@ -239,7 +239,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		{
 			currentContextTokens: options.currentContextTokens,
 			queryItems: getCandidates ? candidateItems : undefined,
-			emptyText: () => (roleMode() ? `  ${cycleKey} 循环中没有快捷角色` : undefined),
+			emptyText: () => (roleMode() ? `  No quick roles in the ${cycleKey} cycle` : undefined),
 		},
 		selectOnly,
 	);
@@ -476,32 +476,32 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		const catalogue = browser.pickerItems(roleMode() ? quickRoleItems : modelItems());
 		return browser.pickerRows(
 			catalogue,
-			{ providers: false, rest: mode() === "role" ? null : query.trim() ? "匹配项" : "全部" },
+			{ providers: false, rest: mode() === "role" ? null : query.trim() ? "Matches" : "All" },
 			current(),
 		);
 	});
 
 	const footer = (): string => {
-		const close = `${keyCaps(cancelKbd())} 关闭`;
+		const close = `${keyCaps(cancelKbd())} close`;
 		const nav = `${keyCaps(actionKbd("tui.select.up", "up"))}/${keyCaps(actionKbd("tui.select.down", "down"))}`;
 		const confirm = keyCaps(confirmKbd());
-		if (selectOnly) return `${nav} 浏览 · ${confirm} 选择 · 输入以搜索 · ${close}`;
-		const provider = `${keyCaps(["tab"])} Provider`;
+		if (selectOnly) return `${nav} models · ${confirm} select · type to search · ${close}`;
+		const provider = `${keyCaps(["tab"])} provider`;
 		let hint: string;
 		switch (mode()) {
 			case "role":
-				hint = `${nav} 浏览角色 · ${confirm} 应用角色模型 · 输入以搜索 · ${close}`;
+				hint = `${nav} roles · ${confirm} apply role model · type to search · ${close}`;
 				break;
 			case "task":
-				hint = `${nav} 浏览模型 · ${confirm} 用于 Task Subagent · ${provider} · 输入以搜索 · ${close}`;
+				hint = `${nav} models · ${confirm} use for Task subagents · ${provider} · type to search · ${close}`;
 				break;
 			default: {
-				const steps = options.thinkingLevelFor ? " · ←/→ 思考级别" : "";
-				hint = `${nav} 浏览模型 · ${confirm} 用于当前会话 · ${provider}${steps} · 输入以搜索 · @ 快捷角色 · ${close}`;
+				const steps = options.thinkingLevelFor ? " · ←/→ thinking" : "";
+				hint = `${nav} models · ${confirm} use for this session · ${provider}${steps} · type to search · @ quick roles · ${close}`;
 			}
 		}
 		if (taskKey !== undefined && !roleMode())
-			hint += ` · ${keyCaps(taskKey.split("+"))} ${taskMode() ? "会话模型" : "Task 模型"}`;
+			hint += ` · ${keyCaps(taskKey.split("+"))} ${taskMode() ? "session model" : "task model"}`;
 		return hint;
 	};
 
@@ -512,13 +512,16 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		return {
 			look: "omp.model-picker",
 			browser,
-			heading: selectOnly ? "选择模型" : taskMode() ? "切换 Task 模型" : "切换模型",
+			heading: selectOnly ? "Select Model" : taskMode() ? "Switch Task Model" : "Switch Model",
 			...(taskMode() ? { tone: "error" } : {}),
 			status: error
 				? { text: error, tone: "error" }
 				: taskMode()
 					? { text: TASK_HINT, tone: "error" }
-					: { text: selectOnly ? "选择要使用的模型" : roleMode() ? QUICK_ROLE_HINT : STATUS_HINT, tone: "muted" },
+					: {
+							text: selectOnly ? "Select a model to use" : roleMode() ? QUICK_ROLE_HINT : STATUS_HINT,
+							tone: "muted",
+						},
 			...(shown
 				? {
 						thinking: shown.disabled
@@ -533,7 +536,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 	return (
 		<picker
 			icon="cpu"
-			noun={() => (mode() === "role" ? "角色" : "模型")}
+			noun={() => (mode() === "role" ? "roles" : "models")}
 			size="md"
 			anchor="composer"
 			search="list"
@@ -541,7 +544,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 			layout="rows"
 			preview="none"
 			placeholder={() =>
-				selectOnly ? "搜索模型…" : mode() === "task" ? "搜索 Task 模型…" : "搜索，输入 @ 查看角色…"
+				selectOnly ? "Search models…" : mode() === "task" ? "Search Task models…" : "Search, @ for roles…"
 			}
 			scopes={() => (selectOnly || mode() === "role" ? undefined : scopes())}
 			scope={() => (selectOnly || mode() === "role" ? undefined : scope())}
@@ -558,16 +561,16 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 			current={() => rows().current}
 			total={() => rows().total}
 			level={level}
-			title={() => (selectOnly ? "选择模型" : configError() ? "切换模型" : undefined)}
+			title={() => (selectOnly ? "Select Model" : configError() ? "Switch model" : undefined)}
 			subtitle={() => {
 				const error = configError();
 				return error ? [{ s: "error", t: error }] : undefined;
 			}}
-			empty={() => (mode() === "role" ? `${cycleKey} 循环中没有快捷角色` : "没有可用模型")}
+			empty={() => (mode() === "role" ? `No quick roles in the ${cycleKey} cycle` : "No models available")}
 			actions={() =>
 				taskKey !== undefined && mode() !== "role"
 					? [
-							pickerAction("task", "Task / 会话", taskKey.split("+"), {
+							pickerAction("task", "Task / Main", taskKey.split("+"), {
 								on: mode() === "task",
 								head: true,
 								icon: "users",

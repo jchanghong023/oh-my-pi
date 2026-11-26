@@ -15,22 +15,22 @@ export const cfgToolsArtifactSpillThreshold = register({
 	default: 50,
 	ui: {
 		tab: "tools",
-		group: "输出限制",
-		label: "产物转存阈值 (KB)",
-		description: "超过此大小的工具输出会保存为产物；尾部内容保留在行内",
+		group: "Output Limits",
+		label: "Artifact Spill Threshold (KB)",
+		description: "Tool output above this size is saved as an artifact; tail is kept inline",
 		options: [
-			{ value: "1", label: "1 KB", description: "约 250 Token" },
-			{ value: "2.5", label: "2.5 KB", description: "约 625 Token" },
-			{ value: "5", label: "5 KB", description: "约 1.25K Token" },
-			{ value: "10", label: "10 KB", description: "约 2.5K Token" },
-			{ value: "20", label: "20 KB", description: "约 5K Token" },
-			{ value: "30", label: "30 KB", description: "约 7.5K Token" },
-			{ value: "50", label: "50 KB", description: "默认；约 12.5K Token" },
-			{ value: "75", label: "75 KB", description: "约 19K Token" },
-			{ value: "100", label: "100 KB", description: "约 25K Token" },
-			{ value: "200", label: "200 KB", description: "约 50K Token" },
-			{ value: "500", label: "500 KB", description: "约 125K Token" },
-			{ value: "1000", label: "1 MB", description: "约 250K Token" },
+			{ value: "1", label: "1 KB", description: "~250 tokens" },
+			{ value: "2.5", label: "2.5 KB", description: "~625 tokens" },
+			{ value: "5", label: "5 KB", description: "~1.25K tokens" },
+			{ value: "10", label: "10 KB", description: "~2.5K tokens" },
+			{ value: "20", label: "20 KB", description: "~5K tokens" },
+			{ value: "30", label: "30 KB", description: "~7.5K tokens" },
+			{ value: "50", label: "50 KB", description: "Default; ~12.5K tokens" },
+			{ value: "75", label: "75 KB", description: "~19K tokens" },
+			{ value: "100", label: "100 KB", description: "~25K tokens" },
+			{ value: "200", label: "200 KB", description: "~50K tokens" },
+			{ value: "500", label: "500 KB", description: "~125K tokens" },
+			{ value: "1000", label: "1 MB", description: "~250K tokens" },
 		],
 	},
 });
@@ -41,18 +41,18 @@ export const cfgToolsArtifactTailBytes = register({
 	default: 20,
 	ui: {
 		tab: "tools",
-		group: "输出限制",
-		label: "产物尾部大小 (KB)",
-		description: "输出转存为产物时，保留在行内的尾部内容大小",
+		group: "Output Limits",
+		label: "Artifact Tail Size (KB)",
+		description: "Amount of tail content kept inline when output spills to artifact",
 		options: [
-			{ value: "1", label: "1 KB", description: "约 250 Token" },
-			{ value: "2.5", label: "2.5 KB", description: "约 625 Token" },
-			{ value: "5", label: "5 KB", description: "约 1.25K Token" },
-			{ value: "10", label: "10 KB", description: "约 2.5K Token" },
-			{ value: "20", label: "20 KB", description: "默认；约 5K Token" },
-			{ value: "50", label: "50 KB", description: "约 12.5K Token" },
-			{ value: "100", label: "100 KB", description: "约 25K Token" },
-			{ value: "200", label: "200 KB", description: "约 50K Token" },
+			{ value: "1", label: "1 KB", description: "~250 tokens" },
+			{ value: "2.5", label: "2.5 KB", description: "~625 tokens" },
+			{ value: "5", label: "5 KB", description: "~1.25K tokens" },
+			{ value: "10", label: "10 KB", description: "~2.5K tokens" },
+			{ value: "20", label: "20 KB", description: "Default; ~5K tokens" },
+			{ value: "50", label: "50 KB", description: "~12.5K tokens" },
+			{ value: "100", label: "100 KB", description: "~25K tokens" },
+			{ value: "200", label: "200 KB", description: "~50K tokens" },
 		],
 	},
 });
@@ -63,19 +63,20 @@ export const cfgToolsArtifactHeadBytes = register({
 	default: 20,
 	ui: {
 		tab: "tools",
-		group: "输出限制",
-		label: "产物头部大小 (KB)",
-		description: "输出转存为产物时，除尾部外保留在行内的头部内容大小（省略中间部分）。0 表示关闭，仅保留尾部。",
+		group: "Output Limits",
+		label: "Artifact Head Size (KB)",
+		description:
+			"Amount of head content kept inline alongside the tail when output spills to artifact (middle elision). 0 disables — keep tail only.",
 		options: [
-			{ value: "0", label: "0 KB", description: "关闭；截断时仅保留尾部" },
-			{ value: "1", label: "1 KB", description: "约 250 Token" },
-			{ value: "2.5", label: "2.5 KB", description: "约 625 Token" },
-			{ value: "5", label: "5 KB", description: "约 1.25K Token" },
-			{ value: "10", label: "10 KB", description: "约 2.5K Token" },
-			{ value: "20", label: "20 KB", description: "默认；约 5K Token" },
-			{ value: "50", label: "50 KB", description: "约 12.5K Token" },
-			{ value: "100", label: "100 KB", description: "约 25K Token" },
-			{ value: "200", label: "200 KB", description: "约 50K Token" },
+			{ value: "0", label: "0 KB", description: "Disabled; tail-only truncation" },
+			{ value: "1", label: "1 KB", description: "~250 tokens" },
+			{ value: "2.5", label: "2.5 KB", description: "~625 tokens" },
+			{ value: "5", label: "5 KB", description: "~1.25K tokens" },
+			{ value: "10", label: "10 KB", description: "~2.5K tokens" },
+			{ value: "20", label: "20 KB", description: "Default; ~5K tokens" },
+			{ value: "50", label: "50 KB", description: "~12.5K tokens" },
+			{ value: "100", label: "100 KB", description: "~25K tokens" },
+			{ value: "200", label: "200 KB", description: "~50K tokens" },
 		],
 	},
 });
@@ -86,18 +87,18 @@ export const cfgToolsOutputMaxColumns = register({
 	default: 768,
 	ui: {
 		tab: "tools",
-		group: "输出限制",
-		label: "输出列数上限",
+		group: "Output Limits",
+		label: "Output Column Cap",
 		description:
-			"流式工具输出（bash、python、js eval）及 `read` 的每行字节上限。超过此宽度的行会用省略号截断；直到下一个换行符的剩余字节会被丢弃。0 表示关闭。",
+			"Per-line byte cap for streaming tool outputs (bash, python, js eval) and `read`. Lines wider than this are ellipsis-truncated; remaining bytes up to the next newline are dropped. 0 disables.",
 		options: [
-			{ value: "0", label: "关闭", description: "不限制每行大小" },
-			{ value: "256", label: "256", description: "严格" },
+			{ value: "0", label: "Off", description: "No per-line cap" },
+			{ value: "256", label: "256", description: "Tight" },
 			{ value: "512", label: "512" },
-			{ value: "768", label: "768", description: "默认" },
+			{ value: "768", label: "768", description: "Default" },
 			{ value: "1024", label: "1024" },
 			{ value: "2048", label: "2048" },
-			{ value: "4096", label: "4096", description: "宽松" },
+			{ value: "4096", label: "4096", description: "Loose" },
 		],
 	},
 });
@@ -108,17 +109,17 @@ export const cfgToolsArtifactTailLines = register({
 	default: 500,
 	ui: {
 		tab: "tools",
-		group: "输出限制",
-		label: "产物尾部行数",
-		description: "输出转存为产物时，保留在行内的尾部内容最大行数",
+		group: "Output Limits",
+		label: "Artifact Tail Lines",
+		description: "Maximum lines of tail content kept inline when output spills to artifact",
 		options: [
-			{ value: "50", label: "50 行", description: "约 250 Token" },
-			{ value: "100", label: "100 行", description: "约 500 Token" },
-			{ value: "250", label: "250 行", description: "约 1.25K Token" },
-			{ value: "500", label: "500 行", description: "默认；约 2.5K Token" },
-			{ value: "1000", label: "1000 行", description: "约 5K Token" },
-			{ value: "2000", label: "2000 行", description: "约 10K Token" },
-			{ value: "5000", label: "5000 行", description: "约 25K Token" },
+			{ value: "50", label: "50 lines", description: "~250 tokens" },
+			{ value: "100", label: "100 lines", description: "~500 tokens" },
+			{ value: "250", label: "250 lines", description: "~1.25K tokens" },
+			{ value: "500", label: "500 lines", description: "Default; ~2.5K tokens" },
+			{ value: "1000", label: "1000 lines", description: "~5K tokens" },
+			{ value: "2000", label: "2000 lines", description: "~10K tokens" },
+			{ value: "5000", label: "5000 lines", description: "~25K tokens" },
 		],
 	},
 });
@@ -129,14 +130,14 @@ export const cfgToolsArtifactMaxBytes = register({
 	default: 16,
 	ui: {
 		tab: "tools",
-		group: "输出限制",
-		label: "产物文件大小上限 (MB)",
+		group: "Output Limits",
+		label: "Artifact File Cap (MB)",
 		description:
-			"为流式工具输出（bash、python、js eval）保存的产物文件最大大小。超过上限时，保留开头（最多 3 MB）及最新的剩余内容，并在两者之间插入截断提示。0 = 无限制。",
+			"Maximum size of the artifact file saved for streaming tool output (bash, python, js eval). Larger output keeps its beginning (up to 3 MB) and its most recent remainder, with a truncation notice between them. 0 = unlimited.",
 		options: [
-			{ value: "0", label: "无限制", description: "保存完整输出" },
+			{ value: "0", label: "Unlimited", description: "Save the complete output" },
 			{ value: "4", label: "4 MB" },
-			{ value: "16", label: "16 MB", description: "默认" },
+			{ value: "16", label: "16 MB", description: "Default" },
 			{ value: "64", label: "64 MB" },
 			{ value: "256", label: "256 MB" },
 			{ value: "1024", label: "1 GB" },
@@ -150,9 +151,9 @@ export const cfgReadLineNumbers = register({
 	default: false,
 	ui: {
 		tab: "files",
-		group: "读取",
-		label: "行号",
-		description: "默认在 read 工具输出前添加行号",
+		group: "Reading",
+		label: "Line Numbers",
+		description: "Prepend line numbers to read tool output by default",
 	},
 });
 
@@ -162,15 +163,15 @@ export const cfgReadDefaultLimit = register({
 	default: 300,
 	ui: {
 		tab: "files",
-		group: "读取",
-		label: "默认读取行数限制",
-		description: "Agent 调用 read 时未指定行数限制所返回的默认行数",
+		group: "Reading",
+		label: "Default Read Limit",
+		description: "Default number of lines returned when agent calls read without a limit",
 		options: [
-			{ value: "200", label: "200 行" },
-			{ value: "300", label: "300 行" },
-			{ value: "500", label: "500 行" },
-			{ value: "1000", label: "1000 行" },
-			{ value: "5000", label: "5000 行" },
+			{ value: "200", label: "200 lines" },
+			{ value: "300", label: "300 lines" },
+			{ value: "500", label: "500 lines" },
+			{ value: "1000", label: "1000 lines" },
+			{ value: "5000", label: "5000 lines" },
 		],
 	},
 });
@@ -181,9 +182,9 @@ export const cfgReadRenderMarkdown = register({
 	default: false,
 	ui: {
 		tab: "files",
-		group: "读取",
-		label: "Markdown 预览",
-		description: "将 Markdown 读取结果渲染为带格式的终端 Markdown 预览，而非原始源码",
+		group: "Reading",
+		label: "Markdown Previews",
+		description: "Render Markdown read results as formatted terminal Markdown previews instead of raw source",
 	},
 });
 
@@ -193,9 +194,9 @@ export const cfgReadSummarizeEnabled = register({
 	default: true,
 	ui: {
 		tab: "files",
-		group: "读取摘要",
-		label: "读取摘要",
-		description: "调用 read 时未指定显式选择器则返回结构化代码摘要",
+		group: "Read Summaries",
+		label: "Read Summaries",
+		description: "Return structural code summaries when read is called without an explicit selector",
 	},
 });
 
@@ -205,9 +206,9 @@ export const cfgReadSummarizeProse = register({
 	default: false,
 	ui: {
 		tab: "files",
-		group: "读取摘要",
-		label: "文本摘要",
-		description: "读取 Markdown 和纯文本时返回结构化摘要",
+		group: "Read Summaries",
+		label: "Prose Summaries",
+		description: "Return structural summaries for Markdown and plain text reads",
 	},
 });
 
@@ -217,9 +218,9 @@ export const cfgReadSummarizeMinBodyLines = register({
 	default: 4,
 	ui: {
 		tab: "files",
-		group: "读取摘要",
-		label: "读取摘要主体行数",
-		description: "读取摘要折叠多行主体或字面量所需的最小长度",
+		group: "Read Summaries",
+		label: "Read Summary Body Lines",
+		description: "Minimum multiline body or literal length before read summaries collapse it",
 	},
 });
 
@@ -229,9 +230,9 @@ export const cfgReadSummarizeMinCommentLines = register({
 	default: 6,
 	ui: {
 		tab: "files",
-		group: "读取摘要",
-		label: "读取摘要注释行数",
-		description: "读取摘要折叠多行块注释所需的最小长度",
+		group: "Read Summaries",
+		label: "Read Summary Comment Lines",
+		description: "Minimum multiline block comment length before read summaries collapse it",
 	},
 });
 
@@ -241,9 +242,9 @@ export const cfgReadSummarizeMinTotalLines = register({
 	default: 100,
 	ui: {
 		tab: "files",
-		group: "读取摘要",
-		label: "读取摘要最小文件行数",
-		description: "总行数少于此值的文件按原文读取，而不生成结构化摘要",
+		group: "Read Summaries",
+		label: "Read Summary Minimum File Length",
+		description: "Files with fewer total lines are read verbatim instead of structurally summarized",
 	},
 });
 
@@ -253,9 +254,10 @@ export const cfgReadSummarizeUnfoldUntil = register({
 	default: 50,
 	ui: {
 		tab: "files",
-		group: "读取摘要",
-		label: "读取摘要展开目标",
-		description: "以广度优先方式展开可省略片段，直到摘要至少包含此数量的可见行。0 表示仅保留最外层的省略。",
+		group: "Read Summaries",
+		label: "Read Summary Unfold Target",
+		description:
+			"BFS-unfold elidable spans until the summary is at least this many visible lines. 0 keeps only the outermost elisions.",
 	},
 });
 
@@ -265,10 +267,10 @@ export const cfgReadSummarizeUnfoldLimit = register({
 	default: 100,
 	ui: {
 		tab: "files",
-		group: "读取摘要",
-		label: "读取摘要展开上限",
+		group: "Read Summaries",
+		label: "Read Summary Unfold Ceiling",
 		description:
-			"以广度优先方式展开时的摘要大小硬性上限。若一次展开显示的行数会超过此上限，则跳过该片段（保持折叠），继续展开其余片段。",
+			"Hard ceiling on summary size while BFS-unfolding. An unfold whose revealed lines would exceed this is skipped (that span stays folded) and unfolding continues with the remaining spans.",
 	},
 });
 
@@ -278,9 +280,9 @@ export const cfgReadToolResultPreview = register({
 	default: false,
 	ui: {
 		tab: "files",
-		group: "读取",
-		label: "行内读取预览",
-		description: "在对话记录中行内渲染 read 工具结果，而非显示摘要行",
+		group: "Reading",
+		label: "Inline Read Previews",
+		description: "Render read tool results inline in the transcript instead of summary rows",
 	},
 });
 
@@ -295,10 +297,10 @@ export const cfgToolsApproval = register({
 	default: {},
 	ui: {
 		tab: "interaction",
-		group: "授权确认",
-		label: "工具授权策略",
+		group: "Approvals",
+		label: "Tool Approval Policies",
 		description:
-			"按工具设置授权策略。设为 'allow' 自动授权，'prompt' 要求确认，'deny' 阻止调用。所有授权确认模式均遵循这些覆盖设置。",
+			"Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Overrides are honored in every approval mode.",
 	},
 });
 
@@ -316,35 +318,39 @@ export const cfgToolsApprovalMode = register({
 	default: "yolo",
 	ui: {
 		tab: "interaction",
-		group: "授权确认",
-		label: "工具授权确认",
+		group: "Approvals",
+		label: "Tool Approval",
 		description:
-			"工具调用的默认授权确认行为。“始终询问”仅自动授权只读工具。“询问并记住”还会在读取文件前询问，并可记住文件或目录。“允许写入”自动授权读取和工作区写入工具。“全部自动授权 (Yolo)”自动授权所有级别；用户策略仍可要求确认或阻止调用。",
+			"Default approval behavior for tool calls. 'Always ask' auto-approves read-only tools only. 'Ask and remember' also asks before file reads, and can remember a file or folder. 'Write' auto-approves read and workspace-write tools. 'Yolo' auto-approves all tiers. 'Guarded' auto-approves all tiers but still asks for each tool-flagged critical action. User policy may still prompt or block.",
 		options: [
 			{
 				value: "always-ask",
-				label: "始终询问",
-				description: "自动授权只读工具；写入和执行工具需要确认。",
+				label: "Always ask",
+				description: "Auto-approve read-only tools; require confirmation for write and exec tools.",
 			},
 			{
 				value: "always-ask-cached",
-				label: "询问并记住",
-				description: "读取或写入文件前询问，可在本会话或跨会话记住文件或目录授权；执行工具仍需确认。",
+				label: "Ask and remember",
+				description:
+					"Ask before reading or writing a file, with answers that remember the file or its folder for this session or every session; require confirmation for exec tools.",
 			},
 			{
 				value: "write",
-				label: "允许写入",
-				description: "自动授权只读和写入工具；bash、eval、browser 和 task 等执行工具需要确认。",
+				label: "Write",
+				description:
+					"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, and task.",
 			},
 			{
 				value: "yolo",
-				label: "全部自动授权 (Yolo)",
-				description: "自动授权读取、写入和执行工具。用户策略仍可要求确认或阻止调用。",
+				label: "Yolo",
+				description:
+					"Auto-approve read, write, and exec tools. User policy can still require confirmation or block calls.",
 			},
 			{
 				value: "guarded",
-				label: "危险操作确认 (Guarded)",
-				description: "自动授权普通调用，保留工具声明的危险操作逐次确认与用户策略。",
+				label: "Guarded",
+				description:
+					"Auto-approve read, write, and exec tools, but require confirmation every time a tool flags a critical action. User policy still applies.",
 			},
 		],
 	},
@@ -357,7 +363,7 @@ export const cfgToolsRestrictedFolders = register({
 	default: EMPTY_STRING_ARRAY,
 	ui: {
 		tab: "interaction",
-		group: "授权确认",
+		group: "Approvals",
 		label: "Restricted Folders",
 		editor: "json",
 		description:
@@ -381,9 +387,9 @@ export const cfgTodoEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "待办",
-		description: "启用 todo 工具以跟踪任务",
+		group: "Available Tools",
+		label: "Todos",
+		description: "Enable the todo tool for task tracking",
 	},
 });
 
@@ -393,9 +399,9 @@ export const cfgTodoReminders = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "待办",
-		label: "待办提醒",
-		description: "提醒 Agent 在停止前完成待办事项",
+		group: "Todos",
+		label: "Todo Reminders",
+		description: "Remind the agent to complete todos before stopping",
 	},
 });
 
@@ -405,14 +411,14 @@ export const cfgTodoRemindersMax = register({
 	default: 3,
 	ui: {
 		tab: "tools",
-		group: "待办",
-		label: "待办提醒上限",
-		description: "放弃前的最大待办提醒次数",
+		group: "Todos",
+		label: "Todo Reminder Limit",
+		description: "Maximum number of todo reminders before giving up",
 		options: [
-			{ value: "1", label: "1 次提醒" },
-			{ value: "2", label: "2 次提醒" },
-			{ value: "3", label: "3 次提醒" },
-			{ value: "5", label: "5 次提醒" },
+			{ value: "1", label: "1 reminder" },
+			{ value: "2", label: "2 reminders" },
+			{ value: "3", label: "3 reminders" },
+			{ value: "5", label: "5 reminders" },
 		],
 	},
 });
@@ -451,17 +457,17 @@ export const cfgTodoEager = register({
 	default: "default",
 	ui: {
 		tab: "tools",
-		group: "待办",
-		label: "自动创建待办事项",
-		description: "收到首条消息后推动自动创建待办清单的程度",
+		group: "Todos",
+		label: "Create Todos Automatically",
+		description: "How strongly to push automatic todo-list creation after the first message",
 		options: [
-			{ value: "default", label: "默认", description: "由模型决定；不自动创建待办清单" },
+			{ value: "default", label: "Default", description: "Model decides; no automatic todo list" },
 			{
 				value: "preferred",
-				label: "优先",
-				description: "收到首条消息时建议创建待办清单（仅提醒，不强制）",
+				label: "Preferred",
+				description: "Suggests a todo list on the first message (reminder, not forced)",
 			},
-			{ value: "always", label: "始终", description: "收到首条消息时强制创建完整的待办清单" },
+			{ value: "always", label: "Always", description: "Forces a comprehensive todo list on the first message" },
 		],
 	},
 });
@@ -488,17 +494,17 @@ export const cfgTasksTodoClearDelay = register({
 	default: 60,
 	ui: {
 		tab: "tools",
-		group: "待办",
-		label: "待办自动清除延迟",
-		description: "从待办组件中移除已完成或已放弃事项前的延迟",
+		group: "Todos",
+		label: "Todo Auto-Clear Delay",
+		description: "Delay before completed or abandoned todos are removed from the todo widget",
 		options: [
-			{ value: "0", label: "立即" },
-			{ value: "60", label: "1 分钟", description: "默认" },
-			{ value: "300", label: "5 分钟" },
-			{ value: "900", label: "15 分钟" },
-			{ value: "1800", label: "30 分钟" },
-			{ value: "3600", label: "1 小时" },
-			{ value: "-1", label: "永不" },
+			{ value: "0", label: "Instant" },
+			{ value: "60", label: "1 minute", description: "Default" },
+			{ value: "300", label: "5 minutes" },
+			{ value: "900", label: "15 minutes" },
+			{ value: "1800", label: "30 minutes" },
+			{ value: "3600", label: "1 hour" },
+			{ value: "-1", label: "Never" },
 		],
 	},
 });
@@ -510,9 +516,9 @@ export const cfgGlobEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
+		group: "Available Tools",
 		label: "Glob",
-		description: "启用 glob 工具以通过 glob 模式查找文件",
+		description: "Enable the glob tool for glob-based file lookup",
 	},
 });
 
@@ -522,9 +528,9 @@ export const cfgGrepEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
+		group: "Available Tools",
 		label: "Grep",
-		description: "启用 grep 工具以通过正则表达式搜索内容",
+		description: "Enable the grep tool for regex content search",
 	},
 });
 
@@ -534,15 +540,15 @@ export const cfgGrepContextBefore = register({
 	default: 0,
 	ui: {
 		tab: "tools",
-		group: "Grep 与浏览器",
-		label: "Grep 前文",
-		description: "每个 grep 匹配项之前的上下文行数",
+		group: "Grep & Browser",
+		label: "Grep Context Before",
+		description: "Lines of context before each grep match",
 		options: [
-			{ value: "0", label: "0 行" },
-			{ value: "1", label: "1 行" },
-			{ value: "2", label: "2 行" },
-			{ value: "3", label: "3 行" },
-			{ value: "5", label: "5 行" },
+			{ value: "0", label: "0 lines" },
+			{ value: "1", label: "1 line" },
+			{ value: "2", label: "2 lines" },
+			{ value: "3", label: "3 lines" },
+			{ value: "5", label: "5 lines" },
 		],
 	},
 });
@@ -553,16 +559,16 @@ export const cfgGrepContextAfter = register({
 	default: 0,
 	ui: {
 		tab: "tools",
-		group: "Grep 与浏览器",
-		label: "Grep 后文",
-		description: "每个 grep 匹配项之后的上下文行数",
+		group: "Grep & Browser",
+		label: "Grep Context After",
+		description: "Lines of context after each grep match",
 		options: [
-			{ value: "0", label: "0 行" },
-			{ value: "1", label: "1 行" },
-			{ value: "2", label: "2 行" },
-			{ value: "3", label: "3 行" },
-			{ value: "5", label: "5 行" },
-			{ value: "10", label: "10 行" },
+			{ value: "0", label: "0 lines" },
+			{ value: "1", label: "1 line" },
+			{ value: "2", label: "2 lines" },
+			{ value: "3", label: "3 lines" },
+			{ value: "5", label: "5 lines" },
+			{ value: "10", label: "10 lines" },
 		],
 	},
 });
@@ -573,9 +579,9 @@ export const cfgAstGrepEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
+		group: "Available Tools",
 		label: "AST Grep",
-		description: "启用 ast_grep 工具以进行结构化 AST 搜索",
+		description: "Enable the ast_grep tool for structural AST search",
 	},
 });
 
@@ -585,9 +591,9 @@ export const cfgAstEditEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
+		group: "Available Tools",
 		label: "AST Edit",
-		description: "启用 ast_edit 工具以进行结构化 AST 重写",
+		description: "Enable the ast_edit tool for structural AST rewrites",
 	},
 });
 
@@ -597,7 +603,7 @@ export const cfgFindVerifyModel = register({
 	default: undefined,
 	ui: {
 		tab: "tools",
-		group: "查找",
+		group: "Find",
 		label: "Find Verification Model",
 		description:
 			"Model selector (e.g. openrouter/liquid/d1-ultra) tried first for find's passage verification, before the judge role; filename and sketch ranking stay on the judge role. Unset: the judge role verifies too",
@@ -611,18 +617,18 @@ export const cfgFindEnabled = register({
 	default: "auto",
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "Find（语义 grep）",
+		group: "Available Tools",
+		label: "Find (semantic grep)",
 		description:
-			"启用 find 工具：使用自然语言搜索文件和行范围，由 judge 模型角色评判。自动模式在首个可用的 judge 模型支持原生判定时启用",
+			"Enable the find tool: natural-language search for files and line ranges, judged by the judge model role. Auto enables it when the first usable judge is native",
 		options: [
 			{
 				value: "auto",
-				label: "自动",
-				description: "首个可用的 judge 模型支持原生判定时启用",
+				label: "Auto",
+				description: "Enable when the first usable judge is native",
 			},
-			{ value: "on", label: "开启", description: "始终启用，不受 judge 角色所解析模型的影响" },
-			{ value: "off", label: "关闭", description: "禁用 find 工具" },
+			{ value: "on", label: "On", description: "Always enable, whichever model the judge role resolves to" },
+			{ value: "off", label: "Off", description: "Disable the find tool" },
 		],
 	},
 });
@@ -653,9 +659,9 @@ export const cfgDebugEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
+		group: "Available Tools",
 		label: "Debug",
-		description: "启用 debug 工具以通过 DAP 调试",
+		description: "Enable the debug tool for DAP-based debugging",
 	},
 });
 
@@ -665,9 +671,9 @@ export const cfgLaunchEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "服务",
-		description: "启用命名 bash 服务和 proc:// 监管，用于共享的长时间运行项目进程",
+		group: "Available Tools",
+		label: "Services",
+		description: "Enable named bash services and proc:// supervision for shared long-running project processes",
 	},
 });
 
@@ -687,9 +693,9 @@ export const cfgSpeechgenEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "语音生成",
-		description: "启用 tts 工具，使用本机（Phonon）或 xAI Grok Voice 合成语音文件",
+		group: "Available Tools",
+		label: "Speech Generation",
+		description: "Enable the tts tool for on-device (Phonon) or xAI Grok Voice speech-file synthesis",
 	},
 });
 
@@ -699,9 +705,10 @@ export const cfgGenerateImageEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "图片生成",
-		description: "启用 generate_image 工具（文生图与图片编辑）。tools.commands 开启时可通过 bash 调用。",
+		group: "Available Tools",
+		label: "Generate Image",
+		description:
+			"Enable the generate_image tool (text-to-image generation and editing). Mounted as a tool command when tools.commands is on.",
 	},
 });
 
@@ -711,9 +718,9 @@ export const cfgComputerEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "计算机",
-		description: "启用可编程宿主桌面 eval 预置环境（截图、输入、无障碍功能）",
+		group: "Available Tools",
+		label: "Computer",
+		description: "Enable the scriptable host-desktop eval prelude (screenshots, input, accessibility)",
 	},
 });
 
@@ -723,9 +730,9 @@ export const cfgRatchetEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
+		group: "Available Tools",
 		label: "Ratchet",
-		description: "启用 ratchet 评估/爬山优化预置环境；/ratchet 可为当前会话开启此功能",
+		description: "Enable the ratchet eval/hillclimb prelude; /ratchet turns it on for the current session",
 	},
 });
 
@@ -735,9 +742,10 @@ export const cfgArchiveEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "归档",
-		description: "启用只读 archive eval 预置环境：Prompt 历史、最近项目、历史会话及回顾",
+		group: "Available Tools",
+		label: "Archive",
+		description:
+			"Enable the read-only archive eval prelude: prompt history, recent projects, past sessions and recaps",
 	},
 });
 
@@ -760,9 +768,9 @@ export const cfgComputerDisplay = register({
 	default: "active",
 	ui: {
 		tab: "tools",
-		group: "计算机",
-		label: "计算机显示器",
-		description: "活动窗口所在的显示器（active）、所有显示器（all）或原生显示器 id",
+		group: "Computer",
+		label: "Computer Display",
+		description: "Active window's display (active), all displays (all), or a native display id",
 	},
 });
 
@@ -772,9 +780,9 @@ export const cfgComputerMaxWidth = register({
 	default: 3840,
 	ui: {
 		tab: "tools",
-		group: "计算机",
-		label: "计算机截图宽度",
-		description: "截图最大宽度，单位为像素",
+		group: "Computer",
+		label: "Computer Screenshot Width",
+		description: "Maximum screenshot width in pixels",
 	},
 });
 
@@ -784,9 +792,9 @@ export const cfgComputerMaxHeight = register({
 	default: 2400,
 	ui: {
 		tab: "tools",
-		group: "计算机",
-		label: "计算机截图高度",
-		description: "截图最大高度，单位为像素",
+		group: "Computer",
+		label: "Computer Screenshot Height",
+		description: "Maximum screenshot height in pixels",
 	},
 });
 
@@ -797,8 +805,8 @@ export const cfgComputerTakeover = register({
 	default: "fallback",
 	ui: {
 		tab: "tools",
-		group: "计算机",
-		label: "接管窗口输入",
+		group: "Computer",
+		label: "Computer Takeover",
 		description:
 			"When window input takes over (the real pointer and keyboard; your Escape stops it) instead of running in the background",
 		options: [
@@ -836,16 +844,16 @@ export const cfgImagesQuestionTimeoutMs = register({
 	default: 300_000,
 	ui: {
 		tab: "tools",
-		group: "执行",
-		label: "图片提问超时",
+		group: "Execution",
+		label: "Image Question Timeout",
 		description:
-			"read 的 ?q= 图片提问所调用视觉模型的单次请求超时，单位为毫秒。Provider 无响应时会快速返回超时错误，而非一直阻塞到手动中止。设为 0 可禁用超时。",
+			"Per-request timeout for the vision-model call behind read's ?q= image questions, in milliseconds. A stalled provider fails fast with a timeout error instead of blocking until manual abort. Set to 0 to disable the timeout.",
 		options: [
-			{ value: "0", label: "关闭" },
-			{ value: "60000", label: "1 分钟" },
-			{ value: "120000", label: "2 分钟" },
-			{ value: "180000", label: "3 分钟" },
-			{ value: "300000", label: "5 分钟" },
+			{ value: "0", label: "Disabled" },
+			{ value: "60000", label: "1 minute" },
+			{ value: "120000", label: "2 minutes" },
+			{ value: "180000", label: "3 minutes" },
+			{ value: "300000", label: "5 minutes" },
 		],
 	},
 });
@@ -856,9 +864,9 @@ export const cfgCheckpointEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "检查点/回退",
-		description: "启用 checkpoint 和 rewind 工具以创建和恢复上下文检查点",
+		group: "Available Tools",
+		label: "Checkpoint/Rewind",
+		description: "Enable the checkpoint and rewind tools for context checkpointing",
 	},
 });
 
@@ -869,9 +877,9 @@ export const cfgFetchEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "读取 URL",
-		description: "允许 read 工具获取和处理 URL",
+		group: "Available Tools",
+		label: "Read URLs",
+		description: "Allow the read tool to fetch and process URLs",
 	},
 });
 
@@ -881,10 +889,10 @@ export const cfgVaultEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "Obsidian 知识库",
+		group: "Available Tools",
+		label: "Obsidian Vault",
 		description:
-			"启用 vault:// 内部 URL，通过 Obsidian CLI 读取和编辑 Obsidian 知识库内容。关闭时，拒绝解析 vault://，系统 Prompt 中也不包含 vault:// 条目。",
+			"Enable the vault:// internal URL for reading and editing Obsidian vault content via the Obsidian CLI. When disabled, vault:// resolution is refused and the vault:// entry is omitted from the system prompt.",
 	},
 });
 
@@ -894,10 +902,10 @@ export const cfgGithubEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
+		group: "Available Tools",
 		label: "GitHub CLI",
 		description:
-			"启用 github 工具（通过 op 分派仓库、issue、pull request、diff、search、checkout、push 及 Actions 监视等工作流）",
+			"Enable the github tool (op-based dispatch for repository, issue, pull request, diff, search, checkout, push, and Actions watch workflows)",
 	},
 });
 
@@ -908,8 +916,8 @@ export const cfgGithubCacheEnabled = register({
 	ui: {
 		tab: "tools",
 		group: "GitHub",
-		label: "GitHub 视图缓存",
-		description: "在 ~/.omp/cache/github-cache.db 中缓存渲染后的 issue/PR 视图输出，重复读取不再产生开销",
+		label: "GitHub View Cache",
+		description: "Cache rendered issue/PR view output in ~/.omp/cache/github-cache.db so repeated reads are free",
 	},
 });
 
@@ -920,8 +928,8 @@ export const cfgGithubCacheSoftTtlSec = register({
 	ui: {
 		tab: "tools",
 		group: "GitHub",
-		label: "GitHub 缓存软 TTL",
-		description: "在此时间范围内，直接返回缓存的 issue/PR 视图行（单位为秒；默认 5 分钟）",
+		label: "GitHub Cache Soft TTL",
+		description: "Within this window, cached issue/PR view rows are returned directly (seconds; default 5 minutes)",
 	},
 });
 
@@ -932,8 +940,9 @@ export const cfgGithubCacheHardTtlSec = register({
 	ui: {
 		tab: "tools",
 		group: "GitHub",
-		label: "GitHub 缓存硬 TTL",
-		description: "超过软 TTL 后返回缓存行并在后台刷新；超过硬 TTL 后丢弃缓存（单位为秒；默认 7 天）",
+		label: "GitHub Cache Hard TTL",
+		description:
+			"Past the soft TTL the cached row is returned and refreshed in the background; past the hard TTL it is dropped (seconds; default 7 days)",
 	},
 });
 
@@ -943,9 +952,9 @@ export const cfgWebSearchEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "网页搜索",
-		description: "启用 web_search 工具以获取实时网页结果",
+		group: "Available Tools",
+		label: "Web Search",
+		description: "Enable the web_search tool for live web results",
 	},
 });
 
@@ -955,9 +964,9 @@ export const cfgOpenWikiToolsEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "OpenWiki 查询",
-		description: "向 Agent 提供四项只读 OpenWiki 查询工具",
+		group: "Available Tools",
+		label: "OpenWiki Query Tools",
+		description: "Enable the four read-only OpenWiki query tools for the agent",
 	},
 });
 
@@ -967,9 +976,10 @@ export const cfgSecurityEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "安全",
-		description: "启用 OMP 原生安全扫描规划、执行及只读 security:// 资源命名空间",
+		group: "Available Tools",
+		label: "Security",
+		description:
+			"Enable OMP-native security scan planning, execution, and the read-only security:// resource namespace",
 	},
 });
 
@@ -979,9 +989,9 @@ export const cfgAskEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
-		label: "提问",
-		description: "启用 ask 工具以交互方式向用户提问",
+		group: "Available Tools",
+		label: "Ask",
+		description: "Enable the ask tool for interactive user questions",
 	},
 });
 
@@ -991,7 +1001,7 @@ export const cfgOutEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "可用工具",
+		group: "Available Tools",
 		label: "Out",
 		description:
 			"Let the agent reply mid-task by writing to out://, shown like a response without ending its turn. Unset: on in the interactive TUI, off in print, RPC, and ACP",
@@ -1006,10 +1016,10 @@ export const cfgToolsIntentTracing = register({
 	env: "PI_INTENT_TRACING",
 	ui: {
 		tab: "tools",
-		group: "执行",
-		label: "意图追踪",
+		group: "Execution",
+		label: "Intent Tracing",
 		description:
-			"要求 Agent 在执行每次工具调用前说明其意图。未设置时，仅交互式 TUI 开启；print、RPC、ACP 和 SDK 会话关闭。",
+			"Ask the agent to describe the intent of each tool call before executing it. Unset: on in the interactive TUI, off in print, RPC, ACP, and SDK sessions",
 	},
 });
 
@@ -1019,10 +1029,10 @@ export const cfgToolsAbortOnFabricatedResult = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "执行",
-		label: "伪造工具结果时中止",
+		group: "Execution",
+		label: "Abort On Fabricated Tool Result",
 		description:
-			"使用带内工具调用时，模型在回合中开始编造工具结果便立即停止。关闭后，模型会完成生成，再丢弃伪造的后续内容。",
+			"With in-band tool calls, stop the model immediately when it starts hallucinating a tool result mid-turn. Disable to let the model finish generating and discard the fabricated continuation instead.",
 	},
 });
 
@@ -1032,10 +1042,10 @@ export const cfgToolsSpeculativeExecutionEnabled = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "执行",
-		label: "实验性推测执行",
+		group: "Execution",
+		label: "Experimental Speculative Execution",
 		description:
-			"启用可安全丢弃的首批操作：通过直接 read 调用和嵌套 eval 进行已验证的本地读取。此基础范围不包含网络请求、Provider 生成请求及实际文件系统写入。",
+			"Enable the discard-safe first slice: validated local reads through direct read calls and nested eval. Network requests, provider completions, and live filesystem writes are not part of this baseline.",
 	},
 });
 
@@ -1045,14 +1055,14 @@ export const cfgToolsSpeculativeExecutionMaxInFlight = register({
 	default: 2,
 	ui: {
 		tab: "tools",
-		group: "执行",
-		label: "推测执行并发数",
-		description: "在常规分派前允许运行的已验证本地读取操作的最大数量。",
+		group: "Execution",
+		label: "Speculative Execution Concurrency",
+		description: "Maximum number of validated local reads allowed to run before normal dispatch.",
 		options: [
-			{ value: "1", label: "1 个操作" },
-			{ value: "2", label: "2 个操作" },
-			{ value: "3", label: "3 个操作" },
-			{ value: "4", label: "4 个操作" },
+			{ value: "1", label: "1 operation" },
+			{ value: "2", label: "2 operations" },
+			{ value: "3", label: "3 operations" },
+			{ value: "4", label: "4 operations" },
 		],
 	},
 });
@@ -1063,16 +1073,16 @@ export const cfgToolsMaxTimeout = register({
 	default: 0,
 	ui: {
 		tab: "tools",
-		group: "执行",
-		label: "工具最大超时",
-		description: "Agent 可为任意工具设置的最大超时秒数（0 = 无限制）",
+		group: "Execution",
+		label: "Max Tool Timeout",
+		description: "Maximum timeout in seconds the agent can set for any tool (0 = no limit)",
 		options: [
-			{ value: "0", label: "无限制" },
-			{ value: "30", label: "30 秒" },
-			{ value: "60", label: "60 秒" },
-			{ value: "120", label: "120 秒" },
-			{ value: "300", label: "5 分钟" },
-			{ value: "600", label: "10 分钟" },
+			{ value: "0", label: "No limit" },
+			{ value: "30", label: "30 seconds" },
+			{ value: "60", label: "60 seconds" },
+			{ value: "120", label: "120 seconds" },
+			{ value: "300", label: "5 minutes" },
+			{ value: "600", label: "10 minutes" },
 		],
 	},
 });
@@ -1086,9 +1096,9 @@ export const cfgAsyncEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "执行",
-		label: "异步执行",
-		description: "启用异步 bash 命令和后台任务执行",
+		group: "Execution",
+		label: "Async Execution",
+		description: "Enable async bash commands and background task execution",
 	},
 });
 
@@ -1108,7 +1118,7 @@ export const cfgAsyncPrintWake = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "执行",
+		group: "Execution",
 		label: "Wake Print Mode on Job Results",
 		description:
 			"In print mode (-p, --mode json), keep running after the last prompt while this run's background jobs are active, and start another turn in the same session with each job's result; exits once no job or result is pending. Off: print mode exits after its prompts and cancels running jobs",
@@ -1121,7 +1131,7 @@ export const cfgAsyncWidgets = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "执行",
+		group: "Execution",
 		label: "Live Job Widgets",
 		description:
 			"Draw a live widget for each running background job (charts, bars, status grids derived from its output) in the wait card, the jobs pill and the jobs sheet, and caption long shell commands with one line on what they do. The `widget` model role (default: `smol`) writes one spec and at most one caption per job; updates need no further model calls",
@@ -1134,10 +1144,10 @@ export const cfgToolsCommands = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "工具命令",
+		group: "Discovery & MCP",
+		label: "Tool Commands",
 		description:
-			"将不常用的可发现工具挂载为 bash 命令，使用 --help 查询参数。关闭此设置或未启用 bash 时，已启用的工具保留在顶层。",
+			"Mount rarely-used (discoverable) tools as bash commands with schema-derived `--help` instead of shipping their schemas on every request. Needs the bash tool: sessions without it keep every enabled tool top-level. Disable to expose every enabled tool top-level.",
 	},
 });
 
@@ -1148,18 +1158,18 @@ export const cfgToolsCommandDocs = register({
 	default: "catalog",
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "工具命令提示词文档",
+		group: "Discovery & MCP",
+		label: "Tool Command Prompt Docs",
 		description:
-			"选择在系统提示词中内联哪些已挂载命令的 --help 文档。“仅内置”会内联内置帮助，MCP 和扩展命令的帮助按需获取。",
+			"Choose which mounted commands get their `--help` text inlined in the system prompt. Built-ins keeps core tools inline while MCP and extension tools stay on demand.",
 		options: [
-			{ value: "inline", label: "所有命令", description: "内联所有已挂载命令的帮助。" },
+			{ value: "inline", label: "All Commands", description: "Inline help for every mounted command." },
 			{
 				value: "builtins",
-				label: "仅内置",
-				description: "内联内置帮助；按需获取 MCP 和扩展命令的帮助。",
+				label: "Built-ins Only",
+				description: "Inline built-in help; MCP and extension help on demand.",
 			},
-			{ value: "catalog", label: "仅目录", description: "列出所有命令；按需运行 --help。" },
+			{ value: "catalog", label: "Catalog Only", description: "List every command; run `--help` on demand." },
 		],
 	},
 });
@@ -1170,10 +1180,10 @@ export const cfgToolsCommandInline = register({
 	default: EMPTY_STRING_ARRAY,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "工具命令内联帮助",
+		group: "Discovery & MCP",
+		label: "Tool Command Inline Help",
 		description:
-			"命令文档设为“仅内置”时，也内联名称匹配这些 glob 模式的动态命令（例如 mcp__context_mode_*）。“仅目录”会忽略此设置。",
+			"When Tool Command Prompt Docs is Built-ins Only, also inline dynamic commands whose names match these glob patterns (for example mcp__context_mode_*). Catalog Only ignores this setting.",
 	},
 });
 
@@ -1183,9 +1193,10 @@ export const cfgToolsCommandNotices = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "发现与 MCP",
-		label: "工具命令挂载通知",
-		description: "在 MCP 或扩展工具命令挂载或卸载时显示通知；模型仍会在下一次提示中收到变更。",
+		group: "Discovery & MCP",
+		label: "Tool Command Mount Notices",
+		description:
+			"Show a notice when MCP or extension tools are mounted or unmounted as commands; the model still learns of the change with its next prompt.",
 	},
 });
 
@@ -1196,9 +1207,10 @@ export const cfgDevAutoqa = register({
 	env: "PI_AUTO_QA",
 	ui: {
 		tab: "tools",
-		group: "开发者",
-		label: "自动 QA",
-		description: "自动报告工具问题（report_issue）。默认开启；首次报告会征求同意，拒绝后关闭，直到再次显式启用。",
+		group: "Developer",
+		label: "Auto QA",
+		description:
+			"Automated tool issue reporting (`report_issue`). On by default; the first report asks for consent, and denying it disables reporting until re-enabled explicitly",
 	},
 });
 
@@ -1208,9 +1220,9 @@ export const cfgDevAutoqaPushEndpoint = register({
 	default: "https://qa.omp.sh/v1/grievances" as const,
 	ui: {
 		tab: "tools",
-		group: "开发者",
-		label: "自动 QA 推送端点",
-		description: "接收自动 QA JSON 报告的完整 URL（默认 https://qa.omp.sh/v1/grievances）",
+		group: "Developer",
+		label: "Auto QA Push Endpoint",
+		description: "Full URL receiving Auto QA JSON reports (default https://qa.omp.sh/v1/grievances)",
 	},
 });
 

@@ -11,9 +11,9 @@ export const cfgLiveVoice = register({
 	default: DEFAULT_LIVE_VOICE,
 	ui: {
 		tab: "providers",
-		group: "服务",
-		label: "实时语音音色",
-		description: "实时语音会话使用的音色；自定义实时语音端点可在配置中使用其他音色名称",
+		group: "Services",
+		label: "Live Voice",
+		description: "Voice of realtime voice sessions; a custom live endpoint may take other names (set in config)",
 		options: LIVE_VOICE_OPTIONS,
 	},
 });
@@ -38,9 +38,10 @@ export const cfgLiveEndpoint = register({
 	validate: validateLiveEndpoint,
 	ui: {
 		tab: "providers",
-		group: "服务",
-		label: "实时语音端点",
-		description: "替代 Codex 的 OpenAI Realtime WebRTC 兼容服务地址（如 http://127.0.0.1:8080/v1）；留空使用 Codex",
+		group: "Services",
+		label: "Live Endpoint",
+		description:
+			"Base URL of an OpenAI Realtime WebRTC-compatible server (e.g. http://127.0.0.1:8080/v1) used for live voice instead of Codex; empty uses Codex",
 	},
 });
 
@@ -51,9 +52,9 @@ export const cfgLiveApiKey = register({
 	credential: true,
 	ui: {
 		tab: "providers",
-		group: "服务",
-		label: "实时语音端点 API 密钥",
-		description: "仅发送给实时语音端点的 Bearer 密钥：可填写密钥、环境变量名或 !command",
+		group: "Services",
+		label: "Live Endpoint API Key",
+		description: "Bearer key sent only to the live endpoint: a literal, an environment variable name, or !command",
 	},
 });
 

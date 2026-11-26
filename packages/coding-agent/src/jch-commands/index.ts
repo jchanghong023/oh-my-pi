@@ -8,9 +8,9 @@ import { JCH_WORKFLOW_SLASH_COMMANDS } from "./workflow";
 export const JCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "minimal",
-		description: "以最小充分变更和验证完成明确需求",
+		description: "Complete a specific task with the smallest sufficient change and verification",
 		allowArgs: true,
-		inlineHint: "[任务]",
+		inlineHint: "[task]",
 		handle: command => ({ prompt: prompt.compile(minimalPrompt.trim())({ task: command.args }) }),
 	},
 	...JCH_WORKFLOW_SLASH_COMMANDS,

@@ -191,8 +191,8 @@ export type GitLabDuoModelIdentity = {
 
 /**
  * Duo's public aliases are deployment identity, not model metadata. The
- * reference ids select first-party rows; capabilities, prices, and limits
- * are copied from those rows rather than repeated here.
+ * reference ids select bundled first-party rows; capabilities, prices, and
+ * limits are copied from those rows rather than repeated here.
  */
 const GITLAB_DUO_MODEL_IDENTITIES: Readonly<Record<string, GitLabDuoModelIdentity>> = {
 	"duo-chat-opus-4-6": {

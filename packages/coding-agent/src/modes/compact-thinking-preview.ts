@@ -24,10 +24,10 @@ type ToolActionCategory = "read" | "exec" | "write" | "call";
 type ActionState = "running" | "done" | "failed";
 
 const ACTION_WORDS: Record<ToolActionCategory, Record<ActionState, string>> = {
-	read: { running: "正在读取", done: "读取完成", failed: "读取失败" },
-	exec: { running: "正在执行", done: "执行完成", failed: "执行失败" },
-	write: { running: "正在写入", done: "写入完成", failed: "写入失败" },
-	call: { running: "正在调用", done: "调用完成", failed: "调用失败" },
+	read: { running: "Reading", done: "read OK", failed: "read failed" },
+	exec: { running: "Running", done: "run OK", failed: "run failed" },
+	write: { running: "Writing", done: "write OK", failed: "write failed" },
+	call: { running: "Calling", done: "call OK", failed: "call failed" },
 };
 
 type Call = {
@@ -58,10 +58,10 @@ type ToolAction = {
 type Action = ToolAction | { category: "thinking"; detail: string; stage: ModelStage; running: true };
 
 const MODEL_WORDS: Record<ModelStage, string> = {
-	waiting: "等待响应",
-	thinking: "正在思考",
-	replying: "正在生成回复",
-	"tool-arguments": "正在准备调用",
+	waiting: "waiting",
+	thinking: "thinking",
+	replying: "replying",
+	"tool-arguments": "preparing call",
 };
 
 type ThinkingPreview = { source: string; width: number; proseOnly: boolean; text: string };
@@ -406,7 +406,7 @@ export class CompactThinkingPreview {
 			action ? this.#buildRow(action, columns) : undefined,
 		);
 		if (wait)
-			rows[1] = { word: truncateToWidth(`Agent：${wait}`, columns), tone: "muted", detail: [], running: true };
+			rows[1] = { word: truncateToWidth(`Agent: ${wait}`, columns), tone: "muted", detail: [], running: true };
 		return rows;
 	}
 	render(width: number): readonly string[] {
@@ -493,8 +493,8 @@ export class CompactThinkingPreview {
 		const failed = !model && action.failed;
 		const state = action.running ? "running" : failed ? "failed" : "done";
 		const full = model
-			? `模型：${MODEL_WORDS[action.stage]}`
-			: `Agent：${action.running ? "" : "上次"}${ACTION_WORDS[action.category][state]}`;
+			? `Model ${MODEL_WORDS[action.stage]}`
+			: `Agent: ${action.running ? "" : "Last "}${ACTION_WORDS[action.category][state]}`;
 		const extra = !model && action.additional ? ` +${action.additional}` : "";
 		const word = truncateToWidth(full, width);
 		const runningCall = action.running && action.category === "call";

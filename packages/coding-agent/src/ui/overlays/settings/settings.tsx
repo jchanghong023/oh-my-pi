@@ -1071,15 +1071,12 @@ export function SettingsWindow(props: {
 		return count;
 	};
 
-	const groupId = (group: string): string =>
-		/[^\p{ASCII}]/u.test(group) ? encodeURIComponent(group) : slugify(group);
-
 	const pages = computed((): TspPrefsProps["pages"] => {
 		const out: TspPrefsProps["pages"][number][] = SETTING_TABS.map(id => {
 			const changed = changedCount(id);
 			return { id, label: SETTINGS_PAGES[id].label, icon: id, changed: changed > 0 ? changed : undefined };
 		});
-		out.push({ id: PLUGINS_PAGE, label: "已安装", icon: "plugins", group: "插件" });
+		out.push({ id: PLUGINS_PAGE, label: "Installed", icon: "plugins", group: "Plugins" });
 		return out;
 	});
 
@@ -1118,7 +1115,7 @@ export function SettingsWindow(props: {
 					mono: !def.secret && MONO_TEXT_SETTING.test(def.path) ? true : undefined,
 				};
 			case "providerLimits":
-				return { k: "action", label: "编辑…", act: "edit" };
+				return { k: "action", label: "Edit…", act: "edit" };
 			case "multiselect":
 				return {
 					k: "multi",
@@ -1155,8 +1152,8 @@ export function SettingsWindow(props: {
 			if (item.heading) continue;
 			const row = prefsRow(item);
 			if (!row) continue;
-			const group = item.def!.group ?? "常规";
-			const slug = groupId(group);
+			const group = item.def!.group ?? "General";
+			const slug = slugify(group);
 			const ref = item.page
 				? { id: `${item.page}/${slug}`, title: group, page: item.page }
 				: { id: slug, title: group };
@@ -1170,7 +1167,7 @@ export function SettingsWindow(props: {
 	const focus = (): string | null => {
 		if (sectionFocus()) {
 			const run = runs()[activeRun()];
-			return run?.name ? groupId(run.name) : null;
+			return run?.name ? slugify(run.name) : null;
 		}
 		return selectedId() ?? null;
 	};
@@ -1211,13 +1208,13 @@ export function SettingsWindow(props: {
 				leading = false;
 				continue;
 			}
-			if (leading && !item.def!.group) headless.push(groupId("常规"));
+			if (leading && !item.def!.group) headless.push(slugify("General"));
 			break;
 		}
 		const open = editing();
 		const page = pluginsPage();
 		return {
-			title: "设置",
+			title: "Settings",
 			values,
 			headless,
 			sidebar,
@@ -1234,7 +1231,7 @@ export function SettingsWindow(props: {
 
 	const previewLine = (): readonly TspSpan[] => {
 		version();
-		return callbacks.getStatusLinePreview?.() ?? [{ s: "dim", t: "（无法预览）" }];
+		return callbacks.getStatusLinePreview?.() ?? [{ s: "dim", t: "(preview not available)" }];
 	};
 
 	const plugins = (): SettingsPluginsPrefs | undefined =>
@@ -1320,13 +1317,13 @@ export function SettingsWindow(props: {
 
 	return (
 		<prefs
-			title="OMP 设置"
+			title="omp settings"
 			pages={pages}
 			page={() => (searching() ? preSearchTab() : tab())}
 			lead={() => {
 				if (searching()) return undefined;
 				const id = tab();
-				if (id === PLUGINS_PAGE) return plugins()?.lead ?? "正在加载已安装插件…";
+				if (id === PLUGINS_PAGE) return plugins()?.lead ?? "Loading installed plugins…";
 				return SETTINGS_PAGES[id].lead;
 			}}
 			query={() => (searching() ? query().text : undefined)}

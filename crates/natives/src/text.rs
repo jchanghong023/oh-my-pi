@@ -416,7 +416,7 @@ fn write_u32_u16(out: &mut Vec<u16>, mut val: u32) {
 // ============================================================================
 
 #[inline]
-pub(crate) fn ansi_seq_len_u16(data: &[u16], pos: usize) -> Option<usize> {
+fn ansi_seq_len_u16(data: &[u16], pos: usize) -> Option<usize> {
 	if pos >= data.len() || data[pos] != ESC {
 		return None;
 	}

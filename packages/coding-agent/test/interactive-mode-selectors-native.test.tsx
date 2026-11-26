@@ -140,8 +140,11 @@ describe("inline selectors in a Tern terminal", () => {
 		await mode.showOAuthSelector("login");
 
 		const picker = sheet(ui);
-		expect(picker).toMatchObject({ title: "登录", layout: "cards", size: "md" });
-		expect(picker.items?.find(item => item.id === "anthropic")).toMatchObject({ detail: "未配置", dot: "muted" });
+		expect(picker).toMatchObject({ title: "Sign in", layout: "cards", size: "md" });
+		expect(picker.items?.find(item => item.id === "anthropic")).toMatchObject({
+			detail: "Not configured",
+			dot: "muted",
+		});
 		expect(checked).not.toHaveBeenCalled();
 
 		ui.type(ESCAPE);
@@ -168,7 +171,7 @@ describe("inline selectors in a Tern terminal", () => {
 		// The command reloads its store and then stays pending until the pickers are answered.
 		await reload.mock.results[0]!.value;
 		const providers = sheet(ui);
-		expect(providers.title).toBe("退出登录");
+		expect(providers.title).toBe("Sign out");
 		expect(providers.items!.map(item => item.id)).toEqual(["anthropic"]);
 
 		ui.send({ ev: "action", sf: ui.sf, id: ui.node("picker").id, act: "confirm" });
@@ -287,7 +290,7 @@ describe("inline selectors in a Tern terminal", () => {
 			/>
 		));
 		const treeSheet = sheet(ui);
-		expect(treeSheet).toMatchObject({ title: "会话树", size: "lg", layout: "tree", preview: "side" });
+		expect(treeSheet).toMatchObject({ title: "Session tree", size: "lg", layout: "tree", preview: "side" });
 		// Row text folds line breaks to spaces and keeps the other spacing.
 		expect(treeSheet.items![0]!.label).toEqual([
 			{ t: "user: ", s: "accent strong" },
