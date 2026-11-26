@@ -19,7 +19,7 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { formatModelSelectorValue } from "../config/model-selector";
 import { offlineFromEnv } from "./args";
 import { formatModelStringWithRouting } from "../config/model-resolver";
-import { buildServiceTierByFamily, serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
+import { serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
 import { Settings } from "../config/settings";
 import { resolveWebsocketPreference } from "../session/settings-stream-fn";
 import cachePrefixTemplate from "../prompts/bench/cache-prefix.md" with { type: "text" };
@@ -39,7 +39,7 @@ import {
 import { createLiveBoard, type LiveBoardOutput } from "../modes/view-model/chrome/live-board";
 import { formatCost } from "../modes/view-model/overlays/agent-hub-renderer";
 
-import { cfgTierAnthropic, cfgTierGoogle, cfgTierOpenai } from "../session/settings";
+import { cfgTiers } from "../session/settings";
 
 const DEFAULT_PAR = 4;
 const DEFAULT_CACHE_MAX_TOKENS = 64;
@@ -1191,11 +1191,9 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 		const flagTier = command.flags.serviceTier ? serviceTierSettingToTier(command.flags.serviceTier) : undefined;
 		const serviceTierByFamily = command.flags.serviceTier
 			? serviceTierForAllFamilies(flagTier)
-			: buildServiceTierByFamily(
-					(runtime.settings ? cfgTierOpenai.get(runtime.settings) : undefined) ?? "none",
-					(runtime.settings ? cfgTierAnthropic.get(runtime.settings) : undefined) ?? "none",
-					(runtime.settings ? cfgTierGoogle.get(runtime.settings) : undefined) ?? "none",
-				);
+			: runtime.settings
+				? cfgTiers.get(runtime.settings)
+				: {};
 		if (!json && flagTier) print(chalk.dim(`service tier: ${flagTier}`));
 		const total = cacheMode ? cachePairs! : runs;
 		rows = targets.map(({ selector, model, thinking }): BenchTableRow => ({
