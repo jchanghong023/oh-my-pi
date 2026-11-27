@@ -1765,9 +1765,9 @@ describe("canToolAllowAvoidPrompt", () => {
 	it("is true only when an unmatched call prompts and a tool allow would skip it", () => {
 		expect(canAllow({ "tools.approvalMode": "write" })).toBe(true);
 		expect(canAllow({ "tools.approvalMode": "always-ask" })).toBe(true);
-		// Yolo already runs the unmatched call; a user `prompt` makes it ask, and a tool allow still wins.
+		// Without a user policy, yolo already runs the call; a user prompt cannot be bypassed.
 		expect(canAllow({ "tools.approvalMode": "yolo" })).toBe(false);
-		expect(canAllow({ "tools.approvalMode": "yolo", "tools.approval": { bash: "prompt" } })).toBe(true);
+		expect(canAllow({ "tools.approvalMode": "yolo", "tools.approval": { bash: "prompt" } })).toBe(false);
 		// A user `allow` never prompts; a user `deny` blocks even a tool allow.
 		expect(canAllow({ "tools.approvalMode": "write", "tools.approval": { bash: "allow" } })).toBe(false);
 		expect(canAllow({ "tools.approvalMode": "write", "tools.approval": { bash: "deny" } })).toBe(false);

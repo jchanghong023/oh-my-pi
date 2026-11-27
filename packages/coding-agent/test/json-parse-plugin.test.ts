@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import { TempDir } from "@oh-my-pi/pi-utils/temp";
+import { removeWithRetries, TempDir } from "@oh-my-pi/pi-utils/temp";
 import { createJsonParsePlugin } from "../scripts/json-parse-plugin";
 
 describe("large JSON build assets", () => {
@@ -36,7 +36,9 @@ describe("large JSON build assets", () => {
 			});
 			expect(result.success, result.logs.map(log => log.message).join("\n")).toBe(true);
 			const relocated = dir.join("relocated");
-			await fs.rename(buildDir, relocated);
+			// Relocation must not depend on Windows allowing an atomic directory rename.
+			await fs.cp(buildDir, relocated, { recursive: true });
+			await removeWithRetries(buildDir);
 			await fs.rm(source, { recursive: true });
 			const child = Bun.spawn(
 				compiled ? [`${relocated}/${executable}`] : [process.execPath, `${relocated}/entry.js`],

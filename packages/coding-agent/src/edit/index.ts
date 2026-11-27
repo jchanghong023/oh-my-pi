@@ -46,7 +46,7 @@ import {
 	type WritethroughCallback,
 	writethroughNoop,
 } from "../lsp";
-import { unwrapHashlineHeaderPath } from "../tools/hashline-header-path";
+import { unwrapHashlineHeaderPath } from "../tools/hashline-format";
 import { isRemoteTextWritable, remoteMirrorPath, remoteMirrorUrl, writeRemoteMirror } from "./remote-mirror";
 import { type FileDiagnosticsResult } from "../tools/details/lsp";
 import { notifyWorkspaceWatchedFiles } from "../lsp/client";

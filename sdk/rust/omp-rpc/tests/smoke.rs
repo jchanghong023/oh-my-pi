@@ -329,7 +329,9 @@ fn smoke_scripted_model() {
 		.prompt_and_wait(&prompt("please read_uri notes://today"), DEFAULT_PROMPT_TIMEOUT)
 		.unwrap();
 	println!("read_uri: {:?} reads {:?}", turn.assistant_text, reads.lock().unwrap());
-	assert_eq!(turn.assistant_text.as_deref(), Some("tool said: 1:note body"));
+	let (header, body) = turn.assistant_text.as_deref().unwrap().split_once('\n').unwrap();
+	assert!(header.starts_with("tool said: [notes://today#") && header.ends_with(']'));
+	assert_eq!(body, "1:note body");
 	assert_eq!(*reads.lock().unwrap(), ["notes://today"]);
 
 	let turn = client

@@ -1913,7 +1913,7 @@ describe("Settings", () => {
 				"DeepInfra speech provider",
 				"providers.tts",
 				"deepinfra",
-				{ speech: "deepinfra/hexgrad/Kokoro-82M" },
+				{ speech: "deepinfra/Qwen/Qwen3-TTS" },
 				{ speech: [] },
 			],
 			[

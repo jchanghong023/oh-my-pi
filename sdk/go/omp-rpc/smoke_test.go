@@ -325,7 +325,9 @@ func TestSmokeModel(t *testing.T) {
 	uriMu.Lock()
 	reads := slices.Clone(uriReads)
 	uriMu.Unlock()
-	if deref(turn.AssistantText) != "tool said: 1:note body" || !slices.Contains(reads, "notes://today") {
+	header, body, ok := strings.Cut(deref(turn.AssistantText), "\n")
+	if !ok || !strings.HasPrefix(header, "tool said: [notes://today#") || !strings.HasSuffix(header, "]") ||
+		body != "1:note body" || !slices.Contains(reads, "notes://today") {
 		t.Fatalf("read_uri: text=%q reads=%v", deref(turn.AssistantText), reads)
 	}
 	t.Logf("read_uri: assistant=%q reads=%v", *turn.AssistantText, reads)

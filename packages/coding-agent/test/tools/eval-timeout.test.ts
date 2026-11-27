@@ -61,8 +61,7 @@ describe("EvalTool timeout semantics", () => {
 			.filter((block): block is { type: "text"; text: string } => block.type === "text")
 			.map(block => block.text)
 			.join("\n");
-		expect(text).toContain("timed out after 1 seconds");
-		// The new wording is a plain wall-clock timeout, not an inactivity stall.
+		expect(text).toContain("[timed out after 1s; JS worker killed, state gone]");
 		expect(text).not.toContain("inactivity");
 		expect(text).not.toContain("never");
 
