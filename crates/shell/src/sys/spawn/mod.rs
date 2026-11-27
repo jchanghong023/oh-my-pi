@@ -48,7 +48,7 @@ use std::{
 use bstr::BString;
 use parking_lot::Mutex;
 #[cfg(windows)]
-pub use windows::spawn_detached;
+pub use windows::spawn_breakaway;
 #[cfg(windows)]
 pub(crate) use windows::{break_console_groups, has_console_groups};
 

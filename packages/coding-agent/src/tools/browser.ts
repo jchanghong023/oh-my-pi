@@ -53,7 +53,7 @@ import {
 	type WorkerTabSession,
 	ternBlocksTaken,
 } from "./browser/tab-supervisor";
-import { renderTabCall, tabCallBudgetSeconds } from "./browser/tab-call";
+import { parseTabCall, tabCallBudgetSeconds } from "./browser/tab-call";
 import { resolveToCwd } from "./path-utils";
 import { renderFunctionRun, renderStatusCallChain } from "./run-code";
 import { ToolAbortError, throwIfAborted } from "./tool-errors";
@@ -1018,7 +1018,6 @@ async function closeBrowser(
 }
 
 function resolveBrowserRunCode(params: BrowserParams): string {
-	if (params.action === "call") return renderTabCall(params.chain ?? []);
 	const code = params.code?.trim();
 	const fn = params.fn?.trim();
 	if ((code === undefined || code.length === 0) === (fn === undefined || fn.length === 0)) {
@@ -1039,21 +1038,38 @@ async function runBrowser(
 	signal?: AbortSignal,
 	expectedTab?: TabSession,
 ): Promise<AgentToolResult<unknown>> {
-	const code = resolveBrowserRunCode(params);
+	const callChain = params.action === "call" ? (params.chain ?? []) : undefined;
+	let code: string | undefined;
+	if (callChain !== undefined) {
+		parseTabCall(callChain);
+	} else {
+		code = resolveBrowserRunCode(params);
+	}
 	const tab = expectedTab ?? getTab(name);
 	if (tab) {
 		details.browser = tab.browser.kind.kind;
 		details.url = tab.info.url;
 	}
 
-	const { displays, returnValue, screenshots } = await runInTab(name, {
-		code,
-		timeoutMs,
-		signal,
-		session,
-		expectedTab,
-		waitsForDownload: params.action === "call" && params.chain?.[0]?.method === "waitForDownload",
-	});
+	const { displays, returnValue, screenshots } = await runInTab(
+		name,
+		callChain !== undefined
+			? {
+					callChain,
+					timeoutMs,
+					signal,
+					session,
+					expectedTab,
+					waitsForDownload: callChain[0]?.method === "waitForDownload",
+				}
+			: {
+					code: code!,
+					timeoutMs,
+					signal,
+					session,
+					expectedTab,
+				},
+	);
 
 	if (screenshots.length) details.screenshots = screenshots;
 

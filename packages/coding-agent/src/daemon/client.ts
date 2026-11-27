@@ -10,7 +10,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { IpcConnection, Process, spawnDetached } from "@oh-my-pi/pi-natives";
+import { IpcConnection, Process, spawnBreakaway } from "@oh-my-pi/pi-natives";
 import { isEexist, isEnoent, logger, postmortem, removeWithRetries, toError } from "@oh-my-pi/pi-utils";
 import { resolveCliEntryCmd, resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { daemonBuildId } from "./build";
@@ -177,6 +177,12 @@ function dial(): Promise<IpcConnection> {
  * serves every project, so it never inherits this process's cwd: on Windows a
  * running process's cwd cannot be removed or renamed. Only the no-host
  * fallback pins a cwd, because its entry path is relative to it.
+ *
+ * On Windows a detached `Bun.spawn` still leaves the child in every job object
+ * this process is in, and a terminal host that terminates its job on close
+ * would take down the daemon and every other session's units with it, so the
+ * daemon breaks away from those jobs where they permit it (issue #20722). It
+ * has no console either way, so its units spawn hidden.
  */
 function spawnDaemon(): void {
 	const { cmd, cwd = daemonDir() } = resolveWorkerSpawnCmd(DAEMON_WORKER_ARG);
@@ -186,8 +192,8 @@ function spawnDaemon(): void {
 		process.platform === "linux" ? undefined : { PI_NATIVES_DIR: path.join(daemonDir(), "natives") },
 	);
 	if (process.platform === "win32") {
-		// Bun's ignored stdio does not prevent it from inheriting other Windows handles.
-		spawnDetached(cmd, cwd, env);
+		const [application, ...args] = cmd;
+		spawnBreakaway({ application, args, env, cwd });
 		return;
 	}
 	const child = Bun.spawn(cmd, { cwd, env, stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true });

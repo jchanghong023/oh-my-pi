@@ -51,7 +51,7 @@ omp
 
 - **启动提速与红区 NFS 优化**：在上游已经很快的基础上继续减少启动等待，并针对红区 NFS 优化交互响应。
 - **终端界面与三种显示模式**：设置、模型选择、授权提示和状态栏等使用英文；欢迎区的使用提示、「提示：」、「新功能」和字体提醒保留中文。用户消息、模型回复和工具输出按原文显示。`/display clean` 专注聊天；`/display compact`（默认）显示模型与 Agent 活动、最近工具的只读输出和本轮原始 Diff；`/display detailed` 查看完整工具记录。
-- **旧扩展升级**：使用旧 TUI 组件 API 的扩展需要按 [TUI 迁移指南](../docs/extensions.md#migrating-from-pi-tui) 更新；日常终端命令不需要迁移。
+- **扩展管理**：在 `/extensions` 禁用扩展会隐藏它的编辑器组件，重新启用时恢复。使用旧 TUI 组件 API 的扩展需要按 [TUI 迁移指南](../docs/extensions.md#migrating-from-pi-tui) 更新；日常终端命令不需要迁移。
 - **内网群聊**：用 `/collab2 1234` 开房、`/collab2 join 1234` 加入，多人可向同一个 Agent 发消息。设置了 `OMP_OFFLINE` 时默认连接 `10.239.93.104:9333`，未设置时连接 `127.0.0.1:9333`。开房和加入应使用同一服务器；可通过 `OMP_COLLAB2_IP` 覆盖，只填 IP，不带端口或子网前缀。
 - **危险操作确认**：用 `omp --approval-mode guarded` 启动，普通工具调用自动放行，工具标记的危险操作仍需确认。
 - **中文语音输入**：语音转写默认使用中文和 Whisper Base；非中文按上游默认使用 Fluid Speech Pro，显式配置的听写模型优先。

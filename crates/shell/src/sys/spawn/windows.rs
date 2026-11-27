@@ -60,8 +60,9 @@ use bstr::{BStr, BString, ByteSlice};
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use windows_sys::Win32::{
 	Foundation::{
-		ERROR_INVALID_PARAMETER, ERROR_MORE_DATA, FILETIME, HANDLE, HANDLE_FLAG_INHERIT,
-		INVALID_HANDLE_VALUE, NTSTATUS, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
+		ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_MORE_DATA, FILETIME, HANDLE,
+		HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, NTSTATUS, SetHandleInformation, WAIT_OBJECT_0,
+		WAIT_TIMEOUT,
 	},
 	System::{
 		Console::{
@@ -79,14 +80,15 @@ use windows_sys::Win32::{
 		ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
 		SystemInformation::GetSystemDirectoryW,
 		Threading::{
-			CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-			CreateEventW, CreateProcessW, DETACHED_PROCESS, DeleteProcThreadAttributeList,
-			EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, GetProcessTimes, INFINITE,
-			InitializeProcThreadAttributeList, OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-			PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
-			PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SUSPEND_RESUME, QueryFullProcessImageNameW,
-			ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, SetEvent,
-			TerminateProcess, UpdateProcThreadAttribute, WaitForMultipleObjects,
+			CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+			CREATE_UNICODE_ENVIRONMENT, CreateEventW, CreateProcessW, DETACHED_PROCESS,
+			DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+			GetProcessTimes, INFINITE, InitializeProcThreadAttributeList, OpenProcess,
+			PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+			PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+			PROCESS_SUSPEND_RESUME, QueryFullProcessImageNameW, ResumeThread, STARTF_USESTDHANDLES,
+			STARTUPINFOEXW, STARTUPINFOW, SetEvent, TerminateProcess, UpdateProcThreadAttribute,
+			WaitForMultipleObjects,
 		},
 	},
 };
@@ -728,7 +730,8 @@ fn env_block<'a>(env: impl ExactSizeIterator<Item = (&'a BStr, &'a BStr)>) -> io
 }
 
 /// Launch a detached console executable without inheriting parent handles.
-pub fn spawn_detached(argv: &[String], cwd: &str, env: &HashMap<String, String>) -> io::Result<()> {
+/// Escape the caller's jobs where permitted; otherwise stay in the job.
+pub fn spawn_breakaway(argv: &[String], cwd: &str, env: &HashMap<String, String>) -> io::Result<u32> {
 	let executable = argv.first().ok_or_else(|| invalid("missing executable"))?;
 	let app = wide(BStr::new(executable.as_bytes()))?;
 	let mut line = cmdline::command_line(argv).map_err(invalid)?;
@@ -740,25 +743,32 @@ pub fn spawn_detached(argv: &[String], cwd: &str, env: &HashMap<String, String>)
 	)?;
 	let si = STARTUPINFOW { cb: mem::size_of::<STARTUPINFOW>() as u32, ..Default::default() };
 	let mut pi = PROCESS_INFORMATION::default();
-	// SAFETY: all strings are NUL-terminated, the command line is writable,
-	// and the startup and process information pointers stay valid for the call.
-	check(unsafe {
-		CreateProcessW(
-			app.as_ptr(),
-			line.as_mut_ptr(),
-			ptr::null(),
-			ptr::null(),
-			0,
-			DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
-			env.as_ptr().cast(),
-			cwd.as_ptr(),
-			&raw const si,
-			&raw mut pi,
-		)
-	})?;
+	let mut spawn = |flags| {
+		// SAFETY: all strings are NUL-terminated, the command line is writable,
+		// and the startup and process information pointers stay valid for the call.
+		check(unsafe {
+			CreateProcessW(
+				app.as_ptr(),
+				line.as_mut_ptr(),
+				ptr::null(),
+				ptr::null(),
+				0,
+				flags,
+				env.as_ptr().cast(),
+				cwd.as_ptr(),
+				&raw const si,
+				&raw mut pi,
+			)
+		})
+	};
+	let detached = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT;
+	match spawn(detached | CREATE_BREAKAWAY_FROM_JOB) {
+		Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => spawn(detached),
+		result => result,
+	}?;
 	let _process = owned(pi.hProcess)?;
 	let _thread = owned(pi.hThread)?;
-	Ok(())
+	Ok(pi.dwProcessId)
 }
 
 /// The child's handle for one stream (`NUL` for `Null`), inheritable.

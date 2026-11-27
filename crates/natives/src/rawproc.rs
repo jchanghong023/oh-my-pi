@@ -86,7 +86,7 @@ fn errno_code(error: &io::Error) -> String {
 
 // --- spawnRaw -------------------------------------------------------------
 
-/// Options for `spawnRaw`.
+/// Options for `spawnRaw` and `spawnBreakaway`.
 #[napi(object)]
 pub struct SpawnRawOptions {
 	/// Executable name or path (resolved against `env.PATH`).
@@ -172,6 +172,43 @@ pub fn spawn_raw(env: &Env, options: SpawnRawOptions) -> Result<RawChild> {
 			stdout: stdout.into_raw_handle() as i64,
 			stderr: stderr.into_raw_handle() as i64,
 		})
+	}
+}
+
+// --- spawnBreakaway -------------------------------------------------------
+
+/// Start a detached Windows process outside this process's job objects.
+///
+/// The child gets no console (`DETACHED_PROCESS`), its own process group and
+/// no inherited handles. Pass an absolute executable path. It leaves the
+/// caller's jobs where permitted (`CREATE_BREAKAWAY_FROM_JOB`), so a terminal
+/// host that terminates its job on close does not take the child
+/// down. A job that forbids breakaway makes `CreateProcessW` fail with
+/// `ERROR_ACCESS_DENIED`; the child is then started inside the job.
+///
+/// Returns the child's pid.
+///
+/// # Errors
+/// The spawn error, as a JS error whose `code` is errno-style; `ENOSYS` off
+/// Windows.
+#[napi]
+pub fn spawn_breakaway(env: &Env, options: SpawnRawOptions) -> Result<u32> {
+	#[cfg(windows)]
+	{
+		let SpawnRawOptions { application, mut args, env: child_env, cwd } = options;
+		args.insert(0, application);
+		omp_shell::sys::spawn_breakaway(&args, &cwd, &child_env).map_err(|error| {
+			coded_error(
+				env,
+				&errno_code(&error),
+				format!("spawnBreakaway {}: {error}", args[0]),
+			)
+		})
+	}
+	#[cfg(not(windows))]
+	{
+		let _ = options;
+		Err(coded_error(env, "ENOSYS", "spawnBreakaway is Windows-only"))
 	}
 }
 
@@ -354,31 +391,6 @@ pub fn exec_replace(
 	{
 		let _ = (path, argv, env, keep_fds);
 		Err(coded_error(js_env, "ENOSYS", "execReplace is unsupported on this platform"))
-	}
-}
-
-/// Launch a detached Windows process with no inherited handles.
-#[napi]
-#[allow(
-	clippy::implicit_hasher,
-	reason = "napi marshals a JS object into the default-hasher HashMap"
-)]
-pub fn spawn_detached(
-	js_env: &Env,
-	argv: Vec<String>,
-	cwd: String,
-	env: HashMap<String, String>,
-) -> Result<()> {
-	#[cfg(windows)]
-	{
-		omp_shell::sys::spawn_detached(&argv, &cwd, &env).map_err(|error| {
-			coded_error(js_env, &errno_code(&error), format!("spawnDetached: {error}"))
-		})
-	}
-	#[cfg(not(windows))]
-	{
-		let _ = (argv, cwd, env);
-		Err(coded_error(js_env, "ENOSYS", "spawnDetached is unsupported on this platform"))
 	}
 }
 

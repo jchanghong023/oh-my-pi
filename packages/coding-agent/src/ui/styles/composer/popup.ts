@@ -8,8 +8,9 @@
  * - wider than 40 cells, a description column (muted) after a primary
  *   column sized to the widest label (`term.columns` bounds it), wrapped to
  *   `term.descriptionRows` rows when set, else cut to one;
- * - at most `max.lines` rows or the available terminal height, a window
- *   around the selection, with a scrollbar while items are hidden.
+ * - bounded by `max.lines` and the available terminal height, a row window
+ *   centred on the selection (its label always visible), with a scrollbar
+ *   while rows are hidden.
  */
 import type { TspText } from "@oh-my-pi/pi-wire";
 import type { UiNode } from "@oh-my-pi/pi-tui";
@@ -141,8 +142,6 @@ function paintPopup(node: UiNode, cx: PaintContext): Block {
 		0,
 		entries.findIndex(entry => entry.key === listProps.selected),
 	);
-	const overflow = entries.length > visible;
-	const rowWidth = Math.max(0, cx.width - (overflow ? 1 : 0));
 	const [min, max] = term.columns ?? [DEFAULT_COLUMN, DEFAULT_COLUMN];
 	let widest = 0;
 	let widestGlyph = 0;
@@ -153,30 +152,45 @@ function paintPopup(node: UiNode, cx: PaintContext): Block {
 	const marker = `${cx.theme.symbols.symbol("nav.cursor")} `;
 	const cursorWidth = visibleWidth(marker);
 	const cursor: CursorColumn = { marker, blank: " ".repeat(cursorWidth), width: cursorWidth };
-	// Even on a narrow screen leave space for the cursor, gap, a label cell and the end margin.
-	const iconColumn = Math.min(widestGlyph, Math.max(0, rowWidth - cursorWidth - 4));
 	const column = Math.max(min, Math.min(max, widest));
+	const layout = (width: number): string[][] => {
+		// Even on a narrow screen leave space for the cursor, gap, a label cell and the end margin.
+		const iconColumn = Math.min(widestGlyph, Math.max(0, width - cursorWidth - 4));
+		return entries.map((entry, i) => itemRows(cx, entry, i === selected, width, column, iconColumn, cursor, term));
+	};
 
-	let start = overflow ? Math.max(0, Math.min(selected - Math.floor(visible / 2), entries.length - visible)) : 0;
+	// Extra items guarantee overflow. Otherwise try full width first: making room for
+	// the scrollbar can change wrapping or hide descriptions, changing the row count.
+	const itemsOverflow = entries.length > visible;
+	let rowWidth = Math.max(0, cx.width - (itemsOverflow ? 1 : 0));
+	let blocks = layout(rowWidth);
+	let total = blocks.reduce((sum, block) => sum + block.length, 0);
+	if (!itemsOverflow && total > visible) {
+		rowWidth = Math.max(0, cx.width - 1);
+		blocks = layout(rowWidth);
+		total = blocks.reduce((sum, block) => sum + block.length, 0);
+	}
+	if (total <= visible) return { rows: blocks.flat() };
+
+	// First row of each item, and the item the window opens at: the one holding the row that
+	// centres the selection, moved down while the selected item would still be cut off.
+	const offsets: number[] = [];
+	for (let i = 0, row = 0; i < blocks.length; row += blocks[i]!.length, i++) offsets.push(row);
+	const selectedEnd = offsets[selected]! + blocks[selected]!.length;
+	const centre = Math.max(0, Math.min(offsets[selected]! - Math.floor(visible / 2), total - visible));
+	let first = 0;
+	while (first < selected && offsets[first + 1]! <= centre) first++;
+	while (first < selected && selectedEnd - offsets[first]! > visible) first++;
 	const rows: string[] = [];
-	for (let i = start; i < entries.length; i++) {
-		if (rows.length >= visible) {
-			if (i > selected) break;
-			// Wrapped descriptions can fill the window before the selected label.
-			// Restart at that label rather than leaving the selection offscreen.
-			start = i = selected;
-			rows.length = 0;
-		}
-		for (const row of itemRows(cx, entries[i]!, i === selected, rowWidth, column, iconColumn, cursor, term)) {
+	for (let i = first; i < blocks.length && rows.length < visible; i++) {
+		for (const row of blocks[i]!) {
 			if (rows.length >= visible) break;
 			rows.push(row);
 		}
 	}
-	if (!overflow) return { rows };
 
-	const thumb = Math.max(1, Math.floor((visible * visible) / entries.length));
-	const span = entries.length - visible;
-	const at = Math.round((Math.min(start, span) / span) * Math.max(0, rows.length - thumb));
+	const thumb = Math.max(1, Math.floor((visible * visible) / total));
+	const at = Math.round(Math.min(1, offsets[first]! / (total - visible)) * (rows.length - thumb));
 	return {
 		rows: rows.map((row, i) => {
 			const pad = " ".repeat(Math.max(0, rowWidth - visibleWidth(row)));

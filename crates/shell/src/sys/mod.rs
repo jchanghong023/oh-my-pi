@@ -54,7 +54,7 @@ pub mod user;
 pub mod utmp;
 
 #[cfg(windows)]
-pub use spawn::spawn_detached;
+pub use spawn::spawn_breakaway;
 
 #[cfg(windows)]
 pub(crate) use crate::sys::spawn::break_console_groups;

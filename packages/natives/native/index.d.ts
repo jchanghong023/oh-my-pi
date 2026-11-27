@@ -4933,8 +4933,23 @@ export interface SnapcompactRenderOptions {
  */
 export declare function snapcompactSupportedChars(font: string, chars: string): string
 
-/** Launch a detached Windows process with no inherited handles. */
-export declare function spawnDetached(argv: Array<string>, cwd: string, env: Record<string, string>): void
+/**
+ * Start a detached Windows process outside this process's job objects.
+ *
+ * The child gets no console (`DETACHED_PROCESS`), its own process group and
+ * no inherited handles. Pass an absolute executable path. It leaves the
+ * caller's jobs where permitted (`CREATE_BREAKAWAY_FROM_JOB`), so a terminal
+ * host that terminates its job on close does not take the child
+ * down. A job that forbids breakaway makes `CreateProcessW` fail with
+ * `ERROR_ACCESS_DENIED`; the child is then started inside the job.
+ *
+ * Returns the child's pid.
+ *
+ * # Errors
+ * The spawn error, as a JS error whose `code` is errno-style; `ENOSYS` off
+ * Windows.
+ */
+export declare function spawnBreakaway(options: SpawnRawOptions): number
 
 /**
  * Spawn in its own process group with three pipes; parent-side fds are
@@ -4942,7 +4957,7 @@ export declare function spawnDetached(argv: Array<string>, cwd: string, env: Rec
  */
 export declare function spawnRaw(options: SpawnRawOptions): RawChild
 
-/** Options for `spawnRaw`. */
+/** Options for `spawnRaw` and `spawnBreakaway`. */
 export interface SpawnRawOptions {
   /** Executable name or path (resolved against `env.PATH`). */
   application: string

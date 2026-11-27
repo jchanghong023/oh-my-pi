@@ -1644,7 +1644,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.hud.queue.onEdit = () => this.handleDequeue();
 
 		this.#display.hideToolActivity.set(cfgDisplayMode.get(this.settings) !== "detailed");
-		this.#hideThinkingBlock = cfgHideThinkingBlock.get(this.settings);
 		this.#display.proseOnlyThinking.set(cfgProseOnlyThinking.get(this.settings));
 		this.#display.expandThinkingBlocks.set(cfgExpandThinkingBlocks.get(this.settings));
 		this.#syncTranscriptDisplaySettings();
@@ -1735,9 +1734,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#liveCommandController = new LiveCommandController(this);
 		this.#selectorController = new SelectorController(this);
 		this.#focusController = new SessionFocusController(this);
+		// Through the setter: the blocks read the synced signal, and its effective value needs the view session.
+		this.hideThinkingBlock = cfgHideThinkingBlock.get(settings);
 		this.#inputController = new InputController(this);
 		this.collabController = new CollabController(this);
-		this.#syncHideThinking();
 		this.#syncCompactMode();
 		this.session.setPromptDropped?.(prompt => this.restoreDroppedPrompt(prompt));
 		this.#observerRegistry = new SessionObserverRegistry();
@@ -2339,12 +2339,15 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Initialize hooks with TUI-based UI context
 		await logger.time("InteractiveMode.init:hooks", () => this.initHooksAndCustomTools());
-		// A live `disabledExtensions` edit suspends or resumes extensions: drop (or restore) their link
-		// schemes and renderers from the transcript.
+		// A live `disabledExtensions` edit hides or restores widgets, link schemes and renderers.
 		const extensionRunner = this.session.extensionRunner;
 		if (extensionRunner) {
+			const syncWidgets = () =>
+				this.hud.widgets.setOwnerVisibility(owner => !extensionRunner.isExtensionSuspended(owner));
+			syncWidgets();
 			this.#eventBusUnsubscribers.push(
 				extensionRunner.onSuspensionChange(() => {
+					syncWidgets();
 					this.#applyExtensionLinks();
 					this.#redrawExtensionLinks();
 					this.#syncTranscriptPresenters();
