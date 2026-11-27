@@ -73,11 +73,15 @@ async function startHarness(): Promise<Harness> {
 			getApiKey: () => "test-key",
 		}),
 		sessionManager: manager,
-		settings: Settings.isolated({ "compaction.enabled": false, "compaction.keepRecentTokens": 1 }),
+		settings: Settings.isolated({
+			"display.mode": "detailed",
+			"compaction.enabled": false,
+			"compaction.keepRecentTokens": 1,
+		}),
 		modelRegistry,
 		sideStreamFn: side.stream,
 	});
-	const terminal = createModeTerminal({ columns: 120, rows: 36 });
+	const terminal = createModeTerminal({ columns: 120, rows: 36, settings: session.settings });
 	const mode = new InteractiveMode(session, "test", () => {}, undefined, undefined, undefined, terminal.frame);
 	await session.prompt("Earlier request");
 	await mode.init({ suppressWelcomeIntro: true });

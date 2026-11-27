@@ -145,62 +145,81 @@ describe("ast_edit tool schema", () => {
 		["file to directory", true],
 		["directory to file", false],
 		["directory to file", true],
-	] as const)("rewrites current paths across %s with multiple targets=%s", async (boundary, multipleTargets) => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-target-type-"));
-		const cwd = path.join(tempDir, "project");
-		await fs.mkdir(cwd);
-		try {
-			const targetPath = path.join(cwd, "target.py");
-			const childPaths = [path.join(targetPath, "child.py"), path.join(targetPath, "nested", "other.py")];
-			const source = "def caller():\n    return legacy_call(value)\n";
-			const writeDirectory = async () => {
-				await fs.mkdir(path.dirname(childPaths[1]!), { recursive: true });
-				for (const childPath of childPaths) await Bun.write(childPath, source);
-			};
-			if (boundary === "file to directory") await Bun.write(targetPath, source);
-			else await writeDirectory();
-			const stablePath = path.join(cwd, "stable.py");
-			if (multipleTargets) await Bun.write(stablePath, source);
-			const { tool, queue } = await createPendingTestTool(cwd);
-			const preview = await tool.execute("ast-edit-target-type-preview", {
-				ops: [{ pat: "legacy_call($A)", out: "modern_call($A)" }],
-				paths: multipleTargets ? [targetPath, stablePath] : [targetPath],
-			});
-			expect(preview.details).toMatchObject({ applied: false });
-			for (const candidate of boundary === "file to directory" ? [targetPath] : childPaths) {
-				expect(await Bun.file(candidate).text()).toBe(source);
-			}
-			if (multipleTargets) expect(await Bun.file(stablePath).text()).toBe(source);
+	] as const)(
+		"enforces deferred write scope across %s with multiple targets=%s",
+		async (boundary, multipleTargets) => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-target-type-"));
+			const cwd = path.join(tempDir, "project");
+			await fs.mkdir(cwd);
+			try {
+				const expandsScope = boundary === "file to directory";
+				const targetName = "target.py";
+				const targetPath = path.join(cwd, targetName);
+				const childPaths = [path.join(targetPath, "child.py"), path.join(targetPath, "nested", "other.py")];
+				const source = "def caller():\n    return legacy_call(value)\n";
+				const writeDirectory = async () => {
+					await fs.mkdir(path.dirname(childPaths[1]!), { recursive: true });
+					for (const childPath of childPaths) await Bun.write(childPath, source);
+				};
+				if (expandsScope) await Bun.write(targetPath, source);
+				else await writeDirectory();
+				const stableName = "stable.py";
+				const stablePath = path.join(cwd, stableName);
+				if (multipleTargets) await Bun.write(stablePath, source);
+				const { tool, queue } = await createPendingTestTool(cwd);
+				const preview = await tool.execute("ast-edit-target-type-preview", {
+					ops: [{ pat: "legacy_call($A)", out: "modern_call($A)" }],
+					paths: multipleTargets ? [targetName, stableName] : [targetName],
+				});
+				expect(preview.details).toMatchObject({ applied: false });
+				for (const candidate of expandsScope ? [targetPath] : childPaths) {
+					expect(await Bun.file(candidate).text()).toBe(source);
+				}
+				if (multipleTargets) expect(await Bun.file(stablePath).text()).toBe(source);
 
-			await fs.rm(targetPath, { recursive: true });
-			if (boundary === "file to directory") await writeDirectory();
-			else await Bun.write(targetPath, source);
-			const rewrittenPaths = boundary === "file to directory" ? [...childPaths] : [targetPath];
-			if (multipleTargets) rewrittenPaths.push(stablePath);
-			const expectedFiles = rewrittenPaths
-				.map(filePath => path.relative(cwd, filePath).replaceAll("\\", "/"))
-				.sort();
+				await fs.rm(targetPath, { recursive: true });
+				if (expandsScope) await writeDirectory();
+				else await Bun.write(targetPath, source);
+				const apply = () =>
+					queue.peekPendingInvoker()!({
+						action: "apply",
+						reason: "apply after target type changed",
+					});
+				if (expandsScope) {
+					await expect(apply()).rejects.toThrow("AST edit target scope changed");
+					for (const childPath of childPaths) {
+						expect(await Bun.file(childPath).text()).toBe(source);
+					}
+					if (multipleTargets) expect(await Bun.file(stablePath).text()).toBe(source);
+					return;
+				}
 
-			const applyResult = (await queue.peekPendingInvoker()!({
-				action: "apply",
-				reason: "apply after target type changed",
-			})) as InvokedToolResult;
-			expect(applyResult.isError).toBe(true);
-			expect(applyResult.details).toMatchObject({
-				sourceResultDetails: {
-					applied: true,
-					totalReplacements: rewrittenPaths.length,
-					files: expect.arrayContaining(expectedFiles),
-					fileReplacements: expect.arrayContaining(expectedFiles.map(filePath => ({ path: filePath, count: 1 }))),
-				},
-			});
-			for (const filePath of rewrittenPaths) {
-				expect(await Bun.file(filePath).text()).toBe(source.replace("legacy_call", "modern_call"));
+				const rewrittenPaths = [targetPath];
+				if (multipleTargets) rewrittenPaths.push(stablePath);
+				const expectedFiles = rewrittenPaths
+					.map(filePath => path.relative(cwd, filePath).replaceAll("\\", "/"))
+					.sort();
+
+				const applyResult = (await apply()) as InvokedToolResult;
+				expect(applyResult.isError).toBe(true);
+				expect(applyResult.details).toMatchObject({
+					sourceResultDetails: {
+						applied: true,
+						totalReplacements: rewrittenPaths.length,
+						files: expect.arrayContaining(expectedFiles),
+						fileReplacements: expect.arrayContaining(
+							expectedFiles.map(filePath => ({ path: filePath, count: 1 })),
+						),
+					},
+				});
+				for (const filePath of rewrittenPaths) {
+					expect(await Bun.file(filePath).text()).toBe(source.replace("legacy_call", "modern_call"));
+				}
+			} finally {
+				await removeWithRetries(tempDir);
 			}
-		} finally {
-			await removeWithRetries(tempDir);
-		}
-	});
+		},
+	);
 
 	it("rejects the deferred apply without recreating a deleted target", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-deleted-target-"));

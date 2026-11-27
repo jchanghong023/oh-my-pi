@@ -21,7 +21,7 @@ pub struct FileLock {
 impl FileLock {
 	/// Try to acquire a lock directly from native Rust code.
 	pub(crate) fn try_acquire_path(path: &Path) -> io::Result<Self> {
-		omp_vfs::file_lock::FileLock::try_acquire_path(path).map(|inner| Self { inner })
+		omp_vfs::file_lock::FileLock::try_acquire_explicit_path(path).map(|inner| Self { inner })
 	}
 
 	/// Try to acquire `path` without blocking.
@@ -38,14 +38,15 @@ impl FileLock {
 
 	/// Whether any handle, in any process including this one, holds `path`.
 	///
-	/// Observes without taking the lock: an `F_OFD_GETLK` query plus a
-	/// `connect(2)` probe of the older abstract-socket name on Linux, an
-	/// `F_GETLK` query on other Unix platforms, a `\BaseNamedObjects` directory
-	/// listing on Windows. A concurrent `tryAcquire()` never meets it.
+	/// Observes without taking the lock: on Linux, an `F_OFD_GETLK` query
+	/// plus a `connect(2)` probe of the full path's older abstract-socket
+	/// name; on other Unix platforms, an `F_GETLK` query; on Windows, a
+	/// `\BaseNamedObjects` directory listing. A concurrent `tryAcquire()`
+	/// never meets it.
 	#[napi]
 	pub fn is_held(path: JsString) -> napi::Result<bool> {
 		let path = js::utf8(path)?;
-		omp_vfs::file_lock::FileLock::is_held_path(Path::new(&*path)).map_err(|error| {
+		omp_vfs::file_lock::FileLock::is_held_explicit_path(Path::new(&*path)).map_err(|error| {
 			napi::Error::from_reason(format!(
 				"Failed to probe native file lock for {}: {error}",
 				&*path

@@ -66,10 +66,14 @@ test("keeps a long user message and its native toolbar intact while tool activit
 			const activity = signal(true);
 			const actions: string[] = [];
 			const text = Array.from({ length: 24 }, (_, i) => `row-${i}`).join("\n");
-			const root = single(<col>
-				<UserMessage model={{ text, actions: true, timestamp: 1, onAction: act => actions.push(act) }} />
-				<ToolActivity visible={activity}><text text="running a tool" /></ToolActivity>
-			</col>);
+			const root = single(
+				<col>
+					<UserMessage model={{ text, actions: true, timestamp: 1, onAction: act => actions.push(act) }} />
+					<ToolActivity visible={activity}>
+						<text text="running a tool" />
+					</ToolActivity>
+				</col>,
+			);
 			const user = root.children()[0]!;
 			const env = staticEnvironment(PLAIN_THEME);
 			const rows = () => paintNode(env, user, 120).rows;
@@ -83,8 +87,13 @@ test("keeps a long user message and its native toolbar intact while tool activit
 				expect(native).toContain("row-23");
 				expect(native).toContain("omp.user.tools");
 				expect(native).toContain('"click":"copy-message"');
-				expect(native).toContain('"click":"rewind"');
-				user.handlers.onAction?.("copy-message", { type: "action", key: "tools/copy", act: "copy-message", mods: [] });
+				expect(native).toContain('"id":"rewind-turn"');
+				user.handlers.onAction?.("copy-message", {
+					type: "action",
+					key: "tools/copy",
+					act: "copy-message",
+					mods: [],
+				});
 			}
 			expect(Bun.stripANSI(paintNode(env, root, 120).rows.join("\n"))).not.toContain("running a tool");
 			expect(actions).toEqual(["copy-message", "copy-message"]);

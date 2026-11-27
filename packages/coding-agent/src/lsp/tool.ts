@@ -985,19 +985,17 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 				}
 			}
 
-			// Validate every accepted bucket (overlap + snippet-format rejection)
-			// before writing any file, so a snippet edit in a later URI cannot
-			// leave earlier files half-applied.
-			for (const bucket of acceptedByUri.values()) {
-				sortAndValidateTextEdits(bucket.edits);
-			}
-
 			const referenceEdits: RenameReferenceEdit[] = [];
+			let referenceEditCount = 0;
 			for (const [uri, bucket] of acceptedByUri) {
 				const filePath = uriToFile(uri);
 				referenceEdits.push({ filePath, edits: bucket.edits });
+				// Validate before any writes and count only the edits application keeps.
+				// Keep the original order for application, especially same-position insertions.
+				const editCount = sortAndValidateTextEdits(bucket.edits).length;
+				referenceEditCount += editCount;
 				const rel = formatPathRelativeToCwd(filePath, this.session.cwd);
-				summary.push(`  ${bucket.primaryServer}: applied ${bucket.edits.length} edit(s) to ${rel}`);
+				summary.push(`  ${bucket.primaryServer}: applied ${editCount} edit(s) to ${rel}`);
 				if (bucket.discarded > 0) {
 					const others = Array.from(bucket.conflictServers).join(", ");
 					summary.push(
@@ -1014,7 +1012,6 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			// reference file are left unchanged.
 			await applyEditsThenRename(referenceEdits, source, dest);
 			summary.push(`  Renamed ${sourceLabel} → ${destLabel}`);
-			const referenceEditCount = referenceEdits.reduce((count, entry) => count + entry.edits.length, 0);
 			summary.push(`  Servers responding to willRenameFiles: ${Array.from(respondingServers).join(", ") || "none"}`);
 			summary.push(
 				`  Applied ${referenceEditCount} reference edit(s). Check references not covered by server-provided edits.`,
@@ -1498,6 +1495,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			const symbolName = symbol ? parseSymbolSpec(symbol).symbol : undefined;
 
 			let output: string;
+			let success = true;
 			// Set on bare empty-lookup outcomes (no definition/references/…): the
 			// result carries no information once consumed, so compaction may elide
 			// it. Clean diagnostics runs are NOT useless — they are verification
@@ -1734,14 +1732,8 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 								);
 
 					if (result.length === 0) {
-						if (apply === true) {
-							return {
-								content: [{ type: "text", text: "No code actions available to apply" }],
-								details: { serverName, action, success: false, request: params },
-								isError: true,
-							};
-						}
-						output = "No code actions available";
+						success = apply !== true;
+						output = apply === true ? "No code actions available to apply" : "No code actions available";
 						break;
 					}
 
@@ -1769,11 +1761,9 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 								normalizedQuery.length === 0
 									? "apply=true needs query (an action's title or index) to choose among"
 									: `No code action matches "${normalizedQuery}". Available actions:`;
-							return {
-								content: [{ type: "text", text: `${reason}\n${actionLines.join("\n")}` }],
-								details: { serverName, action, success: false, request: params },
-								isError: true,
-							};
+							success = false;
+							output = `${reason}\n${actionLines.join("\n")}`;
+							break;
 						}
 
 						const appliedAction = await applyCodeAction(selectedAction, {
@@ -1794,16 +1784,9 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 						});
 
 						if (!appliedAction) {
-							return {
-								content: [
-									{
-										type: "text",
-										text: `Action "${selectedAction.title}" has no workspace edit or command to apply`,
-									},
-								],
-								details: { serverName, action, success: false, request: params },
-								isError: true,
-							};
+							success = false;
+							output = `Action "${selectedAction.title}" has no workspace edit or command to apply`;
+							break;
 						}
 
 						const summaryLines: string[] = [];
@@ -1946,7 +1929,8 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			}
 			return {
 				content: [{ type: "text", text: output }],
-				details: { serverName, action, success: true, request: params },
+				details: { serverName, action, success, request: params },
+				...(!success ? { isError: true } : {}),
 				...(useless ? { useless: true } : {}),
 			};
 		} catch (err) {

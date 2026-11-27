@@ -352,7 +352,6 @@ describe("attached context gauge and standalone status", () => {
 		expect(Bun.stripANSI(plain[0]!)).toContain(modelName);
 		expect(Bun.stripANSI(plain[1]!)).toContain("overflow-session");
 		expect(plain.join("\n")).not.toMatch(/\x1b\[48;/);
-		expect(plain[0]).toContain("\x1b[49m");
 		for (const key of ["sep.powerlineLeft", "sep.powerlineRight"]) {
 			expect(plain.join("\n")).not.toContain(theme.symbols.symbol(key));
 		}

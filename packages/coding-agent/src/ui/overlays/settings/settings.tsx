@@ -835,7 +835,8 @@ export function SettingsWindow(props: {
 			return true;
 		}
 		if (open || untrack(pluginsPage) || text === "") return false;
-		setQuery(insert(query()));
+		if (searching()) setQuery(insert(query()));
+		else startSearch(text);
 		return true;
 	};
 

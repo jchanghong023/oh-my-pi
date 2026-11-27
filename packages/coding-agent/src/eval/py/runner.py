@@ -61,6 +61,7 @@ import threading
 import time
 import traceback
 import tokenize
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -233,6 +234,9 @@ class _RunnerState:
 
 _CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "omp_current_rid", default=None
+)
+_POOL_PRELUDE_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "omp_pool_prelude_rid", default=None
 )
 _CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS: contextvars.ContextVar[set[int] | None] = (
     contextvars.ContextVar(
@@ -2441,6 +2445,43 @@ def _register_sync_helpers(*helpers: Callable[..., Any]) -> None:
         _SYNC_HELPERS[helper.__name__] = helper
 
 
+def _pool_prelude_rid(rid: str | None) -> str | None:
+    # A queued request has no task, and a finished request has been removed.
+    return rid if rid is not None and _STATE.executing_tasks.get(rid) is not None else None
+
+
+def _install_pool_prelude_attribution() -> None:
+    submit = ThreadPoolExecutor.submit
+
+    @functools.wraps(submit)
+    def submit_with_run(executor, fn, /, *args, **kwargs):
+        # Attribute each job to its submitter, not the pool or the last cell
+        # to start. Only carry prelude attribution; leave other context alone.
+        rid = _pool_prelude_rid(_CURRENT_RID.get() or _POOL_PRELUDE_RID.get())
+        if rid is None:
+            return submit(executor, fn, *args, **kwargs)
+
+        def run():
+            token = _POOL_PRELUDE_RID.set(rid)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _POOL_PRELUDE_RID.reset(token)
+
+        return submit(executor, run)
+
+    ThreadPoolExecutor.submit = submit_with_run
+
+
+def _current_run_id(require_context: bool) -> str | None:
+    rid = _CURRENT_RID.get()
+    if rid is not None:
+        return rid
+    if require_context:
+        return _pool_prelude_rid(_POOL_PRELUDE_RID.get())
+    return _STATE.capture_rid
+
+
 def _install_builtins(ns: dict) -> None:
     ns["__omp_emit_status"] = _emit_status
     ns["__omp_register_sync_helpers"] = _register_sync_helpers
@@ -2449,13 +2490,10 @@ def _install_builtins(ns: dict) -> None:
     ns["__omp_magic_async"] = __omp_magic_async
     ns["__omp_magic_cell"] = __omp_magic_cell
     ns["__omp_shell"] = __omp_shell
-    # Plain threads don't inherit the ContextVar. Keep the capture fallback for
-    # ordinary helpers, but never use it to authorize a prelude.
-    ns["__omp_current_run_id__"] = lambda require_context: _CURRENT_RID.get() or (
-        None if require_context else _STATE.capture_rid
-    )
+    ns["__omp_current_run_id__"] = _current_run_id
 
 
+_install_pool_prelude_attribution()
 _install_builtins(_STATE.user_ns)
 
 

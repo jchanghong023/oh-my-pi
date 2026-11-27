@@ -6,7 +6,7 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { createBundlePlugins } from "./bundle-plugins";
 import { embeddedRelayExtensionFiles } from "./embed-relay-extension";
 import { buildDocsIndexPayload } from "./generate-docs-index";
-import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
+import { buildOpenWikiResourceText, openWikiResourceFile } from "./openwiki-resources";
 
 const packageDir = path.join(import.meta.dir, "..");
 const defaultOutDir = path.join(packageDir, "dist");
@@ -105,18 +105,13 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 export async function bundleDist(outDir: string = defaultOutDir): Promise<void> {
 	const cliPath = path.join(outDir, "cli.js");
 	const start = Bun.nanoseconds();
-	// Register each reset before its write so partial failures are covered.
-	const resets: Array<() => Promise<void>> = [];
+	const openWikiText = await buildOpenWikiResourceText();
+	await cleanBundleOutputs(outDir);
 	const failures: unknown[] = [];
 	try {
-		const openWikiResources = await buildOpenWikiResources();
-		resets.push(resetOpenWikiResources);
-		const openWikiText = await writeOpenWikiResources(openWikiResources);
-		await cleanBundleOutputs(outDir);
 		// The npm bundle ships no stats dashboard sources, so embed the dashboard
 		// archive the same way compiled binaries do (scripts/build-binary.ts). Reset
 		// afterwards to keep the checked-in placeholder empty.
-		resets.push(() => runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]));
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
 		// One payload for both consumers: inlined into dist/cli.js via `--define` for
 		// the bundled CLI entrypoint, and written to dist/docs-index.generated.txt so
@@ -149,6 +144,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		const docsPayload = await buildDocsIndexPayload();
 		// Also refreshes `src/.../extension.generated.json`, which SDK consumers of `src` read.
 		const files = await embeddedRelayExtensionFiles();
+		files[openWikiResourceFile] = openWikiText;
 		const { plugins, specDrivenArchive } = await createBundlePlugins();
 		plugins.push(inlineNativeNoticesPlugin);
 		// Build in-process: the docs embed payload is far larger than Linux's
@@ -183,8 +179,10 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 	} catch (error) {
 		failures.push(error);
 	} finally {
-		for (const result of await Promise.allSettled(resets.map(reset => reset()))) {
-			if (result.status === "rejected") failures.push(result.reason);
+		try {
+			await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
+		} catch (error) {
+			failures.push(error);
 		}
 	}
 	if (failures.length === 1) throw failures[0];

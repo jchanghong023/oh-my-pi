@@ -112,7 +112,12 @@ describe("bash job widgets", () => {
 			for (let waited = 0; waited < 10_000; waited += 20) {
 				await Bun.sleep(20);
 				inspection = inspectAsyncJob(manager, "Main", job.id);
-				if (inspection?.streams?.[0]?.bytes && inspection.trace) break;
+				if (
+					inspection?.streams?.[0]?.bytes &&
+					inspection.trace?.units.some(unit => unit.nodes.some(node => node.state === "running"))
+				) {
+					break;
+				}
 			}
 			expect(job.status).toBe("running");
 			expect(inspection?.output ?? "").toBe("");

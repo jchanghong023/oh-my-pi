@@ -5,6 +5,8 @@ provider "ascend" {
 	automatic-default #false
 	skip-cross-provider-reference-fills #true
 	disable-strict-tools #true
+	// The seed's zero rates are placeholders, not a free pricing guarantee.
+	pricing-status "unknown"
 
 	// These deployment aliases share Ascend's explicit budget-plus-effort contract.
 	models "qwen3.8-27b" "qwen3.8-flash-next" {

@@ -631,7 +631,7 @@ describe("ExtensionUiController tool approval", () => {
 			const queue = harness.agent.peekSteeringQueue();
 			expect(queue).toHaveLength(1);
 			expect(queue[0]).toMatchObject({
-				content: kind === "text" ? "stop this call" : expect.stringMatching(/^\[Image #1[^\]]*\]$/),
+				content: kind === "text" ? "stop this call" : expect.stringMatching(/^\[Image #1[^\]]*\] *$/),
 			});
 		},
 	);

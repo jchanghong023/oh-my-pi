@@ -37,6 +37,11 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
 
 const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
+const EMPTY_CLIPBOARD = {
+	readImage: async () => null,
+	readText: async () => "",
+};
+
 function createPasteContext(sessionManager: SessionManager) {
 	const editor = new Composer();
 	const showStatus = vi.fn();
@@ -44,6 +49,7 @@ function createPasteContext(sessionManager: SessionManager) {
 		composer: editor,
 		shell: { focused: () => editor.field },
 		showStatus,
+		settings: Settings.isolated({ "images.autoResize": true }),
 		sessionManager,
 	} as unknown as InteractiveModeContext;
 	return { ctx, editor, showStatus };
@@ -87,7 +93,7 @@ describe("path-pasted image source path (#12244)", () => {
 		});
 		session = new AgentSession({
 			agent,
-			sessionManager: SessionManager.inMemory(),
+			sessionManager: SessionManager.inMemory(tmpDir),
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: new ModelRegistry(authStorage),
 		});
@@ -106,8 +112,8 @@ describe("path-pasted image source path (#12244)", () => {
 		if (!session) throw new Error("Session was not initialized");
 		const imagePath = path.join(tmpDir, "screenshot.png");
 		await Bun.write(imagePath, Buffer.from(TINY_PNG, "base64"));
-		const { ctx, editor } = createPasteContext(SessionManager.inMemory(tmpDir));
-		const controller = new InputController(ctx);
+		const { ctx, editor } = createPasteContext(session.sessionManager);
+		const controller = new InputController(ctx, EMPTY_CLIPBOARD);
 		await controller.handleImagePathPaste(imagePath);
 		expect(editor.pendingImages.length).toBe(1);
 		return { editor, imagePath };
@@ -247,7 +253,7 @@ describe("path-pasted image source path (#12244)", () => {
 			await sessionManager.ensureOnDisk();
 			const pathBeforeMove = resolveLocalUrlToPath(source, localOptions(sessionManager));
 
-			await sessionManager.moveTo(cwdB);
+			await sessionManager.moveTo(cwdB, path.join(tmpDir, "moved"));
 
 			// The persisted notice names the relocation-safe URL, not the old absolute path.
 			expect(modelVisibleText(moving)).toContain(source);
@@ -266,7 +272,7 @@ describe("path-pasted image source path (#12244)", () => {
 
 	it("commits clipboard pastes in sessions without an artifact directory to the temp local:// root", async () => {
 		if (!session) throw new Error("Session was not initialized");
-		const sessionManager = SessionManager.inMemory(tmpDir);
+		const sessionManager = session.sessionManager;
 		const editor = await pasteClipboardBitmap(sessionManager);
 
 		const source = imageAttachmentSource(editor.pendingImages[0]!)?.path;

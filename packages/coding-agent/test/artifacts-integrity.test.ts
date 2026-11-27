@@ -153,14 +153,22 @@ describe("ArtifactManager write integrity", () => {
 		);
 	}
 
+	const longPathTempPrefix = path.join(path.resolve(os.tmpdir()), "a");
+	// mkdtemp adds six characters; "a.md" is the shortest artifact filename.
+	const shortestDestination = `${longPathTempPrefix}XXXXXX${path.sep}a.md`.length;
 	for (const targetLength of [248, 284]) {
-		it.skipIf(process.platform !== "win32")(
+		it.skipIf(process.platform !== "win32" || shortestDestination > targetLength)(
 			`publishes complete UTF-8 output at ${targetLength} characters with a staging path beyond MAX_PATH`,
 			async () => {
-				const root = freshDir();
-				const id = `LongPath${crypto.randomUUID().replaceAll("-", "")}`;
+				const root = fs.mkdtempSync(longPathTempPrefix);
+				dirs.push(root);
+				const idBudget = targetLength - path.join(root, ".md").length;
+				let id = `lp${crypto.randomUUID().replaceAll("-", "")}`.slice(0, idBudget);
+				// Use an extra filename character if there is room for a separator but no directory name.
+				if (idBudget === id.length + 1) id += "x";
 				const filename = `${id}.md`;
-				const dir = path.join(root, "x".repeat(targetLength - root.length - filename.length - 2));
+				const padding = idBudget - id.length;
+				const dir = padding > 0 ? path.join(root, "x".repeat(padding - 1)) : root;
 				await fs.promises.mkdir(dir, { recursive: true });
 				const destination = path.join(dir, filename);
 				expect(destination.length).toBe(targetLength);

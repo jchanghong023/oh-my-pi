@@ -218,8 +218,24 @@ enum Measurement {
 	#[default]
 	Inherit,
 	Measured,
-	/// A foreground timeout must signal the program itself, not its group.
+	/// Disable the helper when a foreground timeout cannot signal its operand.
 	Direct,
+}
+
+impl Measurement {
+	#[cfg(target_os = "linux")]
+	fn foreground() -> Self {
+		if crate::proctree::Process::supports_measured_operand_signal() {
+			Self::Inherit
+		} else {
+			Self::Direct
+		}
+	}
+
+	#[cfg(not(target_os = "linux"))]
+	const fn foreground() -> Self {
+		Self::Direct
+	}
 }
 
 #[derive(Default)]
@@ -368,6 +384,8 @@ impl SpawnLog {
 struct Labels {
 	last:    u32,
 	parents: Vec<(u32, u32)>,
+	/// Ended calls whose live cleanup still belongs to an enclosing tool.
+	retired: Vec<u32>,
 	/// Where measurement policies are kept for inheritance and cleanup.
 	log:     SpawnLog,
 }
@@ -411,8 +429,23 @@ impl Labels {
 		false
 	}
 
+	fn prune_retired(&mut self, is_live: impl Fn(u32) -> bool) {
+		let mut retired = std::mem::take(&mut self.retired);
+		retired.retain(|&label| {
+			let group = self.group(label);
+			if group.iter().copied().any(&is_live) || self.log.has_live(&group) {
+				true
+			} else {
+				self.release(&group);
+				false
+			}
+		});
+		self.retired = retired;
+	}
+
 	fn release(&mut self, group: &[u32]) {
 		self.parents.retain(|(child, _)| !group.contains(child));
+		self.retired.retain(|label| !group.contains(label));
 		self.log.release(group);
 	}
 }
@@ -687,6 +720,13 @@ impl ToolCalls {
 		if self.active.is_empty() {
 			return;
 		}
+		self.labels.prune_retired(|label| {
+			shell.label_live(label)
+				|| self
+					.active
+					.iter()
+					.any(|(_, tool)| tool.child().label == label)
+		});
 		let now = cx.host.now_ns();
 		let ctl = shell.control();
 		let mut at = 0;
@@ -718,15 +758,16 @@ impl ToolCalls {
 			};
 			let (_, tool) = self.active.swap_remove(at);
 			self.orphans.extend(tool.pending());
-			// A signalled nested callout can disappear while its external's
-			// TERM handler still runs. Keep that subtree in the enclosing
-			// tool's signal/wait set; that tool releases it when it finishes.
+			// An ended nested call may leave live cleanup behind. Keep it in
+			// the enclosing tool's signal/wait set only while it is live.
 			let retained = self.active.iter().any(|(_, parent)| {
 				self
 					.labels
 					.is_descendant(tool.child().label, parent.child().label)
 			}) && (live || self.log.has_live(&group));
-			if !retained {
+			if retained {
+				self.labels.retired.push(tool.child().label);
+			} else {
 				self.labels.release(&group);
 			}
 			if let Some(outcome) = answer {
@@ -754,29 +795,74 @@ fn nanos(d: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[cfg(unix)]
+	use crate::{
+		bash::{Platform, Signal},
+		proctree::Process,
+	};
+
+	#[cfg(unix)]
+	struct SpawnedChild {
+		child:   std::process::Child,
+		#[cfg(target_os = "linux")]
+		tracker: Arc<crate::sys::lifecycle::Tracker>,
+	}
+
+	#[cfg(unix)]
+	impl SpawnedChild {
+		fn sleep() -> Self {
+			Self {
+				child: std::process::Command::new("/bin/sleep")
+					.arg("30")
+					.spawn()
+					.unwrap(),
+				#[cfg(target_os = "linux")]
+				tracker: crate::sys::lifecycle::Tracker::new(0),
+			}
+		}
+
+		fn pid(&self) -> i32 {
+			i32::try_from(self.child.id()).unwrap()
+		}
+
+		fn process(&self) -> Process {
+			#[cfg(target_os = "linux")]
+			let process = Process::from_child(self.pid(), &self.tracker);
+			#[cfg(not(target_os = "linux"))]
+			let process = Process::from_pid(self.pid()).expect("pin owned child");
+			process
+		}
+
+		fn wait_after_signal(&mut self, signal: Signal) {
+			use std::os::unix::process::ExitStatusExt as _;
+
+			#[cfg(target_os = "linux")]
+			let mut life = self.tracker.lock();
+			let status = self.child.wait().unwrap();
+			#[cfg(target_os = "linux")]
+			let _ = life.exited(crate::bash::ExitStatus::Signaled(signal));
+			assert_eq!(status.signal(), Some(i32::from(signal.number(Platform::current()))));
+		}
+	}
 
 	#[cfg(unix)]
 	#[test]
 	fn spawn_log_pins_labeled_external_identities() {
-		let mut child = std::process::Command::new("/bin/sleep")
-			.arg("30")
-			.spawn()
-			.unwrap();
-		let pid = child.id();
+		let mut child = SpawnedChild::sleep();
 		let log = SpawnLog::default();
-		let process = || crate::proctree::Process::from_pid(i32::try_from(pid).unwrap());
+		let process = || Some(child.process());
 		log.record(Lineage { label: 7, detached: false }, process);
 		log.record(Lineage { label: 8, detached: true }, process);
 		let recorded = log.has_external(&[7]);
 		let detached_recorded = log.has_external(&[8]);
 		let snapshot = log.live(&[7]);
 		let live = log.has_live(&[7]);
-		child.kill().unwrap();
-		child.wait().unwrap();
+		child.child.kill().unwrap();
+		child.wait_after_signal(Signal::Kill);
 		assert!(recorded);
 		assert!(!detached_recorded, "detached members are excluded");
 		assert_eq!(snapshot.len(), 1, "the live member must be pinned at spawn");
-		assert_eq!(snapshot[0].pid(), i32::try_from(pid).unwrap());
+		assert_eq!(snapshot[0].pid(), child.pid());
 		assert!(live);
 		assert!(!log.has_live(&[7]));
 		assert!(log.has_external(&[7]), "an exited external remains recorded");
@@ -788,24 +874,14 @@ mod tests {
 	#[cfg(unix)]
 	#[test]
 	fn spawn_log_prunes_exited_handles_without_losing_history_or_live_members() {
-		let mut live = std::process::Command::new("/bin/sleep")
-			.arg("30")
-			.spawn()
-			.unwrap();
+		let mut live = SpawnedChild::sleep();
 		let log = SpawnLog::default();
-		log.record(Lineage { label: 9, detached: false }, || {
-			crate::proctree::Process::from_pid(i32::try_from(live.id()).unwrap())
-		});
+		log.record(Lineage { label: 9, detached: false }, || Some(live.process()));
 		for _ in 0..SpawnLog::PRUNE_THRESHOLD * 3 {
-			let mut child = std::process::Command::new("/bin/sleep")
-				.arg("30")
-				.spawn()
-				.unwrap();
-			log.record(Lineage { label: 7, detached: false }, || {
-				crate::proctree::Process::from_pid(i32::try_from(child.id()).unwrap())
-			});
-			child.kill().unwrap();
-			child.wait().unwrap();
+			let mut child = SpawnedChild::sleep();
+			log.record(Lineage { label: 7, detached: false }, || Some(child.process()));
+			child.child.kill().unwrap();
+			child.wait_after_signal(Signal::Kill);
 			log.release(&[8]); // A nested builtin-only tool leaves no process records.
 		}
 		let retained = log.0.lock().spawned.len();
@@ -815,15 +891,17 @@ mod tests {
 		let signalled = snapshot
 			.first()
 			.is_some_and(|process| process.signal(libc::SIGTERM));
-		if !signalled {
-			live.kill().unwrap();
+		if signalled {
+			live.wait_after_signal(Signal::Term);
+		} else {
+			live.child.kill().unwrap();
+			live.wait_after_signal(Signal::Kill);
 		}
-		live.wait().unwrap();
 		assert!(retained <= SpawnLog::PRUNE_THRESHOLD, "retained {retained} handles");
 		assert!(history, "pruning must preserve the external-spawn history");
 		assert!(!exited_live);
 		assert_eq!(snapshot.len(), 1, "the live member must survive pruning");
-		assert_eq!(snapshot[0].pid(), i32::try_from(live.id()).unwrap());
+		assert_eq!(snapshot[0].pid(), live.pid());
 		assert!(signalled, "the retained live identity must still accept cancellation");
 		log.release(&[7, 9]);
 		assert!(!log.has_external(&[7, 9]));
@@ -859,6 +937,54 @@ mod tests {
 		assert!(!labels.log.measured(innermost));
 		assert!(labels.log.measured(outer));
 		assert_eq!(labels.group(outer), [outer]);
+	}
+
+	#[test]
+	fn retired_labels_keep_live_cleanup_but_discard_its_history_when_it_exits() {
+		let mut labels = Labels::default();
+		let outer = labels.fresh(0);
+		labels.log.set_measurement(outer, Measurement::Measured);
+		for _ in 0..64 {
+			let retired = labels.fresh(outer);
+			let cleanup = labels.fresh(retired);
+			labels
+				.log
+				.record(Lineage { label: cleanup, detached: false }, || None);
+			labels.retired.push(retired);
+			labels.prune_retired(|label| label == cleanup);
+			assert_eq!(labels.group(outer), [outer, retired, cleanup]);
+			assert!(labels.log.has_external(&[cleanup]));
+			assert!(labels.log.measured(cleanup));
+
+			labels.prune_retired(|_| false);
+			assert_eq!(labels.group(outer), [outer]);
+			assert!(labels.retired.is_empty());
+			assert!(!labels.log.has_external(&[cleanup]));
+			assert!(!labels.log.measured(cleanup));
+		}
+		assert!(labels.log.measured(outer));
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn retired_labels_keep_pinned_externals_until_they_exit() {
+		let mut labels = Labels::default();
+		let outer = labels.fresh(0);
+		let retired = labels.fresh(outer);
+		let mut child = SpawnedChild::sleep();
+		labels
+			.log
+			.record(Lineage { label: retired, detached: false }, || Some(child.process()));
+		labels.retired.push(retired);
+		labels.prune_retired(|_| false);
+		let during_cleanup = labels.group(outer);
+
+		child.child.kill().unwrap();
+		child.wait_after_signal(Signal::Kill);
+		labels.prune_retired(|_| false);
+		assert_eq!(during_cleanup, [outer, retired]);
+		assert_eq!(labels.group(outer), [outer]);
+		assert!(!labels.log.has_external(&[retired]));
 	}
 
 	#[test]

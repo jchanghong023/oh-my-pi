@@ -76,7 +76,7 @@ import {
 import { getProviderHooks } from "./provider-hooks";
 import { getProviderDefinition } from "./registry";
 import { assertProviderEnabled } from "./registry/oauth";
-import type { PreparedProviderRequest } from "./registry/types";
+import { AUTHENTICATED_SENTINEL, type PreparedProviderRequest } from "./registry/types";
 import type {
 	Api,
 	AssistantMessage,
@@ -306,13 +306,18 @@ function withProviderInFlightLimit<
 	return outer;
 }
 
-function createVertexAuthenticatedFetch(options: StreamOptions | undefined): FetchImpl {
-	const baseFetch = options?.fetch ?? fetch;
+function createVertexFetch(options: StreamOptions): FetchImpl {
+	const baseFetch = options.fetch ?? fetch;
+	const useAdc = options.requestAuth === undefined;
 	const vertexFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-		const token = await getVertexAccessToken({ signal: options?.signal, fetch: baseFetch });
-		const headers = new Headers(init?.headers);
-		headers.set("Authorization", `Bearer ${token}`);
-		const rewritten = resolveVertexRequest(input);
+		let requestInit = init;
+		if (useAdc) {
+			const token = await getVertexAccessToken({ signal: options.signal, fetch: baseFetch });
+			const headers = new Headers(init?.headers);
+			headers.set("Authorization", `Bearer ${token}`);
+			requestInit = { ...init, headers };
+		}
+		const rewritten = resolveVertexRequest(input, useAdc);
 		const url = rewritten instanceof Request ? rewritten.url : rewritten.toString();
 		// Partner publishers other than Anthropic (e.g. Mistral) take OpenAI-shaped
 		// bodies, where `model` is required and `anthropic_version` is rejected.
@@ -320,13 +325,13 @@ function createVertexAuthenticatedFetch(options: StreamOptions | undefined): Fet
 			const bodyText = await readVertexRequestBody(rewritten, init);
 			const transformed = transformVertexAnthropicBody(bodyText);
 			return baseFetch(url, {
-				...init,
-				method: init?.method ?? (rewritten instanceof Request ? rewritten.method : "POST"),
-				headers,
+				...requestInit,
+				method: requestInit?.method ?? (rewritten instanceof Request ? rewritten.method : "POST"),
+				headers: requestInit?.headers ?? (rewritten instanceof Request ? rewritten.headers : undefined),
 				body: transformed,
 			});
 		}
-		return baseFetch(rewritten, { ...init, headers });
+		return baseFetch(rewritten, requestInit);
 	};
 	return Object.assign(vertexFetch, baseFetch.preconnect ? { preconnect: baseFetch.preconnect } : {});
 }
@@ -355,10 +360,11 @@ function transformVertexAnthropicBody(bodyText: string): string {
 	}
 }
 
-function resolveVertexRequest(input: string | URL | Request): string | URL | Request {
+function resolveVertexRequest(input: string | URL | Request, useAdc: boolean): string | URL | Request {
 	const project = $env.GOOGLE_CLOUD_PROJECT || $env.GCP_PROJECT || $env.GCLOUD_PROJECT;
 	const location = $env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION;
-	if (!project || !location) return input;
+	// Explicit credentials can use a fully resolved RawPredict URL without ADC configuration.
+	if (useAdc && (!project || !location)) return input;
 
 	const rewriteUrl = (url: string): string => {
 		const hasPlaceholder =
@@ -366,16 +372,17 @@ function resolveVertexRequest(input: string | URL | Request): string | URL | Req
 			url.includes("{location}") ||
 			url.includes("%7Bproject%7D") ||
 			url.includes("%7Blocation%7D");
-		const host = resolveVertexEndpointHost(location);
-		const rewritten = hasPlaceholder
-			? url
-					.replace("https://{location}-aiplatform.googleapis.com", `https://${host}`)
-					.replace("https://%7Blocation%7D-aiplatform.googleapis.com", `https://${host}`)
-					.replaceAll("{project}", encodeURIComponent(project))
-					.replaceAll("%7Bproject%7D", encodeURIComponent(project))
-					.replaceAll("{location}", encodeURIComponent(location))
-					.replaceAll("%7Blocation%7D", encodeURIComponent(location))
-			: url;
+		let rewritten = url;
+		if (hasPlaceholder && project && location) {
+			const host = resolveVertexEndpointHost(location);
+			rewritten = url
+				.replace("https://{location}-aiplatform.googleapis.com", `https://${host}`)
+				.replace("https://%7Blocation%7D-aiplatform.googleapis.com", `https://${host}`)
+				.replaceAll("{project}", encodeURIComponent(project))
+				.replaceAll("%7Bproject%7D", encodeURIComponent(project))
+				.replaceAll("{location}", encodeURIComponent(location))
+				.replaceAll("%7Blocation%7D", encodeURIComponent(location));
+		}
 		return rewritten
 			.replace(":streamRawPredict/v1/messages", ":streamRawPredict")
 			.replace(":streamRawPredict/chat/completions", ":streamRawPredict");
@@ -515,10 +522,36 @@ function streamDispatch<TApi extends Api>(
 
 	// Vertex AI and Bedrock Converse authenticate outside the generic API-key path.
 	if (model.api === "google-vertex") {
-		return streamGoogleVertex(model as Model<"google-vertex">, context, requestOptions as GoogleVertexOptions);
+		const vertexModel = model as Model<"google-vertex">;
+		const vertexOptions = requestOptions as GoogleVertexOptions;
+		const auth = vertexOptions.requestAuth;
+		if (auth === undefined) return streamGoogleVertex(vertexModel, context, vertexOptions);
+
+		const apiKey = getHeaderCaseInsensitive(auth.headers, "x-goog-api-key")?.trim() || auth.apiKey?.trim();
+		// The native adapter only bypasses ADC when it has a real express-mode API key.
+		if (!apiKey || apiKey === NO_AUTH_SENTINEL || apiKey.startsWith("<")) {
+			throw new AIError.ConfigurationError(
+				"Explicit Vertex AI auth requires an API key or a x-goog-api-key header.",
+			);
+		}
+		const headers = mergeHeaders(vertexModel.headers, vertexOptions.headers, { "x-goog-api-key": apiKey });
+		return streamGoogleVertex({ ...vertexModel, headers: undefined }, context, { ...vertexOptions, apiKey, headers });
 	}
 	if (model.api === "bedrock-converse-stream") {
-		return streamBedrock(model as Model<"bedrock-converse-stream">, context, requestOptions as BedrockOptions);
+		const bedrockModel = model as Model<"bedrock-converse-stream">;
+		const bedrockOptions = requestOptions as BedrockOptions;
+		const auth = bedrockOptions.requestAuth;
+		if (auth === undefined) return streamBedrock(bedrockModel, context, bedrockOptions);
+
+		const authorization = getHeaderCaseInsensitive(auth.headers, "Authorization")?.trim();
+		const bearerToken = authorization ? /^Bearer[ \t]+(\S+)$/i.exec(authorization)?.[1] : auth.apiKey?.trim();
+		if (!bearerToken || bearerToken === AUTHENTICATED_SENTINEL || bearerToken === NO_AUTH_SENTINEL) {
+			throw new AIError.ConfigurationError(
+				"Explicit Bedrock auth requires an API key or a Bearer Authorization header.",
+			);
+		}
+		// The adapter strips caller Authorization and prefers bearerToken to apiKey.
+		return streamBedrock(bedrockModel, context, { ...bedrockOptions, bearerToken });
 	}
 	if (model.api === "factory-droid-agent") {
 		return streamFactoryDroid(model as Model<"factory-droid-agent">, context, {
@@ -539,21 +572,28 @@ function streamDispatch<TApi extends Api>(
 	if (!apiKey && !hasRequestAuthMaterial(requestAuth)) {
 		throw new AIError.MissingApiKeyError(providerModel.provider);
 	}
-	const providerOptions = isGoogleVertexAuthenticatedModel(providerModel)
-		? {
-				...preparedOptions,
-				apiKey: "vertex-adc",
-				fetch: createVertexAuthenticatedFetch(preparedOptions),
-			}
-		: requestAuth !== undefined
+	const vertex = isGoogleVertexAuthenticatedModel(providerModel);
+	// RawPredict uses a bearer credential. Keep explicit auth headers above it,
+	// but do not let an inherited Authorization shadow an explicit key.
+	const vertexRawPredictApiKey =
+		vertex && isVertexRawPredictUrl(providerModel.baseUrl) ? requestAuth?.apiKey?.trim() : undefined;
+	const providerOptions =
+		requestAuth !== undefined
 			? {
 					...preparedOptions,
 					apiKey,
 					requestAuth,
 					requestAuthPrepared: true,
-					headers: mergeHeaders(preparedOptions.headers, requestAuth.headers),
+					headers: mergeHeaders(
+						preparedOptions.headers,
+						vertexRawPredictApiKey && vertexRawPredictApiKey !== NO_AUTH_SENTINEL
+							? { Authorization: `Bearer ${vertexRawPredictApiKey}` }
+							: undefined,
+						requestAuth.headers,
+					),
 				}
-			: { ...preparedOptions, apiKey };
+			: { ...preparedOptions, apiKey: vertex ? "vertex-adc" : apiKey };
+	if (vertex) providerOptions.fetch = createVertexFetch(providerOptions);
 
 	const api: Api = providerModel.api;
 	if (api === "openrouter" && $env.PI_OPENROUTER_RESPONSES !== "0") {

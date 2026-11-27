@@ -27,10 +27,13 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import {
+	closeLaunchedBrowser,
 	ensureChromiumExecutable,
+	launchHeadlessBrowser,
 	loadPuppeteer,
 	privateTargetId,
 	RENDERER_PRIORITY_ARGS,
+	removeUserDataDir,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import {
 	acquireBrowser,
@@ -53,10 +56,34 @@ import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
 const PROFILE_CHROME_AVAILABLE =
-	CHROMIUM_AVAILABLE &&
-	(process.platform !== "win32" ||
-		path.basename((await ensureChromiumExecutable()) ?? "").toLowerCase() === "chrome.exe");
+	CHROMIUM_AVAILABLE && (process.platform !== "win32" || (await supportsProfileChromeTests()));
 let sharedHeadless: BrowserHandle | undefined;
+
+async function supportsProfileChromeTests(): Promise<boolean> {
+	// Exclude the known Edge-specific behavior, not Chromium executables with
+	// non-default filenames. Low-entropy UA brands also identify Edge when
+	// its headless UA string looks like Chrome's.
+	const probe = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: request =>
+			new Response(`${request.headers.get("sec-ch-ua") ?? ""}\n${request.headers.get("user-agent") ?? ""}`),
+	});
+	try {
+		const launched = await launchHeadlessBrowser({ headless: true, args: ["--no-proxy-server"] });
+		try {
+			const page = await launched.browser.newPage();
+			const response = await page.goto(probe.url.href);
+			if (!response?.ok()) throw new Error("Could not identify the disposable Chromium browser");
+			return !/\b(?:Microsoft Edge|Edg\/)/i.test(`${await launched.browser.version()}\n${await response.text()}`);
+		} finally {
+			await closeLaunchedBrowser(launched);
+			if (launched.userDataDir) await removeUserDataDir(launched.userDataDir);
+		}
+	} finally {
+		await probe.stop(true);
+	}
+}
 
 function makeSession(): ToolSession {
 	return {

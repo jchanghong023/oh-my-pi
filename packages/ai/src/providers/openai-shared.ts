@@ -254,7 +254,9 @@ export function resolveOpenAIRequestSetup(
 	options: OpenAIRequestSetupOptions,
 ): OpenAIRequestSetup {
 	const explicitApiKey =
-		options.requestAuth !== undefined && !options.requestAuthPrepared ? options.requestAuth.apiKey : options.apiKey;
+		options.requestAuth === undefined
+			? options.apiKey
+			: (options.requestAuthPrepared ? options.apiKey : options.requestAuth.apiKey)?.trim();
 	let apiKey = explicitApiKey ?? "";
 	if (options.requestAuth !== undefined && !hasRequestAuthMaterial(options.requestAuth)) {
 		throw new AIError.MissingApiKeyError(model.provider);
@@ -341,7 +343,7 @@ export function resolveOpenAIRequestSetup(
 		if (credential.baseUrl) baseUrl = credential.baseUrl;
 	}
 
-	if (model.provider === "otari" && options.apiKey) {
+	if (model.provider === "otari" && explicitApiKey) {
 		const credential = parseOtariCredential(rawApiKey);
 		if (!credential) throw new AIError.ConfigurationError("Invalid Otari credential");
 		apiKey = credential.token;

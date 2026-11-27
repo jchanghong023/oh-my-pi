@@ -1569,7 +1569,11 @@ export function applyResolvedSystemPromptInputs(
 	// OMP_OFFLINE: append the offline-environment notice after any resolved append
 	// prompt so it reaches the model in every session built from this launch.
 	const offlineNoticeText = getOfflineSystemNotice(parsed.intranetOffline);
-	if (offlineNoticeText) {
+	if (
+		offlineNoticeText &&
+		!options.appendSystemPrompt?.includes(offlineNoticeText) &&
+		!options.customSystemPrompt?.includes(offlineNoticeText)
+	) {
 		options.appendSystemPrompt = options.appendSystemPrompt
 			? `${options.appendSystemPrompt}\n\n${offlineNoticeText}`
 			: offlineNoticeText;
@@ -2123,6 +2127,33 @@ export async function runRootCommand(
 		const autoPrint =
 			(pipedInput !== undefined || !stdinIsTerminal) && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+		// Before session resolution: resume, fork, and import act on these same
+		// startup-parse flags, so rejecting later would leave forked or imported
+		// transcripts (or an opened picker) behind a usage error.
+		validateGoalLaunch(parsedArgs, isInteractive);
+		validateRestoreLaunch(parsedArgs, isInteractive);
+		// Without piped text the prompt must come from argv, which only the
+		// post-extension reparse can settle: an extension string flag's value
+		// (`--spawn-peer reviewer`) looks like a prompt here, and a boolean flag
+		// shadowing a built-in (`--mode compact`) hides one. Fail early only for
+		// an unambiguous argv; otherwise the recheck there decides.
+		const autoPrintNeedsArgPrompt = autoPrint && pipedInput === undefined;
+		if (
+			autoPrintNeedsArgPrompt &&
+			parsedArgs.messages.length === 0 &&
+			parsedArgs.fileArgs.length === 0 &&
+			parsedArgs.unrecognizedFlags.length === 0 &&
+			parsedArgs.invalidFlagValues.length === 0
+		) {
+			exitWithoutTerminal();
+		}
+		// Only the interactive host renders a focusable Agent Hub / subagent session
+		// tree; declare it so headless subagent optimizations (e.g. skipping replan
+		// title refresh) can tell a focusable process from a print/RPC/eval one.
+		setInteractiveHost(isInteractive);
+		if (!isInteractive) {
+			stopPendingStartupComposer();
+		}
 		const companyExplicitlyRequested =
 			(parsedArgs.provider || parseModelString(parsedArgs.model ?? "")?.provider)?.trim().toLowerCase() ===
 			COMPANY_PROVIDER_ID;
@@ -2164,33 +2195,6 @@ export async function runRootCommand(
 		// The TUI owns the Tern pane or cmux workspace it draws in; an omp its commands start sees the claim and
 		// keeps its browser tabs out of this session's pane.
 		if (isInteractive) claimTerminal();
-		// Before session resolution: resume, fork, and import act on these same
-		// startup-parse flags, so rejecting later would leave forked or imported
-		// transcripts (or an opened picker) behind a usage error.
-		validateGoalLaunch(parsedArgs, isInteractive);
-		validateRestoreLaunch(parsedArgs, isInteractive);
-		// Without piped text the prompt must come from argv, which only the
-		// post-extension reparse can settle: an extension string flag's value
-		// (`--spawn-peer reviewer`) looks like a prompt here, and a boolean flag
-		// shadowing a built-in (`--mode compact`) hides one. Fail early only for
-		// an unambiguous argv; otherwise the recheck there decides.
-		const autoPrintNeedsArgPrompt = autoPrint && pipedInput === undefined;
-		if (
-			autoPrintNeedsArgPrompt &&
-			parsedArgs.messages.length === 0 &&
-			parsedArgs.fileArgs.length === 0 &&
-			parsedArgs.unrecognizedFlags.length === 0 &&
-			parsedArgs.invalidFlagValues.length === 0
-		) {
-			exitWithoutTerminal();
-		}
-		// Only the interactive host renders a focusable Agent Hub / subagent session
-		// tree; declare it so headless subagent optimizations (e.g. skipping replan
-		// title refresh) can tell a focusable process from a print/RPC/eval one.
-		setInteractiveHost(isInteractive);
-		if (!isInteractive) {
-			stopPendingStartupComposer();
-		}
 		const authStoragePromise = logger.time("discoverAuthStorage", async () =>
 			(deps.discoverAuthStorage ?? discoverAuthStorage)(undefined, { settings: await settingsPromise }),
 		);
@@ -3098,7 +3102,7 @@ export async function runRootCommand(
 			});
 			watchScopedModelSettings(session, parsedArgs, modelRegistry, settingsInstance);
 
-			if (modelFallbackMessage && (!isInteractive || modelFallbackMessage !== companyProviderError)) {
+			if (modelFallbackMessage && modelFallbackMessage !== companyProviderError) {
 				notifs.push({ kind: "warn", message: modelFallbackMessage });
 				// Non-interactive runs have no notification surface: a model that still
 				// started in place of the requested one is reported on stderr, keeping
@@ -3125,10 +3129,10 @@ export async function runRootCommand(
 				if (modelRegistryError) {
 					process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
 				}
-				if (modelFallbackMessage) {
-					process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
-				} else {
+				if (!modelFallbackMessage) {
 					process.stderr.write(`${chalk.red("No models available.")}\n`);
+				} else if (modelFallbackMessage !== companyProviderError) {
+					process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
 				}
 				const availableModels = modelRegistry.getAvailable();
 				if (parsedArgs.model && availableModels.length > 0) {

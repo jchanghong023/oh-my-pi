@@ -30,7 +30,12 @@ export function loadOpenWikiArchive(): Promise<OpenWikiArchive> {
 
 async function readOpenWikiArchive(): Promise<OpenWikiArchive> {
 	let text = generatedArchiveText;
-	if (!hasEmbeddedArchive(text)) {
+	// The npm SDK uses the archive from the package build even if its src placeholder is populated.
+	if (
+		!process.env.PI_COMPILED &&
+		!process.env.PI_BUNDLED &&
+		(!hasEmbeddedArchive(text) || !isOpenWikiSourceCheckout(fileURLToPath(new URL("../../../../", import.meta.url))))
+	) {
 		try {
 			text = await Bun.file(new URL("../../dist/openwiki-resources.generated.txt", import.meta.url)).text();
 		} catch (cause) {

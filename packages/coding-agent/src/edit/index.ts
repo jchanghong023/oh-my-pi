@@ -812,12 +812,18 @@ export class EditTool implements AgentTool<TInput> {
 	}
 
 	/** Send a patched remote mirror back through its scheme's handler; the mirror tracks what was written. */
-	async #writeRemote(url: string, request: EditWriteRequest, signal?: AbortSignal): Promise<EditWriteResponse> {
+	async #writeRemote(
+		url: string,
+		request: EditWriteRequest,
+		beginMutation: () => void,
+		signal?: AbortSignal,
+	): Promise<EditWriteResponse> {
 		if (request.op !== "update" || request.content === undefined) {
 			throw new ToolError(`${url} can only be patched in place; use \`bash\` to delete or move it`, {
 				path: request.path,
 			});
 		}
+		beginMutation();
 		await InternalUrlRouter.instance().write(url, request.content, sessionWriteContext(this.session, { signal }));
 		await Bun.write(request.path, request.content);
 		return { written: request.content };
@@ -854,10 +860,7 @@ export class EditTool implements AgentTool<TInput> {
 			markUncertain();
 		};
 		const remote = remoteMirrorUrl(request.path);
-		if (remote !== undefined) {
-			beginMutation();
-			return this.#writeRemote(remote, request, signal);
-		}
+		if (remote !== undefined) return this.#writeRemote(remote, request, beginMutation, signal);
 		const journaled = this.session.recordFileChange !== undefined;
 		const before = journaled ? await readSnapshot(request.path) : undefined;
 		const journal = (file: string, after: string | null, snapshot: FileSnapshot | undefined = before) => {

@@ -606,12 +606,22 @@ export async function discoverOAuthEndpoints(
 		if (metadata.oauth || metadata.authorization || metadata.auth) {
 			const oauthData = (metadata.oauth || metadata.authorization || metadata.auth) as Record<string, unknown>;
 			if (typeof oauthData.authorization_url === "string" && typeof oauthData.token_url === "string") {
+				const authorizationUrl = oauthData.authorization_url || oauthData.authorizationUrl;
+				const tokenUrl = oauthData.token_url || oauthData.tokenUrl;
+				if (
+					typeof authorizationUrl !== "string" ||
+					!URL.canParse(authorizationUrl) ||
+					typeof tokenUrl !== "string" ||
+					!URL.canParse(tokenUrl)
+				) {
+					return null;
+				}
 				const resource =
 					protectedResource ?? (typeof oauthData.resource === "string" ? oauthData.resource : undefined);
 
 				return {
-					authorizationUrl: oauthData.authorization_url,
-					tokenUrl: oauthData.token_url,
+					authorizationUrl,
+					tokenUrl,
 					issuerUrl: readIssuerUrl(oauthData) ?? readIssuerUrl(metadata),
 					registrationUrl: readRegistrationUrl(oauthData),
 					clientId:

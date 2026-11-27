@@ -8,7 +8,15 @@ import type { TspSpace, TspSpan, TspText } from "@oh-my-pi/pi-wire";
 import type { CanvasProps, UiNode } from "../../node";
 import type { Theme } from "../../theme/contract";
 import { padTo, replaceTabs, truncate, visibleWidth, wrap } from "../../text/width";
-import { type Block, type Cell, definePainter, EMPTY_BLOCK, type Hit, type PaintContext } from "../paint";
+import {
+	type Block,
+	type Cell,
+	type CoveringRange,
+	definePainter,
+	EMPTY_BLOCK,
+	type Hit,
+	type PaintContext,
+} from "../paint";
 
 /** Blank rows a spacing step stands for. */
 export function spaceRows(space: TspSpace | undefined): number {
@@ -54,11 +62,22 @@ export function stack(blocks: readonly Block[], gap: number): Block {
 	let stable = 0;
 	let open = true;
 	let covering = 0;
+	let coveringRanges: CoveringRange[] | undefined;
 	for (const block of blocks) {
 		if (block.rows.length === 0) continue;
-		covering += block.covering ?? 0;
 		if (rows.length > 0) for (let i = 0; i < gap; i++) rows.push("");
 		const top = rows.length;
+		const tail = Math.min(block.covering ?? 0, block.rows.length);
+		if (block.coveringRanges && tail !== block.rows.length) {
+			for (const { start, end } of block.coveringRanges) {
+				(coveringRanges ??= []).push({ start: top + start, end: top + end });
+				covering += end - start;
+			}
+		} else if (tail > 0) {
+			const end = top + block.rows.length;
+			(coveringRanges ??= []).push({ start: end - tail, end });
+			covering += tail;
+		}
 		const shifted = offsetBlock(block, top, 0);
 		cursor ??= shifted.cursor;
 		if (shifted.hits) (hits ??= []).push(...shifted.hits);
@@ -73,7 +92,7 @@ export function stack(blocks: readonly Block[], gap: number): Block {
 	return {
 		rows,
 		...(stable > 0 ? { stable } : {}),
-		...(covering > 0 ? { covering } : {}),
+		...(coveringRanges ? { covering, coveringRanges } : {}),
 		...(cursor ? { cursor } : {}),
 		...(hits ? { hits } : {}),
 	};

@@ -1687,23 +1687,34 @@ impl Scanner {
 
 	// ----- files-from ---------------------------------------------------------
 
-	/// read_line on the files-from stream; None at the end.
+	/// The next source-relative files-from name; None at the end.
 	fn next_files_from(&mut self) -> Result<Option<Vec<u8>>, RsyncError> {
 		let remote = self.ctx.opts.filesfrom_host.is_some();
 		let eol_nulls = self.ctx.opts.eol_nulls || remote;
-		let Some(reader) = self.files_from.as_mut() else {
-			return Ok(None);
-		};
-		let line = read_line(reader.as_mut(), eol_nulls, !remote, &self.ctx)?;
-		if line.is_empty() {
-			return Ok(None);
-		}
 		let convert = self.ctx.opts.protect_args > 0 && remote;
-		let line = match (&self.ctx.iconv, convert) {
-			(Some(ic), true) => ic.from_wire_io(&line).unwrap_or(line),
-			_ => line,
-		};
-		Ok(Some(paths::sanitize_path_flags(&line, Some(b""), 0, true)))
+		loop {
+			let Some(reader) = self.files_from.as_mut() else {
+				return Ok(None);
+			};
+			let line = read_line(reader.as_mut(), eol_nulls, !remote, &self.ctx)?;
+			if line.is_empty() {
+				return Ok(None);
+			}
+			let line = match (&self.ctx.iconv, convert) {
+				(Some(ic), true) => ic.from_wire_io(&line).unwrap_or(line),
+				_ => line,
+			};
+			let name = paths::sanitize_path_flags(&line, Some(b""), 0, true);
+			// Path::push interprets a native root or drive prefix even in a later component.
+			if cfg!(windows) && name.split(|&b| b == b'/').any(is_absolute_bytes) {
+				self.add_io_error(IOERR_GENERAL);
+				let text = [&b"invalid Windows path in --files-from: "[..], &name, b"\n"].concat();
+				self.logger().rprintf(LogCode::ErrorXfer, &text);
+				self.ctx.check_cancel()?;
+				continue;
+			}
+			return Ok(Some(name));
+		}
 	}
 
 	// ----- the initial list ---------------------------------------------------
@@ -1861,7 +1872,7 @@ impl Scanner {
 		// Replacing native separators is byte-for-byte; account for the
 		// normalized prefix before cutting the original native parent.
 		let native_offset = native.map_or(0, |raw| raw.len() - fbuf.len());
-		let volume_root = paths::volume_root_len(&fbuf);
+		let volume_root = if self.use_ff { None } else { paths::volume_root_len(&fbuf) };
 		let bare_volume = volume_root == Some(fbuf.len()) && fbuf.last() != Some(&b'/');
 		let mut name_type;
 		if self.relative {

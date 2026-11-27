@@ -8,6 +8,7 @@ import {
 	getAgentCacheDir,
 	getAgentDbPath,
 	getAgentDir,
+	getBunStubDir,
 	getConfigRootDir,
 	getDocumentConversionCacheDir,
 	getDocsRsCacheDir,
@@ -76,10 +77,12 @@ describe("cache root", () => {
 		expect(getAgentDir()).toBe(path.join(persistent, "agent"));
 		expect(getAgentDbPath()).toBe(path.join(persistent, "agent", "agent.db"));
 		expect(getHistoryDbPath()).toBe(path.join(persistent, "agent", "history.db"));
-		expect(getModelDbPath()).toBe(path.join(persistent, "agent", "models.db"));
+		expect(getModelDbPath()).toBe(path.join(selectedRoot, "agent", "models.db"));
+		expect(getModelDbPath(path.join(temp, "custom-agent"))).toBe(path.join(selectedRoot, "agent", "models.db"));
 		expect(getSessionsDir()).toBe(path.join(persistent, "agent", "sessions"));
 		expect(getPluginsDir()).toBe(path.join(persistent, "plugins"));
 		expect(getAgentCacheDir()).toBe(path.join(selectedRoot, "agent", "cache"));
+		expect(getBunStubDir()).toBe(path.join(selectedRoot, "cache", "bun-stub"));
 		expect(getDocumentConversionCacheDir()).toBe(path.join(selectedRoot, "agent", "cache", "document-conversions"));
 		expect(getAgentCacheDir(path.join(temp, "custom-agent"))).toBe(path.join(selectedRoot, "agent", "cache"));
 		expect(getDocumentConversionCacheDir(path.join(temp, "custom-agent"))).toBe(
@@ -102,10 +105,13 @@ describe("cache root", () => {
 		const root = path.join(temp, "cache");
 		const selectedRoot = process.platform === "linux" ? path.join(root, String(process.getuid!())) : root;
 		process.env.OMP_CACHE_DIR = root;
+		process.env.OMP_OFFLINE = "1";
 		setProfile("work");
 		const profileRoot = path.join(selectedRoot, "profiles", "work");
 		expect(resolveCacheRoot("work")).toBe(profileRoot);
 		expect(getAgentCacheDir()).toBe(path.join(profileRoot, "agent", "cache"));
+		expect(getBunStubDir()).toBe(path.join(profileRoot, "cache", "bun-stub"));
+		expect(getModelDbPath()).toBe(path.join(profileRoot, "agent", "models.db"));
 		expect(getPluginCacheRoot()).toBe(path.join(profileRoot, "plugins", "cache"));
 		expect(getStatsDbPath()).toBe(path.join(profileRoot, "stats.db"));
 		expect(getNativesDir()).toBe(path.join(profileRoot, "natives"));
@@ -121,6 +127,7 @@ describe("cache root", () => {
 		__resetDirsFromEnvForTests();
 		expect(resolveCacheRoot()).toBeUndefined();
 		expect(getAgentCacheDir()).toBe(path.join(custom, "cache"));
+		expect(getModelDbPath()).toBe(path.join(custom, "models.db"));
 		expect(getAgentCacheDir(path.join(temp, "other"))).toBe(path.join(temp, "other", "cache"));
 		expect(getDocumentConversionCacheDir()).toBe(path.join(custom, "cache", "document-conversions"));
 		expect(getPluginCacheRoot()).toBe(path.join(getPluginsDir(), "cache"));
@@ -144,20 +151,41 @@ describe("cache root", () => {
 		if (process.platform !== "linux" && process.platform !== "darwin") return;
 		delete process.env.OMP_CONFIG_ROOT;
 		const xdg = path.join(temp, "xdg");
+		const xdgData = path.join(temp, "xdg-data");
 		fs.mkdirSync(path.join(xdg, "omp"), { recursive: true });
+		fs.mkdirSync(path.join(xdgData, "omp"), { recursive: true });
 		process.env.XDG_CACHE_HOME = xdg;
+		process.env.XDG_DATA_HOME = xdgData;
 		__resetDirsFromEnvForTests();
+		expect(getBunStubDir()).toBe(path.join(xdg, "omp", "cache", "bun-stub"));
+		expect(getModelDbPath()).toBe(path.join(xdgData, "omp", "models.db"));
 		expect(getDocumentConversionCacheDir()).toBe(path.join(xdg, "omp", "cache", "document-conversions"));
 		expect(getFastembedCacheDir()).toBe(path.join(xdg, "omp", "cache", "fastembed"));
 		expect(getNativesDir()).toBe(path.join(xdg, "omp", "natives"));
 		expect(getAgentCacheDir()).toBe(path.join(getAgentDir(), "cache"));
 		expect(getPluginCacheRoot()).toBe(path.join(getPluginsDir(), "cache"));
+		if (process.platform === "linux") {
+			process.env.OMP_OFFLINE = "1";
+			__resetDirsFromEnvForTests();
+			expect(getBunStubDir()).toBe(path.join(xdg, "omp", "cache", "bun-stub"));
+			expect(getModelDbPath()).toBe(path.join("/dev/shm", `omp-${process.getuid!()}`, "agent", "models.db"));
+		}
 	});
 
-	it("selects the implicit root only in Linux offline mode", () => {
+	it("uses the implicit Linux offline root for data caches but not the executable Bun stub", () => {
 		process.env.OMP_OFFLINE = " Yes ";
 		const expected = process.platform === "linux" ? path.join("/dev/shm", `omp-${process.getuid!()}`) : undefined;
 		expect(resolveCacheRoot()).toBe(expected);
+		__resetDirsFromEnvForTests();
+		const persistent = path.join(temp, "persistent");
+		const root = expected ?? persistent;
+		expect(getBunStubDir()).toBe(path.join(persistent, "cache", "bun-stub"));
+		expect(getModelDbPath()).toBe(path.join(root, "agent", "models.db"));
+		expect(getNativeGrammarsDir()).toBe(path.join(root, "natives", "grammars"));
+		setProfile("work");
+		expect(getBunStubDir()).toBe(path.join(persistent, "profiles", "work", "cache", "bun-stub"));
+		expect(getModelDbPath()).toBe(path.join(root, "profiles", "work", "agent", "models.db"));
+		expect(getNativeGrammarsDir()).toBe(path.join(root, "profiles", "work", "natives", "grammars"));
 		process.env.OMP_OFFLINE = "false";
 		expect(resolveCacheRoot()).toBeUndefined();
 		process.env.OMP_CACHE_DIR = "relative";

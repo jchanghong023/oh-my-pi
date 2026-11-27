@@ -497,9 +497,11 @@ async function runDiagnosticConsumer(
 	options: {
 		setup?: (root: string) => Promise<void>;
 		configRoot?: (root: string) => string;
+		cacheRoot?: (root: string) => string;
 		exitCode?: number;
 		offline?: string;
 		logLevel?: string;
+		fixedDate?: boolean;
 	} = {},
 ): Promise<{ root: string; stdout: string; stderr: string; pid: number }> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-diagnostic-contract-"));
@@ -510,6 +512,7 @@ async function runDiagnosticConsumer(
 	const child = Bun.spawn(
 		[
 			process.execPath,
+			...(options.fixedDate ? ["--preload", preloadPath] : []),
 			"--eval",
 			`
 		import * as logger from ${JSON.stringify(moduleUrl)};
@@ -531,12 +534,13 @@ async function runDiagnosticConsumer(
 				XDG_CACHE_HOME: path.join(root, "cache"),
 				PI_CONFIG_DIR: ".omp",
 				OMP_CONFIG_ROOT: options.configRoot?.(root) ?? path.join(root, "primary"),
-				OMP_CACHE_DIR: "",
+				OMP_CACHE_DIR: options.cacheRoot?.(root) ?? "",
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
 				OMP_OFFLINE: options.offline ?? "0",
 				OMP_LOG_LEVEL: options.logLevel ?? "",
 				BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+				...(options.fixedDate ? { OMP_LOGGER_TEST_NOW: fixedNow, TZ: "Etc/GMT+5" } : {}),
 			},
 			stdout: "pipe",
 			stderr: "pipe",
@@ -714,17 +718,22 @@ describe("diagnostic consumer contracts", () => {
 		const result = await runDiagnosticConsumer(
 			`
 			logger.info("buffered_record", { index: 1 });
+			if (fs.existsSync(logger.getCurrentLogPath())) throw new Error("record was not buffered");
 			// Platform timer integration: the isolated child must exercise the real unref'd flush.
 			await Bun.sleep(1_100);
+			fs.copyFileSync(logger.getCurrentLogPath(), path.join(root, "timed.log"));
 			logger.warn("urgent_record", { index: 2 });
 			logger.flush();
 		`,
 			{
+				fixedDate: true,
 				setup: async root => {
 					await fs.writeFile(path.join(root, "primary"), "not a directory");
 				},
 			},
 		);
+		const timed = parseLogLines(await fs.readFile(path.join(result.root, "timed.log"), "utf8"));
+		expect(timed.map(entry => entry.message)).toEqual(["log_directory_fallback", "buffered_record"]);
 		const entries = await readLogEntries(consumerFallbackDir(result.root));
 		expect(entries.map(entry => entry.message)).toEqual([
 			"log_directory_fallback",
@@ -737,7 +746,8 @@ describe("diagnostic consumer contracts", () => {
 
 	test("does not append to earlier invocations' logs when a PID is reused", async () => {
 		const previousRecord = `${JSON.stringify({ message: "earlier_invocation" })}\n`;
-		const result = await runDiagnosticConsumer(`
+		const result = await runDiagnosticConsumer(
+			`
 			const previous = getLogPath();
 			fs.mkdirSync(path.dirname(previous), { recursive: true });
 			fs.writeFileSync(previous, ${JSON.stringify(previousRecord)});
@@ -747,12 +757,13 @@ describe("diagnostic consumer contracts", () => {
 			fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({
 				previous, current: logger.getCurrentLogPath()
 			}));
-		`);
+		`,
+			{ fixedDate: true },
+		);
 		const { previous, current } = await Bun.file(path.join(result.root, "result.json")).json();
 		expect(await Bun.file(previous).text()).toBe(previousRecord);
 		expect(await Bun.file(previous + ".1").text()).toBe(previousRecord);
-		expect(current).not.toBe(previous);
-		expect(current).not.toBe(previous + ".1");
+		expect(current).toBe(`${previous}.2`);
 		const entry = JSON.parse((await Bun.file(current).text()).trim());
 		expect(entry.message).toBe("current_invocation");
 		expect(entry.pid).toBe(result.pid);
@@ -801,7 +812,8 @@ describe("diagnostic consumer contracts", () => {
 				const yesterday = new Date();
 				yesterday.setDate(yesterday.getDate() - 1);
 				fs.writeFileSync(path.join(actual.logs, "omp." + localDay(yesterday) + ".99991.log"), "older_fallback_marker\\n");
-				fs.writeFileSync(path.join(actual.logs, "omp." + localDay(new Date()) + ".99992.log"), "other_pid_fallback_marker\\n");
+				const otherPid = process.pid === 99992 ? 99993 : 99992;
+				fs.writeFileSync(path.join(actual.logs, "omp." + localDay(new Date()) + "." + otherPid + ".log"), "other_pid_fallback_marker\\n");
 				const source = await createDebugLogSource();
 				const initial = await source.getInitialText();
 				const hadOlder = source.hasOlderLogs();
@@ -848,7 +860,8 @@ describe("diagnostic consumer contracts", () => {
 		const reportUrl = pathToFileURL(
 			path.resolve(import.meta.dir, "../../coding-agent/src/debug/report-bundle.ts"),
 		).href;
-		const result = await runDiagnosticConsumer(`
+		const result = await runDiagnosticConsumer(
+			`
 			import { getLogsDir } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "../src/dirs.ts")).href)};
 			import { getLogText, createDebugLogSource, createReportBundle } from ${JSON.stringify(reportUrl)};
 			const defaultFile = getLogPath();
@@ -877,7 +890,9 @@ describe("diagnostic consumer contracts", () => {
 			const rotated = { file: logger.getCurrentLogPath(), logs: logger.getCurrentLogsDir(), text: rotatedText };
 			logger.setTransports({ file: false });
 			fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ defaultFile, defaultDir, lazy, consoleState, normal, rotated }));
-		`);
+		`,
+			{ fixedDate: true },
+		);
 		const payload = JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"));
 		expect(payload.lazy).toEqual({ file: payload.defaultFile, logs: payload.defaultDir, exists: false });
 		expect(payload.consoleState).toMatchObject({
@@ -1157,17 +1172,21 @@ describe("diagnostic consumer contracts", () => {
 	});
 
 	test("flushes a single natural-exit lifecycle and does not copy arbitrary run mode", async () => {
+		const cacheRoot = (root: string) => path.join(root, "offline-cache");
 		const result = await runDiagnosticConsumer(
 			`
 			logger.initializeDiagnosticLogging("sensitive-mode-canary");
 			logger.initializeDiagnosticLogging("cli");
 			logger.debug("natural_exit_record");
 		`,
-			{ offline: "1", logLevel: "debug" },
+			{ offline: "1", logLevel: "debug", cacheRoot },
 		);
-		const log = await readSingleLog(path.join(result.root, "primary", "logs"));
+		const cache = cacheRoot(result.root);
+		const logsDir =
+			process.platform === "linux" ? path.join(cache, String(process.getuid!()), "logs") : path.join(cache, "logs");
+		const log = await readSingleLog(logsDir);
 		expect(log.text).not.toContain("sensitive-mode-canary");
-		expect((await readLogEntries(path.join(result.root, "primary", "logs"))).map(entry => entry.message)).toEqual([
+		expect(parseLogLines(log.text).map(entry => entry.message)).toEqual([
 			"application_started",
 			"natural_exit_record",
 			"application_stopping",

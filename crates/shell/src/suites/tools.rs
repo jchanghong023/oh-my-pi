@@ -356,12 +356,13 @@ async fn kill_of_a_job_spec_ends_the_job() {
 	assert!(r.elapsed < Duration::from_secs(5), "took {:?}", r.elapsed);
 }
 
-/// The peak resident set size of `dd` reading one 64 MiB block, as `time
-/// -l` reports it after `command` on the pipe.
-async fn dd_rss(s: &mut Session, command: &str) -> u64 {
-	let probe = format!("{command} 2>&1 | awk '/maximum resident set size/ {{ print $1 }}'");
+/// The peak resident set size that `time -l` reports on the pipe,
+/// without letting the RSS filter mask the program's exit status.
+async fn dd_rss(s: &mut Session, command: &str, status: i32) -> u64 {
+	let probe =
+		format!("set -o pipefail; {command} 2>&1 | awk '/maximum resident set size/ {{ print $1 }}'");
 	let r = run(s, &probe).await;
-	assert_eq!(r.status, 0, "{command}: {}", r.stderr);
+	assert_eq!(r.status, status, "{command}: {}", r.stderr);
 	r.stdout
 		.trim()
 		.parse()
@@ -379,8 +380,42 @@ async fn time_reports_a_programs_peak_memory() {
 	let dd = "/bin/dd if=/dev/zero of=/dev/null bs=67108864 count=1";
 	for command in [format!("time -l {dd}"), format!("time -l sh -c '{dd} 2>/dev/null | cat; true'")]
 	{
-		let rss = dd_rss(&mut s, &command).await;
+		let rss = dd_rss(&mut s, &command, 0).await;
 		assert!((64 << 20..1 << 30).contains(&rss), "{command}: {rss}");
+	}
+
+	#[cfg(target_os = "linux")]
+	{
+		// This contract needs pidfds and a working measurement helper.
+		let pid = std::process::id();
+		if crate::proctree::Process::from_pid(i32::try_from(pid).unwrap()).is_none() {
+			return;
+		}
+		// Plain `time` uses the helper as the program's parent; direct
+		// fallback makes the session host its parent. Do not gate on RSS.
+		let probe = run(&mut s, r#"time -l /bin/sh -c 'printf "%s\n" "$PPID"'"#).await;
+		assert_eq!(probe.status, 0, "{}", probe.stderr);
+		if probe.stdout.trim().parse::<u32>().unwrap() == pid {
+			return;
+		}
+
+		// Keep pages resident so direct spawn cannot pass the upper bound.
+		let host_memory = std::hint::black_box(vec![1_u8; 64 << 20]);
+		let upper = u64::try_from(host_memory.len() / 2).unwrap();
+		let program_bytes = 8 << 20;
+		let program = format!(
+			"/bin/sh -c '/bin/dd if=/dev/zero of=/dev/null bs={program_bytes} count=1 2>/dev/null && \
+			 exit 7'"
+		);
+		for command in [
+			format!("time -l timeout --foreground 0.5 {program}"),
+			format!("timeout --foreground 0.5 time -l {program}"),
+		] {
+			// Status 7 rather than 124 means the timeout did not expire.
+			let rss = dd_rss(&mut s, &command, 7).await;
+			assert!((program_bytes..upper).contains(&rss), "{command}: {rss}");
+		}
+		drop(host_memory);
 	}
 }
 

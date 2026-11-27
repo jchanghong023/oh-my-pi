@@ -244,6 +244,24 @@ async function collectSessionIds(sessionFile: string | undefined): Promise<Set<s
 	return ids;
 }
 
+/** Scan the configured and active destinations independently, without listing aliases twice. */
+async function* listLogDirectories(configured: string, active: string) {
+	const distinct = path.relative(configured, active) !== "";
+	const dirs = distinct ? [configured, active] : [configured];
+	const seen = new Set<string>();
+	for (const dir of dirs) {
+		try {
+			const realDir = distinct ? await fs.realpath(dir) : dir;
+			if (seen.has(realDir)) continue;
+			const entries = await fs.readdir(realDir, { withFileTypes: true });
+			seen.add(realDir);
+			yield { dir: realDir, entries, fallback: distinct && dir === active };
+		} catch {
+			// One destination can be inaccessible while the other is readable.
+		}
+	}
+}
+
 /**
  * Concatenate the tail of every same-day process log so a report generated
  * after a crash still captures the fatal PID's `omp.<date>.<pid>.log`. The
@@ -260,72 +278,61 @@ async function collectSameDayLogs(
 	logger.flush();
 	// Resolve after flushing: the buffered write may have selected a fallback.
 	const configuredDir = logsDir ?? logger.getConfiguredLogsDir();
-	const activePath = logsDir === undefined ? logger.currentLogFile() : undefined;
-	const dirs = activePath ? [...new Set([configuredDir, path.dirname(activePath)])] : [configuredDir];
+	const activeDir = logsDir ?? logger.getCurrentLogsDir();
 	// Log files are named with the local day (see localDay / RotatingFileSink),
 	// so match them with the local day too — the UTC key misses the live log
 	// between local midnight and UTC midnight.
 	const today = localDay(new Date());
-	const sameDay: Array<{ filePath: string; mtimeMs: number }> = [];
-	const seenDirs = new Set<string>();
-	for (const dir of dirs) {
-		try {
-			const realDir = dirs.length > 1 ? await fs.realpath(dir) : dir;
-			if (seenDirs.has(realDir)) continue;
-			seenDirs.add(realDir);
-			const entries = await fs.readdir(realDir, { withFileTypes: true });
-			for (const entry of entries) {
-				if (!entry.isFile()) continue;
-				const match = LOG_FILE_PATTERN.exec(entry.name);
-				if (!match || match[1] !== today) continue;
-				const filePath = path.join(realDir, entry.name);
-				try {
-					const stat = await fs.stat(filePath);
-					sameDay.push({ filePath, mtimeMs: stat.mtimeMs });
-				} catch {
-					// File may have rotated away between readdir and stat.
-				}
+	const sameDay: Array<{ filePath: string; mtimeMs: number; fallback: boolean }> = [];
+	for await (const { dir, entries, fallback } of listLogDirectories(configuredDir, activeDir)) {
+		for (const entry of entries) {
+			if (!entry.isFile()) continue;
+			const match = LOG_FILE_PATTERN.exec(entry.name);
+			if (!match || match[1] !== today) continue;
+			const filePath = path.join(dir, entry.name);
+			try {
+				const stat = await fs.stat(filePath);
+				sameDay.push({ filePath, mtimeMs: stat.mtimeMs, fallback });
+			} catch {
+				// File may have rotated away between readdir and stat.
 			}
-		} catch {
-			// Opening one directory may fail independently of the other.
 		}
 	}
 	sameDay.sort((a, b) => a.mtimeMs - b.mtimeMs);
 
 	const chunks: string[] = [];
 	const sessionLines: string[] = [];
-	for (const { filePath } of sameDay) {
+	for (const { filePath, fallback } of sameDay) {
 		const name = path.basename(filePath);
-		if (sessionIds.size === 0) {
-			const text = await readLastLines(filePath, linesPerFile);
-			if (text) chunks.push(`===== ${name} =====\n${text}`);
-			continue;
-		}
-		// One read serves both files, so the tail and the session lines agree;
-		// the tail keeps the same byte cap as a tail read.
-		let bytes: Uint8Array;
 		try {
-			bytes = await Bun.file(filePath).bytes();
-		} catch (err) {
-			if (isEnoent(err)) continue; // Rotated away since the listing.
-			throw err;
-		}
-		const tailStart = Math.max(0, bytes.length - MAX_LOG_BYTES);
-		const decoder = new TextDecoder();
-		const text = lastLines(decoder.decode(bytes.subarray(tailStart)), tailStart > 0, linesPerFile);
-		if (text) chunks.push(`===== ${name} =====\n${text}`);
-		const lines = decoder.decode(bytes).split("\n");
-		for (const line of lines) {
-			if (!line.includes('"sessionId":')) continue;
-			try {
-				const { sessionId } = JSON.parse(line) as { sessionId?: unknown };
-				if (typeof sessionId === "string" && sessionIds.has(sessionId)) sessionLines.push(line);
-			} catch {
-				// A torn last line of a live file.
+			if (sessionIds.size === 0) {
+				const text = await readLastLines(filePath, linesPerFile);
+				if (text) chunks.push(`===== ${name} =====\n${text}`);
+				continue;
 			}
+			// One read serves both files, so the tail and the session lines agree;
+			// the tail keeps the same byte cap as a tail read.
+			const bytes = await Bun.file(filePath).bytes();
+			const tailStart = Math.max(0, bytes.length - MAX_LOG_BYTES);
+			const decoder = new TextDecoder();
+			const text = lastLines(decoder.decode(bytes.subarray(tailStart)), tailStart > 0, linesPerFile);
+			if (text) chunks.push(`===== ${name} =====\n${text}`);
+			const lines = decoder.decode(bytes).split("\n");
+			for (const line of lines) {
+				if (!line.includes('"sessionId":')) continue;
+				try {
+					const { sessionId } = JSON.parse(line) as { sessionId?: unknown };
+					if (typeof sessionId === "string" && sessionIds.has(sessionId)) sessionLines.push(line);
+				} catch {
+					// A torn last line of a live file.
+				}
+			}
+			// Keep only what can reach the archive, file by file.
+			if (sessionLines.length > MAX_LOG_LINES) sessionLines.splice(0, sessionLines.length - MAX_LOG_LINES);
+		} catch (err) {
+			// A file in the additional fallback scan must not prevent the report.
+			if (!fallback && !isEnoent(err)) throw err;
 		}
-		// Keep only what can reach the archive, file by file.
-		if (sessionLines.length > MAX_LOG_LINES) sessionLines.splice(0, sessionLines.length - MAX_LOG_LINES);
 	}
 	return { tails: chunks.join("\n\n"), sessionLines: sessionLines.join("\n") };
 }
@@ -335,25 +342,22 @@ const LOG_FILE_PATTERN = new RegExp(`^${APP_NAME}\\.(\\d{4}-\\d{2}-\\d{2})\\.\\d
 export async function createDebugLogSource(): Promise<DebugLogSource> {
 	// Flushing can recover a buffered write to a fallback before we snapshot older files.
 	logger.flush();
-	const logsDir = logger.getCurrentLogsDir();
-	const todayPath = logger.getCurrentLogPath();
-	const todayName = path.basename(todayPath);
-	let olderFiles: string[] = [];
-	try {
-		const entries = await fs.readdir(logsDir, { withFileTypes: true });
-		const datedFiles = entries
-			.filter(entry => entry.isFile())
-			.map(entry => {
-				const match = LOG_FILE_PATTERN.exec(entry.name);
-				return match ? { name: entry.name, date: match[1] } : undefined;
-			})
-			.filter((entry): entry is { name: string; date: string } => entry !== undefined)
-			.filter(entry => entry.name !== todayName)
-			.sort((a, b) => b.date.localeCompare(a.date));
-		olderFiles = datedFiles.map(entry => entry.name);
-	} catch {
-		olderFiles = [];
+	const configuredDir = logger.getConfiguredLogsDir();
+	const activeDir = logger.getCurrentLogsDir();
+	const includesFallback = path.relative(configuredDir, activeDir) !== "";
+	const currentPath = logger.getCurrentLogPath();
+	const todayPath = includesFallback ? await fs.realpath(currentPath).catch(() => currentPath) : currentPath;
+	const olderFiles: Array<{ filePath: string; date: string }> = [];
+	for await (const { dir, entries } of listLogDirectories(configuredDir, activeDir)) {
+		for (const entry of entries) {
+			if (!entry.isFile()) continue;
+			const match = LOG_FILE_PATTERN.exec(entry.name);
+			if (!match) continue;
+			const filePath = path.join(dir, entry.name);
+			if (path.relative(todayPath, filePath) !== "") olderFiles.push({ filePath, date: match[1] });
+		}
 	}
+	olderFiles.sort((a, b) => b.date.localeCompare(a.date));
 
 	let cursor = 0;
 
@@ -367,15 +371,14 @@ export async function createDebugLogSource(): Promise<DebugLogSource> {
 		const slice = olderFiles.slice(cursor, cursor + count);
 		cursor += slice.length;
 		const chunks: string[] = [];
-		for (const filename of slice.reverse()) {
-			const filePath = path.join(logsDir, filename);
+		for (const { filePath } of slice.reverse()) {
 			try {
 				const content = await readLastLines(filePath, MAX_LOG_LINES);
 				if (content.length > 0) {
 					chunks.push(content);
 				}
 			} catch (err) {
-				if (!isEnoent(err)) {
+				if (!includesFallback && !isEnoent(err)) {
 					throw err;
 				}
 			}

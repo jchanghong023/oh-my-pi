@@ -1,13 +1,14 @@
 /** @jsxImportSource @oh-my-pi/pi-tui */
 import { describe, expect, test } from "bun:test";
-import { createRoot, resolveChildren } from "@oh-my-pi/pi-tui";
+import { createRoot, nativeRendering, resolveChildren, setNativeRenderingForTest, signal } from "@oh-my-pi/pi-tui";
 import { bubbleEvent } from "@oh-my-pi/pi-tui/dispatch";
 import { paintNode, staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
 import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
 import { loadThemeSync } from "@oh-my-pi/pi-tui/theme/loader";
-import { INTENT_FIELD, type TspPickerItem } from "@oh-my-pi/pi-wire";
-import { findKind, mountOverlay } from "../../../helpers/overlay-terminal";
+import { INTENT_FIELD, type TspPickerProps, type TspText } from "@oh-my-pi/pi-wire";
+import { getKeybindings, KeybindingsManager, setKeybindings } from "../../../../src/config/keybindings/keybindings";
 import { TreeSelector, type TreeSelectorNode } from "../../../../src/ui/overlays/pickers/tree-selector";
+import { findKind, mountOverlay } from "../../../helpers/overlay-terminal";
 import { pickerSuite } from "./harness";
 
 function build(): { roots: TreeSelectorNode[]; leaf: string } {
@@ -45,6 +46,7 @@ function build(): { roots: TreeSelectorNode[]; leaf: string } {
 }
 
 const noop = (): void => {};
+const labelText = (label: TspText): string => (typeof label === "string" ? label : label.map(span => span.t).join(""));
 
 test("the ASCII tree paints fork guides and active-path bullets", () => {
 	createRoot(dispose => {
@@ -62,6 +64,26 @@ test("the ASCII tree paints fork guides and active-path bullets", () => {
 		}
 	});
 });
+
+test("Alt+Enter still navigates configured branches on non-tool rows", () => {
+	const previous = getKeybindings();
+	const { roots, leaf } = build();
+	const nextBranch = roots[0]!.children[0]!.children[0]!.entry.id;
+	const term = mountOverlay(() => (
+		<TreeSelector roots={roots} currentLeafId={leaf} terminalHeight={30} onSelect={noop} onCancel={noop} />
+	));
+	try {
+		setKeybindings(KeybindingsManager.inMemory({ "app.tree.nextBranch": "alt+enter" }));
+		const picker = findKind(term.surface.layer()[0]!, "picker")!;
+		expect(picker.props()).toMatchObject({ selected: leaf });
+		term.press("alt+enter");
+		expect(picker.props()).toMatchObject({ selected: nextBranch });
+	} finally {
+		setKeybindings(previous);
+		term.dispose();
+	}
+});
+
 pickerSuite({
 	dir: "overlays/tree-selector",
 	mount(caseName) {
@@ -94,7 +116,7 @@ pickerSuite({
 });
 
 describe("timeline tool details", () => {
-	function setup() {
+	function setup(terminalWidth = () => 120) {
 		const roots = build().roots;
 		const parent = roots[0]!;
 		const calls = parent.children[0]!;
@@ -124,7 +146,11 @@ describe("timeline tool details", () => {
 					role: "toolResult",
 					toolCallId: `call-${name}`,
 					toolName: "grep",
-					content: [{ type: "text", text: `RESULT-${name}\nTAIL-${name}` }],
+					content: [
+						{ type: "text", text: `RESULT-${name}` },
+						{ type: "text", text: `TAIL-${name}` },
+					],
+					details: { replies: [`REPLY-${name}`] },
 					isError,
 				},
 			} as TreeSelectorNode["entry"],
@@ -139,6 +165,7 @@ describe("timeline tool details", () => {
 				roots={roots}
 				currentLeafId="alpha"
 				terminalHeight={40}
+				terminalWidth={terminalWidth}
 				onSelect={id => switched.push(id)}
 				onCancel={noop}
 			/>
@@ -148,7 +175,7 @@ describe("timeline tool details", () => {
 		return {
 			term,
 			switched,
-			props: () => picker.props() as { items: TspPickerItem[]; order: string[]; selected: string },
+			props: () => picker.props() as TspPickerProps,
 			text: () => term.screen().join("\n"),
 			selectNative: (item: string) => {
 				bubbleEvent([root, picker], { type: "select", key: "picker", item });
@@ -165,8 +192,8 @@ describe("timeline tool details", () => {
 		const h = setup();
 		try {
 			for (const id of ["alpha", "bravo"]) {
-				const item = h.props().items.find(item => item.id === id)!;
-				const label = typeof item.label === "string" ? item.label : item.label.map(span => span.t).join("");
+				const item = h.props().items!.find(item => item.id === id)!;
+				const label = labelText(item.label);
 				expect(label).toStartWith(`Trace ${id} ownership`);
 				expect(label).toContain("grep");
 				expect(label).not.toContain("RESULT-");
@@ -182,8 +209,11 @@ describe("timeline tool details", () => {
 		const h = setup();
 		try {
 			h.term.press("alt+enter");
-			for (const marker of ["Status: Success", "ARGS-alpha", "RESULT-alpha", "TAIL-alpha"])
+			for (const marker of ["Status: Success", "ARGS-alpha", "REPLY-alpha", "RESULT-alpha", "TAIL-alpha"])
 				expect(h.text()).toContain(marker);
+			const lines = h.text().split("\n");
+			const resultLine = lines.findIndex(line => line.includes("RESULT-alpha"));
+			expect(lines[resultLine + 1]).toContain("TAIL-alpha");
 			expect(h.text()).not.toContain("RESULT-bravo");
 			expect(h.switched).toEqual([]);
 			h.term.press("alt+enter");
@@ -207,6 +237,47 @@ describe("timeline tool details", () => {
 			expect(h.props().order).not.toContain("alpha");
 			expect(h.props().order).not.toContain("bravo");
 		} finally {
+			h.term.dispose();
+		}
+	});
+
+	test("native details are read-only rows following the selected tool and rewrap on resize", () => {
+		const columns = signal(120);
+		const h = setup(columns);
+		const previous = nativeRendering();
+		try {
+			setNativeRenderingForTest(true);
+			const initialOrder = h.props().order!;
+			expect(h.props().preview).toBe("side");
+			h.detailsNative();
+
+			const expanded = h.props();
+			const details = expanded.itemsAdd!;
+			const lines = details.map(item => labelText(item.label));
+			expect(expanded.preview).toBe("none");
+			expect(expanded.selected).toBe("alpha");
+			expect(expanded.order).toEqual([
+				...initialOrder.slice(0, initialOrder.indexOf("alpha") + 1),
+				...details.map(item => item.id),
+				...initialOrder.slice(initialOrder.indexOf("alpha") + 1),
+			]);
+			expect(details.every(item => item.disabled === true)).toBe(true);
+			expect(lines.join("\n")).toContain("REPLY-alpha\n\nRESULT-alpha\nTAIL-alpha");
+			expect(lines.join("\n")).not.toContain("RESULT-bravo");
+			h.selectNative(details[0]!.id);
+			expect(h.props().selected).toBe("alpha");
+
+			columns.set(42);
+			const narrow = h.props().itemsAdd!.map(item => labelText(item.label));
+			expect(narrow.length).toBeGreaterThan(lines.length);
+			expect(narrow.every(line => line.length <= 24)).toBe(true);
+
+			h.selectNative("bravo");
+			expect(h.props()).toMatchObject({ selected: "bravo", order: initialOrder, preview: "side" });
+			expect(h.props().itemsAdd).toBeUndefined();
+			expect(h.switched).toEqual([]);
+		} finally {
+			setNativeRenderingForTest(previous);
 			h.term.dispose();
 		}
 	});

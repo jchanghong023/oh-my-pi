@@ -428,7 +428,8 @@ export class GoalRuntime {
 		steering: GoalBudgetSteering,
 		currentUsage?: GoalTokenUsage,
 		persistWallClock = false,
-	): Promise<void> {
+		completionRequest?: GoalAutopilotRequest,
+	): Promise<Goal | undefined> {
 		const state = this.#getStateClone();
 		if (!state?.enabled || !isAccountingStatus(state.goal)) return;
 		if (this.#turnSnapshot?.activeGoalId !== state.goal.id && this.#wallClock.activeGoalId !== state.goal.id) return;
@@ -463,7 +464,18 @@ export class GoalRuntime {
 		// objective snapshots. Keep normal tool flushes in memory/UI only, but make wall-clock
 		// usage durable before internal session switches because the active runtime is leaving.
 		const shouldPersistUsage = tokenDelta > 0 || flippedToBudgetLimited || (persistWallClock && wallSeconds > 0);
-		await this.#commitState(state, { persist: shouldPersistUsage ? "goal" : undefined });
+		// Completing an already reviewed goal must commit while the originating response is still current.
+		// Publishing the budget transition first replaces the run and revokes that response's scope.
+		const completed =
+			flippedToBudgetLimited &&
+			state.autoOrchestrate === true &&
+			completionRequest?.run.goalId === state.goal.id &&
+			completionRequest.run.review &&
+			completionRequest.run.review !== completionRequest &&
+			completionRequest.isCurrent()
+				? await this.#finishGoal(state)
+				: undefined;
+		if (!completed) await this.#commitState(state, { persist: shouldPersistUsage ? "goal" : undefined });
 		if (state.autoOrchestrate === true) {
 			logger.info("Goal usage accounted", {
 				component: "goal.runtime",
@@ -482,7 +494,7 @@ export class GoalRuntime {
 				budget_reached: flippedToBudgetLimited,
 				persisted: shouldPersistUsage,
 			});
-			if (flippedToBudgetLimited && steering !== "allowed") {
+			if (!completed && flippedToBudgetLimited && steering !== "allowed") {
 				logger.info("Goal budget steer suppressed", {
 					component: "goal.runtime",
 					event: "goal_budget_steer",
@@ -493,6 +505,7 @@ export class GoalRuntime {
 				});
 			}
 		}
+		if (completed) return completed;
 
 		if (state.goal.status !== "budget-limited") {
 			this.#budgetReportedFor = undefined;
@@ -500,6 +513,7 @@ export class GoalRuntime {
 		if (steering === "allowed" && flippedToBudgetLimited && this.#budgetReportedFor !== state.goal.id) {
 			await this.#sendBudgetLimitSteer(state);
 		}
+		return undefined;
 	}
 
 	async flushUsage(steering: GoalBudgetSteering, currentUsage?: GoalTokenUsage): Promise<void> {
@@ -674,7 +688,13 @@ export class GoalRuntime {
 
 	async completeGoalFromTool(request?: GoalAutopilotRequest | GoalAutopilotCompletionRequest): Promise<Goal> {
 		return await this.#withAccounting(async () => {
-			await this.#flushUsageLocked("suppressed");
+			const completed = await this.#flushUsageLocked(
+				"suppressed",
+				undefined,
+				false,
+				request instanceof GoalAutopilotCompletionRequest ? undefined : request,
+			);
+			if (completed) return completed;
 			const state = this.#getStateClone();
 			if (!state?.goal) {
 				throw new Error("cannot complete goal because no goal is active");
@@ -706,16 +726,20 @@ export class GoalRuntime {
 					}
 				}
 			}
-			state.enabled = false;
-			state.goal.status = "complete";
-			state.goal.updatedAt = this.#now();
-			state.mode = "exiting";
-			state.reason = "completed";
-			this.#clearActiveAccounting();
-			this.#budgetReportedFor = undefined;
-			await this.#commitState(state, { persist: "goal", transition: "complete" });
-			return state.goal;
+			return await this.#finishGoal(state);
 		});
+	}
+
+	async #finishGoal(state: LocalGoalModeState): Promise<Goal> {
+		state.enabled = false;
+		state.goal.status = "complete";
+		state.goal.updatedAt = this.#now();
+		state.mode = "exiting";
+		state.reason = "completed";
+		this.#clearActiveAccounting();
+		this.#budgetReportedFor = undefined;
+		await this.#commitState(state, { persist: "goal", transition: "complete" });
+		return state.goal;
 	}
 
 	buildActivePrompt(): string | undefined {

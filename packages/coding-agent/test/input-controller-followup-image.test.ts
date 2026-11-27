@@ -189,7 +189,7 @@ describe("InputController.handleFollowUp image forwarding", () => {
 			editor.setText("[Image #1] not yet sent");
 			expect(controller.restoreQueuedMessagesToEditor({ abort: true })).toBe(1);
 			expect(clearQueue).toHaveBeenCalledWith({ forInterrupt: true });
-			expect(abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+			expect(abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL, detachTools: true });
 			expect(draftAtAbort).toBe("[Image #2] queued\n\n[Image #1] not yet sent");
 			expect(editor.pendingImages).toEqual([newer, image]);
 			expect(editor.pendingImageLinks).toEqual(["local://newer.png", undefined]);

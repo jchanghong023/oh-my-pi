@@ -84,6 +84,7 @@ import type { ConfiguredThinkingLevel } from "../utils/render-utils";
 import type { BlockedKind } from "../utils/run-status";
 import type { TokenRateMeter } from "../utils/token-rate";
 import type { TranscriptReplica } from "./interactive/transcript-replica";
+import type { WorkingMessageSource } from "./interactive/working";
 import type { EventController } from "./controllers/event-controller";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { ConversationPosition } from "./utils/conversation-position";
@@ -103,6 +104,12 @@ export type CompactionQueuedMessage = {
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
 	draftDetached?: boolean;
+	/** Original conversation for follow-up-key builtins held during compaction. */
+	followUp?: ConversationPosition;
+};
+
+export type CompactionQueueOptions = Pick<CompactionQueuedMessage, "imageLinks" | "draftDetached" | "followUp"> & {
+	preserveDraft?: boolean;
 };
 
 /**
@@ -115,6 +122,8 @@ export type YieldCompaction = ConversationPosition & {
 	text: string;
 	instructions?: string;
 	mode?: CompactMode;
+	/** Earlier input from the same compaction queue has not finished dispatching yet. */
+	afterDispatch?: Promise<void>;
 };
 
 export type SubmittedUserInput = {
@@ -823,7 +832,7 @@ export interface InteractiveModeContext {
 		text: string,
 		mode: "steer" | "followUp",
 		images?: ImageContent[],
-		options?: { preserveDraft?: boolean; imageLinks?: (string | undefined)[]; draftDetached?: boolean },
+		options?: CompactionQueueOptions,
 	): void;
 	flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void>;
 	/** Start the compaction queued for the next yield, if any; it runs once the session is idle. */
@@ -840,7 +849,7 @@ export interface InteractiveModeContext {
 	clearPendingExecRuns(): void;
 	flushPendingModelSwitch(): Promise<void>;
 	/** Restore the default with no label. Use `showInCompact: false` for labels already projected into the compact dock. */
-	setWorkingMessage(message?: string | (() => string), showInCompact?: boolean): void;
+	setWorkingMessage(message?: string | (() => string), showInCompact?: boolean, source?: WorkingMessageSource): void;
 	applyPendingWorkingMessage(): void;
 	/** Show the turn's working row (default label, interrupt key, accent, tok/s trailer) unless one holds the row. */
 	ensureWorkingRow(): void;

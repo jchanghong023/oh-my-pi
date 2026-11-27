@@ -687,9 +687,10 @@ describe("strict shared browser owner cleanup", () => {
 					client: broker,
 					probe: async () => {
 						if (state === "healthy") return true;
-						options.snapshot = makeSnapshot(
-							"DevTools listening on ws://127.0.0.1:63199/devtools/browser/replacement",
-						);
+						options.snapshot = {
+							...makeSnapshot("DevTools listening on ws://127.0.0.1:63199/devtools/browser/replacement"),
+							id: "replacement-daemon-wedge",
+						};
 						return false;
 					},
 				}),

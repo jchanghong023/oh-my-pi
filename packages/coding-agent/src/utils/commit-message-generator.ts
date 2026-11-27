@@ -6,12 +6,17 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
+import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 
 import { cfgOffline } from "../config/auxiliary-model-policy";
 import type { ModelRegistry } from "../config/model-registry";
-import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
+import {
+	getModelMatchPreferences,
+	resolveModelPatternCandidates,
+	resolveModelRoleValue,
+} from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import commitSystemPrompt from "../prompts/system/commit-message-system.md" with { type: "text" };
 import { journalCompletion, type ModelUsageLedger } from "../session/model-usage-journal";
@@ -58,16 +63,18 @@ function getSmolModelCandidates(
 	const candidates: Array<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }> = [];
 	const addCandidate = (model?: Model<Api>, thinkingLevel?: ThinkingLevel): void => {
 		if (!model) return;
-		if (candidates.some(c => c.model.provider === model.provider && c.model.id === model.id)) return;
+		if (candidates.some(c => routedModelsAreEqual(c.model, model))) return;
 		candidates.push({ model, thinkingLevel });
 	};
 
 	const matchPreferences = getModelMatchPreferences(settings);
-	const configuredSmol = resolveModelRoleValue(settings.getModelRole("smol"), availableModels, {
-		settings,
-		matchPreferences,
-	});
-	addCandidate(configuredSmol.model, concreteThinkingLevel(configuredSmol.thinkingLevel));
+	const configuredSmol = settings.getModelRole("smol");
+	if (configuredSmol) {
+		for (const { pattern, automatic } of resolveModelPatternCandidates(configuredSmol, settings)) {
+			const resolved = resolveModelRoleValue(pattern, availableModels, { settings, matchPreferences, automatic });
+			addCandidate(resolved.model, concreteThinkingLevel(resolved.thinkingLevel));
+		}
+	}
 	const automaticModels = availableModels.filter(model => providerEntry(model.provider)?.automaticDefault !== false);
 
 	for (const pattern of roleDefaultModels().smol) {

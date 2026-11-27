@@ -21,6 +21,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import type { TspPrefsControl, TspPrefsSection, TspSpan } from "@oh-my-pi/pi-wire";
+import { shortenPath } from "../../../utils/render-utils";
 import type {
 	InstalledPlugin,
 	InstalledPluginSummary,
@@ -119,11 +120,6 @@ function entryValue(entry: PluginListEntry): string {
 
 function marketplaceEnabled(summary: InstalledPluginSummary): boolean {
 	return summary.entries[0]?.enabled !== false;
-}
-
-function shortenPath(path: string): string {
-	const home = process.env.HOME;
-	return home && path.startsWith(home) ? `~${path.slice(home.length)}` : path;
 }
 
 function filterText(item: DetailItem): string {

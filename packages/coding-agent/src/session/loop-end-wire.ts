@@ -48,6 +48,8 @@ export function toWireEvent(event: LocalAgentSessionEvent): LocalWireSessionEven
  * Decode a wire event into a session event: an `agent_end` with `isTerminal: false`
  * is a pause; any other `agent_end` (hosts that omit the flags included) ends the run.
  */
+export function fromWireEvent(event: WireSessionEvent | AgentSessionEvent): AgentSessionEvent;
+export function fromWireEvent(event: LocalWireSessionEvent | LocalAgentSessionEvent): LocalAgentSessionEvent;
 export function fromWireEvent(event: LocalWireSessionEvent | LocalAgentSessionEvent): LocalAgentSessionEvent {
 	if (event.type !== "agent_end" || !("isTerminal" in event)) return event;
 	const { isTerminal, yielded, awaitingAsyncWork, ...end } = event;

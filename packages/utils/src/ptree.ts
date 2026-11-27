@@ -8,6 +8,7 @@
  */
 
 import * as os from "node:os";
+import type { ReadableStreamDefaultReader as NodeStreamReader } from "node:stream/web";
 import { Process, type ProcessTerminateOptions } from "@oh-my-pi/pi-natives";
 import type { Spawn, Subprocess } from "bun";
 
@@ -618,26 +619,25 @@ export class ChildProcess<In extends InMask = InMask> {
 	}
 
 	#trackStdout(): void {
-		// Do not lock a stream reference already exposed to a caller.
-		if (this.#stdoutStream || this.#stdoutDone || this.#stdoutExposed || this.proc.stdout.locked) return;
+		if (this.#stdoutStream || this.#stdoutDone || this.#stdoutExposed) return;
+		const stdout = this.proc.stdout;
+		if (stdout.locked) return;
 
-		const reader = this.proc.stdout.getReader();
-		this.#pipeReaders.add(reader);
-		// Empty stdout can reach EOF without any consumer pulling the wrapper.
-		// Drop its liveness evidence at raw EOF even if the consumer stops after
-		// the last chunk instead of requesting the wrapper's final done result.
+		// Claim the raw stream only when the wrapper is pulled. Callers using
+		// proc.stdout directly must still be able to acquire its reader.
+		let reader: NodeStreamReader<Uint8Array> | undefined;
+		// Once opened, drop liveness at raw EOF even if the consumer stops
+		// after its last chunk without asking for the wrapper's done result.
 		let pulled = false;
 		let pipeSettled = false;
 		const settlePipe = () => {
 			if (pipeSettled) return;
 			pipeSettled = true;
-			this.#pipeReaders.delete(reader);
+			if (reader) this.#pipeReaders.delete(reader);
 			if (pulled) this.#openPipeReaders--;
 			this.#markStdoutDone();
 		};
-		void reader.closed.then(settlePipe, settlePipe);
-		let finished = false;
-		// An unpulled reader is not evidence of a live pipe writer.
+		// An unopened or already closed stream is not evidence of a live pipe writer.
 		const trackPull = () => {
 			if (pulled || pipeSettled) return;
 			pulled = true;
@@ -645,20 +645,34 @@ export class ChildProcess<In extends InMask = InMask> {
 			this.#syncAbortListeners();
 		};
 		const finish = () => {
-			if (finished) return;
-			finished = true;
+			if (!reader) return;
 			try {
 				reader.releaseLock();
 			} finally {
 				settlePipe();
+				reader = undefined;
 			}
 		};
 		this.#stdoutStream = new ReadableStream<Uint8Array>(
 			{
-				async pull(controller) {
-					trackPull();
+				pull: async controller => {
 					try {
-						const chunk = await reader.read();
+						if (!reader) {
+							if (this.#cutoff) {
+								controller.close();
+								return;
+							}
+							reader = stdout.getReader();
+							this.#pipeReaders.add(reader);
+							void reader.closed.then(settlePipe, settlePipe);
+						}
+						const pending = reader.read();
+						if (!pulled && !pipeSettled) {
+							// Let a raw reader already at EOF settle before arming abort.
+							await Promise.resolve();
+							trackPull();
+						}
+						const chunk = await pending;
 						if (chunk.done) {
 							finish();
 							if (controller.desiredSize !== null) controller.close();
@@ -672,7 +686,7 @@ export class ChildProcess<In extends InMask = InMask> {
 				},
 				async cancel(reason) {
 					try {
-						await reader.cancel(reason);
+						await (reader ?? stdout).cancel(reason);
 					} finally {
 						finish();
 					}
@@ -720,8 +734,6 @@ export class ChildProcess<In extends InMask = InMask> {
 			throw new Error('Full stderr capture must be requested when spawning the process (pass stderr: "full")');
 		}
 
-		// Read through the exposed stream: a timeout/abort tracker may already
-		// hold the only reader on the raw proc.stdout.
 		const stdoutP = this.#readStream(this.stdout);
 		const stderrP =
 			stderrMode === "full" && stderrChunks
@@ -796,8 +808,15 @@ export class ChildProcess<In extends InMask = InMask> {
 	}
 
 	#cutoffOutput(): void {
+		if (this.#cutoff) return;
 		this.#cutoff = true;
 		for (const reader of this.#pipeReaders) reader.cancel().catch(() => {});
+		// No tracked reader owns an unopened stdout pipe. Close the raw stream
+		// without acquiring its lock or interfering with a direct/raw reader.
+		if (!this.#stdoutDone) {
+			const stdout = this.proc.stdout;
+			if (!stdout.locked) void stdout.cancel().catch(() => {});
+		}
 	}
 
 	#clearTimeout(): void {

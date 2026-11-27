@@ -345,7 +345,10 @@ async function main(): Promise<void> {
 			await fs.rm(winOut, { force: true });
 			await fs.rm(winSdkOut, { force: true });
 			await timed("Windows dependencies", () =>
-				run([process.execPath, "install", "--frozen-lockfile"], root, cleanEnv),
+				run([process.execPath, "install", "--frozen-lockfile"], root, {
+					...cleanEnv,
+					OMP_SKIP_OPENWIKI_POSTINSTALL: "1",
+				}),
 			);
 			await timed("Windows native", () =>
 				run([process.execPath, "scripts/build-release-native.ts"], root, cleanEnv),

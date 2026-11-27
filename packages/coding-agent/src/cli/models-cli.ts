@@ -454,6 +454,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 				const cwd = getProjectDir();
 				const offline = offlineFromEnv();
 				const strategy = action === "refresh" ? "online" : offline ? "offline" : "online-if-uncached";
+				const cacheOnly = strategy === "offline";
 				stage = "lane";
 				const laneStarted = performance.now();
 				logger.info("models.lane.started", {
@@ -463,12 +464,20 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 					result: "started",
 					offline,
 				});
-				const companyError = await initializeCompanyModelLane(offline);
-				let companyConfigError = false;
-				if (offline) {
-					companyConfigError = Boolean(companyError);
-					if (companyError) process.stderr.write(`${companyError}\n`);
-				}
+				const lanePromise = initializeCompanyModelLane(offline);
+				initStarted = performance.now();
+				logger.info("models.init.started", {
+					...commandFields,
+					event: "models_init",
+					stage: "settings_init",
+					result: "started",
+					offline,
+				});
+				const settingsPromise = Settings.init({ cwd, configFiles: command.flags.config });
+				settingsPromise.catch(() => {});
+				const companyError = await lanePromise;
+				const companyConfigError = companyError !== undefined;
+				if (companyError) process.stderr.write(`${companyError}\n`);
 				const laneFields = {
 					...commandFields,
 					event: "models_lane",
@@ -482,15 +491,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 				else logger.info("models.lane.completed", laneFields);
 
 				stage = "settings_init";
-				initStarted = performance.now();
-				logger.info("models.init.started", {
-					...commandFields,
-					event: "models_init",
-					stage,
-					result: "started",
-					offline,
-				});
-				const settings = await Settings.init({ cwd, configFiles: command.flags.config });
+				const settings = await settingsPromise;
 				stage = "auth_init";
 				const authStorage = await discoverAuthStorage(undefined, { settings });
 				try {
@@ -516,7 +517,6 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 					}
 					stage = "builtin_refresh";
 					const refreshStarted = performance.now();
-					const cacheOnly = strategy === "offline";
 					const refreshFields = {
 						...commandFields,
 						event: cacheOnly ? "offline_model_refresh" : "models_refresh",
@@ -580,7 +580,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 					stage,
 					result: "completed",
 					strategy,
-					cache_only: offline,
+					cache_only: cacheOnly,
 					elapsed_ms: performance.now() - started,
 				});
 			} catch (error) {

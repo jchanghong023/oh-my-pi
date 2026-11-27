@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import { settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import { cfgComposerPredictions } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import type { TestTerminal } from "@oh-my-pi/pi-tui/testing/terminal";
@@ -41,14 +42,20 @@ describe("settings search selection", () => {
 	});
 
 	it("clamps a row that a longer query drops to its previous index, not the first row", () => {
-		const term = mountSettingsWindow();
+		// Keep the result indices independent of unrelated additions to the settings catalog.
+		const host = createSettingsHost();
+		const paths = new Set(["composer.shape", "composer.recallClearedDrafts", "plan.autosave"]);
+		const entries = host.entries.filter(entry => paths.has(entry.path));
+		const term = mountSettingsWindow({ context: { settings: { ...host, entries } } });
 		term.type("comp");
-		expect(selectedRow(term)).toContain("Omit Thinking summaries");
-		// `Omit Thinking summaries` leaves the `compo` results; the released rule
-		// falls to its previous (last) index instead of restarting at the top.
+		term.press("tab");
+		term.press("tab");
+		expect(selectedRow(term)).toContain("Autosave Plans");
+
+		// "comp" matches "completes" in the description; "compo" drops that last row.
 		term.type("o");
-		expect(selectedRow(term)).toContain("Experimental Speculative Execution");
-		expect(highlightedTab(term)).toContain("Tools");
+		expect(selectedRow(term)).toContain("Recall Cleared Drafts");
+		expect(highlightedTab(term)).toContain("Interaction");
 	});
 
 	it("keeps the selected row when deleting a character, while it still matches", () => {

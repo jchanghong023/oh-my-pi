@@ -746,7 +746,10 @@ mod platform {
 /// Stable process reference.
 #[derive(Clone)]
 pub struct Process {
-	inner: platform::Process,
+	inner:            platform::Process,
+	/// The measurement helper's sole child, used only for single-root waves.
+	#[cfg(target_os = "linux")]
+	measured_operand: Option<i32>,
 }
 
 impl Process {
@@ -763,6 +766,20 @@ impl Process {
 		tracker: &std::sync::Arc<crate::sys::lifecycle::Tracker>,
 	) -> Self {
 		Self::from_inner(platform::Process::from_child(pid, tracker))
+	}
+
+	#[cfg(target_os = "linux")]
+	pub(crate) const fn with_measured_operand(mut self, pid: i32) -> Self {
+		self.measured_operand = Some(pid);
+		self
+	}
+
+	#[cfg(target_os = "linux")]
+	pub(crate) fn supports_measured_operand_signal() -> bool {
+		static SUPPORTED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+			Process::from_pid(std::process::id() as i32).is_some_and(|p| p.signal(0))
+		});
+		*SUPPORTED
 	}
 
 	/// Open stable process references whose executable path matches exactly.
@@ -803,6 +820,40 @@ impl Process {
 	/// On Windows the process is terminated whatever `signal` is.
 	pub fn signal(&self, signal: i32) -> bool {
 		self.inner.kill(signal)
+	}
+
+	/// Signal the command itself, not its measurement helper.
+	pub(crate) fn signal_root(&self, signal: i32) -> bool {
+		#[cfg(target_os = "linux")]
+		if let Some(pid) = self.measured_operand {
+			use crate::{
+				bash::{Platform, Signal, signal::DefaultAction},
+				sys::proc::{self, ProcState},
+			};
+
+			let Some(operand) =
+				Self::from_pid(pid).filter(|operand| operand.ppid() == Some(self.pid()))
+			else {
+				return false;
+			};
+			// The helper forks exactly once. Check its pinned identity after
+			// the parentage lookup; the operand's pidfd prevents later reuse.
+			if self.status() != ProcessStatus::Running || !operand.signal(signal) {
+				return false;
+			}
+			// The VM's regular stop check sees the helper, not its operand.
+			if signal != libc::SIGKILL
+				&& u8::try_from(signal)
+					.ok()
+					.and_then(|n| Signal::from_number(n, Platform::current()))
+					.is_some_and(|sig| sig.default_action() == DefaultAction::Terminate)
+				&& proc::info(pid).is_some_and(|info| info.state == ProcState::Stopped)
+			{
+				let _ = operand.signal(libc::SIGCONT);
+			}
+			return true;
+		}
+		self.signal(signal)
 	}
 
 	/// Send `signal` to this process and its descendants, children first.
@@ -872,7 +923,11 @@ impl Process {
 
 impl Process {
 	const fn from_inner(inner: platform::Process) -> Self {
-		Self { inner }
+		Self {
+			inner,
+			#[cfg(target_os = "linux")]
+			measured_operand: None,
+		}
 	}
 
 	/// Walk the live descendant tree from scratch, children first. Cheap and
@@ -943,7 +998,7 @@ impl Process {
 		} else {
 			HashSet::new()
 		};
-		let _ = signal_snapshot(processes, groups, &seen, protected, signal, |_| {});
+		let _ = signal_snapshot(processes, &groups, &seen, protected, signal, |_| {});
 	}
 
 	async fn terminate_tree_impl(
@@ -980,8 +1035,16 @@ impl Process {
 			}
 		}
 
-		// Each escalation is a new wave with a fresh snapshot.
-		descendants = self.signalable_descendants(&protected);
+		// Refresh while keeping known descendants that TERM may have
+		// orphaned. They can also anchor a group whose leader has exited.
+		let mut current = self.signalable_descendants(&protected);
+		if group && !descendants.is_empty() {
+			let seen: HashSet<_> = current.iter().map(Self::pid).collect();
+			current.extend(descendants.into_iter().filter(|process| {
+				!seen.contains(&process.pid()) && process.status() == ProcessStatus::Running
+			}));
+		}
+		descendants = current;
 		self.signal_termination_wave(&descendants, process_group, KILL_SIGNAL, &protected);
 
 		wait_for_exit(self, &descendants, Some(Duration::from_millis(u64::from(timeout_ms))), ct)
@@ -1181,7 +1244,9 @@ impl TerminationTargets {
 		Self::default()
 	}
 
-	/// Record a process group id. Duplicates are ignored.
+	/// Record a process group id. Duplicates are ignored. A group is only
+	/// swept when a pinned process or a member of a preceding wave still
+	/// identifies it.
 	pub fn add_pgid(&mut self, pgid: i32) {
 		if pgid > 0 && !self.pgids.contains(&pgid) {
 			self.pgids.push(pgid);
@@ -1231,7 +1296,7 @@ impl TerminationTargets {
 	pub fn signal(&mut self, signal: i32) {
 		let protected = host_protected_pids();
 		#[cfg(unix)]
-		self.deliver_wave(Vec::new(), signal, &protected, true, |_| {});
+		self.deliver_wave(Vec::new(), signal, &protected, true, crate::sys::proc::list, |_| {});
 		#[cfg(not(unix))]
 		let _ = signal_trees(&self.processes, Vec::new(), &self.pgids, signal, &protected, |_| {});
 	}
@@ -1239,10 +1304,33 @@ impl TerminationTargets {
 	/// Signal only the recorded processes, without their groups or descendants.
 	/// Used by `timeout --foreground`.
 	pub fn signal_roots(&self, signal: i32) {
+		self.deliver_roots(signal, |_| {});
+	}
+
+	#[cfg(target_os = "linux")]
+	pub(crate) fn signal_roots_wave(
+		&self,
+		signal: i32,
+		owned: impl Iterator<Item = i32>,
+	) -> SignalWave {
+		let mut wave = SignalWave {
+			// Unrecorded PIDs must be handled by their owning ExtProc, not
+			// reopened here: a native PID could be a measurement helper.
+			failed:     owned.filter(|pid| !self.seen_pids.contains(pid)).collect(),
+			roots_only: true,
+			family:     Vec::new(),
+		};
+		self.deliver_roots(signal, |pid| {
+			wave.failed.insert(pid);
+		});
+		wave
+	}
+
+	fn deliver_roots(&self, signal: i32, mut on_failure: impl FnMut(i32)) {
 		let protected = host_protected_pids();
 		for process in &self.processes {
-			if !protected.contains(&process.pid()) {
-				let _ = process.signal(signal);
+			if !protected.contains(&process.pid()) && !process.signal_root(signal) {
+				on_failure(process.pid());
 			}
 		}
 	}
@@ -1252,10 +1340,22 @@ impl TerminationTargets {
 	#[cfg(unix)]
 	pub(crate) fn signal_wave(mut self, single: Vec<Process>, signal: i32) -> SignalWave {
 		let mut failed = HashSet::new();
-		self.deliver_wave(single, signal, &host_protected_pids(), false, |pid| {
-			failed.insert(pid);
-		});
-		SignalWave { failed, family: self.family }
+		self.deliver_wave(
+			single,
+			signal,
+			&host_protected_pids(),
+			false,
+			crate::sys::proc::list,
+			|pid| {
+				failed.insert(pid);
+			},
+		);
+		SignalWave {
+			failed,
+			family: self.family,
+			#[cfg(target_os = "linux")]
+			roots_only: false,
+		}
 	}
 
 	#[cfg(unix)]
@@ -1265,12 +1365,13 @@ impl TerminationTargets {
 		signal: i32,
 		protected: &HashSet<i32>,
 		resume_group: bool,
+		read_table: impl FnOnce() -> std::io::Result<Vec<crate::sys::proc::ProcInfo>>,
 		mut on_failure: impl FnMut(i32),
 	) {
 		use crate::sys::proc::{self, ProcState};
 
 		if !self.is_empty() {
-			if let Ok(table) = proc::list() {
+			if let Ok(table) = read_table() {
 				self.refresh_family(&table);
 			} else if self.family.is_empty() {
 				let _ =
@@ -1323,12 +1424,6 @@ impl TerminationTargets {
 	fn refresh_family(&mut self, table: &[crate::sys::proc::ProcInfo]) {
 		use crate::sys::proc;
 
-		let groups: HashSet<_> = self
-			.pgids
-			.iter()
-			.copied()
-			.filter(|&id| !is_self_process_group(id))
-			.collect();
 		// A pinned root still alive after the scan named the same process
 		// during the scan.
 		let roots: HashSet<_> = self
@@ -1337,9 +1432,20 @@ impl TerminationTargets {
 			.filter(|p| p.status() == ProcessStatus::Running)
 			.map(Process::pid)
 			.collect();
-		let retained: HashSet<_> = self.family.iter().map(|p| (p.pid, p.start)).collect();
+		let retained: HashMap<_, _> = self
+			.family
+			.iter()
+			.map(|p| ((p.pid, p.start), p.pgid))
+			.collect();
+		let groups = anchored_groups(
+			table,
+			|id| self.pgids.contains(&id),
+			|p| roots.contains(&p.pid) || retained.get(&(p.pid, p.start)) == Some(&p.pgid),
+		);
 		self.family = proc::family_where(table, |p| {
-			groups.contains(&p.pgid) || roots.contains(&p.pid) || retained.contains(&(p.pid, p.start))
+			groups.contains(&p.pgid)
+				|| roots.contains(&p.pid)
+				|| retained.contains_key(&(p.pid, p.start))
 		});
 	}
 }
@@ -1349,10 +1455,13 @@ impl TerminationTargets {
 pub struct SignalWave {
 	/// Pinned PID deliveries that failed and can be retried through their
 	/// owned child handles.
-	pub failed:        HashSet<i32>,
+	pub failed:            HashSet<i32>,
 	/// The family before signalling, including members TERM may orphan.
 	#[cfg(unix)]
-	pub(crate) family: Vec<crate::sys::proc::ProcInfo>,
+	pub(crate) family:     Vec<crate::sys::proc::ProcInfo>,
+	/// Linux measured children must keep later abandonment single-process.
+	#[cfg(target_os = "linux")]
+	pub(crate) roots_only: bool,
 }
 
 /// Snapshot a complete wave before delivering anything: a TERM handler may
@@ -1389,21 +1498,21 @@ fn signal_trees(
 	}
 
 	single.retain(|p| !protected.contains(&p.pid()) && seen.insert(p.pid()));
-	signal_snapshot(processes.iter().chain(&single), groups, &seen, protected, signal, on_failure)
+	signal_snapshot(processes.iter().chain(&single), &groups, &seen, protected, signal, on_failure)
 }
 
 /// Snapshot group-only members separately from known tree members. Deliver
 /// to each identity once, regardless of later changes to its group.
 fn signal_snapshot<'a>(
-	processes: impl IntoIterator<Item = &'a Process>,
-	groups: HashSet<i32>,
+	processes: impl Iterator<Item = &'a Process> + Clone,
+	groups: &HashSet<i32>,
 	seen: &HashSet<i32>,
 	protected: &HashSet<i32>,
 	signal: i32,
 	mut on_failure: impl FnMut(i32),
 ) -> u32 {
 	#[cfg(unix)]
-	signal_group_only_members(groups, seen, protected, signal);
+	signal_group_only_members(groups, processes.clone(), seen, protected, signal);
 	#[cfg(not(unix))]
 	let _ = (groups, seen, protected);
 	let mut signaled = 0;
@@ -1417,33 +1526,50 @@ fn signal_snapshot<'a>(
 	signaled
 }
 
+/// A numeric PGID can be reused. Expand it only with a live root or a
+/// member identified in the previous wave.
 #[cfg(unix)]
-fn signal_group_only_members(
-	mut groups: HashSet<i32>,
+fn anchored_groups(
+	table: &[crate::sys::proc::ProcInfo],
+	in_scope: impl Fn(i32) -> bool,
+	is_anchor: impl Fn(&crate::sys::proc::ProcInfo) -> bool,
+) -> HashSet<i32> {
+	let mut groups = HashSet::new();
+	for p in table {
+		if in_scope(p.pgid)
+			&& !groups.contains(&p.pgid)
+			&& is_anchor(p)
+			&& !is_self_process_group(p.pgid)
+			&& crate::sys::proc::info(p.pid)
+				.is_some_and(|now| now.start == p.start && now.pgid == p.pgid)
+		{
+			groups.insert(p.pgid);
+		}
+	}
+	groups
+}
+
+#[cfg(unix)]
+fn signal_group_only_members<'a>(
+	groups: &HashSet<i32>,
+	processes: impl Iterator<Item = &'a Process>,
 	seen: &HashSet<i32>,
 	protected: &HashSet<i32>,
 	signal: i32,
 ) {
 	use crate::sys::proc::{self, ProcState};
 
-	groups.retain(|&pgid| pgid > 0 && !is_self_process_group(pgid));
 	if groups.is_empty() {
 		return;
 	}
 	let Ok(snapshot) = proc::list() else {
-		// Without member identities, broadcast only for a group-only
-		// request with no protected targets beyond the host.
-		if seen.is_empty()
-			&& protected
-				.iter()
-				.all(|&pid| u32::try_from(pid).ok() == Some(std::process::id()))
-		{
-			for pgid in groups {
-				let _ = kill_process_group(pgid, signal);
-			}
-		}
 		return;
 	};
+	let roots: HashSet<_> = processes
+		.filter(|p| p.status() == ProcessStatus::Running)
+		.map(Process::pid)
+		.collect();
+	let groups = anchored_groups(&snapshot, |id| groups.contains(&id), |p| roots.contains(&p.pid));
 	for member in snapshot {
 		if groups.contains(&member.pgid)
 			&& member.state != ProcState::Zombie
@@ -1538,6 +1664,64 @@ mod tests {
 			thread::sleep(Duration::from_millis(10));
 		};
 		assert!(status.is_some_and(|status| !status.success()), "fallback must terminate the child");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn hard_group_wave_reaches_known_members_when_the_process_table_is_unavailable() {
+		use std::{
+			os::unix::process::CommandExt,
+			process::{Child, Command},
+			thread,
+			time::Instant,
+		};
+
+		struct Cleanup(Child);
+		impl Drop for Cleanup {
+			fn drop(&mut self) {
+				let _ = self.0.kill();
+				let _ = self.0.wait();
+			}
+		}
+
+		let spawn = |group| {
+			let child = Command::new("/bin/sleep")
+				.arg("30")
+				.process_group(group)
+				.spawn()
+				.unwrap();
+			Cleanup(child)
+		};
+		let mut root = spawn(0);
+		let pgid = i32::try_from(root.0.id()).unwrap();
+		let mut peer = spawn(pgid);
+		#[cfg(target_os = "linux")]
+		let process = Process::from_child(pgid, &crate::sys::lifecycle::Tracker::new(0));
+		#[cfg(not(target_os = "linux"))]
+		let process = Process::from_pid(pgid).unwrap();
+		let mut targets = TerminationTargets::new();
+		targets.add_pgid(pgid);
+		targets.add_process(process);
+		targets.family.push(crate::sys::proc::info(pgid).unwrap());
+		targets
+			.family
+			.push(crate::sys::proc::info(i32::try_from(peer.0.id()).unwrap()).unwrap());
+
+		targets.deliver_wave(
+			Vec::new(),
+			KILL_SIGNAL,
+			&host_protected_pids(),
+			true,
+			|| Err(std::io::Error::from_raw_os_error(libc::EMFILE)),
+			|_| {},
+		);
+		let deadline = Instant::now() + Duration::from_secs(2);
+		for child in [&mut root.0, &mut peer.0] {
+			while child.try_wait().unwrap().is_none() {
+				assert!(Instant::now() < deadline, "the hard wave must terminate {}", child.id());
+				thread::sleep(Duration::from_millis(10));
+			}
+		}
 	}
 
 	/// Regression test for #7452: a cancellation sweep must never signal the

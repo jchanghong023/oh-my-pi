@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as WorkerThreads from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
+import { deserialize } from "bun:jsc";
 
 // Lazy loader: keeps node:worker_threads off CLI startup until the Bun Worker fallback spawns.
 let workerThreadsCache: typeof WorkerThreads | undefined;
@@ -1130,11 +1131,17 @@ function spawnBunWorker(): JsEvalWorkerHandle {
 }
 
 function spawnJsProcess(sessionId?: string): JsEvalWorkerHandle {
-	// Shared subprocess workers ignore stdout; keep only eval output in an
-	// owned OS-temp outbox so SIGKILL cannot discard process.send's queue.
-	const outbox = fs.mkdtempSync(path.join(os.tmpdir(), "omp-js-eval-outbox-"));
+	// The outbox preserves published output even if SIGKILL drops the IPC queue.
+	// When temp storage is unavailable the worker can still send ordinary IPC frames.
+	let outbox: string | undefined;
+	try {
+		outbox = fs.mkdtempSync(path.join(os.tmpdir(), "omp-js-eval-outbox-"));
+	} catch (error) {
+		logger.warn("JS eval output directory unavailable; using IPC for output", { error });
+	}
 	const cleanup = (): void => {
 		process.off("exit", cleanup);
+		if (!outbox) return;
 		try {
 			fs.rmSync(outbox, { recursive: true, force: true });
 		} catch (error) {
@@ -1143,9 +1150,12 @@ function spawnJsProcess(sessionId?: string): JsEvalWorkerHandle {
 	};
 	let spawned: SpawnedSubprocess<ProcessWorkerOutbound>;
 	try {
+		const env = jsKernelEnv(workerEnvFromParent());
+		if (outbox) env[JS_EVAL_OUTBOX_ENV] = outbox;
+		else delete env[JS_EVAL_OUTBOX_ENV];
 		spawned = createWorkerSubprocess<ProcessWorkerOutbound>({
 			spawnCommand: resolveWorkerSpawnCmd(JS_EVAL_PROCESS_ARG, { sameBuild: true }),
-			env: jsKernelEnv(workerEnvFromParent({ [JS_EVAL_OUTBOX_ENV]: outbox })),
+			env,
 			exitLabel: "JS eval worker",
 			detached: shouldDetachKernel(process.platform),
 			reportCleanExit: true,
@@ -1155,7 +1165,7 @@ function spawnJsProcess(sessionId?: string): JsEvalWorkerHandle {
 		cleanup();
 		throw error;
 	}
-	process.once("exit", cleanup);
+	if (outbox) process.once("exit", cleanup);
 	const pid = spawned.proc.pid;
 	const board = registerOnBoard({
 		kind: "external",
@@ -1172,19 +1182,20 @@ function spawnJsProcess(sessionId?: string): JsEvalWorkerHandle {
 	const listeners = new Set<(message: WorkerOutbound) => void>();
 	let delivered = 0;
 	const deliverOutput = (sequence: number): void => {
-		if (sequence <= delivered) return;
-		const filename = path.join(outbox, `${sequence}.json`);
-		const message = JSON.parse(fs.readFileSync(filename, "utf8")) as ProcessWorkerOutput;
+		if (!outbox || sequence <= delivered) return;
+		const filename = path.join(outbox, `${sequence}.bin`);
+		const message = deserialize(fs.readFileSync(filename)) as ProcessWorkerOutput;
 		fs.unlinkSync(filename);
 		delivered = sequence;
 		for (const listener of listeners) listener(message);
 	};
 	const drainOutput = (through = Infinity): void => {
+		if (!outbox) return;
 		try {
 			const sequences = fs
 				.readdirSync(outbox)
-				.filter(name => /^\d+\.json$/.test(name))
-				.map(name => Number(name.slice(0, -5)))
+				.filter(name => /^\d+\.bin$/.test(name))
+				.map(name => Number(name.slice(0, -4)))
 				.sort((a, b) => a - b);
 			for (const sequence of sequences) {
 				if (sequence > through) break;
@@ -1210,16 +1221,22 @@ function spawnJsProcess(sessionId?: string): JsEvalWorkerHandle {
 				.then(() => drainOutput())
 				.finally(() => {
 					writerStopped = true;
-					unsubscribe();
 					cleanup();
 				});
 			try {
-				await raceWithTimeout(drainOnExit, WORKER_CLOSE_TIMEOUT_MS, "Timed out draining JS eval process output");
+				// IPC-only output can still be queued after the process exits.
+				await raceWithTimeout(
+					Promise.all([drainOnExit, spawned.disconnected]),
+					WORKER_CLOSE_TIMEOUT_MS,
+					"Timed out draining JS eval process output",
+				);
 			} catch (error) {
 				// Deliver already-published records before killSession drops the pending run.
 				// drainOnExit still owns any remaining output and cleanup.
 				if (!writerStopped) drainOutput();
 				throw error;
+			} finally {
+				unsubscribe();
 			}
 		})();
 		return terminating;

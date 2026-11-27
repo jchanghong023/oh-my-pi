@@ -298,6 +298,17 @@ fn files_from_lines() {
 	assert_eq!(lines(b"x\ny\0", true, false), ["x\ny"]);
 }
 
+#[cfg(windows)]
+#[test]
+fn files_from_names_stay_relative_to_the_source() {
+	let ctx = ctx_for(base_opts(), proto(33, false), false, true, &std::env::temp_dir());
+	let list = Cursor::new(&b"C:/file\nparent/C:other\n/sub/file\n"[..]);
+	let mut scanner = Scanner::new(&ctx, &[], Filters::new(FilterConfig::default()), Some(Box::new(list))).unwrap();
+	assert_eq!(scanner.next_files_from().unwrap().as_deref(), Some(&b"sub/file"[..]));
+	assert!(scanner.next_files_from().unwrap().is_none());
+	assert_ne!(ctx.io_error.load(Ordering::Relaxed) & IOERR_GENERAL, 0);
+}
+
 #[test]
 fn files_from_sends_implied_parents_without_recursion() {
 	let tmp = fixture();

@@ -113,6 +113,8 @@ export function composerFacts(props: {
 	readonly settings: Accessor<StatusLineSettings>;
 	readonly facts: Accessor<StatusFacts>;
 	readonly click: (action: ComposerBarAction) => { click: ComposerBarAction } | undefined;
+	/** The separate live Generation rate slot, if it currently has a reading. */
+	readonly generationRate?: Accessor<number | undefined> | undefined;
 }): {
 	readonly context: JSXNode;
 	readonly extras: JSXNode;
@@ -131,10 +133,12 @@ export function composerFacts(props: {
 	const facts = computed((): Fact[] => {
 		const settings = effective();
 		const state = props.facts();
+		const hasDefaultGenerationRate =
+			(settings.preset ?? "default") === "default" && props.generationRate?.() !== undefined;
 		const out: Fact[] = [];
 		const collect = (side: "left" | "right", ids: readonly StatusLineSegmentId[]) => {
 			ids.forEach((id, index) => {
-				if (HOMED[id]) return;
+				if (HOMED[id] || (id === "token_rate" && hasDefaultGenerationRate)) return;
 				const view = segmentView(id, state, settings);
 				if (!view) return;
 				const order = side === "left" ? ids.length - index : index + 1;

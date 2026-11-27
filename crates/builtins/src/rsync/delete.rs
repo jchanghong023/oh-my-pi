@@ -837,7 +837,7 @@ fn read_stat(ctx: &Ctx, tree: &Tree, path: &Path, rel: &[u8]) -> io::Result<omp_
 	let st = link_stat(ctx, tree, path, ctx.opts.copy_dirlinks)?;
 	if st.is_symlink() {
 		let target = tree.read_link(path)?;
-		if ctx.opts.copy_unsafe_links && paths::unsafe_symlink(&paths::path_bytes(&target), rel) {
+		if ctx.opts.copy_unsafe_links && paths::unsafe_symlink(&paths::link_target_bytes(&target), rel) {
 			return tree.stat(path);
 		}
 	}

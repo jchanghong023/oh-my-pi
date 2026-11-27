@@ -34,6 +34,7 @@ import {
 	resolveAssistantErrorPresentation,
 	splitAssistantMessageToolTimeline,
 } from "../../session/transcript/transcript-render-helpers";
+import { parseForegroundCompaction, queueYieldCompaction } from "../../slash-commands/builtin-lifecycle";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
@@ -57,6 +58,7 @@ import {
 import { buildSkillCommandPrompt, isKnownSkillCommand } from "../skill-command";
 import {
 	type AssistantView,
+	type CompactionQueueOptions,
 	type CompactionQueuedMessage,
 	type InteractiveModeContext,
 	isLoopCommand,
@@ -64,6 +66,7 @@ import {
 	type RenderInitialMessagesOptions,
 	type RenderSessionContextOptions,
 	type ShowStatusOptions,
+	type YieldCompaction,
 } from "../types";
 import { TurnUsageTally, turnElapsedMs } from "../view-model/overlays/usage-row";
 import {
@@ -1079,7 +1082,7 @@ export class UiHelpers {
 		text: string,
 		mode: "steer" | "followUp",
 		images?: ImageContent[],
-		options?: { preserveDraft?: boolean; imageLinks?: (string | undefined)[]; draftDetached?: boolean },
+		options?: CompactionQueueOptions,
 	): void {
 		const queuedImages = images && images.length > 0 ? images : undefined;
 		this.ctx.compactionQueuedMessages.push({
@@ -1088,6 +1091,7 @@ export class UiHelpers {
 			images: queuedImages,
 			...(options?.imageLinks?.some(link => link !== undefined) ? { imageLinks: options.imageLinks } : {}),
 			draftDetached: options?.draftDetached ?? !options?.preserveDraft,
+			...(options?.followUp ? { followUp: options.followUp } : {}),
 		});
 		if (options?.preserveDraft) this.ctx.composer.addToHistory(text);
 		else {
@@ -1109,12 +1113,16 @@ export class UiHelpers {
 		if (!forwarded && this.ctx.loopPrompt === text) this.ctx.pauseLoop();
 	}
 
-	/** Deliver one compaction-queued message; `onQueued` receives what it pushes onto the session queues. */
+	/**
+	 * Deliver one compaction-queued message. When probing the command prefix,
+	 * return undefined if neither builtin nor slash-command discovery claims it.
+	 */
 	async #deliverQueuedMessage(
 		message: CompactionQueuedMessage,
 		onQueued: (queued: readonly AgentMessage[]) => void,
 		isOwnerVisible: () => boolean,
-	): Promise<boolean> {
+		deferPrompt = false,
+	): Promise<boolean | undefined> {
 		const owner = this.ctx.session;
 		const requireOwner = () => {
 			if (!isOwnerVisible()) throw new Error("The queued message's session changed before delivery");
@@ -1131,10 +1139,11 @@ export class UiHelpers {
 						: undefined,
 				draftDetached: message.draftDetached,
 				followUp:
-					message.mode === "followUp" &&
+					message.followUp ??
+					(message.mode === "followUp" &&
 					(command === "workspace" || command === "goal" || command === "goal-autopilot")
 						? conversationPosition(this.ctx.sessionManager)
-						: undefined,
+						: undefined),
 			});
 		} catch (error) {
 			if (!isOwnerVisible() || !message.draftDetached || command !== "team") throw error;
@@ -1189,6 +1198,9 @@ export class UiHelpers {
 			if (isOwnerVisible()) this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return !forwarded;
 		}
+		// An attachment-aware builtin may have rejected real arguments. The first
+		// ordinary prompt needs to start a turn, not be queued behind one.
+		if (deferPrompt && !this.ctx.isKnownSlashCommand(message.text)) return undefined;
 		if (isKnownSkillCommand(this.ctx, message.text)) {
 			const built = await buildSkillCommandPrompt(this.ctx, message.text, message.mode, message.images);
 			requireOwner();
@@ -1269,9 +1281,29 @@ export class UiHelpers {
 			if (messages.length) setOwnerQueue([...ownerQueue(), ...messages]);
 		};
 		const completedCommands = new Set<CompactionQueuedMessage>();
-		const queuedMessages = [...(this.ctx.compactionQueuedMessages as CompactionQueuedMessage[])];
-		this.ctx.compactionQueuedMessages = [] as CompactionQueuedMessage[];
-		this.ctx.updatePendingMessagesDisplay();
+		const queue = this.ctx.compactionQueuedMessages;
+		let end = queue.length;
+		let nextCompaction: YieldCompaction | undefined;
+		let afterDispatch: PromiseWithResolvers<void> | undefined;
+		if (!this.ctx.collabGuest) {
+			for (let i = 0; i < end; i++) {
+				const message = queue[i];
+				if (message.mode !== "followUp") continue;
+				const parsed = parseForegroundCompaction(message.text);
+				if (!parsed) continue;
+				end = i;
+				afterDispatch = Promise.withResolvers<void>();
+				const position = message.followUp ?? origin ?? conversationPosition(this.ctx.sessionManager);
+				nextCompaction = { ...position, ...parsed, text: message.text, afterDispatch: afterDispatch.promise };
+				break;
+			}
+		}
+		// The next /compact and everything sent after it stay visible and retractable. The
+		// watcher cannot run it until this flush has dispatched the input preceding it.
+		const queuedMessages = nextCompaction ? queue.slice(0, end) : queue;
+		this.ctx.compactionQueuedMessages = nextCompaction ? queue.slice(end + 1) : [];
+		if (nextCompaction) queueYieldCompaction(this.ctx, nextCompaction);
+		else this.ctx.updatePendingMessagesDisplay();
 		// On failure the batch goes back to the compaction queue, so the messages this flush pushed
 		// onto the session queues must leave them. Only those: what other sources queue (an
 		// extension's message, input sent through other paths), before, during or after the flush,
@@ -1311,23 +1343,27 @@ export class UiHelpers {
 			const batch = queuedMessages.filter(
 				message => !completedCommands.has(message) && (!firstLeftOut || message !== firstPrompt),
 			);
-			setOwnerQueue(batch);
+			setOwnerQueue([...batch, ...ownerQueue()]);
 			if (isOwnerVisible()) reportFailure(batch.length, error);
 		};
 
 		try {
-			const firstPromptIndex = options?.willRetry
-				? -1
-				: queuedMessages.findIndex(message => !this.ctx.isKnownSlashCommand(message.text));
-			const prefixLength = firstPromptIndex === -1 ? queuedMessages.length : firstPromptIndex;
-			for (let i = 0; i < prefixLength; i++) {
-				await this.#deliverQueuedMessage(queuedMessages[i], onDelivered, isOwnerVisible);
+			let firstPromptIndex = 0;
+			for (; firstPromptIndex < queuedMessages.length; firstPromptIndex++) {
+				const message = queuedMessages[firstPromptIndex];
+				// The TUI dispatcher can recognize an attached-image command even when
+				// the raw text does not name a known command, e.g. /sketch[Image #1].
+				const deferPrompt = !options?.willRetry && !this.ctx.isKnownSlashCommand(message.text);
+				if (deferPrompt && (!message.images?.length || !message.text.startsWith("/"))) break;
+				const consumed = await this.#deliverQueuedMessage(message, onDelivered, isOwnerVisible, deferPrompt);
+				if (consumed === undefined) break;
+				if (consumed) completedCommands.add(message);
 				if (!isOwnerVisible()) {
-					parkRemaining(queuedMessages.slice(i + 1));
+					parkRemaining(queuedMessages.slice(firstPromptIndex + 1));
 					return;
 				}
 			}
-			if (firstPromptIndex === -1) {
+			if (firstPromptIndex === queuedMessages.length) {
 				if (options?.willRetry) this.ctx.updatePendingMessagesDisplay();
 				return;
 			}
@@ -1454,6 +1490,8 @@ export class UiHelpers {
 			this.ctx.updatePendingMessagesDisplay();
 		} catch (error) {
 			restoreQueue(error);
+		} finally {
+			afterDispatch?.resolve();
 		}
 	}
 

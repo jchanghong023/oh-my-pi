@@ -135,6 +135,14 @@ describe("compat rules conformance", () => {
 		expect(offenders).toEqual([]);
 	});
 
+	test("bundled Ascend models explicitly declare unknown pricing", () => {
+		const models = getBundledModels("ascend");
+		expect(models.length).toBeGreaterThan(0);
+		for (const model of models) {
+			expect(model.pricingStatus).toBe("unknown");
+		}
+	});
+
 	test("every cascade class/family reference exists in the taxonomy", () => {
 		const classes = new Map(rules.taxonomy.classes.map(cls => [cls.id, new Set(cls.families.map(f => f.id))]));
 		const offenders: string[] = [];

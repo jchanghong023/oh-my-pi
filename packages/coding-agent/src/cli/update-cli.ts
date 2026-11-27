@@ -20,6 +20,7 @@ import {
 	isEnoent,
 	logger,
 	pathIsWithinLexical,
+	ptree,
 	SEMVER_RE,
 	VERSION,
 	WhichCachePolicy,
@@ -57,7 +58,8 @@ import {
 import { cfgUpdateChannel } from "../modes/settings";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 
-const UPDATE_REPOSITORY = Bun.env.PI_UPDATE_REPOSITORY ?? process.env.PI_UPDATE_REPOSITORY ?? "jchanghong023/oh-my-pi";
+const FORK_INSTALLER_REPOSITORY = "jchanghong023/oh-my-pi";
+const UPDATE_REPOSITORY = Bun.env.PI_UPDATE_REPOSITORY ?? process.env.PI_UPDATE_REPOSITORY ?? FORK_INSTALLER_REPOSITORY;
 const GITHUB_API = "https://api.github.com";
 const REPO = UPDATE_REPOSITORY || "can1357/oh-my-pi";
 export function isForkUpdateRepository(): boolean {
@@ -68,6 +70,7 @@ const HOMEBREW_FORMULA = "can1357/tap/omp";
 const MISE_TOOL = "github:can1357/oh-my-pi";
 const NIX_STORE_DIR = "/nix/store";
 const RELEASE_METADATA_TIMEOUT_MS = 30_000;
+const GITHUB_AUTH_PROBE_TIMEOUT_MS = 1_000;
 const UPDATE_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 function diagnosticVersion(version: string | undefined): string | undefined {
@@ -239,27 +242,26 @@ export interface ReleaseBinaryAsset {
 
 type GitHubCliTokenRunner = (ghPath: string) => Promise<string | undefined>;
 
-async function readGitHubCliToken(ghPath: string): Promise<string | undefined> {
-	const started = performance.now();
-	updateEvent("github_auth_probe", "started", { executable: "gh" });
+async function readGitHubCliToken(ghPath: string, timeoutMs: number): Promise<string | undefined> {
+	const fields: Record<string, unknown> = { executable: "gh", timeout_ms: timeoutMs };
 	try {
-		const result = await $`${ghPath} auth token --hostname github.com`.quiet().nothrow();
-		updateEvent(
+		return await observeUpdateStage(
 			"github_auth_probe",
-			result.exitCode === 0 ? "completed" : "partial",
-			{ exit_code: result.exitCode, elapsed_ms: performance.now() - started },
-			result.exitCode === 0 ? "info" : "warn",
+			async () => {
+				const result = await ptree.exec([ghPath, "auth", "token", "--hostname", "github.com"], {
+					timeout: timeoutMs,
+					detached: true,
+					allowNonZero: true,
+				});
+				fields.exit_code = result.exitCode;
+				const token = result.ok ? result.stdout.trim() : "";
+				fields.outcome = token ? "completed" : "partial";
+				return token || undefined;
+			},
+			fields,
+			{ recoverable: true },
 		);
-		if (result.exitCode !== 0) return undefined;
-		const token = result.text().trim();
-		return token.length > 0 ? token : undefined;
-	} catch (error) {
-		updateEvent(
-			"github_auth_probe",
-			"partial",
-			{ elapsed_ms: performance.now() - started, ...logger.diagnosticError(error) },
-			"warn",
-		);
+	} catch {
 		return undefined;
 	}
 }
@@ -269,6 +271,7 @@ async function resolveGitHubToken(
 		envToken?: string;
 		ghPath?: string | null;
 		runGhAuthToken?: GitHubCliTokenRunner;
+		timeoutMs?: number;
 	} = {},
 ): Promise<string | undefined> {
 	const envToken = options.envToken ?? (process.env.GITHUB_TOKEN || process.env.GH_TOKEN);
@@ -277,8 +280,10 @@ async function resolveGitHubToken(
 	const ghPath = options.ghPath === null ? undefined : (options.ghPath ?? $which("gh"));
 	if (!ghPath) return undefined;
 
-	const token = await (options.runGhAuthToken ?? readGitHubCliToken)(ghPath);
-	return token?.trim() || undefined;
+	if (!options.runGhAuthToken) {
+		return readGitHubCliToken(ghPath, options.timeoutMs ?? GITHUB_AUTH_PROBE_TIMEOUT_MS);
+	}
+	return (await options.runGhAuthToken(ghPath))?.trim() || undefined;
 }
 
 /** Test hook for the GitHub credential precedence without invoking a real CLI. */
@@ -934,10 +939,22 @@ function getMiseDataDir(): string {
 
 function isMiseInstallPath(candidate: string): boolean {
 	const dataDir = getMiseDataDir();
+	const installsDir = process.env.MISE_INSTALLS_DIR;
 	return (
 		isPathInDirectory(candidate, path.join(dataDir, "shims")) ||
-		isPathInDirectory(candidate, path.join(dataDir, "installs"))
+		isPathInDirectory(candidate, path.join(dataDir, "installs")) ||
+		(!!installsDir && isPathInDirectory(candidate, installsDir))
 	);
+}
+
+function isHomebrewCellarPath(candidate: string): boolean {
+	const parts = normalizePathForComparison(candidate).split(path.sep);
+	return parts.some((part, index) => (part === "Cellar" || part === "cellar") && parts[index + 1] === APP_NAME);
+}
+
+async function isHomebrewFormulaBinary(candidate: string): Promise<boolean> {
+	const prefix = await getHomebrewFormulaPrefix([HOMEBREW_FORMULA]);
+	return prefix !== undefined && isPathInDirectory(candidate, path.join(prefix, "bin"));
 }
 
 function normalizePathForComparison(filePath: string): string {
@@ -1281,7 +1298,7 @@ async function resolveForkUpdateTarget(launcherPath: string): Promise<{ path: st
 		const parts = normalizePathForComparison(candidate).split(path.sep);
 		if (
 			parts.includes("node_modules") ||
-			parts.some((part, index) => (part === "Cellar" || part === "cellar") && parts[index + 1] === APP_NAME) ||
+			isHomebrewCellarPath(candidate) ||
 			isPathInDirectoryLexical(candidate, NIX_STORE_DIR) ||
 			isMiseInstallPath(candidate)
 		) {
@@ -1299,10 +1316,9 @@ async function resolveForkUpdateTarget(launcherPath: string): Promise<{ path: st
 	// A global package link can ultimately resolve outside its managed tree.
 	if (isSymlinkPath(launcherPath) && isManagedPath(resolveLauncherLinkTarget(launcherPath))) return undefined;
 
-	// A custom Homebrew prefix may not expose a Cellar path. Don't probe npm,
-	// Bun or mise: their launchers and install paths identify managed entries.
-	const homebrewPrefix = await getHomebrewFormulaPrefix([HOMEBREW_FORMULA]);
-	if (homebrewPrefix && isPathInDirectory(launcherPath, path.join(homebrewPrefix, "bin"))) return undefined;
+	// Custom manager roots need not expose a Cellar or default mise install path.
+	if (await isHomebrewFormulaBinary(launcherPath)) return undefined;
+	if ((await getMiseBinDirs()).some(dir => isPathInDirectory(launcherPath, dir))) return undefined;
 
 	if (!fs.statSync(targetPath, { throwIfNoEntry: false })?.isFile() || !(await isNativeExecutable(targetPath))) {
 		return undefined;
@@ -1419,14 +1435,14 @@ async function fetchLatestManifest(
 			}
 			summary.failure_stage = "manifest_validation";
 			if (!response.ok) {
+				void response.body?.cancel().catch(() => {});
 				if (response.status === 404 && channel === "canary") throw noCanary();
 				const authHint =
 					response.status === 401 || response.status === 403
 						? "; check the registry credentials in your .npmrc"
 						: "";
-				const detail = await responseBodyDetail(response);
 				throw new Error(
-					`Failed to fetch release info for ${pkg}${origin}: HTTP ${httpStatusText(response)}${detail}${authHint}`,
+					`Failed to fetch release info for ${pkg}${origin}: HTTP ${httpStatusText(response)}${authHint}`,
 				);
 			}
 
@@ -1444,14 +1460,13 @@ export async function getLatestGitHubRelease(
 	repository: string,
 	timeoutMs: number = RELEASE_METADATA_TIMEOUT_MS,
 ): Promise<ReleaseInfo> {
-	return (await fetchLatestGitHubRelease(repository, timeoutMs, await resolveGitHubToken())).release;
+	return (await fetchLatestGitHubRelease(repository, timeoutMs)).release;
 }
 
 async function fetchLatestGitHubRelease(
 	repository: string,
 	timeoutMs: number,
-	githubToken: string | undefined,
-): Promise<{ release: ReleaseInfo; metadata: unknown }> {
+): Promise<{ release: ReleaseInfo; metadata: unknown; githubToken: string | undefined }> {
 	const fields: Record<string, unknown> = {
 		...updateDestination(`${GITHUB_API}/repos/${repository}/releases/latest`, "/repos/<repository>/releases/latest"),
 		timeout_ms: timeoutMs,
@@ -1459,6 +1474,11 @@ async function fetchLatestGitHubRelease(
 	return observeUpdateStage(
 		"latest_github_release",
 		async () => {
+			const signal = withTimeoutSignal(timeoutMs);
+			// Leave time for the request to proceed anonymously if gh does not respond.
+			const githubToken = await resolveGitHubToken({
+				timeoutMs: Math.max(1, Math.min(GITHUB_AUTH_PROBE_TIMEOUT_MS, Math.floor(timeoutMs / 2))),
+			});
 			let response: Response;
 			try {
 				const headers: Record<string, string> = {
@@ -1469,7 +1489,7 @@ async function fetchLatestGitHubRelease(
 				fields.failure_stage = "request";
 				response = await fetch(`${GITHUB_API}/repos/${repository}/releases/latest`, {
 					headers,
-					signal: withTimeoutSignal(timeoutMs),
+					signal,
 				});
 			} catch (err) {
 				if (isTimeoutError(err)) {
@@ -1512,6 +1532,7 @@ async function fetchLatestGitHubRelease(
 			});
 			return {
 				metadata: data,
+				githubToken,
 				release: {
 					tag,
 					version,
@@ -1530,8 +1551,7 @@ async function getForkRelease(channel: UpdateChannel | undefined, timeoutMs = RE
 	if (channel === "canary") {
 		throw new Error(`Canary updates are unavailable for this binary-only fork. Try \`${APP_NAME} update --stable\`.`);
 	}
-	const githubToken = await resolveGitHubToken();
-	return { ...(await fetchLatestGitHubRelease(REPO, timeoutMs, githubToken)), githubToken };
+	return fetchLatestGitHubRelease(REPO, timeoutMs);
 }
 
 /** Select the platform asset from the release already fetched for the update. */
@@ -1603,7 +1623,16 @@ export async function getLatestRelease(
 export async function checkForNewVersion(currentVersion: string, channel: UpdateChannel): Promise<string | undefined> {
 	if (!(await canSelfUpdate())) return undefined;
 	if (isForkUpdateRepository()) {
-		if (isMiseInstallPath(process.execPath)) return undefined;
+		if (channel === "canary") return undefined;
+		const executable = process.execPath;
+		if (
+			isMiseInstallPath(executable) ||
+			isHomebrewCellarPath(executable) ||
+			isHomebrewCellarPath(tryRealpath(executable) ?? executable) ||
+			(await isHomebrewFormulaBinary(executable))
+		) {
+			return undefined;
+		}
 		const latest = await getForkRelease(channel, 5_000);
 		if (compareUpdateVersions(latest.release.version, currentVersion) <= 0) return undefined;
 		return findLatestReleaseBinaryAsset(latest, await getBinaryName())?.version;
@@ -2197,6 +2226,7 @@ export async function sweepStaleUpdateArtifacts(targetPath: string): Promise<voi
 					try {
 						mtimeMs = (await fs.promises.stat(full)).mtimeMs;
 					} catch (error) {
+						if (isEnoent(error)) continue; // Another run already removed the discovered entry.
 						fields.retained_count = Number(fields.retained_count) + 1;
 						fields.outcome = "partial";
 						updateEvent("artifact_stat", "partial", logger.diagnosticError(error), "warn");
@@ -2279,13 +2309,15 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 				}
 
 				fields.installed_verified = true;
-				backupReady = false;
 				// Swap done and verified. On Windows the backup is still the running
 				// process image and cannot be unlinked until this process exits, and on
 				// macOS unlinking the still-mapped backup would break the live image's
 				// TCC permission attribution, so either way a failure here must NOT fail
 				// an otherwise-successful update.
-				fields.backup_retained = !(await removeBackupBestEffort(options.backupPath));
+				if (backupReady) {
+					backupReady = false;
+					fields.backup_retained = !(await removeBackupBestEffort(options.backupPath));
+				}
 				updateEvent("replacement_state", "completed", { ...fields, installed_verified: true });
 				return verification;
 			} catch (err) {
@@ -2564,7 +2596,7 @@ export async function migrateRenamedInstall(release: ReleaseInfo, steps: RenameM
 			updateEvent(
 				"rename_install_result",
 				installExit === 0 ? "completed" : "failed",
-				{ attempt: 1, exit_code: installExit, old_install_untouched: true },
+				{ attempt: 1, exit_code: installExit, old_package_cleanup_attempted: false },
 				installExit === 0 ? "info" : "error",
 			);
 			if (installExit !== 0) {
@@ -3230,7 +3262,7 @@ export async function updateViaShimTakeover(
 			// Serialize the launcher swap and artifact sweep so two overlapping updates
 			// never retire the same shims or reclaim a live run's backup before its
 			// verification can roll it back.
-			await observeUpdateStage("shim_swap_lock", () =>
+			const verification = await observeUpdateStage("shim_swap_lock", () =>
 				withFileLock(exePath, async () => {
 					console.log(chalk.dim(`Installing ${APP_NAME}.exe beside the script launcher...`));
 					await observeUpdateStage("shim_binary_replace", () => fs.promises.rename(tempPath, exePath));
@@ -3351,6 +3383,7 @@ export async function updateViaShimTakeover(
 					for (const ext of [".exe", "", ".cmd", ".ps1", ".bat"]) {
 						await sweepStaleUpdateArtifacts(path.join(launcherDir, `${APP_NAME}${ext}`));
 					}
+					return verification;
 				}),
 			);
 			for (const { launcher } of forwarded) {
@@ -3363,8 +3396,7 @@ export async function updateViaShimTakeover(
 					),
 				);
 			}
-			printVerifiedVersion(installedVersion);
-			await syncRelayAfterVerifiedUpdate(exePath);
+			await finishVerifiedUpdate({ ...verification, path: exePath }, installedVersion);
 			console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
 			fields.forwarded_count = forwarded.length;
 			fields.stuck_count = stuck.length;
@@ -3450,7 +3482,8 @@ function unsupportedForkInstall(manager?: string): UpdateOutcome {
 		: "This fork can only update a standalone OMP binary, not a managed installation or launcher.";
 	const script = process.platform === "win32" ? "install.ps1" : "install.sh";
 	console.log(chalk.yellow(reason));
-	console.log(chalk.dim(`Use this fork's binary installer: https://github.com/${REPO}/blob/main/scripts/${script}`));
+	const installer = `https://github.com/${FORK_INSTALLER_REPOSITORY}/blob/main/scripts/${script}`;
+	console.log(chalk.dim(`Use this fork's binary installer: ${installer}`));
 	return { kind: "unsupported", reason };
 }
 
@@ -3649,7 +3682,6 @@ async function runManagedUpdate(
  * fails, or when another update holds the install lock.
  */
 export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutcome> {
-	const started = performance.now();
 	const fields: Record<string, unknown> = {
 		force: opts.force,
 		check_only: opts.check,
@@ -3677,7 +3709,7 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 				if (!opts.check) lock = acquireInstallLock();
 				// `update.channel` picks the channel; --canary/--stable switch and persist it.
 				await Settings.init({ cwd: getProjectDir() });
-				console.log(chalk.dim(`Current version: ${VERSION}`));
+				if (!fork) console.log(chalk.dim(`Current version: ${VERSION}`));
 				const persistedChannel = readPersistedChannel() ?? "stable";
 				const channel = opts.channel ?? persistedChannel;
 				const isChannelSwitch = opts.channel !== undefined && opts.channel !== persistedChannel;
@@ -3717,8 +3749,7 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 
 				try {
 					let target: Awaited<ReturnType<typeof resolveForkUpdateTarget>>;
-					if (!opts.check && channel !== "canary") {
-						if (!ompPath) throw new Error(`Could not resolve ${APP_NAME} binary path in PATH`);
+					if (ompPath && channel !== "canary") {
 						target = await observeUpdateStage("target_resolution", () => resolveForkUpdateTarget(ompPath));
 						if (!target) {
 							fields.outcome = "skipped";
@@ -3731,18 +3762,22 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 							force_binary: true,
 							replaces_symlink: false,
 						});
+					} else if (!opts.check && channel !== "canary") {
+						throw new Error(`Could not resolve ${APP_NAME} binary path in PATH`);
 					}
+					const currentVersion = target?.version ?? VERSION;
+					fields.current_version = diagnosticVersion(currentVersion);
+					console.log(chalk.dim(`Current version: ${currentVersion}`));
 					failureStage = "release_check";
 					const latest = await getForkRelease(channel);
 					const { release, githubToken } = latest;
 					failureStage = "install";
 
-					const currentVersion = target?.version ?? VERSION;
 					const comparison = compareUpdateVersions(release.version, currentVersion);
 					fields.selected_version = diagnosticVersion(release.version);
 					fields.version_comparison = comparison;
 					if (comparison < 0 || (comparison === 0 && !allowReinstall)) {
-						if (target && isChannelSwitch) {
+						if (!opts.check && target && isChannelSwitch) {
 							persistChannel(channel);
 							console.log(chalk.dim(`Switched to ${channel}; keeping installed version ${currentVersion}.`));
 						}
@@ -3766,7 +3801,7 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 					} else {
 						console.log(chalk.yellow(`Forcing reinstall of ${asset.version}`));
 					}
-					if (!target) {
+					if (opts.check || !target) {
 						fields.reason = "check_only";
 						return { kind: "available", version: asset.version };
 					}
@@ -3784,25 +3819,18 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 					if (opts.channel) persistChannel(channel);
 					return { kind: "installed", version: installed };
 				} catch (err) {
-					const cancelled = err instanceof Error && err.name === "AbortError" && !isTimeoutError(err);
-					updateEvent(
-						"command",
-						cancelled ? "cancelled" : "failed",
-						{
-							failure_stage: failureStage,
-							exit_code: 1,
-							elapsed_ms: performance.now() - started,
-							...logger.diagnosticError(err),
-						},
-						cancelled ? "info" : "error",
-					);
-					throw updateError(
-						failureStage === "release_check" ? "Failed to check for updates" : "Update failed",
-						err,
-					);
+					fields.failure_stage = failureStage;
+					fields.exit_code = 1;
+					throw err;
 				}
 			},
 			fields,
+		);
+	} catch (err) {
+		if (fields.failure_stage === undefined) throw err;
+		throw updateError(
+			fields.failure_stage === "release_check" ? "Failed to check for updates" : "Update failed",
+			err,
 		);
 	} finally {
 		lock?.release();

@@ -24,16 +24,22 @@ jobs:
       name: Resolve fork release metadata
       runs-on: ubuntu-22.04
       outputs:
+         publish-authorized: ${{ steps.authorize.outputs.publish-authorized }}
          release-tag: ${{ steps.detect.outputs.release-tag }}
          version: ${{ steps.detect.outputs.version }}
       steps:
          - name: Reject release publication outside main
-           if: ${{ inputs.publish_release && github.ref != 'refs/heads/main' }}
+           id: authorize
+           if: ${{ inputs.publish_release }}
+           shell: bash
            env:
               RELEASE_REF: ${{ github.ref }}
            run: |
-              echo "::error::Fork releases must be published from refs/heads/main, got $RELEASE_REF"
-              exit 1
+              if [ "$RELEASE_REF" != 'refs/heads/main' ]; then
+                echo "::error::Fork releases must be published from refs/heads/main, got $RELEASE_REF"
+                exit 1
+              fi
+              echo "publish-authorized=true" >> "$GITHUB_OUTPUT"
          - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
          - name: Derive version from fork upstream baseline
            id: detect
@@ -210,7 +216,7 @@ jobs:
    release_github:
       name: Publish GitHub release
       if: ${{ inputs.publish_release &&
-         github.ref == 'refs/heads/main' &&
+         needs.release_metadata.outputs.publish-authorized == 'true' &&
          !cancelled() &&
          needs.release_metadata.result == 'success' &&
          needs.release_binary.result == 'success' &&

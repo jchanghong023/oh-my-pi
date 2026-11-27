@@ -8,10 +8,10 @@
  * rules around the header and the footer, the transcript scrolled between
  * them (j/k, g/G, PgUp/PgDn, the wheel) and following its end.
  */
-import { computed, effect, For, type JSXNode, type UiNode, untrack } from "@oh-my-pi/pi-tui";
+import { computed, derivedNode, effect, For, isUiNode, type JSXNode, type UiNode, untrack } from "@oh-my-pi/pi-tui";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
-import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
+import type { TspMenuEntry, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { sanitizeErrorLine } from "../../../modes/view-model/chrome/error-block";
 import { formatContextUsage } from "../../status/format";
 import type { FocusHost } from "../../shell/overlays";
@@ -39,13 +39,14 @@ export const STATUS_TONE: Readonly<Record<ViewerAgentStatus, TspTone>> = {
 
 function Block(props: { readonly model: AgentTranscriptViewerModel; readonly block: ViewerBlock }): JSXNode {
 	const { model, block } = props;
-	// The session's transcript controls: shown (and run) as on the session's own blocks.
+	// The Hub may keep a block mounted while its agent becomes read-only.
 	const actions = model.deps.actions;
+	const sendable = () => (model.rev(), model.sendable);
+	const hideActivity = () => (model.rev(), !model.detailedInspection && model.deps.hideTools?.() === true);
 	switch (block.kind) {
-		case "user":
-			return block.synthetic ? (
-				<SyntheticMessage text={block.text} expanded={model.expanded} />
-			) : (
+		case "user": {
+			if (block.synthetic) return <SyntheticMessage text={block.text} expanded={model.expanded} />;
+			const prompt = (
 				<UserMessage
 					model={{
 						text: block.text,
@@ -53,11 +54,17 @@ function Block(props: { readonly model: AgentTranscriptViewerModel; readonly blo
 						liveSteered: block.liveSteered,
 						timestamp: block.timestamp,
 						hour12: model.deps.hour12,
-						actions: actions !== undefined,
-						onAction: act => actions?.prompt(act, block.text, block.timestamp),
+						actions: () => actions !== undefined && sendable(),
+						onAction: act => {
+							if (act === "copy-message" || model.sendable) actions?.prompt(act, block.text, block.timestamp);
+						},
 					}}
 				/>
 			);
+			if (!actions || !isUiNode(prompt)) return prompt;
+			const copy: TspMenuEntry = { id: "copy-message", label: "Copy message", icon: "copy" };
+			return derivedNode(prompt, props => (sendable() ? props : { ...props, actions: { hold: [copy] } }));
+		}
 		case "parentIrc":
 			return <ParentIrcMessage parentIrc={block.parentIrc} timestamp={block.timestamp} expanded={model.expanded} />;
 		case "assistant":
@@ -66,18 +73,25 @@ function Block(props: { readonly model: AgentTranscriptViewerModel; readonly blo
 					model={{
 						message: block.message,
 						finalized: true,
-						hideThinking: () => (model.rev(), model.deps.hideThinking?.(model.detailedInspection) ?? false),
+						// The saved reply is the source of reasoning, not the session under the Hub.
+						// Use the explicit thinking preference, as for an ended record.
+						hideThinking: () => (model.rev(), model.deps.hideThinking?.(true) ?? false),
+						hideThinkingActivity: hideActivity,
 						proseOnlyThinking: model.deps.proseOnlyThinking?.(),
 						expandThinking: model.expanded,
 						turnUsage: block.usage,
-						actions: actions !== undefined,
-						onAction: (act, copyText) => actions?.reply(act, block.message, copyText),
+						actions: () => (actions === undefined ? false : sendable() || "copy"),
+						onAction: (act, copyText) => {
+							if (act === "copy-answer" || act === "copy-error" || model.sendable) {
+								actions?.reply(act, block.message, copyText);
+							}
+						},
 					}}
 				/>
 			);
 		case "tool":
 			return (
-				<ToolActivity visible={() => (model.rev(), model.detailedInspection || !model.deps.hideTools?.())}>
+				<ToolActivity visible={() => !hideActivity()}>
 					<ToolBlock call={block.call} />
 				</ToolActivity>
 			);

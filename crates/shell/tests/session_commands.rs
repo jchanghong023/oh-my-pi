@@ -13,7 +13,8 @@ use std::{
 
 use omp_shell::{
 	SessionCommandFuture, SessionCommandHandler, SessionCommandRequest, SessionCommandResult,
-	SessionCommands, Shell, ShellRunOptions, ShellRunResult, cancel::CancelToken,
+	SessionCommands, Shell, ShellRunOptions, ShellRunResult,
+	cancel::{AbortReason, CancelToken},
 	reserved_command_names,
 };
 
@@ -375,12 +376,46 @@ async fn concurrent_invocations_are_in_flight_together() {
 async fn cancelling_the_run_abandons_a_pending_call() {
 	let shell = Shell::new(None);
 	let dropped = Arc::new(AtomicBool::new(false));
-	let started = Instant::now();
-	let (result, _) =
-		run(&shell, "probe pending", Some(hanging(&["probe"], &dropped, None)), None, Some(100))
-			.await;
-	let elapsed = started.elapsed();
-	assert!(elapsed < Duration::from_millis(1500), "the cancelled run took {elapsed:?}");
+	let (started, active) = tokio::sync::oneshot::channel();
+	let started = Mutex::new(Some(started));
+	let pending = commands(&["probe"], {
+		let dropped = Arc::clone(&dropped);
+		move |_| {
+			let started = started
+				.lock()
+				.expect("started")
+				.take()
+				.expect("one invocation");
+			let flag = DropFlag(Arc::clone(&dropped));
+			Box::pin(async move {
+				let _flag = flag;
+				let _ = started.send(());
+				std::future::pending::<Result<SessionCommandResult, String>>().await
+			})
+		}
+	});
+	let mut cancel = CancelToken::default();
+	let abort = cancel.emplace_abort_token();
+	let mut run_pending = std::pin::pin!(shell.run(
+		ShellRunOptions {
+			command: "probe pending".to_owned(),
+			commands: Some(pending),
+			..Default::default()
+		},
+		None,
+		cancel,
+	));
+	tokio::select! {
+		result = run_pending.as_mut() => panic!("run finished before the handler was active: {result:?}"),
+		started = tokio::time::timeout(Duration::from_secs(5), active) => {
+			started.expect("handler did not start").expect("handler exited before waiting");
+		}
+	}
+	abort.abort(AbortReason::Timeout);
+	let result = tokio::time::timeout(Duration::from_millis(1500), run_pending)
+		.await
+		.expect("the cancelled run did not return promptly")
+		.expect("run");
 	assert!(result.timed_out);
 	assert_eq!(result.exit_code, None);
 	assert!(eventually(&dropped).await, "the pending call was not abandoned");

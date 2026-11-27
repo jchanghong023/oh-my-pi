@@ -1243,24 +1243,34 @@ export function openNativeAddon(candidate) {
 export function loadNative() {
 	startupMarker("native:loadNative:start");
 	const ctx = initLoaderContext();
+	const errors = [];
+	let versionCacheReady = true;
 	if (ctx.isCompiledBinary && ctx.offlineCacheUid !== undefined) {
-		if (!prepareLinuxPrivateCacheDirectory(ctx.versionedDir, ctx.offlineCacheUid)) {
-			throw new Error(`Linux native cache directory not found: ${ctx.versionedDir}`);
-		}
 		try {
-			touchNativeVersionDir(ctx.versionedDir);
-		} catch {
-			// An already verified cache hit can still be read on a read-only mount.
+			if (!prepareLinuxPrivateCacheDirectory(ctx.versionedDir, ctx.offlineCacheUid)) {
+				throw new Error(`Linux native cache directory not found: ${ctx.versionedDir}`);
+			}
+			try {
+				touchNativeVersionDir(ctx.versionedDir);
+			} catch {
+				// An already verified cache hit can still be read on a read-only mount.
+			}
+		} catch (err) {
+			if (err instanceof UnsafeLinuxCacheError) throw err;
+			versionCacheReady = false;
+			const message = err instanceof Error ? err.message : String(err);
+			errors.push(`native addon cache (${ctx.versionedDir}): ${message}`);
 		}
 	}
-	const grammarDir = prepareNativeGrammarDir(ctx);
+	const grammarDir =
+		versionCacheReady || ctx.nativesDir !== ctx.addonCacheDir ? prepareNativeGrammarDir(ctx) : undefined;
 
-	const errors = [];
 	const hasEmbedded = hasMatchingEmbeddedAddon(ctx);
 	const { primary: primaryEmbeddedFile, fallback: fallbackEmbeddedFile } = embeddedProbeFiles(ctx);
-	const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors, primaryEmbeddedFile);
-	const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
-	const fallbackEmbeddedPath = fallbackEmbeddedFile && embeddedAddonPath(ctx.versionedDir, fallbackEmbeddedFile);
+	const embeddedCandidate = versionCacheReady ? maybeExtractEmbeddedAddon(ctx, errors, primaryEmbeddedFile) : null;
+	const stagedCandidate = versionCacheReady && !embeddedCandidate ? maybeStageNodeModulesAddon(ctx, errors) : null;
+	const fallbackEmbeddedPath =
+		versionCacheReady && fallbackEmbeddedFile && embeddedAddonPath(ctx.versionedDir, fallbackEmbeddedFile);
 	const runtimeCandidates = resolveRuntimeCandidates({
 		candidates: ctx.candidates,
 		versionedDir: ctx.versionedDir,
@@ -1272,13 +1282,12 @@ export function loadNative() {
 	for (const candidate of runtimeCandidates) {
 		// Extracted lazily, and never probed unless this build's copy is in place.
 		if (candidate === fallbackEmbeddedPath && !maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile)) continue;
-		if (
-			ctx.offlineCacheUid !== undefined &&
-			path.dirname(candidate) === ctx.versionedDir &&
-			!findPrivateNativeCacheFile(candidate, ctx.offlineCacheUid)
-		) {
-			errors.push(`${candidate}: native addon file not found`);
-			continue;
+		if (ctx.offlineCacheUid !== undefined && path.dirname(candidate) === ctx.versionedDir) {
+			if (!versionCacheReady) continue;
+			if (!findPrivateNativeCacheFile(candidate, ctx.offlineCacheUid)) {
+				errors.push(`${candidate}: native addon file not found`);
+				continue;
+			}
 		}
 		try {
 			startupMarker(`native:require:${path.basename(candidate)}`);
@@ -1288,9 +1297,10 @@ export function loadNative() {
 			configureGrammarDir(bindings, grammarDir);
 			loadedAddon = describeLoadedAddon(bindings, candidate, ctx);
 			if (
-				ctx.offlineCacheUid === undefined ||
-				ctx.isCompiledBinary ||
-				(grammarDir !== undefined && ctx.nativesDir === ctx.addonCacheDir)
+				versionCacheReady &&
+				(ctx.offlineCacheUid === undefined ||
+					ctx.isCompiledBinary ||
+					(grammarDir !== undefined && ctx.nativesDir === ctx.addonCacheDir))
 			) {
 				cleanupStaleNativeVersions({
 					nativesDir: ctx.addonCacheDir,
@@ -1298,7 +1308,7 @@ export function loadNative() {
 					offlineCacheUid: ctx.offlineCacheUid,
 				});
 			}
-			if (hasEmbedded) {
+			if (versionCacheReady && hasEmbedded) {
 				pruneStaleEmbeddedAddons({
 					targetDir: ctx.versionedDir,
 					keepHashes: [primaryEmbeddedFile, fallbackEmbeddedFile].filter(Boolean).map(file => file.hash),

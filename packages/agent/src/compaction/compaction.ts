@@ -7,10 +7,12 @@
 
 import {
 	type AnthropicCompactionFiles,
+	type AnthropicOutputEffort,
 	type Api,
 	type ApiKey,
 	type AssistantMessage,
 	type CodexCompactionContext,
+	completeSimple,
 	type Context,
 	Effort,
 	type FetchImpl,
@@ -710,15 +712,18 @@ const completeCompaction: typeof instrumentedCompleteSimple = async (model, cont
 						: telemetryOptions,
 				);
 				const cancelled = options.signal?.aborted || response.stopReason === "aborted";
-				const failed = response.stopReason === "error";
-				(cancelled ? logger.info : failed ? logger.warn : logger.info)("Compaction summary request ended", {
+				const truncated = response.stopReason === "length";
+				const failed = !cancelled && (truncated || response.stopReason === "error");
+				(failed ? logger.warn : logger.info)("Compaction summary request ended", {
 					...fields,
 					result: cancelled ? "cancelled" : failed ? "failed" : "success",
 					elapsed_ms: performance.now() - started,
 					input_tokens: response.usage.input,
 					output_tokens: response.usage.output,
 					...(failed
-						? logger.diagnosticError(createSummarizationError("Compaction request failed", response))
+						? truncated
+							? { reason: "output_limit" }
+							: logger.diagnosticError(createSummarizationError("Compaction request failed", response))
 						: {}),
 				});
 				return response;
@@ -1895,15 +1900,24 @@ function buildCompactionV2Reasoning(
 	return { effort: reasoning.wireEffort ?? reasoning.requestedEffort, summary: "auto" };
 }
 
+interface NativeCompactionFailure {
+	error: unknown;
+	method: "responses_v2" | "responses_v1" | "anthropic_native";
+}
+
 /**
  * Keep any non-auth native protocol failure ahead of authentication failures.
  * Downstream may retry compaction with another provider only when every native
  * protocol failed authentication, so a later auth error must not hide an
  * earlier transport or protocol failure.
  */
-function selectNativeCompactionError(previousError: unknown, nextError: unknown): unknown {
-	if (previousError === undefined) return nextError;
-	return AIError.is(AIError.classify(previousError), AIError.Flag.AuthFailed) ? nextError : previousError;
+function selectNativeCompactionFailure(
+	previous: NativeCompactionFailure | undefined,
+	error: unknown,
+	method: NativeCompactionFailure["method"],
+): NativeCompactionFailure | undefined {
+	if (previous && !AIError.is(AIError.classify(previous.error), AIError.Flag.AuthFailed)) return previous;
+	return error === undefined ? undefined : { error, method };
 }
 
 /**
@@ -1952,7 +1966,7 @@ export async function compact(
 		},
 		async () => {
 			const started = performance.now();
-			let finalMethod = "local_summary";
+			let finalMethod: NativeCompactionFailure["method"] | "remote_summary" | "local_summary" | undefined;
 			let outputTokens: number | undefined;
 			logger.info("Compaction pipeline started", {
 				component: "compaction",
@@ -2027,7 +2041,6 @@ export async function compact(
 					if (context?.length) summaryOptions.extraContext = [...(summaryOptions.extraContext ?? []), ...context];
 					extraContextLoaded = true;
 				};
-				if (summaryOptions.remoteEndpoint) finalMethod = "remote_summary";
 
 				// An archive keeps the reasoning policy of the model it was rendered for;
 				// Claude refuses inputs that reproduce reasoning (issue #6093), so a
@@ -2078,7 +2091,7 @@ export async function compact(
 				];
 				const remoteMessages: AgentMessage[] = [...remotePrefixMessages, ...recentMessages];
 				let usedRemoteCompaction = false;
-				let nativeCompactionError: unknown;
+				let nativeCompactionFailure: NativeCompactionFailure | undefined;
 				let remoteReplayThroughEntryId: string | undefined;
 				// If the complete history overflows, compact only the prefix and replay
 				// the kept tail unchanged. Do not truncate its tool outputs first.
@@ -2121,6 +2134,7 @@ export async function compact(
 					settings.remoteStreamingV2Enabled !== false &&
 					shouldUseCompactionV2Streaming(model)
 				) {
+					finalMethod = "responses_v2";
 					const previousRemoteCompaction = getCompactionV2PreserveData(previousPreserveData);
 					const previousReplacementHistory =
 						previousRemoteCompaction?.provider === model.provider
@@ -2265,7 +2279,6 @@ export async function compact(
 						);
 						reportRemoteUsage(remote.usage, startedAt);
 						preserveData = { ...preserveData, ...storeCompactionV2PreserveData(remote, model) };
-						finalMethod = "responses_v2";
 						outputTokens = remote.usage?.outputTokens;
 					};
 					const whole = await buildV2Input(true);
@@ -2297,7 +2310,11 @@ export async function compact(
 								});
 								throw err;
 							}
-							nativeCompactionError = selectNativeCompactionError(nativeCompactionError, err);
+							nativeCompactionFailure = selectNativeCompactionFailure(
+								nativeCompactionFailure,
+								err,
+								"responses_v2",
+							);
 							// Claim the V1 fallback only when the V1 block below will run.
 							logger.warn(
 								shouldUseOpenAiRemoteCompaction(model)
@@ -2325,6 +2342,7 @@ export async function compact(
 				}
 
 				if (!usedRemoteCompaction && settings.remoteEnabled !== false && shouldUseOpenAiRemoteCompaction(model)) {
+					finalMethod = "responses_v1";
 					const previousRemoteCompaction = getPreservedOpenAiRemoteCompactionData(previousPreserveData);
 					const previousV2Compaction = getCompactionV2PreserveData(previousPreserveData);
 					const previousReplacementHistory =
@@ -2372,7 +2390,7 @@ export async function compact(
 						);
 						reportRemoteUsage(usage, startedAt);
 						preserveData = withOpenAiRemoteCompactionPreserveData(preserveData, remote);
-						finalMethod = "responses_v1";
+						outputTokens = usage?.outputTokens;
 						logger.info("Compaction native method completed", {
 							component: "compaction",
 							event: "compaction_native_method",
@@ -2420,7 +2438,11 @@ export async function compact(
 								});
 								throw err;
 							}
-							nativeCompactionError = selectNativeCompactionError(nativeCompactionError, err);
+							nativeCompactionFailure = selectNativeCompactionFailure(
+								nativeCompactionFailure,
+								err,
+								"responses_v1",
+							);
 							logger.warn("OpenAI remote compaction failed", {
 								component: "compaction",
 								event: "compaction_native_fallback",
@@ -2450,6 +2472,7 @@ export async function compact(
 					settings.remoteEnabled !== false &&
 					shouldUseAnthropicNativeCompaction(model)
 				) {
+					finalMethod = "anthropic_native";
 					const previousNative = getPreservedAnthropicCompactionData(previousPreserveData);
 					// Lead with the previous summary as the live context renders it:
 					// natively when this provider wrote it, as text otherwise.
@@ -2542,13 +2565,16 @@ export async function compact(
 					}
 					await ensureExtraContext();
 					const methodStarted = performance.now();
+					const complete = summaryOptions.completeImpl ?? completeSimple;
+					const requestedEffort = resolveCompactionEffort(model, summaryOptions.thinkingLevel);
+					let effectiveEffort: AnthropicOutputEffort | undefined;
 					logger.info("Compaction native method started", {
 						component: "compaction",
 						event: "compaction_native_method",
 						stage: "request",
 						result: "started",
 						method: "anthropic_native",
-						effective_effort: resolveCompactionEffort(model, summaryOptions.thinkingLevel) ?? "off",
+						requested_effort: requestedEffort ?? "off",
 					});
 					try {
 						// The live turn's own system prompt, wire tools and transformed
@@ -2578,7 +2604,7 @@ export async function compact(
 									formatAdditionalContext(summaryOptions.extraContext).trim() || undefined,
 								),
 								maxTokens: Math.min(Math.floor(0.8 * reserveTokens), MAX_SUMMARY_TOKENS),
-								reasoning: resolveCompactionEffort(model, summaryOptions.thinkingLevel),
+								reasoning: requestedEffort,
 							},
 							signal,
 							{
@@ -2589,7 +2615,15 @@ export async function compact(
 								promptCacheKey: summaryOptions.promptCacheKey,
 								thinkingProbe: summaryOptions.thinkingProbe,
 								providerSessionState: summaryOptions.providerSessionState,
-								completeImpl: summaryOptions.completeImpl,
+								completeImpl: async (requestModel, requestContext, requestOptions) => {
+									effectiveEffort = undefined;
+									const response = await complete(requestModel, requestContext, requestOptions);
+									// The provider reports the effort it left in force. The
+									// completion's reasoning option can be a budget for an
+									// unknown API default, not the actual effort.
+									effectiveEffort = response.requestControls?.effort?.tail ?? undefined;
+									return response;
+								},
 								telemetry: summaryOptions.telemetry,
 								retry: summaryOneshotRetry(summaryOptions),
 							},
@@ -2599,7 +2633,6 @@ export async function compact(
 						nativeToolChanges = remote.toolChanges;
 						nativeUsedTokens = calculatePromptTokens(remote.usage);
 						usedRemoteCompaction = true;
-						finalMethod = "anthropic_native";
 						outputTokens = remote.usage.output;
 						logger.info("Compaction native method completed", {
 							component: "compaction",
@@ -2607,6 +2640,7 @@ export async function compact(
 							stage: "request",
 							result: "success",
 							method: finalMethod,
+							effective_effort: effectiveEffort,
 							input_tokens: calculatePromptTokens(remote.usage),
 							output_tokens: outputTokens,
 							elapsed_ms: performance.now() - methodStarted,
@@ -2622,17 +2656,23 @@ export async function compact(
 								stage: "request",
 								result: "cancelled",
 								method: "anthropic_native",
+								effective_effort: effectiveEffort,
 								elapsed_ms: performance.now() - methodStarted,
 							});
 							throw err;
 						}
-						nativeCompactionError = selectNativeCompactionError(nativeCompactionError, err);
+						nativeCompactionFailure = selectNativeCompactionFailure(
+							nativeCompactionFailure,
+							err,
+							"anthropic_native",
+						);
 						logger.warn("Anthropic server-side compaction failed", {
 							component: "compaction",
 							event: "compaction_native_fallback",
 							stage: "request",
 							result: "failed",
 							method: "anthropic_native",
+							effective_effort: effectiveEffort,
 							next_method: summaryOptions.remoteEndpoint ? "remote_summary" : "none",
 							elapsed_ms: performance.now() - methodStarted,
 							...logger.diagnosticError(err),
@@ -2642,10 +2682,14 @@ export async function compact(
 					}
 				}
 
-				if (!usedRemoteCompaction && nativeCompactionError !== undefined && !summaryOptions.remoteEndpoint) {
-					throw new NativeCompactionError(nativeCompactionError);
+				if (!usedRemoteCompaction && nativeCompactionFailure && !summaryOptions.remoteEndpoint) {
+					finalMethod = nativeCompactionFailure.method;
+					throw new NativeCompactionError(nativeCompactionFailure.error);
 				}
-				if (!usedRemoteCompaction && nativeSummary === undefined) await ensureExtraContext();
+				if (!usedRemoteCompaction && nativeSummary === undefined) {
+					finalMethod = summaryOptions.remoteEndpoint ? "remote_summary" : "local_summary";
+					await ensureExtraContext();
+				}
 
 				// Generate summaries (can be parallel if both needed) and merge into one
 				let summary: string;
@@ -2664,10 +2708,7 @@ export async function compact(
 					const inputTokens = getCompactionV2PreserveData(preserveData)?.usedTokens ?? 0;
 					summary = formatRemoteCompactionSummary(inputTokens);
 				} else if (isSplitTurn && turnPrefixMessages.length > 0) {
-					// Generate both summaries in parallel. With a separate remote endpoint,
-					// wait for the CodeAgent prefix request before deciding if an endpoint
-					// error can retry the whole attempt.
-					const summaries = [
+					const history =
 						messagesToSummarize.length > 0 || previousSummaryForCompaction
 							? generateSummary(
 									messagesToSummarize,
@@ -2679,19 +2720,20 @@ export async function compact(
 									previousSummaryForCompaction,
 									summaryOptions,
 								)
-							: Promise.resolve("No prior history."),
-						generateTurnPrefixSummary(turnPrefixMessages, model, reserveTokens, apiKey, signal, summaryOptions),
-					] as const;
-					const [historyResult, turnPrefixResult] =
+							: Promise.resolve("No prior history.");
+					const summarizePrefix = () =>
+						generateTurnPrefixSummary(turnPrefixMessages, model, reserveTokens, apiKey, signal, summaryOptions);
+					// A separate endpoint may fail or be retried independently. Do not
+					// start a CodeAgent request that would be wasted on endpoint failure
+					// and that an outer retry might otherwise inadvertently replay.
+					const prefix =
 						model.provider === "codeagent" && summaryOptions.remoteEndpoint
-							? await Promise.all([
-									summaries[0].catch(async error => {
-										await summaries[1];
-										throw error;
-									}),
-									summaries[1],
-								])
-							: await Promise.all(summaries);
+							? history.then(() => {
+									signal?.throwIfAborted();
+									return summarizePrefix();
+								})
+							: summarizePrefix();
+					const [historyResult, turnPrefixResult] = await Promise.all([history, prefix]);
 					// Merge into single summary
 					summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
 				} else if (messagesToSummarize.length > 0) {

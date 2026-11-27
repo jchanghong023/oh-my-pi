@@ -90,7 +90,10 @@ for (const change of ["rewrite", "replace"] as const) {
 	it(`re-indexes a cached plain TAR after a same-size ${change}`, async () => {
 		await using temp = await TempDir.create("@read-tar-cache-change-");
 		const archivePath = temp.join("members.tar");
-		await ar.writeArchive(archivePath, "tar", [["value.txt", "before"]]);
+		await ar.writeArchive(archivePath, "tar", [
+			["value.txt", "before"],
+			["other.txt", "decoy!"],
+		]);
 		const originalTime = new Date("2020-01-02T00:00:00Z");
 		await fs.utimes(archivePath, originalTime, originalTime);
 		const originalStat = await fs.stat(archivePath);
@@ -99,7 +102,12 @@ for (const change of ["rewrite", "replace"] as const) {
 		const before = await tool.execute("before-change", { path: `${archivePath}:value.txt:raw` });
 		expect(before.content).toEqual([{ type: "text", text: "before" }]);
 		const replacementPath = temp.join("replacement.tar");
-		await ar.writeArchive(replacementPath, "tar", [["value.txt", "after!"]]);
+		// Move value.txt to another TAR block without changing the archive size.
+		// A stale index would read decoy! at the old location, not after!.
+		await ar.writeArchive(replacementPath, "tar", [
+			["other.txt", "decoy!"],
+			["value.txt", "after!"],
+		]);
 		if (change === "rewrite") {
 			await Bun.write(archivePath, await Bun.file(replacementPath).bytes());
 			const changedTime = new Date("2021-01-02T00:00:00Z");

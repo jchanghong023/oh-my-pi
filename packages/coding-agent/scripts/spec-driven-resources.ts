@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@oh-my-pi/pi-utils/temp";
 import { $, type BunPlugin } from "bun";
 import { parse as parseYaml } from "yaml";
 import { openWikiPackageDirectory } from "../src/openwiki/resource-dependencies";
@@ -11,7 +11,7 @@ import {
 	specDrivenSourceFingerprint,
 } from "../src/spec-driven/resource-fingerprint";
 import { collectSpecDrivenResources } from "../src/spec-driven/resource-inventory";
-import { resolveSpecDrivenResourcePath } from "../src/spec-driven/resources";
+import { resolveSpecDrivenResourcePath } from "../src/spec-driven/resource-path";
 
 const vendor = path.resolve(import.meta.dir, "../src/spec-driven/vendor");
 const resources = path.join(vendor, "resources");

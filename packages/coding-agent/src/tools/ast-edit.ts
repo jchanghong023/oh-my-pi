@@ -24,13 +24,16 @@ import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { missingGrammarsNote, rerunWithGrammars } from "../utils/grammars";
 import type { ToolSession } from ".";
 import { resolveToolTier, strictestApproval, truncateForPrompt } from "./approval";
+import { approvalDirectoryKey } from "./approval-cache";
+import { approvalTreeSearchFolderKey, approvalTreeSearchKey } from "./approval-targets";
+import { toolApprovalScopeToken } from "./approval-scope";
 import { parseReadUrlTarget } from "./fetch";
-import { type FileSnapshot, readSnapshot } from "../commit/selective/journal";
+import { readSnapshot } from "../commit/selective/journal";
 import { createFileRecorder, formatResultPath, resultSnapshotPath } from "./file-recorder";
 import { formatGroupedFiles } from "./grouped-file-output";
 
 import { relativeSearchResultPath, resolveTargetResultPath, resolveToolSearchScope } from "./path-utils";
-import { astEditApprovalTargets } from "./search-approval-targets";
+import { astEditApprovalTargetForResolvedPath, astEditApprovalTargets } from "./search-approval-targets";
 import { capParseErrors, formatCodeFrameLine, formatParseErrors } from "../utils/render-utils";
 import { PREVIEW_PENDING_NOTICE, queueResolveHandler } from "./resolve";
 import { ToolError } from "./tool-errors";
@@ -71,6 +74,13 @@ interface AstEditAggregatedResult {
 	missingGrammars?: string[];
 }
 
+type AstEditTarget = { basePath: string; glob?: string; isDirectory: boolean };
+
+interface AstEditApplyHooks {
+	beforeApply(target?: AstEditTarget): void;
+	afterApply(result: AstEditAggregatedResult, target?: AstEditTarget): Promise<void>;
+}
+
 function statAstEditTargets(
 	targets: readonly { basePath: string; glob?: string }[],
 	filesystem: InternalUrlFilesystem,
@@ -81,6 +91,32 @@ function statAstEditTargets(
 			isDirectory: (await filesystem.stat(target.basePath)).type === "directory",
 		})),
 	);
+}
+
+/** Verify that the observed change contains only the native rewrite, not intervening editor changes. */
+function matchesAppliedRewrite(before: string, after: string, changes: AstReplaceChange[]): boolean {
+	const input = Buffer.from(before);
+	const output = Buffer.from(after);
+	changes.sort(
+		(a, b) =>
+			a.byteStart - b.byteStart ||
+			a.deletedLength - b.deletedLength ||
+			Buffer.compare(Buffer.from(a.after), Buffer.from(b.after)),
+	);
+	let read = 0;
+	let written = 0;
+	for (const change of changes) {
+		const end = change.byteStart + change.deletedLength;
+		if (change.byteStart < read || end > input.length) return false;
+		const unchanged = input.subarray(read, change.byteStart);
+		if (!unchanged.equals(output.subarray(written, written + unchanged.length))) return false;
+		written += unchanged.length;
+		const replacement = Buffer.from(change.after);
+		if (!replacement.equals(output.subarray(written, written + replacement.length))) return false;
+		written += replacement.length;
+		read = end;
+	}
+	return written <= output.length && input.subarray(read).equals(output.subarray(written));
 }
 
 /** Record hashline tags for mutable files; leave missing snapshots out of the output. */
@@ -107,7 +143,9 @@ async function recordAstEditSnapshots(
 	}
 	if (failureCount) {
 		logger.warn(
-			stage === "preview_snapshot" ? "AST edit preview snapshot unavailable" : "AST edit applied snapshot unavailable",
+			stage === "preview_snapshot"
+				? "AST edit preview snapshot unavailable"
+				: "AST edit applied snapshot unavailable",
 			{
 				component: "ast_edit",
 				event: "ast_edit_snapshot_degraded",
@@ -145,7 +183,7 @@ async function runNativeAstEdit(
 				result: "completed",
 				elapsed_ms: performance.now() - started,
 				candidate_count: result.fileChanges.length,
-				reported_written_count: result.applied ? result.fileChanges.length : 0,
+				reported_written_count: options.dryRun || result.fileChanges.length === 0 ? 0 : "unknown",
 				replacement_count: result.totalReplacements,
 				files_searched: result.filesSearched,
 				applied: result.applied,
@@ -174,10 +212,11 @@ async function runNativeAstEdit(
 }
 
 async function runAstEditTargets(
-	targets: Array<{ basePath: string; glob?: string; isDirectory: boolean }>,
+	targets: AstEditTarget[],
 	commonBasePath: string,
 	options: AstEditCallOptions,
 	nativeAstEdit: typeof astEdit,
+	hooks?: AstEditApplyHooks,
 ): Promise<AstEditAggregatedResult> {
 	const aggregatedChanges: AstReplaceChange[] = [];
 	const fileCounts = new Map<string, number>();
@@ -199,6 +238,7 @@ async function runAstEditTargets(
 		}
 	}
 	for (const target of targets) {
+		hooks?.beforeApply(target);
 		const targetResult = await runNativeAstEdit(
 			{
 				rewrites: options.rewrites,
@@ -213,6 +253,7 @@ async function runAstEditTargets(
 			nativeAstEdit,
 			targetIndex++,
 		);
+		if (hooks) await hooks.afterApply(targetResult, target);
 		totalReplacements += targetResult.totalReplacements;
 		filesSearched += targetResult.filesSearched;
 		limitReached = limitReached || targetResult.limitReached;
@@ -246,17 +287,19 @@ async function runAstEditTargets(
 	};
 }
 
-function runAstEditOnce(
-	targets: Array<{ basePath: string; glob?: string; isDirectory: boolean }> | undefined,
+async function runAstEditOnce(
+	targets: AstEditTarget[] | undefined,
 	resolvedSearchPath: string,
 	globFilter: string | undefined,
 	options: AstEditCallOptions,
 	nativeAstEdit: typeof astEdit,
+	hooks?: AstEditApplyHooks,
 ): Promise<AstEditAggregatedResult> {
 	if (targets) {
-		return runAstEditTargets(targets, resolvedSearchPath, options, nativeAstEdit);
+		return runAstEditTargets(targets, resolvedSearchPath, options, nativeAstEdit, hooks);
 	}
-	return runNativeAstEdit(
+	hooks?.beforeApply();
+	const result = await runNativeAstEdit(
 		{
 			rewrites: options.rewrites,
 			path: resolvedSearchPath,
@@ -269,11 +312,15 @@ function runAstEditOnce(
 		},
 		nativeAstEdit,
 	);
+	if (hooks) await hooks.afterApply(result);
+	return result;
 }
 
 type AstEditSchemaInfer = typeof astEditSchema.infer;
 
 export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolDetails> {
+	readonly #approvalTargets = new WeakMap<object, readonly string[] | null>();
+
 	readonly name = "ast_edit";
 	/** Strictest write decision ({@link strictestApproval}) over every path; "write" when none is given. */
 	readonly approval = (args: unknown): ToolApprovalDecision => {
@@ -290,11 +337,22 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 	};
 	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined =>
 		this.approvalRestrictionPaths(args) ?? undefined;
+	readonly bindApprovalTargets = (args: unknown): void => {
+		if (isRecord(args)) {
+			this.#approvalTargets.set(toolApprovalScopeToken() ?? args, this.#resolveApprovalTargets(args));
+		}
+	};
 	readonly approvalRestrictionPaths = (args: unknown): readonly string[] | null => {
-		const paths = isRecord(args) ? args.paths : undefined;
+		if (!isRecord(args)) return null;
+		const bound = this.#approvalTargets.get(toolApprovalScopeToken() ?? args);
+		return bound === undefined ? this.#resolveApprovalTargets(args) : bound;
+	};
+
+	#resolveApprovalTargets(args: Record<string, unknown>): readonly string[] | null {
+		const { paths } = args;
 		if (!Array.isArray(paths) || !paths.every((entry): entry is string => typeof entry === "string")) return null;
 		return astEditApprovalTargets(paths, this.session.cwd);
-	};
+	}
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<AstEditSchemaInfer>;
 		const lines: string[] = [];
@@ -412,13 +470,30 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				const normalizedRewrites = Object.fromEntries(ops);
 				const maxFiles = $envpos("PI_MAX_AST_FILES", 1000);
 
+				const approved = this.approvalRestrictionPaths(params);
+				const paths = [...params.paths];
+				const assertApprovedScope = (target?: AstEditTarget) => {
+					if (!approved) return;
+					const isApproved = (key: string) =>
+						approved.includes(key) ||
+						(approvalTreeSearchFolderKey(key) === undefined &&
+							approved.includes(approvalTreeSearchKey(approvalDirectoryKey(key))));
+					if (target) {
+						const key = astEditApprovalTargetForResolvedPath(target.basePath);
+						if (key !== undefined && isApproved(key)) return;
+					} else if (astEditApprovalTargets(paths, this.session.cwd)?.every(isApproved)) {
+						return;
+					}
+					throw new ToolError("AST edit target scope changed; run ast_edit again to preview and approve it.");
+				};
+
 				const resolveContext = sessionResolveContext(this.session, { signal });
 				// Internal URLs resolve inside the native rewrite, bounded by the tier this call was approved at.
 				const tier = resolveToolTier(this, params);
 				const urlFilesystem = new InternalUrlFilesystem({ context: resolveContext, tier });
 				previewStage = "resolve_scope";
 				const scope = await resolveToolSearchScope({
-					rawPaths: params.paths,
+					rawPaths: paths,
 					cwd: this.session.cwd,
 					internalUrlAction: "rewrite",
 					filesystem: urlFilesystem,
@@ -431,13 +506,13 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					},
 				});
 				const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
-				const targets = multiTargets ? await statAstEditTargets(multiTargets, urlFilesystem) : undefined;
+				assertApprovedScope();
 
 				previewStage = "native_preview";
 				// Dry run, so a re-run after installing missing grammars cannot double-apply.
 				const result = await rerunWithGrammars(() =>
 					runAstEditOnce(
-						targets,
+						multiTargets,
 						resolvedSearchPath,
 						globFilter,
 						{
@@ -458,7 +533,12 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				previewStage = "render_preview";
 				const { errors: cappedParseErrors, total: parseErrorsTotal } = capParseErrors(result.parseErrors);
 				const formatPath = (filePath: string): string =>
-					formatResultPath(filePath, isDirectory, resolvedSearchPath, this.session.cwd);
+					formatResultPath(
+						filePath,
+						multiTargets !== undefined || isDirectory,
+						resolvedSearchPath,
+						this.session.cwd,
+					);
 
 				const { record: recordFile, list: fileList } = createFileRecorder();
 				const fileReplacementCounts = new Map<string, number>();
@@ -505,15 +585,9 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				const useHashLines = resolveFileDisplayMode(this.session).hashLines;
 				const hashContexts = new Map<string, string>();
 				if (useHashLines) {
-					await recordAstEditSnapshots(
-						this.session,
-						fileList,
-						resolveContext,
-						"preview_snapshot",
-						(file, tag) => {
-							hashContexts.set(file, tag);
-						},
-					);
+					await recordAstEditSnapshots(this.session, fileList, resolveContext, "preview_snapshot", (file, tag) => {
+						hashContexts.set(file, tag);
+					});
 				}
 				const outputLines: string[] = [];
 				const displayLines: string[] = [];
@@ -611,22 +685,25 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 										reported_written_count: 0,
 									});
 									let applyStage = "resolve_scope";
-									let reportedWrittenCount = 0;
+									let reportedWrittenCount: 0 | "unknown" = 0;
 									let possiblePartialWrite = false;
 									try {
 										// The apply outlives the preview call: its filesystem carries no signal.
 										const applyContext = sessionResolveContext(this.session);
 										const applyFilesystem = new InternalUrlFilesystem({ context: applyContext, tier });
-										// Native re-enumerates the current targets, which may have changed
-										// between file and directory since preview. Rebase its results using
-										// the apply-time types, not the preview's scope metadata.
-										const applyIsDirectory =
-											(await applyFilesystem.stat(resolvedSearchPath)).type === "directory";
-										const applyTargets = targets
-											? await statAstEditTargets(targets, applyFilesystem)
+										assertApprovedScope();
+										// Separate targets are rebased onto a display-only common path;
+										// only their real execution roots need to still exist.
+										const applyTargets = multiTargets
+											? await statAstEditTargets(multiTargets, applyFilesystem)
 											: undefined;
+										const applyIsDirectory =
+											applyTargets !== undefined ||
+											(await applyFilesystem.stat(resolvedSearchPath)).type === "directory";
+										const formatAppliedPath = (filePath: string): string =>
+											formatResultPath(filePath, applyIsDirectory, resolvedSearchPath, this.session.cwd);
 										applyStage = "prepare_apply";
-										const journaled: Array<{ path: string; before: FileSnapshot }> = [];
+										const journaled = new Map<string, { path: string; before: string }>();
 										if (this.session.recordFileChange) {
 											for (const relativePath of fileList) {
 												const absolute = await resultSnapshotPath(
@@ -635,50 +712,77 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 													applyContext,
 												);
 												const before = absolute === undefined ? undefined : await readSnapshot(absolute);
-												if (absolute !== undefined && before) journaled.push({ path: absolute, before });
-											}
-										}
-										const nativeAstEdit = this.nativeAstEdit;
-										const applyResult = await (async () => {
-											try {
-												const applied = await runAstEditOnce(
-													applyTargets,
-													resolvedSearchPath,
-													globFilter,
-													{
-														rewrites: normalizedRewrites,
-														dryRun: false,
-														maxFiles,
-														failOnParseError: false,
-														filesystem: applyFilesystem.shellFilesystem(),
-													},
-													options => {
-														applyStage = options.dryRun ? "native_preflight" : "native_apply";
-														// Native apply can reject after committing a subset of files.
-														if (!options.dryRun) possiblePartialWrite = true;
-														return nativeAstEdit(options);
-													},
-												);
-												reportedWrittenCount = applied.applied ? applied.fileChanges.length : 0;
-												possiblePartialWrite = false;
-												applyStage = "journal_apply";
-												return applied;
-											} finally {
-												for (const { path: file, before } of journaled) {
-													const after = await readSnapshot(file);
-													if (!after || after.text === before.text) continue;
-													this.session.recordFileChange?.({
-														path: file,
-														tool: "ast_edit",
-														before: before.text,
-														after: after.text,
-													});
+												if (absolute !== undefined && before?.text != null) {
+													journaled.set(relativePath, { path: absolute, before: before.text });
 												}
 											}
-										})();
+										}
+										applyStage = "native_preflight";
+										const applyResult = await runAstEditOnce(
+											applyTargets,
+											resolvedSearchPath,
+											globFilter,
+											{
+												rewrites: normalizedRewrites,
+												dryRun: false,
+												maxFiles,
+												failOnParseError: false,
+												filesystem: applyFilesystem.shellFilesystem(),
+											},
+											this.nativeAstEdit,
+											{
+												beforeApply: target => {
+													// Recheck each separate target after preflight and any preceding writes.
+													applyStage = "resolve_scope";
+													assertApprovedScope(target);
+													applyStage = "native_apply";
+													possiblePartialWrite = true;
+												},
+												afterApply: async (applied, target) => {
+													possiblePartialWrite = false;
+													if (applied.fileChanges.length > 0) reportedWrittenCount = "unknown";
+													applyStage = "journal_apply";
+													if (!applied.applied || journaled.size === 0) return;
+
+													// The native error does not identify which files committed.
+													// Journal only completed targets, even if a later target fails.
+													const changesByPath = new Map<string, AstReplaceChange[]>();
+													for (const change of applied.changes) {
+														const rebased = target
+															? relativeSearchResultPath(
+																	resolvedSearchPath,
+																	resolveTargetResultPath(target, change.path),
+																)
+															: change.path;
+														const file = formatAppliedPath(rebased);
+														if (!journaled.has(file)) continue;
+														const changes = changesByPath.get(file);
+														if (changes) changes.push(change);
+														else changesByPath.set(file, [change]);
+													}
+													for (const [file, changes] of changesByPath) {
+														const snapshot = journaled.get(file)!;
+														const after = await readSnapshot(snapshot.path);
+														if (
+															after?.text == null ||
+															!matchesAppliedRewrite(snapshot.before, after.text, changes)
+														) {
+															journaled.delete(file);
+															continue;
+														}
+														if (after.text === snapshot.before) continue;
+														this.session.recordFileChange?.({
+															path: snapshot.path,
+															tool: "ast_edit",
+															before: snapshot.before,
+															after: after.text,
+														});
+														snapshot.before = after.text;
+													}
+												},
+											},
+										);
 										applyStage = "render_apply_result";
-										const formatAppliedPath = (filePath: string): string =>
-											formatResultPath(filePath, applyIsDirectory, resolvedSearchPath, this.session.cwd);
 										const { errors: cappedApplyParseErrors, total: applyParseErrorsTotal } = capParseErrors(
 											applyResult.parseErrors,
 										);
@@ -747,7 +851,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 											result: stalePreview ? "stale_preview" : "completed",
 											elapsed_ms: performance.now() - applyStarted,
 											candidate_count: result.fileChanges.length,
-											reported_written_count: applyResult.applied ? applyResult.fileChanges.length : 0,
+											reported_written_count: reportedWrittenCount,
 											replacement_count: applyResult.totalReplacements,
 											applied: applyResult.applied,
 											stale_preview: stalePreview,

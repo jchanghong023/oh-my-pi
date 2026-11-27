@@ -11,6 +11,7 @@ import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import {
 	disposeTerminalTitleState,
 	generateSessionTitle,
+	generateTitleOnline,
 	initTerminalTitleState,
 	setExtensionTerminalTitle,
 	setSessionTerminalTitle,
@@ -91,7 +92,6 @@ describe("title generator", () => {
 			"Investigate the resolver",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Structured Title");
@@ -104,6 +104,27 @@ describe("title generator", () => {
 		expect(options?.disableReasoning).toBe(true);
 		const messages = completeSimpleMock.mock.calls[0]?.[1].messages;
 		expect(messages?.map(message => message.role)).toEqual(["user"]);
+	});
+
+	it.each([
+		["generateSessionTitle", generateSessionTitle],
+		["generateTitleOnline", generateTitleOnline],
+	] as const)("%s keeps sessionId as the fourth title argument", async (_name, generate) => {
+		const model = getModelOrThrow("qwen3.8-flash-next");
+		const getApiKey = vi.fn(async () => "test-key");
+		const resolver = vi.fn(() => async () => "test-key");
+		const registry = { getAvailable: () => [model], getApiKey, resolver } as never;
+		const complete = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>Sticky Title</title>" }],
+		} as never);
+		const title = await generate("Investigate the resolver", registry, createSettings(model), "session-1");
+
+		expect(title).toBe("Sticky Title");
+		expect(getApiKey).toHaveBeenCalledWith(model, "session-1");
+		expect(resolver).toHaveBeenCalledWith(model, "session-1");
+		expect(complete.mock.calls[0]?.[2]?.sessionId).toBe("session-1");
+		expect(complete.mock.calls[0]?.[2]?.cwd).toBeUndefined();
 	});
 
 	it("selects an available local-inference model from the tiny role", async () => {
@@ -119,7 +140,7 @@ describe("title generator", () => {
 			content: [],
 		} as never);
 
-		const title = await generateSessionTitle("Investigate the resolver", registry, settings, import.meta.dir);
+		const title = await generateSessionTitle("Investigate the resolver", registry, settings);
 
 		expect(title).toBe("Local Title");
 		expect(generateMock).toHaveBeenCalledWith(localModel.id, "Investigate the resolver");
@@ -139,7 +160,6 @@ describe("title generator", () => {
 				"Investigate the resolver",
 				registry,
 				settings,
-				import.meta.dir,
 				undefined,
 				undefined,
 				undefined,
@@ -179,7 +199,7 @@ describe("title generator", () => {
 			content: [],
 		} as never);
 
-		const title = await generateSessionTitle("Investigate the resolver", registry, settings, import.meta.dir);
+		const title = await generateSessionTitle("Investigate the resolver", registry, settings);
 
 		expect(title).toBeNull();
 		expect(completeSimpleMock).not.toHaveBeenCalled();
@@ -211,7 +231,6 @@ describe("title generator", () => {
 			"the login button is broken on mobile",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Fix login button");
@@ -249,7 +268,6 @@ describe("title generator", () => {
 			"the login button is broken on mobile",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Fix login button");
@@ -266,7 +284,6 @@ describe("title generator", () => {
 			"fix title generation for <think> tag parsing",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Fix <think> tag parsing");
@@ -284,7 +301,6 @@ describe("title generator", () => {
 			"Investigate the resolver",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 			undefined,
 			undefined,
 			undefined,
@@ -309,7 +325,6 @@ describe("title generator", () => {
 			"optimize the CNPG kernel report pipeline",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Optimize CNPG kernel reports");
@@ -331,7 +346,6 @@ describe("title generator", () => {
 			"the login button is broken on mobile",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Fix login button on mobile");
@@ -353,7 +367,6 @@ describe("title generator", () => {
 			"add OAuth authentication to the API",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Add OAuth authentication");
@@ -370,7 +383,6 @@ describe("title generator", () => {
 			"the CI tests keep failing",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Debug failing CI tests");
@@ -384,7 +396,7 @@ describe("title generator", () => {
 			content: [],
 		} as never);
 
-		const title = await generateSessionTitle("hi", createRegistry(model), createSettings(model), import.meta.dir);
+		const title = await generateSessionTitle("hi", createRegistry(model), createSettings(model));
 
 		expect(title).toBeNull();
 		expect(completeSimpleMock).not.toHaveBeenCalled();
@@ -401,7 +413,6 @@ describe("title generator", () => {
 			"I have a quick question for you",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBeNull();
@@ -419,7 +430,6 @@ describe("title generator", () => {
 			"I have a quick question for you",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBeNull();
@@ -437,7 +447,6 @@ describe("title generator", () => {
 			"I have a quick question for you",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBeNull();
@@ -476,7 +485,6 @@ describe("title generator", () => {
 				"I have a quick question for you",
 				createRegistry(primary, [primary, fallback]),
 				settings,
-				import.meta.dir,
 			);
 
 			expect(title).toBeNull();
@@ -516,7 +524,6 @@ describe("title generator", () => {
 			"Investigate resolver errors",
 			createRegistry(primary, [primary, fallback]),
 			settings,
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Fix resolver errors");
@@ -539,7 +546,6 @@ describe("title generator", () => {
 				getApiKey: async () => undefined,
 			} as never,
 			createSettings(model),
-			import.meta.dir,
 			"session-1",
 		);
 
@@ -574,7 +580,6 @@ describe("title generator", () => {
 				},
 			} as never,
 			createSettings(model),
-			import.meta.dir,
 			"session-2",
 		);
 
@@ -629,7 +634,6 @@ describe("title generator", () => {
 					[`${primary.provider}/${primary.id}`]: [`${fallback.provider}/${fallback.id}`],
 				},
 			}),
-			import.meta.dir,
 			"session-abort",
 			undefined,
 			undefined,
@@ -653,7 +657,6 @@ describe("title generator", () => {
 			"Investigate the resolver",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 		const maxTokens = (completeSimpleMock.mock.calls[0]?.[2] as { maxTokens?: number } | undefined)?.maxTokens;
 
@@ -677,7 +680,6 @@ describe("title generator", () => {
 			"Investigate the resolver",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 		const maxTokens = (completeSimpleMock.mock.calls[0]?.[2] as { maxTokens?: number } | undefined)?.maxTokens;
 
@@ -696,7 +698,6 @@ describe("title generator", () => {
 			"plan a setup screen\n```\nWelcome to Claude Code v2.1.158\n```\npick provider then theme",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		const sentMessages = (
@@ -720,7 +721,6 @@ describe("title generator", () => {
 			"the login button is broken on mobile",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Fix login button on mobile");
@@ -739,7 +739,6 @@ describe("title generator", () => {
 				"the login button is broken on mobile",
 				createRegistry(model),
 				createSettings(model),
-				import.meta.dir,
 			);
 
 			expect(title).toBeNull();
@@ -757,7 +756,6 @@ describe("title generator", () => {
 			"fix title generation for <think> tag parsing",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Fix <think> tag parsing");
@@ -774,7 +772,6 @@ describe("title generator", () => {
 			"fix title generation for a ```thinking fence",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toContain("```thinking");
@@ -792,7 +789,6 @@ describe("title generator", () => {
 			"refactor the error handling in the api client",
 			createRegistry(model),
 			createSettings(model),
-			import.meta.dir,
 		);
 
 		expect(title).toBe("Refactor API client error handling");
@@ -826,7 +822,7 @@ describe("title generator", () => {
 			resolver: () => async () => "test-key",
 		} as never;
 
-		await generateSessionTitle("Some message", registry, currentSettings, import.meta.dir);
+		await generateSessionTitle("Some message", registry, currentSettings);
 		expect(mockComplete).toHaveBeenCalled();
 		expect(mockComplete.mock.calls[0]?.[0]).toBe(tinyModel);
 
@@ -841,7 +837,7 @@ describe("title generator", () => {
 			},
 		});
 
-		await generateSessionTitle("Some message", registry, currentSettings, import.meta.dir);
+		await generateSessionTitle("Some message", registry, currentSettings);
 		expect(mockComplete).toHaveBeenCalled();
 		expect(mockComplete.mock.calls[0]?.[0]).toBe(commitModel);
 
@@ -853,7 +849,7 @@ describe("title generator", () => {
 			modelRoles: { smol: `${smolModel.provider}/${smolModel.id}` },
 		});
 
-		await generateSessionTitle("Some message", registry, currentSettings, import.meta.dir);
+		await generateSessionTitle("Some message", registry, currentSettings);
 		expect(mockComplete).toHaveBeenCalled();
 		expect(mockComplete.mock.calls[0]?.[0]).toBe(smolModel);
 	});
@@ -870,14 +866,7 @@ describe("title generator", () => {
 			resolver: () => async () => "test-key",
 		};
 		expect(
-			await generateSessionTitle(
-				"Investigate",
-				registry as never,
-				createSettings(model),
-				import.meta.dir,
-				undefined,
-				model,
-			),
+			await generateSessionTitle("Investigate", registry as never, createSettings(model), undefined, model),
 		).toBeNull();
 		expect(completeSimpleMock).not.toHaveBeenCalled();
 	});
@@ -923,14 +912,7 @@ describe("title generator", () => {
 			resolver: () => async () => "test-key",
 		} as never;
 
-		const title = await generateSessionTitle(
-			"Investigate routing",
-			registry,
-			settings,
-			import.meta.dir,
-			undefined,
-			openaiRouted,
-		);
+		const title = await generateSessionTitle("Investigate routing", registry, settings, undefined, openaiRouted);
 		expect(title).toBe("Routed Recovery");
 		const attempted = completeSimpleMock.mock.calls.map(call => formatModelStringWithRouting(call[0] as Model<Api>));
 		expect(attempted).toEqual([
@@ -975,14 +957,7 @@ describe("title generator", () => {
 			resolver: () => async () => "test-key",
 		} as never;
 
-		const title = await generateSessionTitle(
-			"Investigate the resolver",
-			registry,
-			settings,
-			import.meta.dir,
-			undefined,
-			current,
-		);
+		const title = await generateSessionTitle("Investigate the resolver", registry, settings, undefined, current);
 		expect(title).toBe(`From ${currentFallback.id}`);
 		const attempted = completeSimpleMock.mock.calls.map(call => (call[0] as Model<Api>).id);
 		expect(attempted).toEqual([current.id, currentFallback.id]);
@@ -1020,10 +995,23 @@ describe("title generator", () => {
 				authStorage: { rotateSessionCredential: async () => false },
 				resolver: () => async () => "test-key",
 			} as never;
-			expect(await generateSessionTitle("Investigate the resolver", registry, settings, import.meta.dir)).toBe(
-				"Recovered Title",
-			);
+			expect(
+				await generateSessionTitle(
+					"Investigate the resolver",
+					registry,
+					settings,
+					"codeagent-title",
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					import.meta.dir,
+				),
+			).toBe("Recovered Title");
 			expect(complete.mock.calls.at(-1)?.[0]).toBe(fallback);
+			expect(complete.mock.calls.at(-1)?.[2]).toMatchObject({ cwd: import.meta.dir, sessionId: "codeagent-title" });
 		},
 	);
 
@@ -1063,7 +1051,6 @@ describe("title generator", () => {
 			"Investigate the resolver",
 			registry,
 			settings,
-			import.meta.dir,
 			undefined,
 			fallbackModel,
 		);

@@ -212,3 +212,14 @@ export function applyStartupComposerPreferences(update: PrepaintComposerPreferen
 	frame.setImeSafeCursor(preferences.imeSafeCursor);
 	current.cache?.write(current.cwd, preferences, theme);
 }
+
+/** Keep the next first frame in sync when the active UI changes its display mode. */
+export function rememberStartupComposerDisplayMode(
+	displayMode: NonNullable<StartupPreferences["displayMode"]>,
+	cwd = getProjectDir(),
+	cache = sharedStartupCache(),
+): void {
+	if (!cache) return;
+	const { preferences, theme } = cache.read(cwd);
+	cache.write(cwd, { ...(preferences ?? STARTUP_DEFAULTS), displayMode }, theme ?? {});
+}

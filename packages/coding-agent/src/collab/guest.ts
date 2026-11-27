@@ -201,6 +201,7 @@ export class CollabGuestLink {
 	#replicaLease: (() => void) | undefined;
 	/** Previous session file to restore on leave; null = previous session was unsaved. */
 	#returnSessionFile: string | null = null;
+	#returnSessionLease: (() => void) | undefined;
 	/** Frames apply strictly in arrival order through this chain. */
 	#applyChain: Promise<void> = Promise.resolve();
 	/** True after the initial snapshot has been written to disk and resumed. */
@@ -283,13 +284,17 @@ export class CollabGuestLink {
 		return this.#hubRemote;
 	}
 
-	/** True when this guest joined through a read-only (view) link. */
+	/** True when the link is view-only or the guest is waiting to restore the local session. */
 	get readOnly(): boolean {
-		return this.#readOnly;
+		return this.#left || this.#readOnly;
 	}
 
-	/** Shows the read-only status hint when applicable; true when the action must be dropped. */
+	/** Reports why an action cannot be sent; true when it must be dropped. */
 	#rejectReadOnly(): boolean {
+		if (this.#left) {
+			this.#ctx.showStatus("Collab has disconnected; use /leave to restore the local session");
+			return true;
+		}
 		if (!this.#readOnly) return false;
 		this.#ctx.showStatus("This collab link is read-only");
 		return true;
@@ -318,6 +323,17 @@ export class CollabGuestLink {
 		this.#ctx.setCollabGuest(this);
 		let key: CryptoKey;
 		try {
+			if (this.#returnSessionFile) {
+				// Keep the nameable local session reserved while the runtime owns the
+				// replica. The same SessionManager can reclaim it on leave.
+				this.#returnSessionLease =
+					new FileSessionStorage().claimSession(
+						this.#ctx.sessionManager.getSessionId(),
+						this.#returnSessionFile,
+						this.#ctx.sessionManager,
+					) ?? undefined;
+				if (!this.#returnSessionLease) throw new Error("Could not reserve the local session for collab leave");
+			}
 			key = await importRoomKey(parsed.key);
 			if (this.#left) throw new Error("Collab join cancelled");
 		} catch (err) {
@@ -990,7 +1006,10 @@ export class CollabGuestLink {
 		// disconnect, `bye`): unlatch the pane before the local session takes
 		// over so extensions do not stay stuck on the host's last `agent_start`.
 		this.#reconcileLifecycle(false);
-		this.#restoration = this.#runRestoreLocalSession();
+		this.#restoration = this.#runRestoreLocalSession().catch(error => {
+			this.#restoration = undefined;
+			throw error;
+		});
 		this.#ctx.collabController?.resumeAfterGuest(this.#restoration);
 		return this.#restoration;
 	}
@@ -999,12 +1018,11 @@ export class CollabGuestLink {
 		// An already-running switch cannot be cancelled halfway through. Drain
 		// it before rollback; no queued frame may reactivate the replica later.
 		await this.#applyChain;
-		try {
-			if (this.#replicaActivated) await this.#resumeLocalSession();
-		} finally {
-			this.#replicaLease?.();
-			this.#replicaLease = undefined;
-		}
+		if (this.#replicaActivated) await this.#resumeLocalSession();
+		this.#replicaLease?.();
+		this.#replicaLease = undefined;
+		this.#returnSessionLease?.();
+		this.#returnSessionLease = undefined;
 		if (this.#ctx.collabGuest !== this) return false;
 		this.#ctx.setCollabGuest(undefined);
 		this.#ctx.syncRunningSubagentBadge();

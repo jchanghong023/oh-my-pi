@@ -170,8 +170,14 @@ type UsageStatements = { upsert: Statement; list: Statement };
 export const SCHEMA_VERSION = 7;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 
-/** Singleton instances per database path */
-const instances = new Map<string, AgentStorage>();
+/** One connection (including its in-flight open) per database path. */
+interface StorageEntry {
+	ready: Promise<AgentStorage>;
+	storage?: AgentStorage;
+	pinned: boolean;
+	leases: number;
+}
+const instances = new Map<string, StorageEntry>();
 let cancelExitCleanup: (() => void) | undefined;
 
 /**
@@ -454,36 +460,74 @@ FROM model_usage_legacy
 	}
 
 	/**
-	 * Returns singleton instance for the given database path, creating if needed.
+	 * Returns and pins the singleton for the given database path until explicit close or process exit.
 	 * Retries on the `SQLITE_BUSY` family (including `SQLITE_BUSY_RECOVERY`) with
 	 * exponential backoff. Corrupt stores are quarantined and initialized once
 	 * from an empty replacement. See issue #2421.
 	 * @param dbPath - Path to the SQLite database file (defaults to config path)
 	 * @returns AgentStorage instance for the given path
 	 */
-	static async open(dbPath: string = getAgentDbPath()): Promise<AgentStorage> {
+	static open(dbPath: string = getAgentDbPath()): Promise<AgentStorage> {
+		const entry = AgentStorage.#entry(dbPath);
+		entry.pinned = true;
+		return entry.ready;
+	}
+
+	/** Keep the shared connection open until the last lease is released, unless it is pinned. */
+	static async acquire(dbPath: string): Promise<{ storage: AgentStorage; release: () => void }> {
+		const entry = AgentStorage.#entry(dbPath);
+		entry.leases++;
+		const storage = await entry.ready;
+		let released = false;
+		return {
+			storage,
+			release: () => {
+				if (released) return;
+				released = true;
+				if (--entry.leases === 0 && !entry.pinned && instances.get(dbPath) === entry) {
+					AgentStorage.close(dbPath);
+				}
+			},
+		};
+	}
+
+	static #entry(dbPath: string): StorageEntry {
 		const existing = instances.get(dbPath);
 		if (existing) return existing;
 
+		// Reserve ownership before awaiting SQLite, including across BUSY retries.
+		const entry: StorageEntry = {
+			pinned: false,
+			leases: 0,
+			ready: AgentStorage.#openStorage(dbPath).then(
+				storage => {
+					if (instances.get(dbPath) !== entry) {
+						storage.#close();
+						throw new Error(`AgentStorage closed while opening ${dbPath}`);
+					}
+					entry.storage = storage;
+					return storage;
+				},
+				error => {
+					if (instances.get(dbPath) === entry) AgentStorage.close(dbPath);
+					throw error;
+				},
+			),
+		};
+		instances.set(dbPath, entry);
+		cancelExitCleanup ??= postmortem.register("agent-storage", () => AgentStorage.close(), { exitOnly: true });
+		return entry;
+	}
+
+	static async #openStorage(dbPath: string): Promise<AgentStorage> {
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
 		let preservedPath: string | undefined;
-		const opened = await openSqliteDatabase(
-			dbPath,
-			db => {
-				const storage = new AgentStorage(db, dbPath);
-				// Publish synchronously: concurrent opens must reuse this handle before the helper yields.
-				// Exit-only cleanup keeps the connection valid for continuing sessions.
-				cancelExitCleanup ??= postmortem.register("agent-storage", () => AgentStorage.close(), { exitOnly: true });
-				instances.set(dbPath, storage);
-				return storage;
+		const opened = await openSqliteDatabase(dbPath, db => new AgentStorage(db, dbPath), {
+			recoverCorruption: true,
+			onCorruptionPreserved: backupPath => {
+				preservedPath = backupPath;
 			},
-			{
-				recoverCorruption: true,
-				onCorruptionPreserved: backupPath => {
-					preservedPath = backupPath;
-				},
-			},
-		);
+		});
 		// The quarantined store held the user's provider credentials; carry over what is readable.
 		if (preservedPath) opened.#authStore.salvageQuarantinedCredentials(preservedPath);
 		return opened;
@@ -492,11 +536,13 @@ FROM model_usage_legacy
 	/** Flushes deferred writes and closes one database, or every process-wide database when no path is supplied. */
 	static close(dbPath?: string): void {
 		if (dbPath !== undefined) {
-			const storage = instances.get(dbPath);
+			const storage = instances.get(dbPath)?.storage;
 			if (storage) storage.#close();
 			instances.delete(dbPath);
 		} else {
-			for (const storage of instances.values()) storage.#close();
+			for (const { storage } of instances.values()) {
+				if (storage) storage.#close();
+			}
 			instances.clear();
 		}
 		if (instances.size > 0) return;

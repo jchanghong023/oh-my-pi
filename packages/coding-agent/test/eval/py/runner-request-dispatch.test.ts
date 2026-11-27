@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { $which } from "@oh-my-pi/pi-utils";
+import { requireTestPython } from "./run-prelude";
 
 interface RunnerFrame {
 	type?: string;
@@ -15,9 +15,9 @@ interface RunnerFrame {
 	evalue?: string;
 }
 
-const pythonPath = Bun.env.PYTHON ?? (process.platform !== "win32" && $which("python3") ? "python3" : "python");
 const runnerPath = path.resolve(import.meta.dir, "../../../src/eval/py/runner.py");
 const repoRoot = path.resolve(import.meta.dir, "../../../../..");
+const pythonPath = await requireTestPython(repoRoot);
 const encoder = new TextEncoder();
 // The Windows native-import regression below needs a real native extension to
 // trigger the loader-lock deadlock (#7985, numpy#24290); a pure-`print` cell

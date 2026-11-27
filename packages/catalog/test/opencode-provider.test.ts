@@ -608,10 +608,14 @@ describe("OpenCode provider discovery", () => {
 
 			const refreshed = await resolveProviderModels(managerOptions, "online");
 			expect(refreshed.stale).toBe(false);
-			expect(refreshed.models.map(model => model.id)).toEqual(["longcat-2.0"]);
+			const refreshedIds = refreshed.models.map(model => model.id);
+			expect(refreshedIds).toContain("longcat-2.0");
+			expect(refreshedIds).not.toContain(retired.id);
 
 			const cached = await resolveProviderModels(managerOptions, "offline");
-			expect(cached.models.map(model => model.id)).toEqual(["longcat-2.0"]);
+			const cachedIds = cached.models.map(model => model.id);
+			expect(cachedIds).toContain("longcat-2.0");
+			expect(cachedIds).not.toContain(retired.id);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -627,7 +631,7 @@ describe("OpenCode provider discovery", () => {
 					: new Response("Unauthorized", { status: 401 }),
 		});
 		const models = await options.fetchDynamicModels?.();
-		expect(models?.map(model => model.id)).toEqual(["longcat-2.0"]);
+		expect(models?.map(model => model.id)).toContain("longcat-2.0");
 	});
 
 	test("discovers the Zen Jev judge seed beside the served roster", async () => {

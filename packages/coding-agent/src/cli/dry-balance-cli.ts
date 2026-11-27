@@ -15,8 +15,11 @@ import { replaceTabs, truncateToWidth } from "../utils/text-width";
 import { SPINNER_FRAMES } from "../modes/view-model/theme/symbols";
 import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { COMPANY_PROVIDER_ID, getCompanyConfigError } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
+import { parseModelString } from "../config/model-selector";
 import {
+	disabledProviderIds,
 	formatModelString,
 	getModelMatchPreferences,
 	resolveAllowedModels,
@@ -80,6 +83,7 @@ export interface DryBalanceModelRegistry {
 export interface DryBalanceRuntime {
 	modelRegistry: DryBalanceModelRegistry;
 	settings?: Settings;
+	companyConfigError?: string;
 	close?: () => void;
 }
 
@@ -525,22 +529,24 @@ async function runBenchTargets(
 async function createDefaultRuntime(configFiles: string[] | undefined): Promise<DryBalanceRuntime> {
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd, configFiles });
-	const offline = await initializeOfflineModelCommand(settings, undefined, message => {
-		process.stderr.write(`${message}\n`);
-	});
-	const authStorage = await discoverAuthStorage(undefined, { settings });
+	const offline = await initializeOfflineModelCommand(settings);
+	const companyConfigError = offline ? getCompanyConfigError() : undefined;
+	let authStorage: Awaited<ReturnType<typeof discoverAuthStorage>> | undefined;
 	try {
-		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
+		const storage = (authStorage = await discoverAuthStorage(undefined, { settings }));
+		const modelRegistry = new ModelRegistry(storage, undefined, { settings });
 		for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 		await modelRegistry.hydrateCredentialScopedModelCaches();
 		await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline });
 		return {
 			modelRegistry,
 			settings,
-			close: () => authStorage.close(),
+			companyConfigError,
+			close: () => storage.close(),
 		};
 	} catch (error) {
-		authStorage.close();
+		if (companyConfigError) process.stderr.write(`${companyConfigError}\n`);
+		authStorage?.close();
 		throw error;
 	}
 }
@@ -557,9 +563,16 @@ async function resolveDryBalanceModel(
 	modelRegistry: DryBalanceModelRegistry,
 	settings: Settings | undefined,
 	sampleSessionId: string | undefined,
+	companyConfigError: string | undefined,
 ): Promise<DryBalanceModelSelection> {
 	const preferences = getModelMatchPreferences(settings);
 	if (modelSelector) {
+		if (
+			companyConfigError &&
+			parseModelString(modelSelector.trim())?.provider.toLowerCase() === COMPANY_PROVIDER_ID
+		) {
+			throw new Error(companyConfigError);
+		}
 		const resolved = resolveCliModel({
 			cliModel: modelSelector,
 			modelRegistry,
@@ -571,19 +584,40 @@ async function resolveDryBalanceModel(
 		return { model: resolved.model, warning: resolved.warning };
 	}
 
+	const defaultSelector = settings?.getModelRole("default");
+	const companyDefaultError = disabledProviderIds(settings).has(COMPANY_PROVIDER_ID) ? undefined : companyConfigError;
+	if (companyDefaultError && !defaultSelector) throw new Error(companyDefaultError);
+
 	const allowedModels = await resolveAllowedModels(modelRegistry, settings, preferences);
 	if (allowedModels.length === 0) {
+		if (companyDefaultError) throw new Error(companyDefaultError);
 		throw new Error(
 			"No models available. Use --model to select a model or configure enabledModels/default model settings.",
 		);
 	}
 
-	const defaultRoleSpec = resolveModelRoleValue(settings?.getModelRole("default"), allowedModels, {
+	const defaultRoleSpec = resolveModelRoleValue(defaultSelector, allowedModels, {
 		settings,
 		matchPreferences: preferences,
 	});
 	const defaultModel = defaultRoleSpec.model;
-	if (defaultModel && settings?.getModelRoleProvenance("default") !== "default") {
+	if (companyDefaultError && defaultSelector) {
+		const match = defaultRoleSpec.matchedPattern;
+		// An unavailable company lane must not trigger automatic OAuth selection.
+		if (
+			!defaultModel ||
+			!match ||
+			match.automatic ||
+			parseModelString(match.pattern)?.provider.trim().toLowerCase() === COMPANY_PROVIDER_ID
+		) {
+			throw new Error(companyDefaultError);
+		}
+		return { model: defaultModel, warning: defaultRoleSpec.warning };
+	}
+	if (
+		defaultModel &&
+		(defaultModel.provider === COMPANY_PROVIDER_ID || settings?.getModelRoleProvenance("default") !== "default")
+	) {
 		return { model: defaultModel, warning: defaultRoleSpec.warning };
 	}
 
@@ -821,6 +855,7 @@ export async function runDryBalanceCommand(
 		progressClosed = true;
 		progress?.close();
 	};
+	let companyWarning = runtime.companyConfigError;
 	try {
 		const modelSelector = command.flags.model ?? command.model;
 		const sessionIds = Array.from({ length: samples }, () => randomSessionId());
@@ -829,7 +864,12 @@ export async function runDryBalanceCommand(
 			runtime.modelRegistry,
 			runtime.settings,
 			isBench ? undefined : sessionIds[0],
+			companyWarning,
 		);
+		if (companyWarning) {
+			writeStderr(`${companyWarning}\n`);
+			companyWarning = undefined;
+		}
 		if (warning) writeStderr(`${chalk.yellow(`Warning: ${warning}`)}\n`);
 		let results: DryBalanceAttemptResult[];
 		let benchResults: DryBalanceBenchResult[] | undefined;
@@ -880,6 +920,9 @@ export async function runDryBalanceCommand(
 		}
 		if (summary.failure.total > 0 || (summary.bench?.failure.total ?? 0) > 0) setExitCode(1);
 		return summary;
+	} catch (error) {
+		if (companyWarning && getErrorMessage(error) !== companyWarning) writeStderr(`${companyWarning}\n`);
+		throw error;
 	} finally {
 		closeProgress();
 		runtime.close?.();

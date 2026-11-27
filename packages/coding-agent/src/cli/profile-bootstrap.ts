@@ -42,6 +42,7 @@ import {
 	PROFILE_BOOTSTRAP_BOUNDARY_ARG,
 	STRING_VALUE_FLAGS,
 } from "./flag-tables";
+import { isNativeShell } from "./native-shell";
 
 const OPENWIKI_VALUE_FLAGS = new Set([
 	"--language",
@@ -82,8 +83,8 @@ export interface ProfileBootstrapResult {
  * and the captured flag values.
  *
  * The first residual command owns its arguments unless it accepts profile globals.
- * Resources also own their arguments after a leading cwd; in launch syntax those
- * same words are prompts and do not end profile extraction. OpenWiki accepts
+ * Resources and native shells also own their arguments after leading options.
+ * Resource names in launch syntax can still be prompts. OpenWiki accepts
  * profile globals alongside its options; only its value flags need a boundary.
  *
  * Throws when either flag is supplied without a value.
@@ -115,7 +116,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 
 		if (index === subcommandIndex) {
 			openWikiArgv = arg === "openwiki";
-			if (openWikiArgv || isResourceCommand(arg)) {
+			if (openWikiArgv || isResourceCommand(arg) || isNativeShell(arg)) {
 				sawSubcommand = !openWikiArgv;
 				stripped.push(arg);
 				continue;

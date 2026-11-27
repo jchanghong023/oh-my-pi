@@ -610,6 +610,7 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 	let after = Number.MIN_SAFE_INTEGER;
 	let afterIsReadable = false;
 	let damaged = 0;
+	let inPayloadDamage = false;
 	let rowidSeek: Statement<{ salvage_rowid: number }, [number]> | undefined;
 	while (after < Number.MAX_SAFE_INTEGER) {
 		const row = probe(seek, after);
@@ -618,11 +619,16 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 			keep(row);
 			after = row.salvage_rowid;
 			afterIsReadable = true;
+			inPayloadDamage = false;
 			continue;
 		}
-		if (++damaged > SALVAGE_MAX_DAMAGED_REGIONS) break;
 		rowidSeek ??= db.query<{ salvage_rowid: number }, [number]>(`SELECT rowid AS salvage_rowid ${seekClause}`);
 		const unreadable = probe(rowidSeek, after);
+		// Adjacent unreadable payloads are one damaged region. Keep checking each
+		// rowid so a readable island still ends it, and bound damaged page skips
+		// separately when the rowid itself cannot be read.
+		if ((!unreadable || !inPayloadDamage) && ++damaged > SALVAGE_MAX_DAMAGED_REGIONS) break;
+		inPayloadDamage = Boolean(unreadable);
 		if (unreadable) {
 			after = unreadable.salvage_rowid;
 			afterIsReadable = false;

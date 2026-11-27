@@ -211,8 +211,22 @@ describe("role thinking helper propagation", () => {
 			content: [{ type: "text", text: "<title>Investigate resolver</title>" }],
 		} as never);
 
-		const title = await generateSessionTitle("Investigate resolver", registry as never, settings, import.meta.dir);
+		const title = await generateSessionTitle(
+			"Investigate resolver",
+			registry as never,
+			settings,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			import.meta.dir,
+		);
 		expect(title).toBe("Investigate resolver");
-		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({ disableReasoning: true });
+		const options = completeSimpleMock.mock.calls[0]?.[2];
+		expect(options).toMatchObject({ cwd: import.meta.dir, disableReasoning: true });
+		expect(options?.sessionId).toBeUndefined();
 	});
 });

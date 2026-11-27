@@ -2,7 +2,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
 import type { ApiKeyResolverRegistry } from "../config/api-key-resolver";
-import { COMPANY_PROVIDER_ID, getCompanyConfigError } from "../config/company-provider";
+import { COMPANY_PROVIDER_ID, getCompanyConfigError, isCompanyLaneActive } from "../config/company-provider";
 import {
 	disabledProviderIds,
 	getModelMatchPreferences,
@@ -71,6 +71,15 @@ export async function resolvePrimaryModel(
 		}
 	}
 	const model = resolved?.model;
+	if (override && !isCompanyLaneActive()) {
+		const selectors = resolveConfiguredModelPatterns(override, settings);
+		if (
+			(!model || selectors.length === 1) &&
+			selectors.some(pattern => parseModelString(pattern)?.provider.trim().toLowerCase() === COMPANY_PROVIDER_ID)
+		) {
+			throw new Error("Company provider is only available with OMP_OFFLINE=1.");
+		}
+	}
 	if (!model) {
 		throw new Error("No model available for commit generation");
 	}

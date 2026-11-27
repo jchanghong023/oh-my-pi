@@ -40,6 +40,21 @@
 
 ### Fixed
 
+- Team configuration writes report the effective member list and apply the same validation to temporary and saved values.
+- Goal Autopilot preserves the first notification across a stopped queue, respects follow-up timing, and restores only the active goal after compaction.
+- Queued `/sketch` attachments stay local during compaction. Queued input can be withdrawn, and a second `/compact` waits for earlier prompts.
+- Dictation's release-to-submit mode no longer treats standalone punctuation as a second word.
+- Follow-up drafts returned to the editor after a conversation switch now explain why they were not sent.
+- Live user-run Bash and Python output stays visible when the transcript rebuilds after a display change.
+- `omp update --check` reports the version of the binary the updater would replace and no longer suggests updating managed Homebrew installs.
+- `/wt` creates new worktrees outside the source checkout even when invoked from a subdirectory, and the session picker keeps distinct worktree histories separate.
+- Shared skills keep their configured priority, and `/skills` reports results even when a subagent transcript is open.
+- The browser leaves borrowed tabs untouched after a worker crash and still releases owned resources when recording cannot be saved.
+- Form timeouts return only saved annotations in ordinary sessions; Goal Autopilot requires an effective recommendation and a valid response.
+- Native model and tree pickers preserve distinct model routes, inline tool details, and regular branch navigation.
+- Company-only model choices fail explicitly when unavailable instead of using another account.
+- Turning off `providers.thinkingProbe` still skips extra probe requests, but requests now reuse any cached thinking format and supported effort levels for the model.
+- OpenWiki's embedded model gateway no longer resends duplicate assistant text after a tool call when the streamed response interleaves text and reasoning.
 - Single-file reads and read preview titles now highlight the path like grouped reads (dim directory, colored file name, muted line range) instead of painting it flat in the accent color ([#20615](https://github.com/can1357/oh-my-pi/pull/20615) by [@JustasMasiulis](https://github.com/JustasMasiulis))
 - Large pictures in assistant replies (`<img>` embeds, page stills, SVG fences) now fit within 80% of the terminal's height instead of drawing at full size past the screen ([#20620](https://github.com/can1357/oh-my-pi/pull/20620) by [@JustasMasiulis](https://github.com/JustasMasiulis))
 - Blob-broker tunnels no longer flash console windows on Windows, including when a tunnel fails to start and is retried ([#20599](https://github.com/can1357/oh-my-pi/issues/20599)).
@@ -71,6 +86,12 @@
 ### Removed
 
 - Removed unused `parse*Args`/`print*Help` exports from `@oh-my-pi/pi-coding-agent/cli/{config,grep,plugin,setup,shell,web-search,update}-cli`; the subcommands parse flags through `src/commands/*` ([#20526](https://github.com/can1357/oh-my-pi/pull/20526))
+
+### Release Notes Errata
+
+- **19.1.0 — Knowledge migration:** The built-in Markdown index, `knowledge_search`, `/knowledge`, all `omp knowledge` commands (including `mcp`), and `knowledge.reranker.*` were removed. Existing `knowledge.db` files are neither deleted nor migrated. Use `omp openwiki --init` to create a new repository wiki, or configure an external MCP tool for document search.
+- **18.18.1 — Collab migration:** The old offline username workflow is no longer supported: `omp collab serve` and `/join <username>` do not work. Start sharing with `/collab` and join with `/join <link>`. For an active local host, use `omp collab list` to find its instance ID or PID and `omp collab link <instanceId|pid>` to request an invitation.
+- **18.18.8 — Release categories:** The 12 entries following the repeated Ask option-notes entry, from the Codex assistant-message rewrite through persistent-shell cleanup, belong under `Fixed`, not `Changed`. The installer PATH warning belongs under `Changed`.
 
 ## [19.2.1] - 2026-11-25
 

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,7 +10,9 @@ import {
 	cleanupStaleNativeVersions,
 	embeddedAddonPath,
 	extractEmbeddedAddons,
+	loadNative,
 } from "../native/loader-state.js";
+import { resolveLinuxPrivateCacheRoot } from "../native/offline-root.js";
 import packageJson from "../package.json" with { type: "json" };
 import { embeddedAddonFiles } from "../scripts/embed-native";
 
@@ -192,10 +195,75 @@ describe("native addon embedding", () => {
 		},
 	);
 
+	it.skipIf(process.platform !== "linux")(
+		"probes outside a failed private version cache but rejects unsafe paths",
+		() => {
+			const privateRoot = resolveLinuxPrivateCacheRoot();
+			if (privateRoot === undefined) throw new Error("Expected a Linux private cache root");
+			const cache = path.join(privateRoot, "natives");
+			const versionDir = path.join(cache, packageJson.version);
+			const { filename } = resolveLocalHostAddon({ platform: "linux", arch: process.arch, avx2: false });
+			const fallback = path.join(path.dirname(process.execPath), filename);
+			const env = { PI_NATIVES_DIR: cache, PI_COMPILED: "1", PI_NATIVE_VARIANT: "baseline" };
+			const savedEnv = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+			const realLstat = fsSync.lstatSync;
+			const realMkdir = fsSync.mkdirSync;
+			const uid = process.geteuid!();
+			const directory = (owner: number, mode: number) => ({ uid: owner, mode, isDirectory: () => true });
+			let outcome: "EROFS" | "ENOSPC" | "unsafe" = "EROFS";
+			// No writes beneath the host's /dev/shm: supply trusted parents and a
+			// precise fault at the version directory (or an unsafe existing directory).
+			const lstat = spyOn(fsSync, "lstatSync").mockImplementation(((target, options) => {
+				if (target === "/" || target === "/dev") return directory(0, 0o755);
+				if (target === "/dev/shm") return directory(0, 0o1777);
+				if (target === privateRoot || target === cache) return directory(uid, 0o700);
+				if (target === versionDir) return outcome === "unsafe" ? directory(uid, 0o777) : undefined;
+				if (typeof target === "string" && target.startsWith(`${privateRoot}${path.sep}`)) return undefined;
+				return realLstat(target, options);
+			}) as typeof fsSync.lstatSync);
+			const mkdir = spyOn(fsSync, "mkdirSync").mockImplementation(((target, options) => {
+				if (target === versionDir) throw Object.assign(new Error(outcome), { code: outcome });
+				if (
+					typeof target === "string" &&
+					(target === privateRoot || target.startsWith(`${privateRoot}${path.sep}`))
+				) {
+					throw new Error(`Unexpected private cache mkdir: ${target}`);
+				}
+				return realMkdir(target, options);
+			}) as typeof fsSync.mkdirSync);
+			const dlopen = spyOn(process, "dlopen").mockImplementation(() => {
+				throw new Error("fixture records candidate probing without loading a host addon");
+			});
+			try {
+				Object.assign(process.env, env);
+				for (outcome of ["EROFS", "ENOSPC"] as const) {
+					expect(loadNative).toThrow(`native addon cache (${versionDir}): ${outcome}`);
+					expect(mkdir.mock.calls).toEqual([[versionDir, { mode: 0o700 }]]);
+					expect(dlopen).toHaveBeenCalledWith(expect.anything(), fallback);
+					expect(dlopen.mock.calls.some(([, candidate]) => path.dirname(candidate) === versionDir)).toBe(false);
+					mkdir.mockClear();
+					dlopen.mockClear();
+				}
+				outcome = "unsafe";
+				expect(loadNative).toThrow(`Unsafe Linux offline native cache path ${versionDir}`);
+				expect(mkdir).not.toHaveBeenCalled();
+				expect(dlopen).not.toHaveBeenCalled();
+			} finally {
+				dlopen.mockRestore();
+				mkdir.mockRestore();
+				lstat.mockRestore();
+				for (const [key, value] of Object.entries(savedEnv)) {
+					if (value === undefined) delete process.env[key];
+					else process.env[key] = value;
+				}
+			}
+		},
+	);
+
 	it.skipIf(process.arch !== "x64" || process.platform === "win32")(
 		"extracts only the selected addon until the loader tries a fallback",
 		async () => {
-			const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-first-run-"));
+			const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "pi-natives-first-run-"));
 			const nativeDir = path.join(root, "native");
 			const manifestDir = path.join(import.meta.dir, "../native");
 			const tag = `${process.platform}-${process.arch}`;
@@ -240,7 +308,12 @@ try {
 				for (const variant of ["baseline", "modern"]) {
 					const cache = path.join(root, variant);
 					const child = Bun.spawn([binary], {
-						env: { ...process.env, PI_NATIVES_DIR: cache, PI_NATIVE_VARIANT: variant },
+						env: {
+							...process.env,
+							HOME: path.join(root, "home"),
+							PI_NATIVES_DIR: cache,
+							PI_NATIVE_VARIANT: variant,
+						},
 						stdout: "pipe",
 						stderr: "ignore",
 					});
@@ -273,6 +346,7 @@ try {
 					const blocked = Bun.spawn([binary], {
 						env: {
 							...process.env,
+							HOME: path.join(root, "home"),
 							PI_NATIVES_DIR: blockedCache,
 							PI_NATIVE_VARIANT: variant,
 							PI_DEBUG_STARTUP: "1",
@@ -287,9 +361,11 @@ try {
 					]);
 					expect(exitCode).toBe(0);
 					const { error }: { error: string } = JSON.parse(stdout);
-					expect(error).toContain("embedded addon dir");
-					expect(stderr).toContain("native:require:");
-					expect(error).toContain(path.join(path.dirname(binary), `pi_natives.${tag}-${variant}.node`));
+					const filename = `pi_natives.${tag}-${variant}.node`;
+					const fallback = path.join(path.dirname(binary), filename);
+					expect(error).toContain(`- embedded addon extraction (${filename}):`);
+					expect(stderr).toContain(`native:require:${filename}`);
+					expect(error.split("\n").some(line => line.startsWith(`- ${fallback}:`))).toBe(true);
 				}
 			} finally {
 				await fs.rm(root, { recursive: true, force: true });

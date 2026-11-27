@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { disposeAllKernelSessions, executePython } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import type { KernelExecuteResult } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import * as pythonKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
@@ -103,16 +104,28 @@ describe("executePython lifecycle", () => {
 	});
 });
 
-async function injectKernelStartupScript(cwd: string, source: string): Promise<void> {
-	// Inject sitecustomize only into the real kernel child, not the availability
-	// probe, without relying on POSIX executable scripts or changing process.env.
-	const startupDir = path.join(cwd, "startup");
-	await fs.mkdir(startupDir);
-	await fs.writeFile(path.join(startupDir, "sitecustomize.py"), source);
-	const start = pythonKernel.PythonKernel.start.bind(pythonKernel.PythonKernel);
-	vi.spyOn(pythonKernel.PythonKernel, "start").mockImplementation(options =>
-		start({ ...options, env: { ...options.env, PYTHONPATH: startupDir } }),
-	);
+async function startupExitInterpreter(cwd: string, code: number, stderr?: string): Promise<string> {
+	vi.spyOn(Settings, "init").mockResolvedValue(Settings.isolated());
+	if (process.platform !== "win32") {
+		const shim = path.join(cwd, "python");
+		const print = stderr ? `printf '%s\\n' '${stderr.replaceAll("'", "'\\''")}' >&2\n` : "";
+		await fs.writeFile(shim, `#!/bin/sh\n${print}exit ${code}\n`, { mode: 0o755 });
+		return shim;
+	}
+
+	// Windows cannot execute the POSIX shim. Change only the runner argv,
+	// retaining the real child, its stdio pipes and the kernel startup path.
+	const spawn = Bun.spawn;
+	const print = stderr ? `require("node:fs").writeSync(2, ${JSON.stringify(`${stderr}\n`)});` : "";
+	const child = `${print}process.exit(${code});`;
+	vi.spyOn(Bun, "spawn").mockImplementation(((...args: Parameters<typeof Bun.spawn>) => {
+		const [command, ...rest] = args;
+		if (Array.isArray(command) && command[0] === process.execPath && command[1] === "-u") {
+			return Reflect.apply(spawn, Bun, [[process.execPath, "-e", child], ...rest]);
+		}
+		return Reflect.apply(spawn, Bun, args);
+	}) as typeof Bun.spawn);
+	return process.execPath;
 }
 
 /**
@@ -128,11 +141,8 @@ describe("executePython reports a failure nobody cancelled as a failure", () => 
 
 	it("a kernel whose process exits during startup reports its exit code and stderr, not a cancellation", async () => {
 		using tempDir = TempDir.createSync("@python-kernel-dies-at-start-");
-		await injectKernelStartupScript(
-			tempDir.path(),
-			"import os\nos.write(2, b'shim: python 3.12.4 is not installed\\n')\nos._exit(3)\n",
-		);
-		const run = executePython("1 + 1", { kernelMode: "per-call", cwd: tempDir.path() });
+		const interpreter = await startupExitInterpreter(tempDir.path(), 3, "shim: python 3.12.4 is not installed");
+		const run = executePython("1 + 1", { kernelMode: "per-call", cwd: tempDir.path(), interpreter });
 		await expect(run).rejects.toThrow("Python kernel exited with code 3");
 		await expect(run).rejects.toThrow("shim: python 3.12.4 is not installed");
 	});
@@ -141,8 +151,8 @@ describe("executePython reports a failure nobody cancelled as a failure", () => 
 		using tempDir = TempDir.createSync("@python-kernel-dies-silently-at-start-");
 		// Nothing on stderr, so the exit code is the only thing that explains the
 		// failure: a diagnosis built from the stderr drain alone has no reason at all.
-		await injectKernelStartupScript(tempDir.path(), "import os\nos._exit(23)\n");
-		const run = executePython("1 + 1", { kernelMode: "per-call", cwd: tempDir.path() });
+		const interpreter = await startupExitInterpreter(tempDir.path(), 23);
+		const run = executePython("1 + 1", { kernelMode: "per-call", cwd: tempDir.path(), interpreter });
 		await expect(run).rejects.toThrow("Python kernel exited with code 23");
 	});
 

@@ -17,7 +17,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { InternalUrlRouter } from "../internal-urls/router";
 import { approvalCacheKeyForPath, approvalDirectoryKey } from "./approval-cache";
-import { approvalTargetKey, approvalTreeSearchKey, isApprovalPublicUrl } from "./approval-targets";
+import {
+	approvalLocalBackingPath,
+	approvalTargetKey,
+	approvalTreeSearchKey,
+	isApprovalPublicUrl,
+} from "./approval-targets";
 import type { ToolSession } from "./index";
 import {
 	hasGlobPathChars,
@@ -82,6 +87,23 @@ export function searchApprovalCacheTargets(
 	return keys.size > 0 ? [...keys] : undefined;
 }
 
+/** Refresh the canonical key for a literal execution path, without parsing tool arguments. */
+export function astEditApprovalTargetForResolvedPath(absolute: string, allowDirectory = true): string | undefined {
+	if (!path.isAbsolute(absolute)) return undefined;
+	// An NTFS stream can report its base file's metadata, not its own identity.
+	if (process.platform === "win32" && absolute.slice(path.parse(absolute).root.length).includes(":")) return undefined;
+	try {
+		const stat = fs.statSync(absolute);
+		const isDirectory = stat.isDirectory();
+		if (!stat.isFile() && !(allowDirectory && isDirectory)) return undefined;
+		const realPath = fs.realpathSync.native(absolute);
+		if (process.platform === "win32" && !windowsApprovalPathIsUnambiguous(realPath)) return undefined;
+		return searchStatApprovalKey(realPath, true, isDirectory);
+	} catch {
+		return undefined;
+	}
+}
+
 /** A complete set of exact local files or directory trees; other inputs are resolved only at execution. */
 export function astEditApprovalTargets(roots: readonly string[], cwd: string): readonly string[] | null {
 	const keys = new Set<string>();
@@ -94,10 +116,7 @@ export function astEditApprovalTargets(roots: readonly string[], cwd: string): r
 		try {
 			const basePath = parseSearchPath(root).basePath;
 			const absolute = resolveToCwd(basePath, cwd);
-			if (!path.isAbsolute(absolute) || absolute !== absolute.trim()) return null;
-			// An NTFS stream can report its base file's metadata, not its own identity.
-			if (process.platform === "win32" && absolute.slice(path.parse(absolute).root.length).includes(":"))
-				return null;
+			if (absolute !== absolute.trim()) return null;
 			// A multi-target walk may turn resolved spellings into a combined glob rooted
 			// at a lexical ancestor. Only key paths that remain literal in that walk.
 			if (
@@ -106,14 +125,12 @@ export function astEditApprovalTargets(roots: readonly string[], cwd: string): r
 			) {
 				return null;
 			}
-			const stat = fs.statSync(absolute);
-			if (!stat.isFile() && (hasSpaces || !stat.isDirectory())) return null;
 			// Execution checks the unsplit spelling before parsing separators. If parsing changed it,
 			// make sure the literal probe still prevents a space-delimited list.
 			if (hasSpaces && basePath !== root && probeLiteralPathExistsSync(root, cwd) !== "exists") return null;
-			const realPath = fs.realpathSync.native(absolute);
-			if (process.platform === "win32" && !windowsApprovalPathIsUnambiguous(realPath)) return null;
-			keys.add(searchStatApprovalKey(realPath, true, stat.isDirectory()));
+			const key = astEditApprovalTargetForResolvedPath(absolute, !hasSpaces);
+			if (key === undefined) return null;
+			keys.add(key);
 		} catch {
 			return null;
 		}
@@ -156,10 +173,11 @@ function searchRootApprovalKey(root: string, session: ToolSession, recursive: bo
 		return isApprovalPublicUrl(root) ? undefined : approvalTargetKey(session.cwd, root);
 	}
 	const router = InternalUrlRouter.instance();
-	if (router.canHandle(router.normalize(root))) {
-		const key = approvalTargetKey(session.cwd, root, session);
-		if (!key || !path.isAbsolute(key)) return key;
-		return searchFolderKey(key, recursive) ?? key;
+	if (router.canHandle(root)) {
+		const normalized = router.normalize(root.trim());
+		const backing = approvalLocalBackingPath(normalized, session);
+		if (backing === undefined) return normalized;
+		return searchFolderKey(backing, recursive) ?? approvalCacheKeyForPath(backing);
 	}
 	let absolute: string;
 	try {

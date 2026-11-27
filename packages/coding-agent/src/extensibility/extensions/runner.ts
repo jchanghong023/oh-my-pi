@@ -612,10 +612,17 @@ export const UNAVAILABLE_ANNOTATIONS: ExtensionAnnotationsAPI = Object.freeze({
 	open: () => Promise.reject(new Error("ctx.annotations is not available in this host.")),
 });
 
+function contextHistoryIdentity(message: AgentMessage): string {
+	return message.role === "toolResult"
+		? `${message.role}:${message.timestamp}:${message.toolCallId}`
+		: `${message.role}:${message.timestamp}`;
+}
+
 /**
  * Hooks that construct fresh objects lose the index preserved by object spread.
- * Recover it from a unique role/timestamp pair, never from the output position:
- * a hook can insert, filter, or reorder messages in the same pass.
+ * Recover it from a unique message identity, never from the output position:
+ * a hook can insert, filter, or reorder messages in the same pass. Tool
+ * results from distinct calls can share a millisecond timestamp.
  */
 function restoreContextHistoryIndices(previousMessages: AgentMessage[], nextMessages: AgentMessage[]): void {
 	if (nextMessages.every(message => getContextHistoryIndex(message) !== undefined)) return;
@@ -628,14 +635,14 @@ function restoreContextHistoryIndices(previousMessages: AgentMessage[], nextMess
 			claimed.add(index);
 			continue;
 		}
-		const key = `${message.role}:${message.timestamp}`;
+		const key = contextHistoryIdentity(message);
 		replacements.set(key, replacements.has(key) ? null : { message });
 	}
 	if (replacements.size === 0) return;
 
 	for (const message of previousMessages) {
 		if (!message) continue;
-		const replacement = replacements.get(`${message.role}:${message.timestamp}`);
+		const replacement = replacements.get(contextHistoryIdentity(message));
 		if (!replacement) continue;
 		const index = getContextHistoryIndex(message);
 		// A previous insertion or a second source with this identity makes the

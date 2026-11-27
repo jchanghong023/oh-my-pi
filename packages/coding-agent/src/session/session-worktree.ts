@@ -1,6 +1,6 @@
 /**
  * `/wt` backing: reuse a branch's checkout or create a committed-only linked
- * worktree beside the current session directory, without changing the source.
+ * worktree beside the source checkout, without changing the source.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -137,6 +137,7 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 		throw new Error(`Cannot create a worktree: ${cwd} has no commits.`);
 	}
 	const worktrees = await repository.worktrees();
+	const { repoRoot, commonDir } = repository.info();
 	if (!createdBranch) {
 		if ((await repository.currentBranch()) === branch) {
 			return {
@@ -152,13 +153,33 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 		let invalidRegistration: Error | undefined;
 		for (const existing of worktrees) {
 			if (existing.branch !== branchRef) continue;
+			const primary = existing === worktrees[0];
+			let registeredPath = existing.path;
+			// A separate Git directory has no implicit path back to the primary
+			// checkout. Listings may report the caller's root or the metadata dir.
+			if (
+				primary &&
+				repository.linkedWorktree() &&
+				(path.relative(repoRoot, registeredPath) === "" || path.relative(commonDir, registeredPath) === "")
+			) {
+				const configuredRoot = await repository.configGet("core.worktree");
+				if (!configuredRoot) {
+					invalidRegistration ??= new Error(
+						`Cannot locate the primary checkout of '${branch}' from '${cwd}': its Git directory is separate and has no core.worktree path. Open OMP from the primary checkout instead.`,
+					);
+					continue;
+				}
+				registeredPath = path.resolve(commonDir, configuredRoot);
+			}
 			try {
-				const reusedPath = await fs.realpath(existing.path);
+				const reusedPath = await fs.realpath(registeredPath);
 				const checkout = vcs.requireGit(reusedPath);
-				const { repoRoot, commonDir } = checkout.info();
+				const info = checkout.info();
+				const canonicalCommonDir = await fs.realpath(commonDir);
 				if (
-					(await fs.realpath(repoRoot)) !== reusedPath ||
-					(await fs.realpath(commonDir)) !== (await fs.realpath(repository.info().commonDir)) ||
+					(await fs.realpath(info.repoRoot)) !== reusedPath ||
+					(await fs.realpath(info.commonDir)) !== canonicalCommonDir ||
+					(primary && (await fs.realpath(info.gitDir)) !== canonicalCommonDir) ||
 					(await checkout.head()).refName !== branchRef
 				) {
 					throw new Error("Directory is not a checkout of the requested branch in this repository.");
@@ -174,16 +195,18 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 				};
 			} catch (cause) {
 				invalidRegistration ??= new Error(
-					`Cannot reuse worktree ${existing.path} for '${branch}'. Restore the checkout or run \`git worktree repair\` if it was moved; its registration was left intact.`,
+					`Cannot reuse worktree ${registeredPath} for '${branch}'. Restore the checkout or run \`git worktree repair\` if it was moved; its registration was left intact.`,
 					{ cause },
 				);
 			}
 		}
 		if (invalidRegistration) throw invalidRegistration;
 	}
-	const primaryRoot = repository.primaryRoot() ?? repository.info().repoRoot;
+	const primaryRoot = repository.primaryRoot() ?? repoRoot;
 	const slug = branch.replaceAll(/[^A-Za-z0-9._-]+/g, "-");
-	const basePath = path.join(path.dirname(path.resolve(cwd)), `${slug}-${hashPath(primaryRoot)}`);
+	// Creating under the parent of a subdirectory would add an untracked
+	// directory inside the source checkout.
+	const basePath = path.join(path.dirname(repoRoot), `${slug}-${hashPath(primaryRoot)}`);
 	const worktreePath = await resolveAvailableWorktreePath(basePath, worktrees);
 	await fs.mkdir(path.dirname(worktreePath), { recursive: true });
 

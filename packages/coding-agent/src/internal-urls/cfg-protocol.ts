@@ -402,6 +402,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		const finish = (
 			outcome: CfgWriteOutcome,
 			shadow?: { layer: SettingProvenance; effective: unknown },
+			note?: string,
 		): InternalWriteResult => {
 			const effective = shadow ? formatValue(leaf, shadow.effective) : undefined;
 			const details: CfgWriteDetails = { ...request, outcome, ...(effective !== undefined ? { effective } : {}) };
@@ -418,7 +419,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 					provenance: shadow ? PROVENANCE_LABELS[shadow.layer] : undefined,
 				})
 				.trim();
-			return { content: [{ type: "text", text }], details: { cfg: details } };
+			return { content: [{ type: "text", text: note ? `${text}\n${note}` : text }], details: { cfg: details } };
 		};
 
 		if (!save && Bun.deepEquals(previous, value)) return finish("unchanged");
@@ -447,8 +448,8 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		}
 		const caller = callerSession(context);
 		const sessionId = caller.getSessionId?.() ?? undefined;
-		let teamSave: { service: TeamConfigService; revision: string; errorClass: typeof TeamConfigError } | undefined;
-		if (save && leaf.id === cfgTeamMembers.id) {
+		let team: { service: TeamConfigService; revision?: string; errorClass: typeof TeamConfigError } | undefined;
+		if (leaf.id === cfgTeamMembers.id) {
 			const registry = caller.modelRegistry;
 			if (!registry) throw new Error("Cannot validate Team members without the calling session's model registry.");
 			const { TeamConfigError, TeamConfigService } = await import("../team/config");
@@ -463,11 +464,15 @@ export class CfgProtocolHandler implements ProtocolHandler {
 					!caller.isDisposed?.() &&
 					(caller.getSessionId?.() ?? undefined) === sessionId,
 			});
-			const { revision } = await host.persistentSettings.readUserSetting(leaf.id);
-			if (revision === null) throw new Error("User Team configuration cannot be safely read; nothing was saved.");
-			teamSave = { service, revision, errorClass: TeamConfigError };
-			const projected = settings.projectUserSetting(leaf.id, value);
-			if (!Bun.deepEquals(value, projected.value)) request.shadowedBy = PROVENANCE_LABELS[projected.source];
+			team = { service, errorClass: TeamConfigError };
+			if (save) {
+				const { revision } = await host.persistentSettings.readUserSetting(leaf.id);
+				if (revision === null) throw new Error("User Team configuration cannot be safely read; nothing was saved.");
+				team.revision = revision;
+				const projected = settings.projectUserSetting(leaf.id, value);
+				if (!Bun.deepEquals(value, projected.value) && ABOVE_GLOBAL.includes(projected.source))
+					request.shadowedBy = PROVENANCE_LABELS[projected.source];
+			}
 		} else if (save) {
 			// Saving may still be meant for other projects, so ask anyway, but name the layer that wins here.
 			// A session sharing the persistent instance drops its own override on save, so it does not shadow.
@@ -492,6 +497,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		if (answer === "deny") return finish("declined");
 
 		if (!save) {
+			team?.service.validateTeamMembers(value);
 			leaf.override(settings, value);
 			host.applied({ path: leaf.id, value: leaf.get(settings), settings, save });
 			// A non-fallback env var outranks runtime overrides; report it instead of claiming the change.
@@ -499,12 +505,12 @@ export class CfgProtocolHandler implements ProtocolHandler {
 			return finish("applied", layer ? { layer, effective: leaf.get(settings) } : undefined);
 		}
 		const persistent = host.persistentSettings;
-		if (teamSave) {
+		if (team?.revision !== undefined) {
 			let result;
 			try {
-				result = await teamSave.service.saveTeamConfig(value, teamSave.revision);
+				result = await team.service.saveTeamConfig(value, team.revision);
 			} catch (error) {
-				if (!(error instanceof teamSave.errorClass)) throw error;
+				if (!(error instanceof team.errorClass)) throw error;
 				const status = error.data?.write.status;
 				const receipt =
 					status === "saved"
@@ -526,15 +532,13 @@ export class CfgProtocolHandler implements ProtocolHandler {
 			if (settings !== persistent)
 				host.applied({ path: leaf.id, value: leaf.get(persistent), settings: persistent, save });
 			host.applied({ path: leaf.id, value: leaf.get(settings), settings, save });
-			return finish(
-				"applied",
-				result.effectiveMatchesRequested
-					? undefined
-					: {
-							layer: result.config.source ?? "env",
-							effective: result.config.effectiveMembers?.map(slot => slot.rawSelector) ?? leaf.get(settings),
-						},
-			);
+			if (result.effectiveMatchesRequested) return finish("applied");
+			const layer = result.config.source;
+			if (layer && ABOVE_GLOBAL.includes(layer)) {
+				const effective = result.config.effectiveMembers?.map(slot => slot.rawSelector) ?? leaf.get(settings);
+				return finish("applied", { layer, effective });
+			}
+			return finish("applied", undefined, result.effectiveNote);
 		}
 		leaf.set(persistent, value);
 		await persistent.flush();

@@ -62,6 +62,7 @@ describe("config CLI schema coverage", () => {
 			'"startup.changelogMode": expanded\ncollapseChangelog: false\nstartup: {}\nother: keep\n',
 			{ startup: {}, other: "keep" },
 		],
+		["{startup: {? changelogMode}, other: keep}\n", { startup: {}, other: "keep" }],
 	] satisfies [string, Record<string, unknown>][])(
 		"resets a nested setting through the real CLI for %j",
 		async (source, expected) => {
@@ -111,6 +112,33 @@ describe("config CLI schema coverage", () => {
 		expect(parsed.key).toBe("modelRoles");
 		expect(parsed.type).toBe("record");
 		expect(parsed.value).toEqual({ default: "claude-opus-4-6" });
+	});
+
+	it("replaces legacy role selectors without removing unrelated configuration", async () => {
+		const file = testAgentDir!.join("config.yml");
+		await Bun.write(
+			file,
+			[
+				"# Keep provider settings",
+				"providers:",
+				"  tinyModel: lfm2.5-350m",
+				"  maxInFlightRequests: {openai: 2}",
+				'"providers.memoryModel": lfm2.5-700m',
+				"modelRoles: {smol: anthropic/old}",
+				"",
+			].join("\n"),
+		);
+		const env = { PI_CODING_AGENT_DIR: testAgentDir!.path() };
+		const value = { tiny: "anthropic/new-tiny", memory: "anthropic/new-memory" };
+		const saved = await runCliProcess(["config", "set", "modelRoles", JSON.stringify(value), "--json"], env);
+		expect(saved.exitCode).toBe(0);
+		expect(JSON.parse(saved.output)).toEqual({ key: "modelRoles", value });
+		const source = await Bun.file(file).text();
+		expect(source).toContain("# Keep provider settings");
+		expect(YAML.parse(source)).toEqual({ providers: { maxInFlightRequests: { openai: 2 } }, modelRoles: value });
+		const reread = await runCliProcess(["config", "get", "modelRoles", "--json"], env);
+		expect(reread.exitCode).toBe(0);
+		expect(JSON.parse(reread.output)).toMatchObject({ key: "modelRoles", value, type: "record" });
 	});
 
 	it("normalizes valid provider in-flight request limits from JSON objects", async () => {

@@ -317,10 +317,11 @@ export declare class FileLock {
   /**
    * Whether any handle, in any process including this one, holds `path`.
    *
-   * Observes without taking the lock: an `F_OFD_GETLK` query plus a
-   * `connect(2)` probe of the older abstract-socket name on Linux, an
-   * `F_GETLK` query on other Unix platforms, a `\BaseNamedObjects` directory
-   * listing on Windows. A concurrent `tryAcquire()` never meets it.
+   * Observes without taking the lock: on Linux, an `F_OFD_GETLK` query
+   * plus a `connect(2)` probe of the full path's older abstract-socket
+   * name; on other Unix platforms, an `F_GETLK` query; on Windows, a
+   * `\BaseNamedObjects` directory listing. A concurrent `tryAcquire()`
+   * never meets it.
    */
   static isHeld(path: string): boolean
   /** Whether this handle owns the requested lock. */
@@ -1012,7 +1013,10 @@ export declare class VcsGitRepo {
   statusSummary(signal?: unknown | undefined | null): Promise<VcsStatusSummary>
   /** Read config. */
   configGet(key: string, signal?: unknown | undefined | null): Promise<string | undefined | null>
-  /** Resolve an effective executable hook without executing it. */
+  /**
+   * Resolve an effective executable hook without executing it.
+   * Rejects when an active configuration-defined hook has no file path.
+   */
   hookPath(name: string, signal?: unknown | undefined | null): Promise<string | null>
   /** Set config. */
   configSet(key: string, value: string, signal?: unknown | undefined | null): Promise<undefined>
@@ -1092,7 +1096,10 @@ export declare class VcsGitRepo {
   stageHunks(selections: Array<VcsHunkSelection>, rawDiff?: string | undefined | null, signal?: unknown | undefined | null): Promise<undefined>
   /** Create commit. */
   commitCreate(message: string, options: VcsCommitOptions, signal?: unknown | undefined | null): Promise<string>
-  /** Hook-free confirmed-tree commit with locked, resumable index publication. */
+  /**
+   * Hook-free confirmed-tree commit with locked, resumable index publication.
+   * Cancellation is honored before the write starts, not during settlement.
+   */
   commitCreateScoped(message: string, options: VcsScopedCommitOptions, signal?: unknown | undefined | null): Promise<VcsScopedCommitResult>
   /** Publish a private-index commit after preparing the shared index. */
   commitReconciled(message: string, options: VcsCommitOptions, selection: string, signal?: unknown | undefined | null): Promise<VcsReconciledCommit>
@@ -1131,7 +1138,10 @@ export declare class VcsGitRepo {
    * writes.
    */
   previewOwnedPatch(patch: string, options: VcsOwnedPatchPreviewOptions, signal?: unknown | undefined | null): Promise<VcsOwnedPatchPreview>
-  /** Guard worktree preimages and report every path's actual partial outcome. */
+  /**
+   * Guard worktree preimages and report every path's actual partial outcome.
+   * Cancellation is honored before the write starts, not during settlement.
+   */
   applyOwnedPatch(patch: string, options: VcsOwnedPatchOptions, signal?: unknown | undefined | null): Promise<VcsOwnedPatchResult>
   /** Check patch applicability. */
   canApplyPatch(patch: string, options: VcsApplyOptions, signal?: unknown | undefined | null): Promise<boolean>

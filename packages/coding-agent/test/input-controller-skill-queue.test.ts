@@ -76,7 +76,7 @@ function createStubInputControllerContext(opts: {
 	const renderOptimisticSkillMessage = vi.fn();
 	const reconcileOptimisticSkillMessage = vi.fn();
 	const clearOptimisticSkillMessage = vi.fn();
-	const queueCompactionMessage = vi.fn((_text: string, _mode: "steer" | "followUp", _images?: ImageContent[]) => {});
+	const queueCompactionMessage = vi.fn<InteractiveModeContext["queueCompactionMessage"]>();
 	const setLoopPrompt = vi.fn((_prompt: string) => {});
 	const armLoopAutoSubmit = vi.fn();
 	const ctx = {
@@ -180,7 +180,7 @@ describe("InputController skill queue chip metadata", () => {
 		editor.setText("/skill:test-skill arg1 arg2");
 		await editor.onSubmit?.("/skill:test-skill arg1 arg2");
 
-		expect(queueCompactionMessage).toHaveBeenCalledWith("/skill:test-skill arg1 arg2", "steer", undefined);
+		expect(queueCompactionMessage).toHaveBeenCalledWith("/skill:test-skill arg1 arg2", "steer", undefined, undefined);
 		expect(promptCustomMessage).not.toHaveBeenCalled();
 	});
 
@@ -215,7 +215,7 @@ describe("InputController skill queue chip metadata", () => {
 		await editor.onSubmit?.("/skill:test-skill arg1 arg2");
 
 		expect(setLoopPrompt).toHaveBeenCalledWith("/skill:test-skill arg1 arg2");
-		expect(queueCompactionMessage).toHaveBeenCalledWith("/skill:test-skill arg1 arg2", "steer", undefined);
+		expect(queueCompactionMessage).toHaveBeenCalledWith("/skill:test-skill arg1 arg2", "steer", undefined, undefined);
 	});
 
 	it("passes slash-form queueChipText for streaming skill follow-ups", async () => {

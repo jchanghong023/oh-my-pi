@@ -130,6 +130,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 			renderInitialMessages++;
 			await options.renderInitialMessages?.();
 		},
+		refreshCompactPresentation() {},
 		reloadTodos: async (source?: AgentSession) => {
 			reloadTodoSessions.push(source ?? main.session);
 		},

@@ -21,9 +21,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { pathToFileURL } from "node:url";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Composer } from "../src/ui/composer/composer";
 
 const ONE_PX_PNG = Buffer.from(
@@ -31,7 +33,7 @@ const ONE_PX_PNG = Buffer.from(
 	"base64",
 );
 
-function createCtx() {
+function createCtx(cwd: string) {
 	const composer = new Composer();
 	const pasteText = vi.spyOn(composer, "insertText");
 	const insertAtom = vi.spyOn(composer, "insertAtom");
@@ -39,10 +41,8 @@ function createCtx() {
 	const ctx = {
 		composer,
 		shell: { focused: () => composer.field },
-		sessionManager: {
-			getCwd: () => process.cwd(),
-			putBlob: async () => ({ hash: "h", path: "/tmp/h.png", displayPath: "/tmp/h.png" }),
-		} as unknown as InteractiveModeContext["sessionManager"],
+		settings: Settings.isolated({ "images.autoResize": false }),
+		sessionManager: SessionManager.inMemory(cwd),
 		showStatus,
 	} as unknown as InteractiveModeContext;
 	return {
@@ -65,18 +65,15 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-3506-"));
 		imgPath = path.join(tmpDir, "screenshot.png");
 		await fs.writeFile(imgPath, ONE_PX_PNG);
-		resetSettingsForTest();
-		await Settings.init({ inMemory: true, overrides: { "images.autoResize": false } });
 	});
 
 	afterEach(async () => {
 		await fs.rm(tmpDir, { recursive: true, force: true });
-		resetSettingsForTest();
 		vi.restoreAllMocks();
 	});
 
 	it("attaches the image when the clipboard exposes only its file path (Finder Cmd+C)", async () => {
-		const { ctx, spies } = createCtx();
+		const { ctx, spies } = createCtx(tmpDir);
 		const controller = new InputController(ctx, {
 			readImage: async () => null, // arboard returns ContentNotAvailable when only a file URL is on the pasteboard
 			readText: async () => imgPath,
@@ -94,8 +91,8 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 	});
 
 	it("attaches the image when the clipboard exposes a `file://` URL (Codex parity)", async () => {
-		const { ctx, spies } = createCtx();
-		const fileUrl = new URL(`file://${imgPath}`).href;
+		const { ctx, spies } = createCtx(tmpDir);
+		const fileUrl = pathToFileURL(imgPath).href;
 		const controller = new InputController(ctx, {
 			readImage: async () => null,
 			readText: async () => fileUrl,
@@ -116,7 +113,7 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 		// bracketed-paste splitter shreds the path on whitespace, so the
 		// keybind text fallback MUST try the trimmed text as a single
 		// candidate before splitting.
-		const { ctx, spies } = createCtx();
+		const { ctx, spies } = createCtx(tmpDir);
 		const spaced = path.join(tmpDir, "Screenshot 2026-06-25 at 1.23.45 PM.png");
 		await fs.writeFile(spaced, ONE_PX_PNG);
 		const controller = new InputController(ctx, {
@@ -138,7 +135,7 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 		// The Darwin-only `readMacFileUrls` AppleScript bridge reaches the
 		// file-URL representation and the controller MUST route it through
 		// `handleImagePathPaste` instead of bailing with "Clipboard is empty".
-		const { ctx, spies } = createCtx();
+		const { ctx, spies } = createCtx(tmpDir);
 		const readText = vi.fn(async () => ""); // pbpaste output
 		const readMacFileUrls = vi.fn(async () => [imgPath]);
 		const controller = new InputController(ctx, {
@@ -162,7 +159,7 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 		// back the whole `public.file-url` list. The controller MUST attach
 		// every image in the list, not stop after the first — matches the
 		// bracketed-paste handler in `CustomEditor.handleInput`.
-		const { ctx, spies } = createCtx();
+		const { ctx, spies } = createCtx(tmpDir);
 		const secondImg = path.join(tmpDir, "second.jpg");
 		const thirdImg = path.join(tmpDir, "third.png");
 		await fs.writeFile(secondImg, ONE_PX_PNG);
@@ -183,11 +180,12 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 	});
 
 	it("skips non-image URLs in a mixed Finder selection but still attaches the image siblings", async () => {
-		const { ctx, spies } = createCtx();
+		const { ctx, spies } = createCtx(tmpDir);
+		// The AppleScript bridge returns decoded paths; use host paths for the injected bridge.
 		const readMacFileUrls = vi.fn(async () => [
-			"/Users/me/Documents/report.pdf",
+			path.join(tmpDir, "report.pdf"),
 			imgPath,
-			"/Users/me/Documents/notes.txt",
+			path.join(tmpDir, "notes.txt"),
 		]);
 		const controller = new InputController(ctx, {
 			readImage: async () => null,
@@ -204,8 +202,8 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 	});
 
 	it("ignores non-image macOS file URLs and falls through to the text fallback", async () => {
-		const { ctx, spies } = createCtx();
-		const readMacFileUrls = vi.fn(async () => ["/Users/me/Documents/report.pdf"]);
+		const { ctx, spies } = createCtx(tmpDir);
+		const readMacFileUrls = vi.fn(async () => [path.join(tmpDir, "report.pdf")]);
 		const controller = new InputController(ctx, {
 			readImage: async () => null,
 			readText: async () => "fallback text",
@@ -221,7 +219,7 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 	});
 
 	it("preserves #1628 smart-paste behavior for non-image text", async () => {
-		const { ctx, spies } = createCtx();
+		const { ctx, spies } = createCtx(tmpDir);
 		const controller = new InputController(ctx, {
 			readImage: async () => null,
 			readText: async () => "just some plain text, no path here",
@@ -234,9 +232,9 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 		expect(spies.pendingImages.length).toBe(0);
 	});
 
-	it("still pastes text for a path-shaped but non-image extension (e.g. /tmp/report.csv)", async () => {
-		const { ctx, spies } = createCtx();
-		const csvPath = "/tmp/report.csv";
+	it("still pastes text for a path-shaped but non-image extension", async () => {
+		const { ctx, spies } = createCtx(tmpDir);
+		const csvPath = path.join(tmpDir, "report.csv");
 		const controller = new InputController(ctx, {
 			readImage: async () => null,
 			readText: async () => csvPath,

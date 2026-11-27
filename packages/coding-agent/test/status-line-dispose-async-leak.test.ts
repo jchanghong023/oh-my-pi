@@ -45,16 +45,17 @@ function mockFeatureCheckout(): void {
 			refName: "refs/heads/feature/x",
 		}),
 		linkedWorktree: () => null,
+		statusChangeCounts: async () => [0, 0, 0, 0, 0, 0, 0, 0],
 	} as unknown as VcsGitRepo;
 	const repo = {
 		kind: () => "git",
 		asGit: () => git,
 		asJj: () => null,
 		root: () => "/repo/dispose",
-		statusSummary: async () => ({ staged: 0, unstaged: 0, untracked: 0 }),
 	} as unknown as VcsRepo;
 	vi.spyOn(vcs, "repo").mockReturnValue(repo);
 	vi.spyOn(vcs, "repoForDisplay").mockReturnValue(repo);
+	vi.spyOn(vcs, "git").mockReturnValue(null);
 }
 
 describe("status line dispose guards background reads", () => {

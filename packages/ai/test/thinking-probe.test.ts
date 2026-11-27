@@ -3,7 +3,7 @@ import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { readThinkingCapability } from "@oh-my-pi/pi-catalog/thinking-capability";
+import { readThinkingCapability, writeThinkingCapability } from "@oh-my-pi/pi-catalog/thinking-capability";
 import { isRecord, TempDir, untilAborted } from "@oh-my-pi/pi-utils";
 
 const context: Context = { messages: [{ role: "user", content: "the real task", timestamp: 1 }] };
@@ -179,6 +179,42 @@ describe("unknown-model thinking negotiation", () => {
 		expect(readThinkingCapability(model, temp.join("models.db"))?.format).toBe("openrouter");
 		expect(requests.at(-1)?.reasoning).toEqual({ effort: "high" });
 		expect(requests.at(-1)?.reasoning_effort).toBeUndefined();
+	});
+
+	it("applies a cached format and effort clamp to an unverified model without sending probes", async () => {
+		await using temp = await TempDir.create("@thinking-probe-");
+		const dbPath = temp.join("models.db");
+		const model = unknownModel("openai-completions");
+		expect(model.thinking?.unverified).toBe(true);
+		writeThinkingCapability(
+			model,
+			{
+				checkedAt: Date.now(),
+				format: "openrouter",
+				efforts: [Effort.High],
+				observed: false,
+				attempts: [{ format: "openrouter", effort: Effort.High, accepted: true, observed: false }],
+			},
+			dbPath,
+		);
+		const requests: Record<string, unknown>[] = [];
+		const fetch: FetchImpl = async (_url, init) => {
+			requests.push(bodyRecord(init));
+			return chatSuccess();
+		};
+
+		const result = await streamSimple(model, context, {
+			apiKey: "test",
+			fetch,
+			reasoning: Effort.Max,
+			thinkingCapabilityDbPath: dbPath,
+			thinkingProbe: false,
+		}).result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests).toHaveLength(1);
+		expect(requests.some(isCapabilityProbe)).toBe(false);
+		expect(requests[0]?.reasoning).toEqual({ effort: "high" });
+		expect(requests[0]?.reasoning_effort).toBeUndefined();
 	});
 
 	it("falls back from Anthropic adaptive effort to budget thinking and retains answer room", async () => {

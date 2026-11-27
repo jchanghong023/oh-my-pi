@@ -8,11 +8,16 @@
 
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { SqlSessionStorage, type SqlSessionStorageClient } from "@oh-my-pi/pi-coding-agent/session/sql-session-storage";
 import { SessionWriteConflictError } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { SQL } from "bun";
+import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 // Storage keys are platform paths; `/sessions/...` is only drive-relative on Windows,
 // so a resolved `open()` would address a different key than `create()` wrote.
@@ -108,6 +113,53 @@ describe("SessionManager + SqlSessionStorage (SQLite)", () => {
 		expect(leaf?.type).toBe("message");
 		await reopened.close();
 		await client.end();
+	});
+
+	it.each([
+		{ keys: "exact and absolute", hasExact: true },
+		{ keys: "absolute only", hasExact: false },
+	])("switches from an absolute key to a relative request with $keys", async ({ hasExact }) => {
+		const client = new SQL("sqlite::memory:");
+		try {
+			const storage = await SqlSessionStorage.create({ client });
+			const relative = path.join("sessions", "opaque-switch.jsonl");
+			const absolute = path.resolve(relative);
+			const options = { initialCwd: process.cwd(), suppressBreadcrumb: true };
+			const manager = await SessionManager.open(absolute, undefined, storage, options);
+			manager.appendMessage({ role: "user", content: "absolute history", timestamp: 1 });
+			await manager.flush();
+			let expectedId = manager.getSessionId();
+			if (hasExact) {
+				const exact = await SessionManager.open(relative, undefined, storage, options);
+				exact.appendMessage({ role: "user", content: "relative history", timestamp: 2 });
+				expectedId = exact.getSessionId();
+				await exact.close();
+			}
+			manager.setTaskSiblingCandidate("outgoing affinity");
+			const authStorage = createInMemoryAuthStorage();
+			const session = new AgentSession({
+				agent: new Agent({ initialState: { messages: manager.buildSessionContext().messages } }),
+				sessionManager: manager,
+				settings: Settings.isolated(),
+				modelRegistry: new ModelRegistry(authStorage),
+				memoryEnabled: false,
+			});
+			try {
+				expect(session.sessionFile).toBe(absolute);
+				expect(await session.switchSession(relative)).toBe(true);
+				expect(session.sessionFile).toBe(hasExact ? relative : absolute);
+				expect(session.sessionId).toBe(expectedId);
+				expect(manager.getTaskSiblingCandidate()).toBe(hasExact ? undefined : "outgoing affinity");
+				expect(session.messages.filter(message => message.role === "user").map(message => message.content)).toEqual(
+					[hasExact ? "relative history" : "absolute history"],
+				);
+			} finally {
+				await session.dispose();
+				authStorage.close();
+			}
+		} finally {
+			await client.end();
+		}
 	});
 
 	it("SessionManager.list returns SQL-backed sessions for the cwd", async () => {

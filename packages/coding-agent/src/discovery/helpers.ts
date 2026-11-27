@@ -19,7 +19,7 @@ import {
 import { boundSettings, isUserSourceEnabled } from "../capability";
 import type { ContextFile } from "../capability/context-file";
 import type { ExtensionModule } from "../capability/extension-module";
-import { invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
+import { createFileReader, invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
 import {
 	MAIN_AGENT_RULE_NAME,
 	parseRuleAgents,
@@ -492,9 +492,11 @@ export async function scanSkillsFromDir(
 		}
 		return { items, warnings };
 	}
+	// A later discovery may find a file that was missing in this scan.
+	const readSkillFile = createFileReader();
 	const loadSkill = async (skillPath: string) => {
 		try {
-			const content = await readFile(skillPath);
+			const content = await readSkillFile(skillPath);
 			if (!content) return;
 			const { frontmatter, body } = parseFrontmatter(content, { source: skillPath });
 			if (frontmatter.enabled === false) {

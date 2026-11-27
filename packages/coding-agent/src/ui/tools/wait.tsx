@@ -17,7 +17,7 @@ import type { JSXNode } from "@oh-my-pi/pi-tui";
 import { replaceTabs } from "@oh-my-pi/pi-tui/text/width";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { jobDisplayLabel } from "../../async/job-label";
-import { formatWallTimeNotice } from "../../tools/details/bash";
+import { formatExitCodeNotice, formatWallTimeNotice } from "../../tools/details/bash";
 import type { AgentActivitySnapshot, CoordinationDetails, JobSnapshot } from "../../tools/details/wait";
 import {
 	formatArtifactErrorNotice,
@@ -82,25 +82,28 @@ export function waitFailurePreview(
 	}
 	// The local sink prefixes its reason, while bridge and shaped output can carry it as a footer.
 	let trailingReason: string | undefined;
-	const withoutRaw = stripRawOutputNotice(raw).text;
+	const rawFooter = stripRawOutputNotice(raw);
 	const withoutTimeout =
 		job.timedOut === true
-			? stripTrailingNotice(withoutRaw, line => {
+			? stripTrailingNotice(rawFooter.text, line => {
 					trailingReason = BASH_TIMEOUT_NOTICE.exec(line)?.[1];
 					return trailingReason !== undefined;
 				})
-			: withoutRaw;
+			: rawFooter.text;
 	const wallNotice =
 		job.wallTimeNoticeEmitted === true && job.wallTimeMs !== undefined
 			? formatWallTimeNotice(job.wallTimeMs)
 			: undefined;
 	const withoutWall = wallNotice === undefined ? withoutTimeout : stripTrailingNotice(withoutTimeout, wallNotice);
-	const withoutExit = stripTrailingNotice(withoutWall, line => /^Command exited with code -?\d+$/u.test(line));
-	const output = stripRawOutputNotice(
+	const exitNotice = job.exitCode !== undefined && job.exitCode !== 0 ? formatExitCodeNotice(job.exitCode) : undefined;
+	const withoutExit =
+		exitNotice === undefined ? withoutWall : stripTrailingNotice(withoutWall, line => line === exitNotice);
+	const outputWithArtifact = stripRawOutputNotice(
 		wallNotice !== undefined && withoutWall === withoutTimeout && withoutExit !== withoutTimeout
 			? stripTrailingNotice(withoutExit, wallNotice)
 			: withoutExit,
-	).text;
+	);
+	const output = outputWithArtifact.text;
 	const timeout = job.timedOut === true ? BASH_TIMEOUT_NOTICE.exec(output) : undefined;
 	const reason = timeout?.[1] ?? trailingReason;
 	if (!expanded && duplicatesBashOutcome(job, settled)) return { lines: [], reason };
@@ -118,11 +121,17 @@ export function waitFailurePreview(
 		}
 	}
 	const truncation = job.meta?.truncation;
+	const artifactId =
+		job.meta?.minimized?.artifactId ??
+		rawFooter.artifactId ??
+		outputWithArtifact.artifactId ??
+		truncation?.artifactId;
+	const elidedBytes = artifactId === truncation?.artifactId ? truncation?.artifactElidedBytes : undefined;
 	return {
 		lines,
 		reason,
-		artifact: truncation?.artifactId
-			? `${truncation.artifactElidedBytes ? "Sample only · " : ""}${formatFullOutputReference(truncation.artifactId, truncation.artifactElidedBytes)}`
+		artifact: artifactId
+			? `${elidedBytes ? "Sample only · " : ""}${formatFullOutputReference(artifactId, elidedBytes)}`
 			: undefined,
 	};
 }

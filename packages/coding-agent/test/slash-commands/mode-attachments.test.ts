@@ -87,7 +87,9 @@ describe("mode command attachments", () => {
 
 		await harness.editor.onSubmit?.("/goal keep this private");
 
-		expect(harness.handleGoalModeCommand).toHaveBeenCalledWith("keep this private", undefined);
+		expect(harness.handleGoalModeCommand).toHaveBeenCalledWith("keep this private", undefined, {
+			streamingBehavior: "steer",
+		});
 		expect(harness.editor.pendingImages).toEqual([]);
 		expect(harness.editor.pendingImageLinks).toEqual([]);
 	});

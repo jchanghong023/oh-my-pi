@@ -241,7 +241,6 @@ export function unmeteredMessage(model: Model<Api>, text: string): AssistantMess
  * @param firstMessage The first user message
  * @param registry Model registry
  * @param settings Settings used to resolve the title model
- * @param cwd The caller's current task directory for online completion requests
  * @param sessionId Optional session id for sticky API key selection
  * @param currentModel Current model (used to derive title model)
  * @param metadataResolver Optional resolver evaluated after credential selection
@@ -255,12 +254,12 @@ export function unmeteredMessage(model: Model<Api>, text: string): AssistantMess
  * @param onUsage Optional reporter for every title attempt the provider billed
  *   and for a local model's title, so the caller can journal the request on
  *   the session's cost ledger.
+ * @param cwd Optional caller working directory for online completion requests
  */
 export async function generateSessionTitle(
 	firstMessage: string,
 	registry: ModelRegistry,
 	settings: Settings,
-	cwd: string,
 	sessionId?: string,
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
@@ -268,6 +267,7 @@ export async function generateSessionTitle(
 	signal?: AbortSignal,
 	credentialSourceSessionId?: string,
 	onUsage?: TitleUsageReporter,
+	cwd?: string,
 ): Promise<string | null> {
 	// Defer titling for greetings / acknowledgements / empty input. The default
 	// tiny title model can't reliably decline trivial input, so this happens
@@ -351,7 +351,6 @@ export async function generateTitleOnline(
 	firstMessage: string,
 	registry: ModelRegistry,
 	settings: Settings,
-	cwd: string,
 	sessionId?: string,
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
@@ -359,6 +358,7 @@ export async function generateTitleOnline(
 	customSystemPrompt?: string,
 	credentialSourceSessionId?: string,
 	onUsage?: TitleUsageReporter,
+	cwd?: string,
 ): Promise<string | null> {
 	const models = getTitleModels(registry, settings, currentModel);
 	if (models.length === 0) {
@@ -383,7 +383,7 @@ async function generateTitleOnlineWithModels(
 	firstMessage: string,
 	models: Model<Api>[],
 	registry: ModelRegistry,
-	cwd: string,
+	cwd: string | undefined,
 	sessionId?: string,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
 	signal?: AbortSignal,

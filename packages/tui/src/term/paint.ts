@@ -37,6 +37,12 @@ export interface Hit {
 	readonly act?: string;
 }
 
+/** A half-open interval of rows in a block. */
+export interface CoveringRange {
+	readonly start: number;
+	readonly end: number;
+}
+
 /** What a painter returns: rows (none wider than the width it got), plus cursor and hit regions. */
 export interface Block {
 	readonly rows: readonly string[];
@@ -57,6 +63,11 @@ export interface Block {
 	 * children's.
 	 */
 	readonly covering?: number;
+	/**
+	 * Exact covering rows, sorted and non-overlapping. Without ranges, the last
+	 * `covering` rows are covered; a full-block `covering` count always takes precedence.
+	 */
+	readonly coveringRanges?: readonly CoveringRange[];
 }
 
 /** A smooth sweep, spinner, or a lower-priority animation on legacy terminals. */
@@ -94,6 +105,14 @@ function sameBlock(a: Block, b: Block): boolean {
 				return false;
 		}
 	}
+	if (a.coveringRanges !== b.coveringRanges) {
+		if (!a.coveringRanges || !b.coveringRanges || a.coveringRanges.length !== b.coveringRanges.length) return false;
+		for (let i = 0; i < a.coveringRanges.length; i++) {
+			const x = a.coveringRanges[i]!;
+			const y = b.coveringRanges[i]!;
+			if (x.start !== y.start || x.end !== y.end) return false;
+		}
+	}
 	return true;
 }
 
@@ -104,7 +123,7 @@ export interface PaintContext {
 	/** Rows allocated when the parent fixes a height (fullscreen layers, flex columns); undefined: natural height. */
 	readonly height: number | undefined;
 	/** Terminal screen rows, when painting for a live terminal rather than at an isolated size. */
-	readonly viewportHeight: number | undefined;
+	readonly viewportHeight?: number | undefined;
 	/** The active theme (reading it subscribes to theme changes). */
 	readonly theme: Theme;
 	/** Paint `node` at a size, cached; the child's reads are its own. */
@@ -216,7 +235,9 @@ export interface PointerHover {
 export interface PaintEnvironment {
 	readonly theme: Accessor<Theme>;
 	/** Animation clock in ms (ticked by the backend while painters read it). */
-	readonly clock: (cadence?: PaintCadence) => number;
+	readonly clock: (smooth?: boolean) => number;
+	/** A clock that also handles named animation cadences. */
+	readonly clockCadence?: (cadence?: PaintCadence) => number;
 	readonly focus: Accessor<UiNode | null>;
 	readonly viewportHeight?: Accessor<number>;
 	readonly reduceMotion: Accessor<boolean>;
@@ -312,7 +333,10 @@ function createContext(env: PaintEnvironment, width: number, height: number | un
 			return env.theme();
 		},
 		paint: (child, childWidth, childHeight) => paintNode(env, child, childWidth, childHeight),
-		now: smooth => env.clock(smooth),
+		now: cadence => {
+			if (env.clockCadence) return env.clockCadence(cadence);
+			return env.clock(typeof cadence === "string" ? undefined : cadence);
+		},
 		focused: node => env.focus() === node,
 		hovered: node => {
 			const hover = env.hover?.();

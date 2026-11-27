@@ -16,9 +16,10 @@ import { DISASM_BACKENDS } from "@oh-my-pi/pi-coding-agent/disasm/backend";
 import { IpcConnection } from "@oh-my-pi/pi-natives";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
+import { requireTestPython } from "../eval/py/run-prelude";
 import { waitFor } from "../fixtures/daemon-harness";
 
-const PYTHON = Bun.which("python3") ?? Bun.which("python");
+const PYTHON = Bun.env.PYTHON || Bun.which("python3") || Bun.which("python") ? await requireTestPython() : undefined;
 const STUB = path.join(import.meta.dir, "..", "fixtures", "binaryninja-stub");
 const TOKEN = "transport-test-token";
 const TEST_TIMEOUT_MS = 30_000;

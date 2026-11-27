@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
+import { requireTestPython } from "../eval/py/run-prelude";
 
 // Execute the actual recovery block delivered to the model. Only the OS/IBus
 // boundary is simulated; no real input method, process, or user file is changed.
@@ -103,6 +104,8 @@ with contextlib.ExitStack() as stack:
 print(json.dumps(dict(state, exitCode=code, output=output.getvalue())))
 `;
 
+const python = await requireTestPython();
+
 interface RecoveryResult {
 	exitCode: number;
 	engine: string;
@@ -112,8 +115,6 @@ interface RecoveryResult {
 }
 
 async function recover(mode: string): Promise<RecoveryResult> {
-	const python = Bun.which("python3") ?? Bun.which("python");
-	if (!python) throw new Error("Python 3.8+ is required to verify the Python 3.6 recovery syntax");
 	const expanded = await executeAcpBuiltinSlashCommand("/jchime", {
 		session: { model: undefined },
 	} as unknown as SlashCommandRuntime);

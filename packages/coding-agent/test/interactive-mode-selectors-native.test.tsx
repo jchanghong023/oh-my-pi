@@ -302,10 +302,21 @@ describe("inline selectors in a Tern terminal", () => {
 
 		// The details action exposes the original multiline output without folding whitespace.
 		ui.send({ ev: "action", sf: ui.sf, id: picker.id, act: "details" });
-		const details = ui.children(ui.get(picker.id)).find(node => node.k === "list")!;
-		expect(ui.children(details).find(node => node.k === "text")?.p.text).toEqual(
-			expect.stringContaining("alpha\nbeta"),
+		const expanded = sheet(ui);
+		expect(expanded.preview).toBe("none");
+		expect(expanded.selected).toBe("result");
+		const items = new Map([...(expanded.items ?? []), ...(expanded.itemsAdd ?? [])].map(item => [item.id, item]));
+		const order = expanded.order ?? [];
+		const details = order.slice(order.indexOf("result") + 1).map(id => {
+			if (typeof id !== "string") throw new Error("Expected an inline detail item, not a picker group");
+			return items.get(id);
+		});
+		expect(details.length).toBeGreaterThan(0);
+		expect(details.every(item => item?.disabled)).toBe(true);
+		const text = details.map(item =>
+			typeof item?.label === "string" ? item.label : item?.label.map(span => span.t).join(""),
 		);
+		expect(text.join("\n")).toContain("alpha\nbeta");
 		tree.close();
 
 		const reset = mode.showEditorAreaDialog(() => (

@@ -19,10 +19,11 @@ export { type ExportThemeNames, parseExportArgs } from "./args";
 let cachedTemplate: string | undefined;
 const SESSION_DATA_MARKER = "{{SESSION_DATA}}";
 
-// The fork does not publish a hosted viewer. Pin the payload-compatible viewer from the integrated upstream release.
+// Use the integrated upstream v19.2.1 release manifest, which supports Bash details.toolCommands.
+// The fork does not publish a viewer for the development manifest.
 const HOSTED_VIEWER_URL =
-	"https://build.stencil.so/web/omp/19.0.1/export-viewer-1ae4bd46d3c40dc063601ddfbca2bf14fd7b57cb5bba470d3a6b5fc56f8f0f84.js";
-const HOSTED_VIEWER_INTEGRITY = "sha256-GuS9RtPEDcBjYB3fvKK/FP17V8tbukcNOmtfxW+PD4Q=";
+	"https://build.stencil.so/web/omp/19.2.1/export-viewer-89198a2c1cf0f36d0e455c4623f0c68958b71eba7f0a08be089b63e68d40f981.js";
+const HOSTED_VIEWER_INTEGRITY = "sha256-iRmKLBzw820ORVxGI/DGiVi3Hrp/Cgi+CJtj5o1A+YE=";
 
 /** Create an export document with a checkout viewer or an integrity-pinned release viewer. */
 export function getTemplate(): string {

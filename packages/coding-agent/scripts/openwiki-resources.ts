@@ -12,7 +12,8 @@ import { openWikiResourceFingerprint } from "../src/openwiki/resource-fingerprin
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const vendorRoot = path.join(repoRoot, "vendor/openwiki");
 const packageDir = path.join(repoRoot, "packages/coding-agent");
-const generatedFile = path.join(packageDir, "src/openwiki/openwiki-resources.generated.txt");
+/** Absolute Bun.build overlay key and the source generator's destination. */
+export const openWikiResourceFile = path.join(packageDir, "src/openwiki/openwiki-resources.generated.txt");
 
 async function filesUnder(root: string, prefix = ""): Promise<Record<string, string>> {
 	const entries: Record<string, string> = {};
@@ -69,13 +70,8 @@ async function browserScript(entry: string): Promise<string> {
 	return output.outputs[0]!.text();
 }
 
-export interface OpenWikiResources {
-	files: ReadonlyMap<string, Uint8Array>;
-	sourceFingerprint: string;
-}
-
-/** Read the checked-out fork; local uncommitted changes are intentionally respected. */
-export async function buildOpenWikiResources(): Promise<OpenWikiResources> {
+/** Build archive text from the current checkout without writing the source resource. */
+export async function buildOpenWikiResourceText(): Promise<string> {
 	const fingerprint = openWikiResourceFingerprint(repoRoot);
 	const visual: Record<string, string> = {
 		"client.js": await browserScript("client.ts"),
@@ -99,36 +95,32 @@ export async function buildOpenWikiResources(): Promise<OpenWikiResources> {
 	for (const [name, content] of Object.entries(skills)) files.set(`skills/${name}`, Buffer.from(content));
 	for (const [name, content] of Object.entries(visual)) files.set(`visual/${name}`, Buffer.from(content));
 	files.set("__omp_meta__.json", Buffer.from(JSON.stringify({ sourceFingerprint: fingerprint })));
-	return { files, sourceFingerprint: fingerprint };
+	return buildEmbeddedArchive(files);
 }
 
-/** Publish the archive in one rename and return the text written. */
-export async function writeOpenWikiResources(resources: OpenWikiResources): Promise<string> {
-	const archive = await buildEmbeddedArchive(resources.files);
-	await mkdir(path.dirname(generatedFile), { recursive: true });
-	const temporary = `${generatedFile}.${randomUUID()}.tmp`;
+/** Publish the source archive in one rename. */
+async function writeOpenWikiResources(archive: string): Promise<void> {
+	await mkdir(path.dirname(openWikiResourceFile), { recursive: true });
+	const temporary = `${openWikiResourceFile}.${randomUUID()}.tmp`;
 	try {
 		await writeFile(temporary, archive, { flag: "wx" });
-		await rename(temporary, generatedFile);
+		await rename(temporary, openWikiResourceFile);
 	} finally {
 		await rm(temporary, { force: true });
 	}
-	return archive;
-}
-
-/** Restore the checked-in placeholder so stale resources cannot masquerade as current. */
-export async function resetOpenWikiResources(): Promise<void> {
-	await mkdir(path.dirname(generatedFile), { recursive: true });
-	await writeFile(generatedFile, "");
 }
 
 if (import.meta.main) {
-	if (!existsSync(path.join(vendorRoot, "package.json")) && process.argv.includes("--if-present")) {
-		await resetOpenWikiResources();
+	const postinstall = process.argv.includes("--if-present");
+	// CNB embeds its own archive and must leave the tracked placeholder untouched.
+	if (postinstall && process.env.OMP_SKIP_OPENWIKI_POSTINSTALL === "1") process.exit(0);
+	if (postinstall && !existsSync(path.join(vendorRoot, "package.json"))) {
+		await mkdir(path.dirname(openWikiResourceFile), { recursive: true });
+		await writeFile(openWikiResourceFile, "");
 		console.warn(
 			"OpenWiki submodule absent; initialize it and run bun run gen:openwiki-resources before using OpenWiki.",
 		);
 	} else {
-		await writeOpenWikiResources(await buildOpenWikiResources());
+		await writeOpenWikiResources(await buildOpenWikiResourceText());
 	}
 }

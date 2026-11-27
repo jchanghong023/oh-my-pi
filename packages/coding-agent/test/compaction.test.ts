@@ -1,23 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { type AgentMessage, Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, ThinkingLevel, Tokenizer } from "@oh-my-pi/pi-agent-core";
 import {
+	type CompactionPreparation,
 	type CompactionSettings,
 	calculateContextTokens,
 	compact,
 	compactionContextTokens,
 	DEFAULT_COMPACTION_SETTINGS,
 	findCutPoint,
+	generateHandoffFromContext,
 	getLastAssistantUsage,
 	hasContextTokenUsage,
 	prepareCompaction,
 	resolveThresholdTokens,
 	shouldCompact,
 } from "@oh-my-pi/pi-agent-core/compaction/compaction";
+import { NativeCompactionError } from "@oh-my-pi/pi-agent-core/compaction/errors";
 import * as ai from "@oh-my-pi/pi-ai";
 import { encodeTextSignatureV1 } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import type { AssistantMessage, Model, ProviderPayload, Usage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type {
 	CompactionEntry,
@@ -28,6 +33,8 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { parseSessionEntries } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { migrateSessionEntries } from "@oh-my-pi/pi-coding-agent/session/session-migrations";
+import { logger } from "@oh-my-pi/pi-utils";
+import { createFileOps } from "@oh-my-pi/snapcompact";
 import { mockFetch } from "./helpers/fetch-mock";
 import { e2eApiKey } from "./utilities";
 
@@ -108,6 +115,19 @@ function createAssistantMessage(text: string, usage?: Usage): AssistantMessage {
 		api: "anthropic-messages",
 		provider: "anthropic",
 		model: "claude-sonnet-4-5",
+	};
+}
+
+function createSplitPreparation(settings: Partial<CompactionSettings>): CompactionPreparation {
+	return {
+		firstKeptEntryId: "kept-1",
+		messagesToSummarize: [createUserMessage("Earlier history")],
+		turnPrefixMessages: [createUserMessage("Current turn")],
+		recentMessages: [createAssistantMessage("Retained reply")],
+		isSplitTurn: true,
+		tokensBefore: 10_000,
+		fileOps: createFileOps(),
+		settings: { ...DEFAULT_COMPACTION_SETTINGS, ...settings },
 	};
 }
 
@@ -576,6 +596,29 @@ describe("remote compaction setting", () => {
 		expect(result.shortSummary).toBe("Local short summary");
 	});
 
+	it.each([404, 429])(
+		"does not start a CodeAgent turn-prefix request when the history endpoint returns %d",
+		async status => {
+			const model: Model = { ...openaiChatModel, provider: "codeagent" };
+			const preparation = createSplitPreparation({
+				remoteEndpoint: "https://compaction.example.test/summarize",
+			});
+			const fetchHandler = vi.fn(() => new Response(null, { status }));
+			const completeImpl = vi.fn(async () => createAssistantMessage("Unused prefix summary"));
+
+			await expect(
+				compact(preparation, model, "test-api-key", undefined, undefined, {
+					fetch: mockFetch(fetchHandler),
+					completeImpl,
+					oneshotRetry: false,
+				}),
+			).rejects.toThrow(`Remote compaction failed (${status}`);
+
+			expect(fetchHandler).toHaveBeenCalledTimes(1);
+			expect(completeImpl).not.toHaveBeenCalled();
+		},
+	);
+
 	it("preserves prior compaction items and encrypted reasoning for OpenAI remote compaction", async () => {
 		const model = openaiResponsesModel;
 
@@ -632,13 +675,17 @@ describe("remote compaction setting", () => {
 		];
 		const fetchHandler = vi.fn(
 			async (_input, _init) =>
-				new Response(JSON.stringify({ output: remoteOutput }), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				}),
+				new Response(
+					JSON.stringify({
+						output: remoteOutput,
+						usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
 		);
 		const fetchSpy = mockFetch(fetchHandler);
 		const completeSimpleSpy = vi.spyOn(ai, "completeSimple");
+		const info = vi.spyOn(logger, "info").mockImplementation(() => {});
 
 		const result = await compact(preparation, model, "test-api-key", undefined, undefined, {
 			fetch: fetchSpy,
@@ -663,6 +710,16 @@ describe("remote compaction setting", () => {
 		// summarization is skipped (no redundant LLM round), leaving the placeholder.
 		expect(result.summary).toContain("Remote compaction preserved provider-native history");
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
+		expect(info).toHaveBeenCalledWith(
+			"Compaction pipeline completed",
+			expect.objectContaining({
+				event: "compaction_pipeline",
+				result: "success",
+				method: "responses_v1",
+				output_tokens_available: true,
+				output_tokens: 40,
+			}),
+		);
 		expect(result.preserveData).toEqual({
 			openaiRemoteCompaction: {
 				provider: "openai",
@@ -1142,6 +1199,103 @@ describe("remote compaction setting", () => {
 			},
 		});
 	});
+});
+
+describe("compaction request diagnostics", () => {
+	it("logs a truncated handoff as a failed request", async () => {
+		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		await expect(
+			generateHandoffFromContext(
+				{
+					systemPrompt: ["Summarize"],
+					messages: [{ role: "user", content: "Earlier history", timestamp: Date.now() }],
+				},
+				anthropicModel,
+				{
+					streamOptions: { apiKey: "test-api-key" },
+					completeImpl: async () => ({ ...createAssistantMessage("Incomplete output"), stopReason: "length" }),
+				},
+			),
+		).rejects.toThrow("model output ended incomplete");
+
+		expect(warn).toHaveBeenCalledWith(
+			"Compaction summary request ended",
+			expect.objectContaining({
+				event: "compaction_summary_request",
+				method: "handoff",
+				result: "failed",
+				reason: "output_limit",
+			}),
+		);
+	});
+
+	it("logs the failed V1 method when no summary fallback was attempted", async () => {
+		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const completeImpl = vi.fn(async () => createAssistantMessage("Unused fallback"));
+
+		await expect(
+			compact(
+				createSplitPreparation({ remoteStreamingV2Enabled: false }),
+				openaiResponsesModel,
+				"test-api-key",
+				undefined,
+				undefined,
+				{ fetch: mockFetch(() => new Response(null, { status: 404 })), completeImpl },
+			),
+		).rejects.toBeInstanceOf(NativeCompactionError);
+
+		expect(completeImpl).not.toHaveBeenCalled();
+		expect(warn).toHaveBeenCalledWith(
+			"Compaction pipeline ended",
+			expect.objectContaining({ event: "compaction_pipeline", result: "failed", method: "responses_v1" }),
+		);
+	});
+
+	it.each([
+		[ThinkingLevel.Low, Effort.High],
+		[ThinkingLevel.Off, Effort.High],
+		[ThinkingLevel.Low, null],
+	] as const)(
+		"logs the recorded Anthropic effort (current selection %s, effort in force %s)",
+		async (thinkingLevel, effort) => {
+			const model = getBundledModel("anthropic", "claude-opus-5-5")!;
+			const preparation = createSplitPreparation({});
+			const answer = {
+				...createAssistantMessage("Earlier reply"),
+				model: model.id,
+				requestControls: { messageIndex: 1, effort: { topLevel: effort, tail: effort } },
+			} satisfies AssistantMessage;
+			preparation.messagesToSummarize.push(answer);
+			const info = vi.spyOn(logger, "info").mockImplementation(() => {});
+			const result = await compact(preparation, model, "test-api-key", undefined, undefined, {
+				thinkingLevel,
+				completeImpl: async (_model, _context, options) => {
+					expect(options.reasoning).toBe(effort ?? model.thinking?.efforts.at(-1));
+					return {
+						...answer,
+						stopDetails: { type: "compaction" },
+						providerPayload: {
+							type: "anthropicCompaction",
+							provider: "anthropic",
+							content: "Signed history summary",
+							signature: "test-signature",
+						},
+					};
+				},
+			});
+
+			expect(result.summary).toContain("Signed history summary");
+			expect(info).toHaveBeenCalledWith(
+				"Compaction native method completed",
+				expect.objectContaining({
+					event: "compaction_native_method",
+					method: "anthropic_native",
+					result: "success",
+					effective_effort: effort ?? undefined,
+				}),
+			);
+		},
+	);
 });
 
 describe("prepareCompaction retained history", () => {

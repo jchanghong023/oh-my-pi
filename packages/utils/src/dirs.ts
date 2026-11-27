@@ -22,6 +22,7 @@ import {
 	isPrivateCacheDirectory,
 	normalizeProfileName,
 	prepareLinuxPrivateCacheDirectory,
+	preparePrivateCacheDirectory,
 	resolveAbsoluteDir,
 	resolveCacheRoot,
 	resolveLinuxPrivateCacheRoot,
@@ -351,6 +352,7 @@ class DirResolver {
 	readonly configRoot: string;
 	readonly agentDir: string;
 	readonly cacheRoot: string | undefined;
+	readonly executableCacheRoot: string;
 
 	// Per-category base dirs. Without XDG, all three equal configRoot / agentDir.
 	// With XDG on Linux, they point to $XDG_*_HOME/omp/.
@@ -418,6 +420,10 @@ class DirResolver {
 			state: xdgState ?? this.configRoot,
 			cache: this.cacheRoot ?? xdgCache ?? this.configRoot,
 		};
+		// The implicit Linux cache lives on /dev/shm, which may be mounted noexec.
+		this.executableCacheRoot =
+			(this.cacheRoot && resolveAbsoluteDir(process.env.OMP_CACHE_DIR) ? this.cacheRoot : xdgCache) ??
+			this.configRoot;
 		// XDG flattens the agent/ prefix: ~/.omp/agent/sessions → $XDG_DATA_HOME/omp/sessions
 		this.#agentDirs = {
 			data: xdgData ?? this.agentDir,
@@ -757,6 +763,16 @@ export function getRemoteDir(): string {
 	return dirs.rootSubdir("remote", "data");
 }
 
+/** Expand a leading `~` and allow an absolute path, including a Windows current-drive root. */
+function resolveWorktreesDir(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (!trimmed) return undefined;
+	let p = trimmed;
+	if (p === "~") p = os.homedir();
+	else if (p.startsWith("~/") || p.startsWith("~\\")) p = os.homedir() + p.slice(1);
+	return path.isAbsolute(p) ? path.normalize(p) : undefined;
+}
+
 let worktreesDirOverride: string | undefined;
 
 /**
@@ -765,13 +781,13 @@ let worktreesDirOverride: string | undefined;
  * `worktree.base` setting in coding-agent; pass `undefined`/empty to clear and
  * fall back to `OMP_WORKTREE_DIR` or the `~/.omp/wt` default.
  *
- * `~` is expanded and a relative path is rejected (see {@link resolveAbsoluteDir}).
+ * `~` is expanded and a relative path is rejected.
  * Returns the absolute path that took effect, or `undefined` if the input was
  * cleared or rejected — callers can warn on a non-empty input that returns
  * `undefined`.
  */
 export function setWorktreesDir(dir: string | undefined): string | undefined {
-	worktreesDirOverride = resolveAbsoluteDir(dir);
+	worktreesDirOverride = resolveWorktreesDir(dir);
 	return worktreesDirOverride;
 }
 
@@ -783,7 +799,7 @@ export function setWorktreesDir(dir: string | undefined): string | undefined {
  * ignored and resolution falls through.
  */
 export function getWorktreesDir(): string {
-	return resolveAbsoluteDir(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
+	return resolveWorktreesDir(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
 }
 
 /** Get the SSH control socket directory (~/.omp/ssh-control). */
@@ -937,7 +953,7 @@ export function getAvatarCacheDir(): string {
 
 /** Get the directory holding the `bun` stub a compiled omp appends to its JS eval kernel's PATH (~/.omp/cache/bun-stub). */
 export function getBunStubDir(): string {
-	return dirs.rootSubdir(path.join("cache", "bun-stub"), "cache");
+	return path.join(dirs.executableCacheRoot, "cache", "bun-stub");
 }
 
 /** Get the local FastEmbed model cache directory (~/.omp/cache/fastembed). */
@@ -1061,7 +1077,19 @@ export function getTranscriptIndexDbPath(agentDir?: string): string {
 
 /** Get the path to models.db (model cache database). */
 export function getModelDbPath(agentDir?: string): string {
-	return dirs.agentSubdir(agentDir, "models.db", "data");
+	return dirs.agentSubdir(agentDir, "models.db", dirs.cacheRoot ? "cache" : "data");
+}
+
+/** Prepare the selected model cache at open time, without changing custom database paths. */
+export function prepareModelCacheDirectory(dbPath: string): void {
+	const root = dirs.cacheRoot;
+	if (!root || path.relative(getModelDbPath(), dbPath) !== "") return;
+	const directory = path.dirname(dbPath);
+	if (preparePerformanceCacheDirectory(root)) {
+		preparePrivateCacheDirectory(root, directory, process.geteuid!(), { kind: "model" });
+	} else {
+		fs.mkdirSync(directory, { recursive: true });
+	}
 }
 
 /** Cache directory for direct agent cache consumers. */

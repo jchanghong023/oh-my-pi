@@ -4234,6 +4234,7 @@ export function createSyntheticToolResultMessage(
 		content: [{ type: "text", text: errorMessage ? `${message}: ${errorMessage}` : `${message}.` }],
 		details,
 		isError: true,
+		...(reason === "aborted" ? { cancelled: true } : {}),
 		timestamp: Date.now(),
 	};
 }
@@ -4267,6 +4268,7 @@ function createAbortedToolResult(
 		toolName: toolCall.name,
 		result,
 		isError: true,
+		...(toolResultMessage.cancelled ? { cancelled: true } : {}),
 	});
 	stream.push({ type: "message_start", message: toolResultMessage });
 	stream.push({ type: "message_end", message: toolResultMessage });

@@ -3,6 +3,7 @@ import type { RenderResultOptions } from "./renderer";
 import { type ShellTrace } from "@oh-my-pi/pi-wire";
 import type { SpotlightDetails } from "./spotlight";
 import { type ToolCommandRenderDispatch } from "./tool-commands";
+import { readShellWord } from "@oh-my-pi/pi-utils/shell";
 
 /**
  * LLM-facing footer appended when a tool call becomes a background job. It states the job's kill
@@ -111,15 +112,17 @@ export function stripBashNotices(
 	return stripRawOutputNotice(text);
 }
 
-const COMPOUND_CHARS = new Set(["|", "&", ";", "<", ">", "(", ")", "$", "`", "\n"]);
+const COMPOUND_CHARS = new Set(["|", "&", ";", "<", ">", "(", ")", "$", "`", "\n", "\r"]);
 
 /** Whether a command is one simple tool invocation, with no shell composition or substitution. */
 export function isSoleToolInvocation(command: string | undefined, dispatch: ToolCommandRenderDispatch): boolean {
 	if (dispatch.mode !== "execute") return false;
-	const { tool } = dispatch;
 	const line = command?.trim();
-	if (!line || (line !== tool && !line.startsWith(`${tool} `) && !line.startsWith(`${tool}\t`))) return false;
+	if (!line) return false;
+	const first = readShellWord(line);
+	if (first === "unterminated" || first?.value !== dispatch.tool) return false;
 	let quote: "'" | '"' | undefined;
+	let wordStart = true;
 	for (let i = 0; i < line.length; i++) {
 		const ch = line[i]!;
 		if (quote === "'") {
@@ -127,7 +130,8 @@ export function isSoleToolInvocation(command: string | undefined, dispatch: Tool
 			continue;
 		}
 		if (ch === "\\") {
-			i++;
+			if (++i === line.length) return false;
+			if (line[i] !== "\n") wordStart = false;
 			continue;
 		}
 		if (quote === '"') {
@@ -135,10 +139,15 @@ export function isSoleToolInvocation(command: string | undefined, dispatch: Tool
 			else if (ch === "$" || ch === "`") return false;
 			continue;
 		}
+		if (ch === "#" && wordStart) {
+			// A comment's backslash cannot continue it past the physical newline.
+			return !line.includes("\n", i);
+		}
 		if (ch === "'" || ch === '"') quote = ch;
 		else if (COMPOUND_CHARS.has(ch)) return false;
+		wordStart = ch === " " || ch === "\t";
 	}
-	return true;
+	return quote === undefined;
 }
 
 const NO_TOOL_COMMANDS: readonly never[] = [];

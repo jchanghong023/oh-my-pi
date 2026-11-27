@@ -481,7 +481,27 @@
           "REPO_MAPPING:rules_rust+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_rust+,rules_cc rules_cc+",
           "FILE:@@//Cargo.lock e44689b123cb07e1901808756a6a75a32465de40fad0823fe7774c0a329d96e5",
-          "FILE:@@//Cargo.toml f2e4b3c7fb415a086917e97be0ce9dc1632502b0dddd9bf237f7f49ed40b686f"
+          "FILE:@@//Cargo.toml f2e4b3c7fb415a086917e97be0ce9dc1632502b0dddd9bf237f7f49ed40b686f",
+          "FILE:@@//crates/ast/Cargo.toml da6ccdcce38a298a048b4795859902b03b96de0f6befd74be5d7a3c2511b6636",
+          "FILE:@@//crates/vfs/Cargo.toml b5347e068f305a39e014c272db9e52f4c4e71897c0c4932d9a111c051b2497d8",
+          "FILE:@@//crates/xfs/Cargo.toml 93f1813b9347c292ef3f71f1ecc602edf4493777a6b7d5c66f64d33c7e160a93",
+          "FILE:@@//crates/builtins/Cargo.toml d45113be2276b5dfdcca4b18a19d56b6d0a28962b4f750d850a94115b7f9592f",
+          "FILE:@@//crates/diff/Cargo.toml 092863523d790cedb5a0ff029eec41ff901af34ea7f1edfcc5b9ad4389402777",
+          "FILE:@@//crates/iso/Cargo.toml 2ca448b724d5f7a39f9125571c260865256562d7835a1ca9d4cb0ea324e04fc8",
+          "FILE:@@//crates/edit/Cargo.toml 081adec6d38133459ff6b923d2a798ad5a8526ff6cc1bf2b8cacbbd3e7ad16c9",
+          "FILE:@@//crates/natives/Cargo.toml 46931e5d1a4ebd08cd9853405f928bf69034d19c179ec0bdd8127f5c600cd7c2",
+          "FILE:@@//crates/predict/Cargo.toml 958c6a516ef31ef3fb01b3582f7939b3d2f353d612a03b868558efb15236ec9e",
+          "FILE:@@//crates/shell/Cargo.toml f72c25a5fd39d2ce5238e0a484554f8c7fc01f29acd3da87756b9bc95ab2f6dd",
+          "FILE:@@//crates/vcs/Cargo.toml f90805e7d6334abe61cd24dab959196e87f77203500438a4b3a6d3ebe392073a",
+          "FILE:@@//crates/voice/Cargo.toml 2c0d0a8cdf0c219779875978d3c84d694a144921d3f34c8c0ccd74a71f86cf9a",
+          "FILE:@@//crates/web/Cargo.toml 5ef9e0ed3f461581e4cf84d76dbe7b5ada3d67bc57e365c8d3f909ee1086f6ce",
+          "FILE:@@//crates/vendor/cfg_aliases/Cargo.toml 4f86686307ed6b8a0c24145d97bd42809dec663b92785e917887c934b28ae150",
+          "FILE:@@//crates/vendor/grep-searcher/Cargo.toml c7baa4f3286506c1d2aea81646645f819f042ed9e0baeb1ff318b8c0f5ccf114",
+          "FILE:@@//crates/vendor/jaq-core/Cargo.toml 5a2ab179a46230e89d776d8c46df8a5ba4d2afeee872b29295437b71557f9831",
+          "FILE:@@//crates/vendor/jaq-json/Cargo.toml d71939ca0b12e08aa9d309163d517aeac307396f65222ef839cea8ddefde6fa6",
+          "FILE:@@//crates/vendor/jaq-std/Cargo.toml 341ddc27fe57f9536c5f496cefc5f34344bb9d50731616ab9b41d606973c69eb",
+          "FILE:@@//crates/vendor/napi/Cargo.toml 064b561f5f8a075efc77387418751d92ae4c03c816245403eee6b5460940fb40",
+          "FILE:@@//crates/vendor/tree-sitter-go/Cargo.toml e3f4a8444057434ab482de256ab6491f2bb3adc3916600cf335b2dfa60565ca4"
         ],
         "generatedRepoSpecs": {
           "crates": {

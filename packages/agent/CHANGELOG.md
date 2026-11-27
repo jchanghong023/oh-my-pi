@@ -21,6 +21,8 @@
 
 ### Fixed
 
+- Interrupted model streams mark unstarted tool calls as cancelled.
+- Compaction reports truncated responses as failures and does not wait for an unused CodeAgent request after the required summary fails.
 - CodeAgent compaction no longer retries a request with unchanged credentials, and response observers receive the request's cancellation signal.
 - Tool cancellations are reported consistently during execution and replay.
 - Compaction retries oversized requests to a separate summary endpoint.

@@ -150,6 +150,7 @@ function createContext() {
 		dictationSpaceHold: vi.fn(),
 		showDebugSelector: vi.fn(),
 		showHistorySearch: vi.fn(),
+		focusAsk: () => false,
 		toggleThinkingBlockVisibility: vi.fn(),
 		showModelSelector,
 		updateEditorBorderColor: vi.fn(),
@@ -1594,8 +1595,10 @@ describe("InputController global editor actions", () => {
 });
 
 describe("InputController global tool-output expand (ctrl+o)", () => {
-	function setup() {
+	function setup(expandKey?: KeyId) {
 		const context = createContext();
+		cfgDisplayMode.set(context.ctx.settings, "detailed");
+		if (expandKey) context.setKeybinding("app.tools.expand", [expandKey]);
 		new InputController(context.ctx).setupKeyHandlers();
 		return context;
 	}
@@ -1635,9 +1638,7 @@ describe("InputController global tool-output expand (ctrl+o)", () => {
 	});
 
 	it("honors a remapped expand key while a view that binds ctrl+o has focus", () => {
-		const context = createContext();
-		context.setKeybinding("app.tools.expand", ["ctrl+x"]);
-		new InputController(context.ctx).setupKeyHandlers();
+		const context = setup("ctrl+x");
 		context.setFocused(fakeNode("list", key => key.id === "ctrl+o"));
 
 		expect(context.press("ctrl+x")).toBe("global");

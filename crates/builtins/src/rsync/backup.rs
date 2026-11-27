@@ -259,7 +259,7 @@ fn relative_backup_tree(ctx: &Ctx, trees: &DestTrees, dir: &[u8], create: bool) 
 			}
 			hops -= 1;
 			let target = cur.read_link(name)?;
-			let target_bytes = paths::path_bytes(&target).into_owned();
+			let target_bytes = paths::link_target_bytes(&target);
 			if paths::is_absolute_bytes(&target_bytes) || target.is_absolute() {
 				let mut abs = target;
 				for el in &remaining {
@@ -543,7 +543,7 @@ fn duplicate(
 	let mode = st.mode();
 	let link = if mode_is_lnk(mode) {
 		match dest.read_link(path) {
-			Ok(t) => Some(paths::path_bytes(&t).into_owned()),
+			Ok(t) => Some(paths::link_target_bytes(&t).into_owned()),
 			Err(_) => return Ok(BackupOutcome::Absent),
 		}
 	} else {
@@ -640,7 +640,7 @@ fn skips_unsafe_link(ctx: &Ctx, dest: &Tree, path: &Path, rel: &[u8], mode: u32)
 		return false;
 	}
 	let logger = &ctx.logger;
-	let target = dest.read_link(path).ok().map(|t| paths::path_bytes(&t).into_owned());
+	let target = dest.read_link(path).ok().map(|t| paths::link_target_bytes(&t).into_owned());
 	match target.filter(|t| !t.is_empty()) {
 		None => {
 			if logger.levels().info(Info::Symsafe) >= 1 {

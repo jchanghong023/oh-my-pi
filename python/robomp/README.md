@@ -165,15 +165,14 @@ lifecycle commands (`robomp:dev`, `robomp:build`, `robomp:up`, `robomp:down`,
 
 ```bash
 bun run robomp:install                  # installs SDK and robomp development dependencies
-bun run test:py                         # complete ordinary SDK and robomp suites, every run
-bun run robomp:test:integration         # explicit full integration smoke test
+bun run test:py                         # SDK on all hosts; RoboOMP on Linux
+bun run robomp:test:integration         # opt-in Linux integration smoke test
 ```
 
-Run `bun run test:py` from the repository root for both ordinary suites. For
-a focused run, use `python3 -m pytest python/robomp/tests/<file>.py` or select a
-file under `sdk/python/omp-rpc/tests/`. RoboOMP requires POSIX; on Windows use an
-existing WSL environment explicitly. The root `bun run test` and
-`bun run test:ts` do not run these Python suites.
+Run `bun run test:py` from the repository root. Hosts other than Linux run
+the SDK suite and skip RoboOMP before collection. On Linux, use
+`python3 -m pytest python/robomp/tests/<file>.py` for a focused run. The root
+`bun run test` and `bun run test:ts` do not run these Python suites.
 
 The integration test is opt-in. It spawns a real `omp --mode rpc` against an
 `httpx.MockTransport` GitHub and a local bare repo, so it needs `omp` on `PATH`.

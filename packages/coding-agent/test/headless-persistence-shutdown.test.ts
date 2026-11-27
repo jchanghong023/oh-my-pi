@@ -117,7 +117,7 @@ async function createHarness(): Promise<ShutdownHarness> {
 	const dir = TempDir.createSync("@pi-headless-shutdown-");
 	tempDirs.push(dir);
 	const authStorage = await AuthStorage.create(":memory:");
-	const settings = Settings.isolated();
+	const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
 	const manager = SessionManager.create(dir.path(), `${dir.path()}/sessions`);
 	const latchedBeforeRun: Error[] = [];
 
@@ -126,6 +126,7 @@ async function createHarness(): Promise<ShutdownHarness> {
 		model: { provider: "anthropic", id: "test-model" },
 		settings: Settings.isolated(),
 		sessionManager: manager,
+		subscribe: () => () => {},
 		subscribeLocal: () => () => {},
 		addDisposer: () => {},
 		setScopedModelsRefresher: () => {},

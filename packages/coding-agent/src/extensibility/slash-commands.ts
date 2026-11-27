@@ -138,22 +138,27 @@ export function parseFileSlashInvocation(text: string): { name: string; args: st
 	return { name: text.slice(1, spaceIndex), args: text.slice(spaceIndex + 1) };
 }
 
-const RAW_ARG_TEMPLATE_PATTERN = /\{\{[\s\S]*?\brawArguments\b[\s\S]*?\}\}/;
-
 /** Render a file command's template with `argsString`. Throws on a malformed template. */
 export function renderFileSlashCommand(command: FileSlashCommand, argsString: string): string {
 	const args = parseCommandArgs(argsString);
 	const argsText = args.join(" ");
-	const usesInlineArgPlaceholders =
-		templateUsesInlineArgPlaceholders(command.content) || RAW_ARG_TEMPLATE_PATTERN.test(command.content);
+	let usesRawArguments = false;
 	const substituted = substituteArgs(command.content, args);
 	const rendered = prompt.render(substituted, {
 		args,
 		ARGUMENTS: argsText,
 		arguments: argsText,
-		rawArguments: argsString,
+		// Track real evaluation rather than scanning across tags or comments.
+		get rawArguments() {
+			usesRawArguments = true;
+			return argsString;
+		},
 	});
-	return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
+	return appendInlineArgsFallback(
+		rendered,
+		argsText,
+		usesRawArguments || templateUsesInlineArgPlaceholders(command.content),
+	);
 }
 
 /**

@@ -36,8 +36,8 @@ const primitiveMap: Record<JTDPrimitive, string> = {
 };
 
 export class InvalidJTDReferenceError extends Error {
-	constructor() {
-		super('JTD "ref" must be a string naming a definition');
+	constructor(message = 'JTD "ref" must be a string naming a definition') {
+		super(message);
 		this.name = "InvalidJTDReferenceError";
 	}
 }
@@ -139,6 +139,9 @@ function convertSchemaForm(schema: unknown): unknown {
 
 	// Ref form: { ref: "MyType" } → { $ref: "#/$defs/MyType" }
 	if (isJTDRef(schema)) {
+		if (!schema.ref.isWellFormed()) {
+			throw new InvalidJTDReferenceError('JTD "ref" must not contain an unpaired UTF-16 surrogate');
+		}
 		return { $ref: formatLocalRefPointer(["$defs", schema.ref]) };
 	}
 

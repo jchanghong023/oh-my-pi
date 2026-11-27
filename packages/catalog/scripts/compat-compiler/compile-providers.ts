@@ -421,13 +421,15 @@ function parseProvider(node: KdlNodeView): ParsedProvider | undefined {
 			provider.discovery !== undefined ||
 			provider.kindApis !== undefined ||
 			provider.skipCrossProviderReferenceFills !== undefined ||
+			provider.keepBundledNames !== undefined ||
 			seed !== undefined
 		) {
 			throw new CompatCompileError(
 				node.file,
 				node.line,
 				`provider \`${id}\` has catalog nodes but no default-model; ` +
-					"runtime-policy-only entries require automatic-default #false and no discovery, kind-apis, seed, or skip-cross-provider-reference-fills",
+					"runtime-policy-only entries require automatic-default #false and no discovery, kind-apis, seed, " +
+					"skip-cross-provider-reference-fills, or keep-bundled-names",
 			);
 		}
 	} else {

@@ -253,9 +253,18 @@ describe("InteractiveMode live working label", () => {
 			live.setWorkingMessage("custom activity");
 			await term.waitFor(rows => rows.some(line => line.includes("custom activity")));
 			expect(roles()).toContain('"omp.working"');
+			const presentations = ["clean", "detailed", "compact"] as const;
+			for (const presentation of presentations) {
+				cfgDisplayMode.set(settings, presentation);
+				await Promise.resolve();
+				const dock = roles();
+				expect(dock).toContain('"omp.working"');
+				expect(dock).toContain("custom activity");
+			}
+
 			live.setWorkingMessage();
 
-			for (const presentation of ["clean", "detailed", "compact"] as const) {
+			for (const presentation of presentations) {
 				cfgDisplayMode.set(settings, presentation);
 				await Promise.resolve();
 				expect(roles().includes('"omp.compact.activity"')).toBe(presentation === "compact");

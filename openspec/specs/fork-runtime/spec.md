@@ -103,10 +103,10 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - 公司内网模式只由环境变量 `OMP_OFFLINE` 触发（`1`／`true`／`yes`／`on`，忽略大小写及首尾空白；其他值不触发）。通过环境变量让 OMP 子进程继承同一模式，避免数据根与模型 lane 分裂。
 - 启动和 `omp find` 的 `--offline` 沿用上游语义，仅为本次调用启用 `models.offline` 的辅助服务 Provider 限制，不是网络防火墙。此参数不启用公司内网模式，`OMP_OFFLINE` 也不启用该参数；两者可独立或同时使用。
 - 红区部署启动前必须设置 `OMP_OFFLINE` 和可写的绝对 `OMP_CONFIG_ROOT`；黄区可选设数据根。该部署约定不改变下面的通用目录解析和回退。
-- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 持久数据根：agent 配置与认证、会话、用户资源和未列入性能目录的运行状态及 profiles 沿用根下相对布局，项目级 `.omp/` 不受影响。全部既有 Cache、统计、日志和默认 native 按「可选性能数据根」使用所选性能根；未启用分离时维持原路径。未设置有效 `OMP_CONFIG_ROOT` 时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定持久根位置。
-- native addon 加载器与 grammar 安装器 MUST 使用同一有效目录及 profile 解析；默认 native 和 grammar 缓存按「可选性能数据根」选择位置。显式有效 `PI_NATIVES_DIR` 优先于默认 native 目录，其既有语义不变；本规则不改变 `OMP_CONFIG_ROOT` 或 profile 的既有语义。
+- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 持久数据根：agent 配置与认证、会话、用户资源和未列入性能目录的运行状态及 profiles 沿用根下相对布局，项目级 `.omp/` 不受影响。既有 Cache、统计、日志和默认 native 按「可选性能数据根」选取路径；未启用分离时维持原路径。未设置有效 `OMP_CONFIG_ROOT` 时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定持久根位置。
+- native addon 加载器与 grammar 安装器 MUST 对 grammar 数据使用相同的目录及 profile 解析；addon 二进制和 grammar 缓存均按「可选性能数据根」选择位置。显式有效 `PI_NATIVES_DIR` 优先于默认 native 目录，其既有语义不变；本规则不改变 `OMP_CONFIG_ROOT` 或 profile 的既有语义。
 - **统一持久数据根与独立性能目录**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均通过 `OMP_CONFIG_ROOT` 统一调整持久数据根。
-- **Daemon native 生命周期**：Linux 单用户 daemon 及其子 worker MUST 复用宿主已解析的 native 缓存目录（包括有效 `PI_NATIVES_DIR`；Linux offline 默认使用 `/dev/shm/omp-<UID>` 的 native 缓存，保留 profile 布局），不在 daemon runtime 下另建 native 副本，不随单个会话退出删除共享缓存。其他平台的 daemon 自有 native 缓存位于其 runtime 的 `natives/` 下，不以创建者进程为所有者，core 的显式 `PI_NATIVES_DIR` 不约束 detached daemon；验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 daemon，最后 client 关闭后通过 daemon 正常退出释放自有缓存。各平台均不通过关闭单个 client 关闭共享 daemon；两个独立 worker 同时冷提取／加载完整 native，发布后内容不变且无 staging 残留。
+- **Daemon native 生命周期**：Linux 单用户 daemon 及其子 worker MUST 复用宿主已解析的 native 目录（包括有效 `PI_NATIVES_DIR`；Linux offline 默认按「可选性能数据根」分别解析 addon 二进制与 grammar 数据，保留 profile 布局），不在 daemon runtime 下另建 native 副本，不随单个会话退出删除共享缓存。其他平台的 daemon 自有 native 缓存位于其 runtime 的 `natives/` 下，不以创建者进程为所有者，core 的显式 `PI_NATIVES_DIR` 不约束 detached daemon；验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 daemon，最后 client 关闭后通过 daemon 正常退出释放自有缓存。各平台均不通过关闭单个 client 关闭共享 daemon；两个独立 worker 同时冷提取／加载完整 native，发布后内容不变且无 staging 残留。
 
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
 - **内网交互减负**：仅 Linux offline 将普通后台 TUI 重绘合并到最多 10 FPS；输入回显与取消沿用原输入优先调度，强制最终刷新、终端输出反压与自适应限速不变。品牌渐变刷新降为 250ms，活动计时装饰刷新降为 1000ms。Git 状态缓存由普通模式的 10 秒延长到 60 秒，沿用 HEAD／工作目录／显式失效；未显式失效的外部工作树修改可能延后显示，不新增工具修改通知或修改 Git 配置。非 Linux 和非 offline 保持原行为，不要求改变企业远程软件，不预先承诺公司实机提速。
@@ -138,7 +138,11 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - 安装器获取 Release 元数据时 MUST 验证 TLS 证书，拒绝不受信任的证书且不得回退到跳过验证的请求。企业代理拦截 TLS 时，安装器的元数据请求客户端必须信任该代理的 CA。此要求仅适用于安装器的 Release 元数据请求，不改变运行时 TLS 默认或 `omp update`。
 - 两个平台的安装器都下载到安装目录中的唯一临时文件。启动下载的二进制之前，MUST 将文件的 SHA-256 与已通过 TLS 验证获取的 Release 元数据中同名资产的 SHA-256 摘要比对；摘要缺失或不匹配时拒绝执行、保留旧安装并清理临时文件。摘要匹配后才可确认二进制可启动且 `omp --version` 与所选 Release 完全一致，两项均通过后才替换现有安装；验证失败保留旧安装并清理临时文件。可执行目标是目录时联网前拒绝，不移动目录内容；已经是所选版本时跳过下载但仍提示 PATH。
 - Windows 优先 `curl.exe`；未设置目标协议的代理环境变量及 `ALL_PROXY` 时，自动解析当前用户的 Windows 系统代理并传给 curl，不要求额外设置环境变量。显式代理环境变量优先，curl 遵循 `NO_PROXY`；curl 失败或不可用时仍回退兼容 PowerShell 5.1 的 `Invoke-WebRequest -UseBasicParsing`。安装器只维护 PATH，不写废弃的 settings.json 或擅自改用户 shell/config.yml。二进制资产下载保留原有 TLS 兼容性：curl 追加 `--insecure`，Windows 安装器另加 `--ssl-no-revoke`；POSIX 安装器仅在 curl 使用 Schannel 且版本支持时追加 `--ssl-no-revoke`。仅对二进制资产下载，PowerShell 5.1 允许使用放行证书回调，PowerShell 7+ 允许使用 `-SkipCertificateCheck`；PowerShell 5.1 保留 TLS 1.2 支持。
-- 运行时代理与安装器同序：Windows 主进程内所有经全局 `fetch` 的出网请求（含 LLM 流、OAuth/usage 探测、模型发现、更新检查与 web 请求）按「请求自带显式 `proxy`（`PI_PROXY_<PROVIDER>`/`PI_PROXY`）→ 标准代理环境变量（`HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`，Bun 原生应用）→ 当前用户 Windows 系统代理 → 直连」解析。系统代理仅取 HKCU Internet Settings 的静态 `ProxyEnable`/`ProxyServer`（含 `http=`/`https=` per-protocol 形式，`socks=` 条目与 PAC/WPAD 不支持），每进程读取一次并缓存；未启用或读取失败时行为与无此改动一致。`NO_PROXY` 与回环/内网硬 bypass 同样约束系统代理。仅 win32 生效；worker 子进程入口（本地服务）不经此链路。系统代理层另有 fork 内网绕行清单（`packages/ai` proxy.ts 的 `FORK_SYSTEM_PROXY_BYPASS`，抄自公司代理 override 清单）：公司域名后缀、点名内网主机、CGNAT/RFC1918 式 IP 前缀（`10.`、`100.64.`–`100.126.`、`172.16.`–`172.32.`、`7.` 等）与 `*` 通配条目命中的目标不走系统代理、直连；清单只约束系统代理层，不约束 `PI_PROXY` 与环境变量代理（它们的绕行机制仍是 `NO_PROXY`）。条目语义与来源格式对应：前导 `-` 剥离、数字开头为 IP 前缀、含 `*` 为整机名 glob、首尾皆点为点号标签包含、仅前导点为域名后缀、其余为精确或点后缀。
+- Windows 主进程的全局 HTTP(S) `fetch`（含 LLM 流、OAuth/usage 探测、模型发现、更新检查与 web 请求）优先使用请求的显式 `proxy`（含按现有规则由 `PI_PROXY_<PROVIDER>`／`PI_PROXY` 设置的代理）。进入系统代理回退层时，已显式设置代理（包括 `proxy: false`）或使用 Unix socket 的请求不由该层改写。
+- 系统代理回退层 MUST 对每一跳 HTTP(S) URL 独立选择路由，不沿用上一跳注入的代理；仅在 `redirect: "follow"` 时跟随，保留 `"manual"`／`"error"` 的原有处理。跨源跳转不转发 `Authorization`、`Proxy-Authorization`、`Cookie` 和 `Host` 请求头。
+- 每跳按「目标协议的 `HTTPS_PROXY`／`HTTP_PROXY` → `ALL_PROXY`（均含小写形式）→ 当前用户 Windows 系统代理 → 直连」回退。只有 Bun HTTP `fetch` 能用的环境代理（HTTP(S) 或不带协议的 `host:port`）才优先；不支持的方案（如 SOCKS）不阻断后续回退。可由 Bun 原生应用的环境代理继续交给 Bun 处理，包括其 `NO_PROXY` 行为。
+- 系统代理仅取 HKCU Internet Settings 的静态 `ProxyEnable`／`ProxyServer`（含 `http=`／`https=` per-protocol 形式，不支持 `socks=`、PAC 或 WPAD），每进程读取一次并缓存。未启用或读取失败时不安装系统代理回退层；该层仅 win32 生效，worker 子进程入口（本地服务）不经此链路。
+- `NO_PROXY` 与回环／内网硬 bypass 继续约束系统代理。系统代理层另有 fork 内网绕行清单（`packages/ai/src/utils/fork-system-proxy-bypass.ts` 的 `FORK_SYSTEM_PROXY_BYPASS`，抄自公司代理 override 清单）：公司域名后缀、点名内网主机、CGNAT/RFC1918 式 IP 前缀（`10.`、`100.64.`–`100.126.`、`172.16.`–`172.32.`、`7.` 等）与 `*` 通配条目命中的目标不走系统代理；清单不约束 `PI_PROXY` 与环境变量代理。条目语义与来源格式对应：前导 `-` 剥离、数字开头为 IP 前缀、含 `*` 为整机名 glob、首尾皆点为点号标签包含、仅前导点为域名后缀、其余为精确或点后缀。
 - 零配置 TLS 默认：主进程网络引导时，未设 `NODE_TLS_REJECT_UNAUTHORIZED` 则默认 `0`，未配置 Git 校验选项则默认让 Git 继承 `GIT_SSL_NO_VERIFY=true`，便于使用拦截代理和私有网关。`NODE_TLS_REJECT_UNAUTHORIZED=1` 与 `GIT_SSL_NO_VERIFY=false` 分别要求恢复严格校验；后者不能把字符串 `false` 传给 Git，因为 Git 按变量是否存在关闭证书和主机名校验。显式 `0`／`true` 仍放宽相应校验。agent 目录 `.env` 先于默认值生效；worker 子进程入口不独立应用此默认。放宽校验会失去 TLS 端点身份验证，仅适用于受控环境。
 - 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。Windows 的已验证下载在替换失败时保留为 `.omp.tmp.*`，包括旧安装已成功回滚的情况；回滚失败同时保留旧映像供恢复。
 - Windows 下载成功后，校验、旧映像重命名/强杀回退、换入、回滚或 PATH 设置失败，MUST 打印失败阶段、原始错误、错误类型/代码、安装目标及可用的诊断日志路径，并输出正确引用路径的可执行 PowerShell 命令：未通过验证的二进制不能引导运行；已验证的保留下载可直接启动；旧映像恢复只在目标不存在时执行；重试固定本次 Release 与安装目录，最后核对目标文件及 PATH 命中的版本。二进制已换入但 PATH 设置失败时明确标为部分完成，不能提前报告安装成功。非致命清理失败须说明具体错误和安全重试命令；仍被旧会话占用的映像可留待会话退出后清理，不影响新版安装结果。详细错误仅向终端展示，落盘日志继续遵循脱敏契约。
@@ -516,14 +520,17 @@ OMP MUST 提供可选的 `OMP_CACHE_DIR`，用于分离既有 Cache、统计、�
 #### Scenario: Linux offline 默认性能根
 - **WHEN** 没有有效显式 `OMP_CACHE_DIR`，且 Linux 进程按既有 `OMP_OFFLINE` 真值规则启用 offline
 - **THEN** OMP MUST 使用 `/dev/shm/omp-<UID>` 作为性能数据根，`<UID>` 为当前用户的数字 UID，不再追加 UID，并保留既有 profile 布局
+- **AND** 隐式根不要求挂载允许执行。编译版 JS eval 的可执行 `cache/bun-stub` 与需执行映射的 native addon 二进制 MUST 沿用未选择性能根时的路径（适用的已初始化 XDG cache，否则配置根；保留 profile 布局），不探测挂载选项。grammar 等数据缓存仍走所选性能根；此例外不改显式 `OMP_CACHE_DIR` 或 `PI_NATIVES_DIR` 的既有行为。
 
 #### Scenario: 未选择性能根
 - **WHEN** 没有有效显式 `OMP_CACHE_DIR`，且不是 Linux offline
 - **THEN** OMP MUST 保留原有目录及适用的 XDG 路由，不新增默认目录；空值或相对值不作为显式性能根，也不相对当前工作目录解析
+- **AND** 默认模型目录缓存 `models.db` 保留既有 agent／XDG data 路由
 
 #### Scenario: 性能与持久数据归属
 - **WHEN** 选择了性能数据根
-- **THEN** 原有 Cache 的全部内容（包括模型与运行依赖）、统计数据库及配套文件、运行和安装日志、默认 native 及其缓存使用所选根下既有相对布局
+- **THEN** 原有 Cache（含默认模型目录缓存 `agent/models.db` 与运行依赖）、统计数据库及配套文件、运行和安装日志、默认 native 及其缓存使用所选根下既有相对布局，隐式根的可执行文件例外见上
+- **AND** 显式传入的模型缓存数据库路径不受性能根选择影响
 - **AND** 配置、认证、会话、其他未迁移的用户状态和项目数据 MUST 保持原有位置
 - **AND** 原有日志级别、错误处理、回退和专用覆盖规则不因目录选择而改变
 

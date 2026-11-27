@@ -1064,7 +1064,10 @@ export interface CreateAgentSessionOptions {
 	/** Override local:// protocol options for subagent local:// sharing. Default: uses the session's own artifacts dir and session ID. */
 	localProtocolOptions?: LocalProtocolOptions;
 
-	/** Settings instance. Default: Settings.init({ cwd, agentDir }) */
+	/**
+	 * Settings to use. Defaults to the matching global settings or a workspace-scoped instance.
+	 * Live SDK-scoped instances are retained for this session; other supplied instances stay caller-owned.
+	 */
 	settings?: Settings;
 	/**
 	 * Legacy alias for `settings`. Older Pi extensions pass SettingsManager.create(...)
@@ -1242,6 +1245,8 @@ export async function initializeCompanyModelLane(offline: boolean): Promise<stri
 	return getCompanyConfigError();
 }
 
+const restoreCompanyRoleDefaults = new WeakMap<Settings, () => void>();
+
 /** Apply company defaults; hosts own diagnostic output (shared SDK paths never write terminal streams). */
 export async function initializeOfflineModelCommand(
 	settings?: Settings,
@@ -1249,11 +1254,22 @@ export async function initializeOfflineModelCommand(
 	onWarning?: (message: string) => void,
 ): Promise<boolean> {
 	const companyError = await initializeCompanyModelLane(offline);
-	if (!offline) return false;
+	if (!offline) {
+		if (settings) {
+			const restore = restoreCompanyRoleDefaults.get(settings);
+			restoreCompanyRoleDefaults.delete(settings);
+			restore?.();
+		}
+		return false;
+	}
 	if (companyError) {
 		onWarning?.(companyError);
-	} else if (settings && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)) {
-		settings.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
+	} else if (
+		settings &&
+		!restoreCompanyRoleDefaults.has(settings) &&
+		!disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)
+	) {
+		restoreCompanyRoleDefaults.set(settings, settings.installModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS));
 	}
 	return true;
 }
@@ -2128,14 +2144,17 @@ function retainTinyTitleClient(): () => Promise<void> {
 }
 
 /** Reuse the CLI singleton for its workspace; load other SDK workspaces independently. */
-async function resolveSessionSettings(cwd: string, agentDir: string): Promise<Settings> {
+async function resolveSessionSettings(
+	cwd: string,
+	agentDir: string,
+): Promise<{ settings: Settings; release?: () => void }> {
 	const pending = Settings.current;
-	if (!pending) return Settings.init({ cwd, agentDir });
+	if (!pending) return { settings: await Settings.init({ cwd, agentDir }) };
 	const cached = await pending;
 	if (cached.getCwd() === path.normalize(cwd) && cached.getAgentDir() === path.normalize(agentDir)) {
-		return cached;
+		return { settings: cached };
 	}
-	return Settings.loadIsolated({ cwd, agentDir });
+	return Settings.loadScoped({ cwd, agentDir });
 }
 
 export type NativeChildSessionHooks = Pick<
@@ -2243,9 +2262,15 @@ async function createAgentSessionScoped(
 	registerSshCleanup();
 	registerEvalCleanup();
 
-	const settings = await (options.settings ??
-		options.settingsManager ??
-		logger.time("settings", resolveSessionSettings, cwd, agentDir));
+	// Startup owns the settings lease until the session is returned. Register it first
+	// so failure cleanup can finish using settings before the lease is released.
+	await using startupCleanup = new AsyncDisposableStack();
+	const suppliedSettings = options.settings ?? (await options.settingsManager);
+	const { settings, release: releaseSettings } = suppliedSettings
+		? { settings: suppliedSettings, release: suppliedSettings.retainScoped() }
+		: await logger.time("settings", resolveSessionSettings, cwd, agentDir);
+	let sessionOwnsSettings = false;
+	if (releaseSettings) startupCleanup.defer(() => settings.flush().finally(releaseSettings));
 	await companyLane;
 	await initializeOfflineModelCommand(settings);
 	// Discovery provider toggles and process-wide setting effects (theme, request limits, …)
@@ -2256,19 +2281,16 @@ async function createAgentSessionScoped(
 	const restoreProviderToggles = bindsProcessState
 		? logger.time("initializeWithSettings", initializeWithSettings, settings)
 		: undefined;
-	const unbindSessionEffects = bindsProcessState ? bindEffects(settings) : undefined;
-	// Until the session is handed back (its dispose wrapper then owns the process-state holds
-	// and the credential listener), any startup failure below releases them.
-	using startupCleanup = new DisposableStack();
 	if (restoreProviderToggles) startupCleanup.defer(restoreProviderToggles);
+	const unbindSessionEffects = bindsProcessState ? bindEffects(settings) : undefined;
 	if (unbindSessionEffects) startupCleanup.defer(unbindSessionEffects);
 	const releaseTinyTitleClient = bindsProcessState ? retainTinyTitleClient() : undefined;
 	if (releaseTinyTitleClient) {
-		startupCleanup.defer(() => {
-			void releaseTinyTitleClient().catch(error =>
+		startupCleanup.defer(() =>
+			releaseTinyTitleClient().catch(error =>
 				logger.warn("Session startup: tiny-model client shutdown failed", { error: String(error) }),
-			);
-		});
+			),
+		);
 	}
 	// Snapshot this session's effective configured lane onto its invocation scope
 	// so startup sub-discovery sees the same complete policy that post-startup
@@ -3367,9 +3389,7 @@ async function createAgentSessionScoped(
 					authStorage,
 				});
 				const discoveredMCPManager = mcpResult.manager;
-				startupCleanup.defer(() => {
-					void discoveredMCPManager.disconnectAll().catch(() => {});
-				});
+				startupCleanup.defer(() => discoveredMCPManager.disconnectAll().catch(() => {}));
 				ownedMcpManager = discoveredMCPManager;
 				mcpManager = discoveredMCPManager;
 				toolSession.mcpManager = discoveredMCPManager;
@@ -4145,8 +4165,8 @@ async function createAgentSessionScoped(
 			const unavailableCompanyDefault =
 				companyError &&
 				(!defaultSelector ||
-					resolveConfiguredModelPatterns(defaultSelector, settings).some(pattern =>
-						pattern.startsWith("company/"),
+					resolveConfiguredModelPatterns(defaultSelector, settings).some(
+						pattern => parseModelString(pattern)?.provider.trim().toLowerCase() === COMPANY_PROVIDER_ID,
 					));
 			// Hosts may still dispatch local commands without a model. Preserve the
 			// diagnostic without selecting an unrelated account in place of company.
@@ -5144,17 +5164,15 @@ async function createAgentSessionScoped(
 			}),
 		);
 		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal");
-		const explicitlyRequestedToolNameSet = explicitlyRequestedToolNames
-			? new Set(explicitlyRequestedToolNames)
-			: undefined;
+		const userRequestedToolNames = autoIncludedOpenWiki
+			? explicitlyRequestedToolNames?.filter(name => !autoIncludedOpenWiki?.has(name))
+			: explicitlyRequestedToolNames;
+		const explicitlyRequestedToolNameSet = userRequestedToolNames && new Set(userRequestedToolNames);
 		const inheritedMountedNames = options.mountedToolNames && new Set(options.mountedToolNames);
-		const presentationPinnedToolNames = explicitlyRequestedToolNames
-			? new Set(
-					explicitlyRequestedToolNames.filter(
-						name => !inheritedMountedNames?.has(name) && !autoIncludedOpenWiki?.has(name),
-					),
-				)
-			: undefined;
+		const presentationPinnedToolNames =
+			userRequestedToolNames && inheritedMountedNames
+				? new Set(userRequestedToolNames.filter(name => !inheritedMountedNames.has(name)))
+				: explicitlyRequestedToolNameSet;
 		// Special tools are never requested: their presentation follows the command
 		// transport and whether each has something to act on (see below).
 		const initialRequestedActiveToolNames = (
@@ -5497,7 +5515,11 @@ async function createAgentSessionScoped(
 			const auth = admission
 				? admission.auth
 				: await options.resolveRequestAuth?.(streamModel, requestSignal, {
-						thinkingLevel: (session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off",
+						thinkingLevel: mainRequest
+							? ((session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off")
+							: streamOptions?.disableReasoning
+								? "off"
+								: streamOptions?.reasoning,
 					});
 			const effectiveOptions =
 				auth !== undefined
@@ -6634,12 +6656,23 @@ async function createAgentSessionScoped(
 			let strictOwnerReleased = false;
 			let strictSessionDisposed = false;
 			let strictCallbacks: Set<() => void | Promise<void>> | undefined;
+			let ordinaryDisposeCall: Promise<void> | undefined;
+			const disposeScopedSettings = async (strict: boolean): Promise<void> => {
+				if (!sessionOwnsSettings || !releaseSettings) return;
+				await settings.flush();
+				// An in-flight ordinary dispose can be upgraded while the flush is pending.
+				if (!strict && strictDisposalRequested) return;
+				sessionOwnsSettings = false;
+				releaseSettings();
+			};
 			session.dispose = async (disposeOptions?: AgentSessionDisposeOptions) => {
 				if (disposeOptions?.strict) strictDisposalRequested = true;
 				if (strictDisposalRequested) {
 					const strictOptions = { ...disposeOptions, strict: true };
 					if (!strictDisposeCall) {
 						strictDisposeCall = (async () => {
+							// Do not race outstanding callbacks from an ordinary disposal being upgraded.
+							if (ordinaryDisposeCall) await ordinaryDisposeCall.catch(() => {});
 							session.beginDispose({ strict: true });
 							if (!strictOwnerReleased) {
 								if (agentKind === "main") {
@@ -6689,6 +6722,7 @@ async function createAgentSessionScoped(
 							);
 							const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
 							if (failures.length) throw new AggregateError(failures, "Session owned cleanup failed");
+							if (sessionOwnsSettings) await disposeScopedSettings(true);
 							unsubscribeMcpNotifications = undefined;
 							unregisterMcpPostmortem = undefined;
 							unregisterUnlessParked();
@@ -6700,6 +6734,21 @@ async function createAgentSessionScoped(
 					}
 					return strictDisposeCall;
 				}
+				return (ordinaryDisposeCall ??= disposeOrdinarily(disposeOptions)
+					.finally(() => {
+						// Ordinary teardown can report an error after it has stopped using settings.
+						if (!strictDisposalRequested && sessionOwnsSettings) return disposeScopedSettings(false);
+					})
+					.then(() => {
+						if (!strictDisposalRequested) session.notifyDisposed();
+					})
+					.catch(error => {
+						ordinaryDisposeCall = undefined;
+						throw error;
+					}));
+			};
+
+			async function disposeOrdinarily(disposeOptions?: AgentSessionDisposeOptions): Promise<void> {
 				try {
 					try {
 						// Reject new session work (eval starts) the moment disposal
@@ -6783,8 +6832,7 @@ async function createAgentSessionScoped(
 					// Owned cleanup failures take precedence over the earlier disposal result.
 					throwOwnedCleanupFailures(failures);
 				}
-				if (!strictDisposalRequested) session.notifyDisposed();
-			};
+			}
 		}
 		// The SDK dispose wrapper now owns the startup holds and tool callbacks.
 		startupOwnsToolCallbacks = false;
@@ -7144,6 +7192,7 @@ async function createAgentSessionScoped(
 		startDeferredMCPDiscovery?.(session);
 
 		startupCleanup.move();
+		sessionOwnsSettings = releaseSettings !== undefined;
 		return {
 			session,
 			extensionsResult,

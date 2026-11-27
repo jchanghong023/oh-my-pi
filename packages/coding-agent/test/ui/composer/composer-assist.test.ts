@@ -5,6 +5,7 @@
  * Apple's service replaced by a fake backend.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { pathToFileURL } from "node:url";
 import { createRoot, type KeyEvent } from "@oh-my-pi/pi-tui";
 import { createTestTerminal, type TestTerminal } from "@oh-my-pi/pi-tui/testing/terminal";
 import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
@@ -163,7 +164,8 @@ describe("chip links", () => {
 				capabilities: { hyperlinks: true },
 			});
 			term.focus(composer.field);
-			const links = term.rows().filter(row => row.includes("\x1b]8;;file:///tmp/shot.png"));
+			const target = pathToFileURL("/tmp/shot.png").href;
+			const links = term.rows().filter(row => row.includes(`\x1b]8;;${target}`));
 			// The card's title and the chip in the draft.
 			expect(links.length).toBe(2);
 			term.dispose();
@@ -191,9 +193,9 @@ describe("skill chip link", () => {
 			});
 			term.focus(composer.field);
 			const row = term.rows().find(line => line.includes("now")) ?? "";
-			expect(row).toMatch(
-				/\x1b\]8;;file:\/\/\/tmp\/skills\/review\/SKILL\.md[^\x1b]*\x1b\\(?:\x1b\[[\d;]*m)*✦ review/,
-			);
+			const target = `\x1b]8;;${pathToFileURL("/tmp/skills/review/SKILL.md").href}`;
+			expect(row).toContain(target);
+			expect(row.slice(row.indexOf(target) + target.length)).toMatch(/^\x1b\\(?:\x1b\[[\d;]*m)*✦ review/);
 			term.dispose();
 			dispose();
 		});

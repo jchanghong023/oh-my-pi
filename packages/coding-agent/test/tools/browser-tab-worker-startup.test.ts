@@ -1,10 +1,15 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 
 // Browser globals read inside page.evaluate callbacks; absent from bun-types.
 declare const devicePixelRatio: number;
 declare const window: { open(url: string, target: string, features: string): unknown };
 
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	closeLaunchedBrowser,
+	launchHeadlessBrowser,
+	removeUserDataDir,
+} from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import {
 	acquireBrowser,
 	type BrowserHandle,
@@ -25,6 +30,7 @@ import {
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { withTimeout } from "@oh-my-pi/pi-utils";
 import type { CDPSession } from "puppeteer-core";
+import { rejectionOf } from "../helpers/rejection";
 import { chromiumAvailable, visibleBrowserAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
@@ -100,6 +106,42 @@ class FakeStartupWorker {
 	emitError(error: Error): void {
 		for (const handler of this.#errorHandlers) handler(error);
 	}
+}
+
+/** Observe or withhold commands on a worker's CDP socket without touching the observer's connection. */
+function proxyWorkerCdp(
+	upstreamUrl: string,
+	forward: (command: { method: string; params?: { source?: string } }) => boolean,
+) {
+	const server = Bun.serve<{ upstream?: WebSocket; pending: Array<string | Buffer> }>({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch(request, server) {
+			if (server.upgrade(request, { data: { pending: [] } })) return;
+			return new Response(null, { status: 404 });
+		},
+		websocket: {
+			open(ws) {
+				const upstream = new WebSocket(upstreamUrl);
+				ws.data.upstream = upstream;
+				upstream.onopen = () => {
+					for (const message of ws.data.pending.splice(0)) upstream.send(message);
+				};
+				upstream.onmessage = event => ws.send(event.data);
+				upstream.onclose = () => ws.close();
+			},
+			message(ws, message) {
+				if (!forward(JSON.parse(message.toString()))) return;
+				const { upstream, pending } = ws.data;
+				if (upstream?.readyState === WebSocket.OPEN) upstream.send(message);
+				else pending.push(message);
+			},
+			close(ws) {
+				ws.data.upstream?.close();
+			},
+		},
+	});
+	return { url: `ws://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
 }
 
 const initPayload = {
@@ -183,71 +225,78 @@ describe("browser init budget exhaustion", () => {
 });
 
 describe("browser init deadline carry-over", () => {
-	let sharedHeadless: BrowserHandle | undefined;
-
-	beforeAll(async () => {
-		if (!CHROMIUM_AVAILABLE) return;
-		sharedHeadless = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
-		holdBrowser(sharedHeadless);
-	});
-
-	afterAll(async () => {
-		if (sharedHeadless) await releaseBrowser(sharedHeadless, { kill: true });
-	});
-
-	it.skipIf(!CHROMIUM_AVAILABLE || process.platform === "win32")(
-		"counts caller time already spent before acquisition against the worker-init budget",
+	it.skipIf(!CHROMIUM_AVAILABLE)(
+		"keeps the browser leased through a worker-init timeout and closes the abandoned target",
 		async () => {
-			const launched = sharedHeadless;
-			if (!launched) throw new Error("Expected a shared headless browser");
-			// The hang server makes the ready phase burn its (floor-clamped) budget
-			// without resolving, so the first init attempt fails on its own.
-			const server = Bun.serve({
-				port: 0,
-				fetch: () => Promise.withResolvers<Response>().promise,
-			});
-			let failure: unknown;
+			// Neither the shared headless fixture nor the observer owns any holds on
+			// the supervisor's independently connected handle.
+			const observer = await launchHeadlessBrowser({ headless: true });
 			try {
-				// The caller's deadline started before browser acquisition and that
-				// phase consumed the whole budget (simulated with a backdated
-				// `deadlineStartMs`): `acquireTabImpl` must count that elapsed time
-				// against the worker-init budget instead of starting a fresh
-				// `timeoutMs + GRACE_MS` clock. An exhausted budget fails fast with
-				// the original init error — never the wrapped inline-fallback error.
-				const deadlineStart = performance.now() - 60_000;
-				const started = performance.now();
-				// Mirror the browser prelude host's outer acquisition lease. Its timeout can
-				// release this lease before acquireTab spends the supervisor's
-				// phase floors, but acquireTab must retain its own hold so target
-				// cleanup still has a connected Puppeteer handle.
-				holdBrowser(launched);
-				const acquisition = acquireTab(
-					`deadline-carry-${process.pid}-${Math.random().toString(36).slice(2)}`,
-					launched,
-					{
-						url: `http://127.0.0.1:${server.port}/hang`,
-						waitUntil: "domcontentloaded",
-						timeoutMs: 5_000,
-						deadlineStartMs: deadlineStart,
-					},
-				);
-				await releaseBrowser(launched, { kill: false });
-				if (!("browser" in launched)) throw new Error("Expected a puppeteer-backed browser handle");
-				const connectedAfterCallerRelease = launched.browser.connected;
+				const endpoint = new URL(observer.wsEndpoint);
+				const initScript = "/* deadline-carry fixture */";
+				const stalled = Promise.withResolvers<void>();
+				const proxy = proxyWorkerCdp(observer.wsEndpoint, command => {
+					if (
+						command.method !== "Page.addScriptToEvaluateOnNewDocument" ||
+						!command.params?.source?.includes(initScript)
+					) {
+						return true;
+					}
+					// This command is sent after the worker reports its new target but
+					// before it reports ready. Withhold the reply without sending a
+					// navigation (which is not part of worker initialization).
+					stalled.resolve();
+					return false;
+				});
+				const name = `deadline-carry-${crypto.randomUUID()}`;
+				let launched: BrowserHandle | undefined;
+				let callerReleased = false;
+				let acquisition: ReturnType<typeof acquireTab> | undefined;
 				try {
-					await acquisition;
-				} catch (error) {
-					failure = error;
+					launched = await acquireBrowser(
+						{ kind: "connected", cdpUrl: `http://${endpoint.host}` },
+						{ cwd: process.cwd() },
+					);
+					if (!("browser" in launched)) throw new Error("Expected a Puppeteer browser");
+					launched.wsEndpoint = proxy.url;
+					const existingTargets = new Set(observer.browser.targets());
+					const started = performance.now();
+					expect(launched.refCount).toBe(0);
+					holdBrowser(launched);
+					acquisition = acquireTab(name, launched, {
+						initScripts: [initScript],
+						timeoutMs: 5_000,
+						deadlineStartMs: started - 60_000,
+					});
+					void acquisition.catch(() => undefined);
+					await withTimeout(stalled.promise, 3_000, "Worker did not reach the stalled init command");
+					const target = await observer.browser.waitForTarget(
+						candidate => candidate.type() === "page" && !existingTargets.has(candidate),
+						{ timeout: 1_000 },
+					);
+					const destroyed = Promise.withResolvers<void>();
+					observer.browser.on("targetdestroyed", candidate => {
+						if (candidate === target) destroyed.resolve();
+					});
+					callerReleased = true;
+					await releaseBrowser(launched, { kill: false });
+					expect(launched.browser.connected).toBeTrue();
+					const failure = await rejectionOf(acquisition);
+					expect(failure).toMatchObject({ message: "Timed out initializing browser tab worker" });
+					// Only the first attempt's setup and ready floors may be spent.
+					expect(performance.now() - started).toBeLessThan(4_000);
+					await withTimeout(destroyed.promise, 3_000, "Abandoned worker target was not closed");
+					expect(observer.browser.connected).toBeTrue();
+					expect(getTab(name)).toBeUndefined();
+				} finally {
+					await proxy.stop();
+					await acquisition?.catch(() => undefined);
+					await releaseTab(name, { kill: false });
+					if (launched && !callerReleased) await releaseBrowser(launched, { kill: false });
 				}
-				const elapsed = performance.now() - started;
-				expect(connectedAfterCallerRelease).toBeTrue();
-				expect(failure).toBeDefined();
-				expect(String((failure as Error).message)).not.toContain("inline fallback also failed");
-				// Only the first attempt's floors are spent (setup floor 2 s + ready
-				// floor 500 ms), never a second full budget cycle.
-				expect(elapsed).toBeLessThan(4_000);
 			} finally {
-				await server.stop(true);
+				await closeLaunchedBrowser(observer);
+				if (observer.userDataDir) await removeUserDataDir(observer.userDataDir);
 			}
 		},
 		30_000,
@@ -1483,7 +1532,7 @@ describe("browser tabs whose renderer crashed", () => {
 	);
 
 	it.skipIf(!CHROMIUM_AVAILABLE)(
-		"leaves a tab closed while its crashed page is being reattached closed",
+		"releases the tab handle without reloading or closing its borrowed page during crash recovery",
 		async () => {
 			const launched = headless();
 			const name = `crashed-closed-${process.pid}`;
@@ -1502,6 +1551,13 @@ describe("browser tabs whose renderer crashed", () => {
 				await crashRenderer(launched, url);
 				const crashedWorker = tab.worker;
 				const terminate = crashedWorker.terminate.bind(crashedWorker);
+				const originalEndpoint = tab.browser.wsEndpoint;
+				const commands = new Set<string>();
+				const proxy = proxyWorkerCdp(originalEndpoint, command => {
+					commands.add(command.method);
+					return command.method !== "Page.reload";
+				});
+				tab.browser.wsEndpoint = proxy.url;
 				let released: Promise<boolean> | undefined;
 				// The reattach terminates the crashed page's worker before starting a new one: close the tab right then.
 				const terminateSpy = spyOn(crashedWorker, "terminate").mockImplementation(async () => {
@@ -1512,12 +1568,18 @@ describe("browser tabs whose renderer crashed", () => {
 					const outcome = await runInTab(name, { code: "return 1;", timeoutMs: 10_000, session }).catch(
 						(error: unknown) => error,
 					);
-					await released;
-					expect(String(outcome)).toContain("was closed");
+					expect(await released).toBe(true);
+					expect(String(outcome)).toContain("omp released the tab without reloading or closing the borrowed page");
+					expect(commands.has("Inspector.enable")).toBeTrue();
+					expect(commands.has("Page.reload")).toBeFalse();
+					expect(userPage.isClosed()).toBeFalse();
 					expect(tab.state).toBe("dead");
 					expect(tab.worker).toBe(crashedWorker);
+					expect(getTab(name)).toBeUndefined();
 				} finally {
+					tab.browser.wsEndpoint = originalEndpoint;
 					terminateSpy.mockRestore();
+					await proxy.stop();
 				}
 			} finally {
 				await releaseTab(name, { kill: false });

@@ -111,11 +111,24 @@ impl FileLock {
 	/// Returns an error if the path is not UTF-8 or the platform operation
 	/// fails.
 	pub fn try_acquire_path(path: &Path) -> io::Result<Self> {
+		Self::try_acquire_path_in::<true>(path)
+	}
+
+	/// Tries to acquire a caller-supplied path without inferring a filename key.
+	///
+	/// # Errors
+	/// Returns an error if the path is not UTF-8 or the platform operation
+	/// fails.
+	pub fn try_acquire_explicit_path(path: &Path) -> io::Result<Self> {
+		Self::try_acquire_path_in::<false>(path)
+	}
+
+	fn try_acquire_path_in<const INFER_KEY: bool>(path: &Path) -> io::Result<Self> {
 		let path = path.to_str().ok_or_else(|| {
 			io::Error::new(io::ErrorKind::InvalidInput, "lock path is not valid UTF-8")
 		})?;
 		#[cfg(target_os = "linux")]
-		let key = match keyed_parts(path) {
+		let key = match INFER_KEY.then(|| keyed_parts(path)).flatten() {
 			Some((root, key)) => {
 				prepare_keyed_root(root)?;
 				key
@@ -137,12 +150,30 @@ impl FileLock {
 	/// # Errors
 	/// Returns an error if the path is not UTF-8 or the platform probe fails.
 	pub fn is_held_path(path: &Path) -> io::Result<bool> {
+		Self::is_held_path_in::<true>(path)
+	}
+
+	/// Observes a caller-supplied path without inferring a filename key.
+	///
+	/// # Errors
+	/// Returns an error if the path is not UTF-8 or the platform probe fails.
+	pub fn is_held_explicit_path(path: &Path) -> io::Result<bool> {
+		Self::is_held_path_in::<false>(path)
+	}
+
+	fn is_held_path_in<const INFER_KEY: bool>(path: &Path) -> io::Result<bool> {
 		let path = path.to_str().ok_or_else(|| {
 			io::Error::new(io::ErrorKind::InvalidInput, "lock path is not valid UTF-8")
 		})?;
 		let held = platform::is_held(path)?;
 		#[cfg(target_os = "linux")]
-		let held = held || legacy_abstract::is_bound(keyed_parts(path).map_or(path, |(_, key)| key))?;
+		let held = held || {
+			let key = INFER_KEY
+				.then(|| keyed_parts(path))
+				.flatten()
+				.map_or(path, |(_, key)| key);
+			legacy_abstract::is_bound(key)?
+		};
 		Ok(held)
 	}
 
@@ -212,12 +243,29 @@ mod tests {
 			.as_nanos();
 		let key = format!("omp-file-lock-legacy-{}-{nonce}", std::process::id());
 		let path = std::env::temp_dir().join(&key);
-		assert_older_build_lock(&path, path.to_str().expect("utf-8 temp path"));
-		assert_older_build_lock(&FileLock::keyed_path(&key), &key);
+		assert_older_build_lock(
+			&path,
+			path.to_str().expect("utf-8 temp path"),
+			FileLock::try_acquire_path,
+			FileLock::is_held_path,
+		);
+		let path = FileLock::keyed_path(&key);
+		assert_older_build_lock(&path, &key, FileLock::try_acquire_path, FileLock::is_held_path);
+		assert_older_build_lock(
+			&path,
+			path.to_str().expect("utf-8 keyed path"),
+			FileLock::try_acquire_explicit_path,
+			FileLock::is_held_explicit_path,
+		);
 	}
 
 	#[cfg(target_os = "linux")]
-	fn assert_older_build_lock(path: &std::path::Path, key: &str) {
+	fn assert_older_build_lock(
+		path: &std::path::Path,
+		key: &str,
+		acquire: fn(&std::path::Path) -> std::io::Result<FileLock>,
+		probe: fn(&std::path::Path) -> std::io::Result<bool>,
+	) {
 		use std::os::{
 			linux::net::SocketAddrExt,
 			unix::net::{SocketAddr, UnixDatagram},
@@ -227,13 +275,13 @@ mod tests {
 		let address = SocketAddr::from_abstract_name(name.as_bytes()).expect("abstract name");
 		let older_build = UnixDatagram::bind_addr(&address).expect("bind the older build's name");
 
-		let refused = FileLock::try_acquire_path(path).expect("acquire attempt");
+		let refused = acquire(path).expect("acquire attempt");
 		assert!(!refused.is_acquired());
-		assert!(FileLock::is_held_path(path).expect("probe while the older build holds it"));
+		assert!(probe(path).expect("probe while the older build holds it"));
 
 		drop(older_build);
-		assert!(!FileLock::is_held_path(path).expect("probe after the older build exits"));
-		let mut lock = FileLock::try_acquire_path(path).expect("acquire");
+		assert!(!probe(path).expect("probe after the older build exits"));
+		let mut lock = acquire(path).expect("acquire");
 		assert!(lock.is_acquired());
 		lock.release_native().expect("release");
 		let _ = std::fs::remove_file(path);

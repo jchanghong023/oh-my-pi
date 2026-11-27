@@ -1659,7 +1659,7 @@ export class AcpAgent implements Agent {
 		switch (method) {
 			case SPEECH_MODELS_LIST_METHOD: {
 				const session =
-					typeof params.sessionId === "string"
+					typeof params?.sessionId === "string"
 						? this.#getSessionRecord(params.sessionId).session
 						: this.#initialSession;
 				const settings = session?.settings ?? (await Settings.init());

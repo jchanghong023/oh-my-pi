@@ -73,13 +73,14 @@ export default class AuthBroker extends Command {
 		"# Health-check the configured remote broker\n  omp auth-broker status",
 	];
 
-	async run(): Promise<void> {
+	async run(startCli?: (action: AuthBrokerAction) => Promise<void>): Promise<void> {
 		const { args, flags } = await this.parse(AuthBroker);
 		if (!args.action) {
 			renderCommandHelp("omp", "auth-broker", AuthBroker);
 			return;
 		}
 		const action = args.action as AuthBrokerAction;
+		if (startCli) await startCli(action);
 		const cmd: AuthBrokerCommandArgs = {
 			action,
 			flags: {

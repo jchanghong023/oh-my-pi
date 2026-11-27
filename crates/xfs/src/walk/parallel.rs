@@ -49,7 +49,10 @@ use super::{
 	give_session, join_child_into, join_into, pruned, take_session,
 };
 use crate::{
-	fs::{Detail, Dir, FileId, FileInfo, FileType, Fs, Listing, Session, mounts::Fences},
+	fs::{
+		Detail, Dir, FileId, FileInfo, FileType, Fs, IncompleteListing, Listing, Session,
+		mounts::Fences,
+	},
 	ignore::{DirIgnores, Frame, Ignorer, Names, Sources},
 };
 
@@ -938,14 +941,22 @@ impl<K: Sink> Ctx<K> {
 			st.session.stat_dir(&dir).await.ok().map(Freshness::Stamp)
 		};
 		let mut listing = std::mem::take(&mut st.listing);
-		if let Err(error) = st
+		let freshness = match st
 			.session
 			.list_into(&dir, self.opts.detail, count, &mut listing)
 			.await
 		{
-			st.listing = listing;
-			return Err(error);
-		}
+			Ok(()) => freshness,
+			Err(error) if depth > 0 && IncompleteListing::is(&error) => {
+				self.report(rel_bytes, error);
+				// Incomplete listings must not hide the error on a cache hit.
+				None
+			},
+			Err(error) => {
+				st.listing = listing;
+				return Err(error);
+			},
+		};
 		let mut names = Names::default();
 		if self.ignorer.is_some() || freshness.is_some() {
 			for record in listing.records() {

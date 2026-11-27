@@ -12,11 +12,13 @@ import {
 	reset as resetCapabilities,
 } from "@oh-my-pi/pi-coding-agent/capability";
 import { type Skill as CapabilitySkill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
+import { withActiveSettings } from "@oh-my-pi/pi-coding-agent/config/settings-context";
 import { getCapability } from "@oh-my-pi/pi-coding-agent/discovery";
 import { getWslWindowsHomeCandidate, runHostProbe } from "@oh-my-pi/pi-coding-agent/discovery/agents";
 import * as discoveryHelpers from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import {
 	type LoadSkillsResult,
+	loadSkillPrompt,
 	loadSkills,
 	loadSkillCatalog,
 	loadSkillsFromDir,
@@ -24,6 +26,12 @@ import {
 } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
 import { SkillProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/skill-protocol";
+import {
+	getSkillStorePath,
+	SKILLS_LOCK_FILE,
+	STORE_INTEGRITY_FILE,
+	writeSkillsLock,
+} from "@oh-my-pi/pi-coding-agent/skillshare/manifest";
 import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-coding-agent/autocomplete/autocomplete";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
@@ -158,6 +166,21 @@ describe("skills", () => {
 
 			expect(skills).toHaveLength(0);
 		});
+
+		it("finds a SKILL.md created after a scan without resetting discovery", async () => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-skill-rescan-"));
+			const options = { dir, source: "test" };
+			const skillDir = path.join(dir, "new-skill");
+			const filePath = path.join(skillDir, "SKILL.md");
+			try {
+				await fs.mkdir(skillDir);
+				expect((await loadSkillsFromDir(options)).skills).toEqual([]);
+				await fs.writeFile(filePath, "---\ndescription: Newly added skill\n---\nNew instructions.");
+				expect((await loadSkillsFromDir(options)).skills).toMatchObject([{ name: "new-skill", filePath }]);
+			} finally {
+				await removeWithRetries(dir);
+			}
+		});
 	});
 
 	describe("loadSkills with options", () => {
@@ -258,6 +281,52 @@ describe("skills", () => {
 			} finally {
 				restoreEnvValue("OMP_SKILLS_DIR", previous);
 				await removeWithRetries(userDir);
+				await removeWithRetries(root);
+			}
+		});
+
+		it("keeps a Shared Skillshare package ahead of a custom copy and preserves containment", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-skillshare-"));
+			const name = "shared-package";
+			const storeDir = getSkillStorePath("test", name, "1.0.0");
+			const sharedDir = path.join(root, "shared");
+			const customDir = path.join(root, "custom");
+			const aliasDir = path.join(sharedDir, name);
+			const customSkill = path.join(customDir, name, "SKILL.md");
+			const previousShared = process.env.OMP_SKILLS_DIR;
+			const options = { ...DISABLE_ALL_BUILTIN_SKILLS, cwd: root, customDirectories: [customDir] };
+			let linked = false;
+			try {
+				await fs.mkdir(path.join(root, ".git"));
+				await fs.mkdir(storeDir, { recursive: true });
+				await fs.mkdir(sharedDir);
+				await fs.mkdir(path.dirname(customSkill), { recursive: true });
+				const integrity = "sha512-test";
+				await fs.writeFile(path.join(storeDir, STORE_INTEGRITY_FILE), integrity);
+				await fs.writeFile(path.join(storeDir, "SKILL.md"), "---\ndescription: Installed package\n---\nInstalled.");
+				await writeSkillsLock(path.join(root, ".omp", SKILLS_LOCK_FILE), {
+					version: 1,
+					skills: { "@test/shared-package": { version: "1.0.0", integrity, resolved: "/tarball" } },
+				});
+				await fs.writeFile(customSkill, "---\ndescription: Custom version\n---\nCustom.");
+				await fs.symlink(storeDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+				linked = true;
+
+				expect((await loadSkills(options)).skills.find(skill => skill.name === name)?.filePath).toBe(customSkill);
+				restoreEnvValue("OMP_SKILLS_DIR", sharedDir);
+				const canonicalStore = await fs.realpath(storeDir);
+				const { skills } = await loadSkillCatalog(options);
+				expect(skills.map(skill => skill.name)).toEqual([`custom/${name}`, name]);
+				expect(skills.find(skill => skill.name === name)).toMatchObject({
+					filePath: path.join(canonicalStore, "SKILL.md"),
+					containRoot: canonicalStore,
+					_source: { provider: "skillshare", providerName: "Shared" },
+				});
+				expect(skills.find(skill => skill.name === `custom/${name}`)?.filePath).toBe(customSkill);
+			} finally {
+				restoreEnvValue("OMP_SKILLS_DIR", previousShared);
+				if (linked) await fs.unlink(aliasDir);
+				await removeWithRetries(storeDir);
 				await removeWithRetries(root);
 			}
 		});
@@ -630,6 +699,58 @@ describe("skills", () => {
 				}
 			});
 		}
+
+		it("revalidates Claude plugin skills using the holder's opt-in outside its settings scope", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-claude-skill-revalidate-"));
+			const configDir = path.join(root, "claude");
+			const registry = path.join(configDir, "plugins", "installed_plugins.json");
+			const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+			const disabled = Settings.isolated({ enabledProviders: [] });
+			const enabled = Settings.isolated({ enabledProviders: ["claude-plugins"] });
+			const release = initializeWithSettings(disabled);
+			const refreshSkills = () =>
+				withActiveSettings(
+					enabled,
+					async () => (await loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, cwd: root })).skills,
+				);
+			const install = async (version: string) => {
+				const installPath = path.join(configDir, "plugins", version);
+				const skillDir = path.join(installPath, "skills", "plugin-upgrade");
+				await fs.mkdir(skillDir, { recursive: true });
+				await fs.writeFile(
+					path.join(skillDir, "SKILL.md"),
+					`---\ndescription: Claude plugin skill\n---\nVersion ${version}.`,
+				);
+				await fs.writeFile(
+					registry,
+					JSON.stringify({ version: 2, plugins: { "test@local": [{ scope: "user", installPath, version }] } }),
+				);
+			};
+			try {
+				await fs.mkdir(path.join(root, ".git"));
+				restoreEnvValue("CLAUDE_CONFIG_DIR", configDir);
+				await install("1.0.0");
+				const skills = await refreshSkills();
+				const original = skills.find(skill => skill.name === "plugin-upgrade")!;
+				expect(original?._source?.origin).toBe("claude");
+
+				// The new path has a different length, so the registry's signature
+				// changes even on filesystems with coarse timestamps. Keep the old file.
+				await install("10.0.0");
+				const loadPrompt = (settings: Settings) =>
+					loadSkillPrompt(original, {
+						skillRediscoveryHost: () => ({ skills, settings, cwd: root, refreshSkills }),
+					});
+				expect((await loadPrompt(disabled)).body).toBe("Version 1.0.0.");
+				expect((await loadPrompt(enabled)).body).toBe("Version 10.0.0.");
+			} finally {
+				discoveryHelpers.clearPluginRootsAndCaches();
+				resetCapabilities();
+				release();
+				restoreEnvValue("CLAUDE_CONFIG_DIR", previousClaudeConfigDir);
+				await removeWithRetries(root);
+			}
+		});
 
 		it("should keep user Claude skills when project .claude/skills is missing", async () => {
 			const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -1238,6 +1359,43 @@ describe("collision handling", () => {
 		}
 	});
 
+	it("does not let an ignored namespace suppress an identical skill from another provider", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-skills-ignore-shadow-"));
+		const userSkill = path.join(isolatedHome, ".omp", "agent", "skills", "calendar");
+		const projectSkill = path.join(root, ".omp", "skills", "calendar", "SKILL.md");
+		const codexSkill = path.join(root, ".codex", "skills", "calendar", "SKILL.md");
+		try {
+			await fs.mkdir(path.join(root, ".git"));
+			for (const [from, to] of [
+				[first, projectSkill],
+				[second, path.join(userSkill, "SKILL.md")],
+				[second, codexSkill],
+			]) {
+				await fs.mkdir(path.dirname(to), { recursive: true });
+				await fs.copyFile(path.join(from, "calendar", "SKILL.md"), to);
+			}
+			const options = {
+				...DISABLE_ALL_BUILTIN_SKILLS,
+				cwd: root,
+				enablePiUser: true,
+				enablePiProject: true,
+				ignoredSkills: ["agent/calendar"],
+			};
+			const { skills } = await loadSkills(options);
+			expect(skills.map(skill => [skill.name, skill.filePath])).toEqual([
+				["calendar", projectSkill],
+				["codex/calendar", codexSkill],
+			]);
+			const catalog = await loadSkillCatalog(options);
+			expect(catalog.skills.find(skill => skill.name === "agent/calendar")?.disabledReason).toBe("skill-config");
+			expect(catalog.skills.find(skill => skill.name === "codex/calendar")?.filePath).toBe(codexSkill);
+		} finally {
+			resetCapabilities();
+			await removeWithRetries(userSkill);
+			await removeWithRetries(root);
+		}
+	});
+
 	it("resolves the bare name to the winner and the collision to its namespaced form", async () => {
 		const { skills } = await loadSkills({
 			...DISABLE_ALL_BUILTIN_SKILLS,
@@ -1261,17 +1419,22 @@ describe("collision handling", () => {
 		// developer's real skills into these exact-list assertions (#1116 only
 		// skips ctx.home, which the isolated temp home is not). Anchor the walk
 		// at the project itself.
-		Bun.spawnSync(["git", "init", "--quiet", project]);
-		const claudeFile = path.join(project, ".claude", "skills", "calendar", "SKILL.md");
-		await fs.mkdir(path.dirname(claudeFile), { recursive: true });
-		await fs.copyFile(claudeFrom, claudeFile);
-		let agentsFile: string | undefined;
-		if (agentsFrom) {
-			agentsFile = path.join(project, ".agents", "skills", "calendar", "SKILL.md");
-			await fs.mkdir(path.dirname(agentsFile), { recursive: true });
-			await fs.copyFile(agentsFrom, agentsFile);
+		try {
+			await fs.mkdir(path.join(project, ".git"));
+			const claudeFile = path.join(project, ".claude", "skills", "calendar", "SKILL.md");
+			await fs.mkdir(path.dirname(claudeFile), { recursive: true });
+			await fs.copyFile(claudeFrom, claudeFile);
+			let agentsFile: string | undefined;
+			if (agentsFrom) {
+				agentsFile = path.join(project, ".agents", "skills", "calendar", "SKILL.md");
+				await fs.mkdir(path.dirname(agentsFile), { recursive: true });
+				await fs.copyFile(agentsFrom, agentsFile);
+			}
+			return { project, claudeFile, agentsFile };
+		} catch (error) {
+			await removeWithRetries(project);
+			throw error;
 		}
-		return { project, claudeFile, agentsFile };
 	}
 	const providerOptions = { ...DISABLE_ALL_BUILTIN_SKILLS, enableClaudeProject: true, enableAgentsProject: true };
 
@@ -1508,8 +1671,8 @@ describe("collision handling", () => {
 		const project = await fs.mkdtemp(path.join(os.tmpdir(), "skills-displaced-"));
 		// Same walk-up anchor as projectWithProviderCopies: keep project-level
 		// discovery from escaping the temp project into the real ~/.claude.
-		Bun.spawnSync(["git", "init", "--quiet", project]);
 		try {
+			await fs.mkdir(path.join(project, ".git"));
 			// Project-level .claude/skills/calendar (provider "claude"; the dotted
 			// home makes its namespace fall back to the provider id) versus a custom
 			// root literally named "claude" that derives the same namespace.

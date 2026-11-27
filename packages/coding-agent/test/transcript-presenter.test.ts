@@ -20,7 +20,7 @@ import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { cfgExtensionTranscriptPresenters } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { applyDisplayPreset, cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -68,10 +68,12 @@ describe("extension transcript presenters", () => {
 		modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.find("ascend", "qwen3.8-flash-next");
 		if (!model) throw new Error("Expected retained presentation model to exist in registry");
+		const settings = Settings.isolated();
+		cfgDisplayMode.set(settings, "detailed");
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "display.mode": "detailed" }),
+			settings,
 			modelRegistry,
 		});
 		term = createModeTerminal({ columns: 120, rows: 32 });
@@ -858,8 +860,7 @@ describe("extension transcript presenters", () => {
 	});
 
 	it("presents advisor and skill blocks without reviving hidden background completion notices", async () => {
-		// Regression guard: non-tool cards staying full while every tool call is compact, or a
-		// compact one that Ctrl+O cannot open.
+		// A compact presentation should not change which messages clean mode lets the user see.
 		await installExtensions(
 			presenter(block =>
 				block.type === "message" && block.message.role === "custom"
@@ -867,34 +868,54 @@ describe("extension transcript presenters", () => {
 					: undefined,
 			),
 		);
-		const custom = (customType: string, details: unknown, timestamp: number) =>
+		const custom = (customType: string, details: unknown, timestamp: number, content = "body") =>
 			session.sessionManager.appendMessage({
 				role: "custom",
 				customType,
-				content: "body",
+				content,
 				display: true,
 				details,
 				timestamp,
 			});
 		custom("advisor", { notes: [{ note: "ADVISOR-NOTE" }] }, 10);
-		custom("skill-prompt", { name: "demo-skill", path: "/skills/demo/SKILL.md", lineCount: 1 }, 20);
+		custom(
+			"skill-prompt",
+			{ name: "demo-skill", path: "/skills/demo/SKILL.md", lineCount: 1 },
+			20,
+			"SKILL-INSTRUCTIONS",
+		);
 		custom("async-result", { jobs: [{ jobId: "bg-7", type: "bash", status: "completed", durationMs: 1200 }] }, 30);
 		await start();
 		await mode.renderInitialMessages();
 		// Detailed mode shows this persisted receipt; clean mode must hide even its compact presentation.
 		expect(chat()).toContain("MSG-async-result");
-		cfgDisplayMode.override(mode.settings, "clean");
-		await Promise.resolve();
+		await applyDisplayPreset(mode.settings, "clean", mode);
+		expect(mode.settings.getGlobalSettings()).toMatchObject({ display: { mode: "clean" }, hideThinkingBlock: true });
+		const expectClean = () => {
+			const collapsed = chat();
+			for (const type of ["advisor", "skill-prompt"]) expect(collapsed).toContain(`MSG-${type}`);
+			expect(collapsed).not.toContain("ADVISOR-NOTE");
+			expect(collapsed).not.toContain("SKILL-INSTRUCTIONS");
+			expect(collapsed).not.toContain("MSG-async-result");
+		};
+		expectClean();
 		await mode.renderInitialMessages();
-		for (const type of ["advisor", "skill-prompt"]) expect(chat()).toContain(`MSG-${type}`);
-		expect(chat()).not.toContain("ADVISOR-NOTE");
-		expect(chat()).not.toContain("MSG-async-result");
+		expectClean();
 
 		mode.setToolsExpanded(true);
-		expect(chat()).not.toContain("MSG-");
-		expect(chat()).toContain("ADVISOR-NOTE");
-		expect(chat()).toContain("demo-skill");
-		expect(chat()).not.toContain("bg-7");
+		const expanded = chat();
+		expect(expanded).not.toContain("MSG-");
+		expect(expanded).toContain("ADVISOR-NOTE");
+		expect(expanded).toContain("demo-skill");
+		expect(expanded).toContain("SKILL-INSTRUCTIONS");
+		expect(expanded).not.toContain("bg-7");
+
+		await applyDisplayPreset(mode.settings, "detailed", mode);
+		expect(mode.settings.getGlobalSettings()).toMatchObject({
+			display: { mode: "detailed" },
+			hideThinkingBlock: false,
+		});
+		expect(chat()).toContain("MSG-async-result");
 	});
 
 	/** Answer every `!` run with `LIVE-OUT` instead of running a shell, once `ready` (if any) resolves. */

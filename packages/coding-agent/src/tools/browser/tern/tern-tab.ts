@@ -248,6 +248,8 @@ export interface TernOpenOptions {
 	identitySeed?: string;
 	/** Native exit check supplied only by the owned WebKit host. */
 	hostExited?: () => boolean;
+	/** Reopen a connection to the proven original Tern socket, for strict cleanup only. */
+	reconnect?: (timeoutMs: number) => Promise<TernSocketClient>;
 }
 
 /** Options of {@link TernTab.adopt}: like an open, but every page setting only when given. */
@@ -508,7 +510,9 @@ export class TernTab implements InProcessRunTab {
 	readonly product: string;
 	/** The PiP's block id (daemon-native). */
 	readonly block: number;
-	readonly #client: TernSocketClient;
+	#client: TernSocketClient;
+	readonly #reconnect: TernOpenOptions["reconnect"];
+	#blockReleased = false;
 	readonly #name: string;
 	/** The user's block this tab adopted (released, never closed); undefined for omp's own PiP. */
 	readonly adopted: TernBlockEntry | undefined;
@@ -589,6 +593,7 @@ export class TernTab implements InProcessRunTab {
 		viewport: ViewportOptions;
 		adopted?: TernBlockEntry;
 		hostExited?: () => boolean;
+		reconnect?: TernOpenOptions["reconnect"];
 	}) {
 		this.#client = opts.client;
 		this.product = opts.client.product;
@@ -603,6 +608,7 @@ export class TernTab implements InProcessRunTab {
 		this.#viewport = { ...opts.viewport };
 		this.adopted = opts.adopted;
 		this.#hostExited = opts.hostExited;
+		this.#reconnect = opts.reconnect;
 	}
 
 	/**
@@ -641,6 +647,7 @@ export class TernTab implements InProcessRunTab {
 			name: opts.name,
 			viewport: opts.viewport,
 			hostExited: opts.hostExited,
+			reconnect: opts.reconnect,
 		});
 		try {
 			await tab.#configure(opts, remainingMs());
@@ -671,6 +678,7 @@ export class TernTab implements InProcessRunTab {
 			name: opts.name,
 			viewport: opts.viewport ?? { width: 0, height: 0 },
 			adopted: opts.block,
+			reconnect: opts.reconnect,
 		});
 		try {
 			const answer = await tab.#op("events", { after: 0 }, remainingMs());
@@ -760,6 +768,11 @@ export class TernTab implements InProcessRunTab {
 		return this.#shown;
 	}
 
+	/** Whether the block's cleanup was confirmed by the backend or owned host exit. */
+	get blockReleased(): boolean {
+		return this.#blockReleased;
+	}
+
 	/**
 	 * Close omp's PiP (its page goes), or release an adopted block: Tern stops
 	 * driving it and resets what omp set, the user's page stays. A Tern without
@@ -768,33 +781,55 @@ export class TernTab implements InProcessRunTab {
 	 * strict cleanup requires a native acknowledgement or confirmed owned host exit.
 	 */
 	async close(opts: { timeoutMs: number; strict?: boolean }): Promise<void> {
-		if (opts.strict) {
-			await this.#recording.close({ strict: true });
-		} else {
-			await this.#recording.close().catch(error => {
-				if (opts.strict) throw error;
-				logger.warn("Failed to finalize a Tern browser recording during close", {
-					error: error instanceof Error ? error.message : String(error),
+		if (this.#blockReleased) return;
+		const original = this.#client;
+		try {
+			if (opts.strict && !original.connected && this.#reconnect) {
+				this.#client = await this.#reconnect(opts.timeoutMs);
+			}
+			if (opts.strict) {
+				await this.#recording.close({ strict: true });
+			} else {
+				await this.#recording.close().catch(error => {
+					if (opts.strict) throw error;
+					logger.warn("Failed to finalize a Tern browser recording during close", {
+						error: error instanceof Error ? error.message : String(error),
+					});
 				});
-			});
+			}
+			this.#blockReleased = await this.#releaseBlock(opts);
+		} finally {
+			if (this.#client !== original) {
+				this.#client.close();
+				this.#client = original;
+			}
 		}
-		if (this.#hostExited?.()) return;
+	}
+
+	async #releaseBlock(opts: { timeoutMs: number; strict?: boolean }): Promise<boolean> {
+		if (this.#hostExited?.()) return true;
 		try {
 			await this.#client.request(
 				{ op: this.adopted ? "release" : "close", block: this.block },
 				{ timeoutMs: opts.timeoutMs },
 			);
+			return true;
 		} catch (error) {
-			if (this.#hostExited?.()) return;
-			if (error instanceof TernError && (error.kind === "not_found" || (!opts.strict && error.kind === "closed")))
-				return;
+			if (this.#hostExited?.()) return true;
+			if (error instanceof TernError && error.kind === "not_found") return true;
+			if (!opts.strict && error instanceof TernError && error.kind === "closed") return false;
 			if (!(this.adopted && error instanceof TernError && error.kind === "invalid")) throw error;
-			await this.#client
-				.request({ op: "scripts", block: this.block, scripts: [] }, { timeoutMs: opts.timeoutMs })
-				.catch(cleanupError => {
-					if (opts.strict && !(cleanupError instanceof TernError && cleanupError.kind === "not_found"))
-						throw cleanupError;
-				});
+			try {
+				await this.#client.request(
+					{ op: "scripts", block: this.block, scripts: [] },
+					{ timeoutMs: opts.timeoutMs },
+				);
+				return true;
+			} catch (cleanupError) {
+				if (cleanupError instanceof TernError && cleanupError.kind === "not_found") return true;
+				if (opts.strict) throw cleanupError;
+				return false;
+			}
 		}
 	}
 

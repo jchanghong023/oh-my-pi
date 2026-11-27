@@ -2617,6 +2617,48 @@ export class SessionManager {
 		await this.#setSessionFile(sessionFile);
 	}
 
+	/**
+	 * Whether a switch targets a different session. If only the actual load
+	 * can determine identity, prepare that snapshot for the caller to adopt
+	 * after any work that must still see the outgoing session.
+	 */
+	prepareSessionSwitch(sessionFile: string): boolean | Promise<{ different: boolean; apply(): Promise<void> }> {
+		const current = this.#sessionFile;
+		if (!current) return true;
+		if (this.#storage instanceof FileSessionStorage) return path.resolve(current) !== path.resolve(sessionFile);
+		if (current === sessionFile) return false;
+		if (path.isAbsolute(sessionFile) || path.resolve(sessionFile) !== current) return true;
+		return this.#prepareLegacySessionSwitch(sessionFile, current);
+	}
+
+	async #prepareLegacySessionSwitch(
+		sessionFile: string,
+		current: string,
+	): Promise<{ different: boolean; apply(): Promise<void> }> {
+		// Only an opaque key whose legacy fallback is the current key needs the
+		// actual load to decide identity. Adopt the same read, without reprobes.
+		const target = await this.#loadSessionSwitchTarget(sessionFile, current);
+		return {
+			different: target.file !== current,
+			apply: () => this.#setSessionFile(target.file, target.loaded),
+		};
+	}
+
+	async #loadSessionSwitchTarget(
+		sessionFile: string,
+		legacyAbsolute?: string,
+	): Promise<{ file: string; loaded: SessionLoadResult }> {
+		const loaded = await loadSessionFile(sessionFile, this.#storage);
+		// Indexed backends keep opaque keys, but older callers could resume an
+		// absolute key by its relative path. Only fall back when the exact key is absent.
+		if (loaded.sourceSize === null && !path.isAbsolute(sessionFile)) {
+			const absoluteFile = legacyAbsolute ?? path.resolve(sessionFile);
+			const absolute = await loadSessionFile(absoluteFile, this.#storage);
+			if (absolute.sourceSize !== null) return { file: absoluteFile, loaded: absolute };
+		}
+		return { file: sessionFile, loaded };
+	}
+
 	async #setSessionFile(
 		sessionFile: string,
 		loadedSession?: SessionLoadResult,
@@ -2624,8 +2666,11 @@ export class SessionManager {
 	): Promise<void> {
 		await this.#drainAndCloseWriter();
 
-		const resolvedSessionFile = this.#storage instanceof FileSessionStorage ? path.resolve(sessionFile) : sessionFile;
-		const loaded = loadedSession ?? (await loadSessionFile(resolvedSessionFile, this.#storage));
+		let resolvedSessionFile = this.#storage instanceof FileSessionStorage ? path.resolve(sessionFile) : sessionFile;
+		let loaded = loadedSession;
+		if (!loaded) {
+			({ file: resolvedSessionFile, loaded } = await this.#loadSessionSwitchTarget(resolvedSessionFile));
+		}
 		const sourceSize =
 			loaded.sourceSize !== undefined
 				? loaded.sourceSize
@@ -4816,9 +4861,8 @@ export class SessionManager {
 		const dir = path.resolve(sessionDir ?? SessionManager.getDefaultSessionDir(cwd));
 		const home = path.resolve(path.dirname(session.path));
 		if (home === dir) return resolveManagedSessionRoot(dir, cwd) !== undefined;
-		return (await worktreeSessionDirs(cwd, dir, { settings, stranded: true })).some(
-			sibling => path.resolve(sibling) === home,
-		);
+		const siblings = await worktreeSessionDirs(cwd, dir, { settings, stranded: true });
+		return siblings.get(home)?.(session.cwd) ?? false;
 	}
 
 	/**
@@ -5134,7 +5178,7 @@ export class SessionManager {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const [pinned, siblingDirs] = await Promise.all([
 			loadPinnedSessionIds(),
-			worktreeScope === "repo" ? worktreeSessionDirs(cwd, dir, { settings }) : [],
+			worktreeScope === "repo" ? worktreeSessionDirs(cwd, dir, { settings }) : undefined,
 		]);
 		return listSessionsForPicker(dir, storage, pinned, siblingDirs);
 	}

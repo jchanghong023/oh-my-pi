@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
 	__resetDirsFromEnvForTests,
@@ -10,27 +9,23 @@ import {
 	setAgentDir,
 	setProfile,
 } from "@oh-my-pi/pi-utils/dirs";
-import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
+import { TempDir } from "@oh-my-pi/pi-utils/temp";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 describe("getInstallId", () => {
-	let tempRoot = "";
-	const ENV_KEYS = ["OMP_CONFIG_ROOT", "PI_CONFIG_DIR", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
+	let tempRoot: TempDir | undefined;
+	const ENV_KEYS = ["OMP_CONFIG_ROOT", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
 	let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 
 	beforeEach(async () => {
 		originalEnv = {};
 		for (const key of ENV_KEYS) originalEnv[key] = process.env[key];
-		const slug = `omp-install-id-${Snowflake.next()}`;
-		// PI_CONFIG_DIR is relative to home; a Windows temp dir may be on another drive.
-		tempRoot = path.join(process.platform === "win32" ? os.homedir() : os.tmpdir(), slug);
-		await fs.mkdir(tempRoot, { recursive: true });
+		tempRoot = await TempDir.create("@omp-install-id-");
 		// Override the full root as well: inherited OMP_CONFIG_ROOT must not
 		// send these destructive identity fixtures into the user's data.
-		process.env.OMP_CONFIG_ROOT = tempRoot;
-		process.env.PI_CONFIG_DIR = path.relative(os.homedir(), tempRoot);
-		setAgentDir(path.join(tempRoot, "agent"));
+		process.env.OMP_CONFIG_ROOT = tempRoot.absolute();
+		setAgentDir(tempRoot.join("agent"));
 		__resetInstallIdCacheForTests();
 	});
 
@@ -42,7 +37,8 @@ describe("getInstallId", () => {
 			else process.env[key] = value;
 		}
 		__resetDirsFromEnvForTests();
-		await fs.rm(tempRoot, { recursive: true, force: true });
+		await tempRoot?.remove();
+		tempRoot = undefined;
 	});
 
 	it("generates and persists a UUID on first call", async () => {

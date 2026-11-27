@@ -268,8 +268,6 @@ async function learn<TApi extends Api>(
 	options: SimpleStreamOptions,
 	run: RunRequest<TApi>,
 ): Promise<ThinkingCapability> {
-	const cached = readThinkingCapability(model, options.thinkingCapabilityDbPath);
-	if (cached) return cached;
 	const key = JSON.stringify([
 		options.thinkingCapabilityDbPath,
 		model.provider,
@@ -325,15 +323,16 @@ export function withProbedThinking<TApi extends Api>(
 		options.disableReasoning ||
 		options.forceReasoningOff ||
 		model.transport === "pi-native" ||
-		options.thinkingProbe === false ||
 		formatBatches(model.api).length === 0
 	) {
 		return run(model, context, options);
 	}
+	const cached = readThinkingCapability(model, options.thinkingCapabilityDbPath);
+	if (!cached && options.thinkingProbe === false) return run(model, context, options);
 	const outer = new AssistantMessageEventStream();
 	void (async () => {
 		try {
-			const capability = await learn(model, options, run);
+			const capability = cached ?? (await learn(model, options, run));
 			options.signal?.throwIfAborted();
 			// Use a format this run accepted, or the first unrejected one; fall
 			// back to the primary hypothesis only if even the plain check was refused.

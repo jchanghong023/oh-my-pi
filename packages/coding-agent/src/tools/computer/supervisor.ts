@@ -32,6 +32,8 @@ import {
 
 const START_TIMEOUT_MS = 10_000;
 const CLOSE_TIMEOUT_MS = 1_500;
+// Native desktop close can take 2s to join its thread; allow for the worker reply and teardown too.
+const STRICT_CLOSE_TIMEOUT_MS = 2_750;
 const GRACE_MS = 750;
 const SMOKE_TIMEOUT_MS = 5_000;
 // A capabilities request only ensures the native session and reads a getter, but
@@ -89,6 +91,7 @@ export interface ComputerWorkerHandle {
 export interface ComputerSupervisorTimeouts {
 	startMs: number;
 	closeMs: number;
+	strictCloseMs?: number;
 }
 
 const DEFAULT_TIMEOUTS: ComputerSupervisorTimeouts = {
@@ -647,7 +650,11 @@ export class ComputerSupervisor implements ComputerController {
 				throw error;
 			});
 			// Bound this caller, not the close handshake. A later call can still receive its final result.
-			return withTimeout(this.#strictCloseCall, this.#timeouts.closeMs, "Timed out closing computer worker");
+			return withTimeout(
+				this.#strictCloseCall,
+				this.#timeouts.strictCloseMs ?? STRICT_CLOSE_TIMEOUT_MS,
+				"Timed out closing computer worker",
+			);
 		}
 		if (this.#closed) return;
 		this.#closed = true;

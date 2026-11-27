@@ -71,7 +71,7 @@ export interface HtmlFormCallbacks {
 	releaseKeys?(): void;
 	/** A pointer event in the dialog: it takes keys again. */
 	claimKeys?(): void;
-	/** The countdown ran out: the draft is sent as it is. */
+	/** The countdown ran out: report the form's current answers and saved notes. */
 	onTimeout?(data: HtmlFormData, notes: OptionNote[], hasValidRecommendation?: boolean): void;
 	validateTimeoutRecommendation?: boolean;
 	/**
@@ -207,19 +207,7 @@ export class HtmlFormModel {
 		this.#callbacks = callbacks;
 		this.focused = signal(options.focused ?? true);
 		this.answers.set(form.fields.map(emptyAnswer));
-		this.#recommended =
-			callbacks.validateTimeoutRecommendation === true &&
-			form.fields.some((field, index) => {
-				if (!field.name || !this.#isValidTimeoutValue(field, index)) return false;
-				return field.kind === "text"
-					? !!field.value.trim()
-					: field.options.some(
-							(option, optionIndex) =>
-								!option.disabled &&
-								!implicitChoiceDefaults.has(option) &&
-								this.answer(index).checked.has(optionIndex),
-						);
-			});
+		this.#recommended = callbacks.validateTimeoutRecommendation === true && this.#hasInitialRecommendation();
 		if (options.vim) {
 			const vim = options.vim;
 			form.fields.forEach((field, index) => {
@@ -326,9 +314,36 @@ export class HtmlFormModel {
 		return choiceValue(field, answer.checked, answer.otherChosen ? answer.other.text : undefined);
 	}
 
-	#isValidTimeoutValue(field: FormField, index: number): boolean {
+	#isValidTimeoutValue(field: FormField, index: number, value: HtmlFormValue | undefined): boolean {
 		if (field.kind === "choice" && field.options[0]?.placeholder && this.answer(index).checked.has(0)) return false;
-		return fieldError(field, this.value(index)) === undefined;
+		return fieldError(field, value) === undefined;
+	}
+
+	#hasInitialRecommendation(): boolean {
+		// Like data(), the last control contributing a value owns its name. An overwritten
+		// default is not a recommendation, even when its own control is valid.
+		const names = new Set<string>();
+		for (let index = this.fields.length - 1; index >= 0; index--) {
+			const field = this.field(index);
+			if (!field.name || names.has(field.name)) continue;
+			const value = this.value(index);
+			if (value === undefined) continue;
+			names.add(field.name);
+			if (!this.#isValidTimeoutValue(field, index, value)) continue;
+			if (field.kind === "text") {
+				if (field.value.trim()) return true;
+			} else {
+				const checked = this.answer(index).checked;
+				if (
+					field.options.some(
+						(option, at) => checked.has(at) && !option.disabled && !implicitChoiceDefaults.has(option),
+					)
+				) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/** Whether field `index` holds an acceptable, non-empty answer. */
@@ -591,11 +606,16 @@ export class HtmlFormModel {
 	timeout(): void {
 		if (this.#done) return;
 		this.#done = true;
-		this.saveNote();
-		const valid = this.#callbacks.validateTimeoutRecommendation
-			? this.#recommended && this.fields.every((field, index) => this.#isValidTimeoutValue(field, index))
-			: undefined;
-		this.#callbacks.onTimeout?.(this.data(), this.notes(), valid);
+		const data = this.data();
+		if (!this.#callbacks.validateTimeoutRecommendation) {
+			this.#callbacks.onTimeout?.(data, this.notes());
+			return;
+		}
+		const valid =
+			this.#recommended &&
+			this.fields.every((field, index) => this.#isValidTimeoutValue(field, index, this.value(index)));
+		if (valid) this.saveNote();
+		this.#callbacks.onTimeout?.(data, this.notes(), valid);
 	}
 
 	// ─── Notes ──────────────────────────────────────────────────────────────

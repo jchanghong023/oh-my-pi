@@ -8,6 +8,7 @@ import {
 import { type ImageContent, toolWireSchema } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import { goalAutopilotRequest } from "../../goals/request-context";
 import type { ToolSession } from "../../tools";
 import { committedTodoPhases } from "../../tools/todo";
 import { isReplyWrite, toolResultReplies } from "../../session/transcript/reply-write";
@@ -57,7 +58,7 @@ export type { JsStatusEvent } from "./shared/types";
 export interface ToolBridgeOptions {
 	session: ToolSession;
 	parentToolCallId?: string;
-	/** Originating cell context, including its request scope, for prelude authorization. */
+	/** Originating cell context, including its request scope, for bridged authorization. */
 	toolContext?: AgentToolContext;
 	signal?: AbortSignal;
 	/** The cell's `timeout` in ms, the budget of a prelude call that sets none (`EvalPreludeContext.cellTimeoutMs`). */
@@ -404,12 +405,22 @@ async function runSessionTool(
 			try {
 				// The script parses the result, so it gets the whole result, not the model's display of it.
 				const context = options.session.getToolContext?.();
+				const requestScope = goalAutopilotRequest(options.toolContext);
 				return await tool.execute(
 					toolCallId,
 					validatedArgs,
 					options.signal,
 					onUpdate,
-					context && { ...context, programmatic: true, parentToolCallId: options.parentToolCallId },
+					context && {
+						...context,
+						programmatic: true,
+						parentToolCallId: options.parentToolCallId,
+						// Carry the authorization, but no loop-dispatched calls: bridged writes
+						// must not wait for or flush the model response's LSP batch.
+						...(requestScope && {
+							toolCall: { batchId: toolCallId, index: 0, total: 0, toolCalls: [], requestScope },
+						}),
+					},
 				);
 			} finally {
 				settled = true;

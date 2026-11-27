@@ -122,7 +122,7 @@ describe("executor completion-probe stage and tool results", () => {
 			onToolResult: entry => toolResults.push(entry),
 		});
 
-		expect(result.exitCode).toBe(0);
+		expect(result.exitCode, result.error ?? result.stderr).toBe(0);
 		const probed = snapshots.find(progress => progress.stage !== undefined);
 		expect(probed).toMatchObject({
 			completionPercent: 40,

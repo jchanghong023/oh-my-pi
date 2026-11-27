@@ -616,9 +616,9 @@ bun setup
 bun dev
 ```
 
-`bun setup` installs Bun workspaces and builds `@oh-my-pi/pi-natives`. Re-run `bun run build:native` after changing Rust crates or `packages/natives`.
+`bun setup` installs Bun workspaces, builds `@oh-my-pi/pi-natives`, and generates the HTML export viewer and embedded browser Relay extension. Re-run `bun run build:native` after changing Rust crates or `packages/natives`.
 
-Nix users get the pinned Bun and Rust toolchains plus all native build dependencies:
+Nix users get the pinned Bun and Rust toolchains plus all native build dependencies. Keep `flake.lock` tracked in Git so `nix develop` and `nix build` use the pinned inputs:
 
 ```sh
 nix develop

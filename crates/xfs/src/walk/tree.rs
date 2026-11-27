@@ -52,7 +52,10 @@ use super::{
 	take_session,
 };
 use crate::{
-	fs::{Detail, Dir, FileId, FileType, Fs, Listing, Record, Session, mounts::Fences},
+	fs::{
+		Detail, Dir, FileId, FileType, Fs, IncompleteListing, Listing, Record, Session,
+		mounts::Fences,
+	},
 	ignore::{DirIgnores, Frame as IgnoreFrame, Ignorer, Names, Sources},
 };
 
@@ -184,8 +187,8 @@ pub enum Event<'a> {
 	/// An entry; a reported directory is descended unless
 	/// [`Tree::skip_dir`] is called before the next event.
 	Entry(TreeEntry<'a>),
-	/// A directory (the root included) that could not be opened or listed,
-	/// or a followed link that would loop. The traversal continues.
+	/// A directory (the root included) that could not be opened or fully
+	/// listed, or a followed link that would loop. The traversal continues.
 	Error(&'a DirError),
 }
 
@@ -202,6 +205,7 @@ struct Post {
 /// A listed directory on the traversal stack.
 struct Frame {
 	listing:  Listing,
+	error:    Option<io::Error>,
 	/// Next record of `listing` to visit.
 	next:     usize,
 	/// Next record to consider for reading ahead.
@@ -245,6 +249,7 @@ struct Listed {
 	dir:     Dir,
 	/// In [`TreeOptions::order`].
 	listing: Listing,
+	error:   Option<io::Error>,
 	names:   Names,
 	/// Its ignore files, when the walk honours them.
 	ignores: DirIgnores,
@@ -322,9 +327,14 @@ async fn list(
 			return Ok(None);
 		}
 	}
-	session
+	let error = match session
 		.list_into(&dir, spec.detail, spec.children, &mut listing)
-		.await?;
+		.await
+	{
+		Ok(()) => None,
+		Err(error) if IncompleteListing::is(&error) => Some(error),
+		Err(error) => return Err(error),
+	};
 	sort(&mut listing, spec.order);
 	let mut names = Names::default();
 	let mut ignores = DirIgnores::default();
@@ -341,7 +351,7 @@ async fn list(
 	} else {
 		None
 	};
-	Ok(Some(Listed { dir, listing, names, ignores, id, took: started.elapsed() }))
+	Ok(Some(Listed { dir, listing, error, names, ignores, id, took: started.elapsed() }))
 }
 
 /// Puts `listing` in `order`.
@@ -678,6 +688,9 @@ impl Tree {
 					}
 				},
 				Phase::Walk => {
+					if let Some(error) = self.stack.0.last_mut().and_then(|frame| frame.error.take()) {
+						return Some(self.cx.record_error(error));
+					}
 					if !self.cx.exhausted && self.cx.room() {
 						self.cx.read_ahead(&mut self.stack.0);
 					}
@@ -813,11 +826,15 @@ impl Cx {
 	/// Records a failure at the current path to report, then `owed` (if any)
 	/// and the path restore to `saved`.
 	fn error(&mut self, error: io::Error, owed: Option<Post>, saved: (usize, usize)) -> Emit {
-		self.error = Some(DirError { path: as_path(&self.abs).to_path_buf(), error });
 		self.after = match owed {
 			Some(post) => After::Post { post, restore: saved },
 			None => After::Restore(saved),
 		};
+		self.record_error(error)
+	}
+
+	fn record_error(&mut self, error: io::Error) -> Emit {
+		self.error = Some(DirError { path: as_path(&self.abs).to_path_buf(), error });
 		Emit::Error
 	}
 
@@ -1001,7 +1018,7 @@ impl Cx {
 		post: Option<Post>,
 		saved: (usize, usize),
 	) -> Frame {
-		let Listed { dir, listing, names, ignores, id, took } = listed;
+		let Listed { dir, listing, error, names, ignores, id, took } = listed;
 		self.latency = (self.latency * 7 + took) / 8;
 		let ignore = if self.ignorer.is_some() {
 			ignores.frame(parent_ignore, names, &self.rel)
@@ -1016,6 +1033,7 @@ impl Cx {
 		self.exhausted = false;
 		Frame {
 			listing,
+			error,
 			next: 0,
 			scan: 0,
 			ahead: VecDeque::new(),

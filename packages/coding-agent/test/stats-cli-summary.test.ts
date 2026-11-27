@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { closeDb } from "@oh-my-pi/omp-stats";
 import { getAgentDir, getSessionsDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
@@ -18,13 +17,12 @@ describe("omp stats --summary", () => {
 
 	beforeEach(() => {
 		tempDir = TempDir.createSync("@omp-stats-summary-");
-		for (const key of [...XDG_KEYS, "PI_CONFIG_DIR"]) {
+		for (const key of [...XDG_KEYS, "OMP_CONFIG_ROOT"]) {
 			originalEnv[key] = process.env[key];
 			delete process.env[key];
 		}
-		const configDir = path.relative(os.homedir(), tempDir.join("config"));
-		process.env.PI_CONFIG_DIR = configDir;
-		setAgentDir(path.join(os.homedir(), configDir, "agent"));
+		process.env.OMP_CONFIG_ROOT = tempDir.join("config");
+		setAgentDir(tempDir.join("config", "agent"));
 	});
 
 	afterEach(() => {

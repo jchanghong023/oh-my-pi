@@ -159,6 +159,29 @@ pub(crate) fn update_reference(
 	Ok(())
 }
 
+fn append_scoped_head_reflog(
+	repo: &gix::Repository,
+	parent: gix::ObjectId,
+	id: gix::ObjectId,
+	committer: gix::actor::SignatureRef<'_>,
+	message: &'static str,
+) -> io::Result<()> {
+	if repo.refs.write_reflog == gix::refs::store::WriteReflog::Disable {
+		return Ok(());
+	}
+	// Match gitoxide's Normal/Always HEAD auto-creation policy. HEAD is private
+	// to this checkout, unlike its referenced branch in a linked worktree.
+	let logs = repo.git_dir().join("logs");
+	fs::create_dir_all(&logs)?;
+	let mut log = fs::OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open(logs.join("HEAD"))?;
+	write!(log, "{parent} {id} ")?;
+	committer.trim().write_to(&mut log)?;
+	writeln!(log, "\t{message}")
+}
+
 /// Translate a lost compare-and-swap on HEAD into [`Error::HeadMoved`], the
 /// failure [`CommitOptions::expected_head`] documents. Returns `None` for
 /// reference errors that are not precondition failures (locks, IO, name
@@ -301,15 +324,30 @@ impl GitRepo {
 					&& !selected.contains(path.as_ref())
 			});
 		}
-		let (mut filter, filter_index) = repo
-			.filter_pipeline(None)
-			.map_err(|err| Error::backend("git add", err))?;
+		let (mut filter, real_filter_index) = if index_path.is_some() {
+			let cache = repo
+				.attributes_only(
+					&index,
+					gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+				)
+				.map_err(|err| Error::backend("git isolated stage", err))?;
+			let filter = gix::filter::Pipeline::new(&repo, cache.detach())
+				.map_err(|err| Error::backend("git isolated stage", err))?;
+			(filter, None)
+		} else {
+			let (filter, filter_index) = repo
+				.filter_pipeline(None)
+				.map_err(|err| Error::backend("git add", err))?;
+			(filter, Some(filter_index))
+		};
+		let filter_index: &gix::index::State =
+			real_filter_index.as_ref().map_or(&index, |index| index);
 		// Hash every selected path first, then rewrite the index in one pass:
 		// removing entries path by path rescans the whole index each time.
 		let mut replaced = std::collections::HashSet::<BString>::new();
 		let mut staged = Vec::new();
 		for path in selected {
-			match stage_one(self.root(), &mut filter, &filter_index, &path, staging_started)? {
+			match stage_one(self.root(), &mut filter, filter_index, &path, staging_started)? {
 				Staged::Entry(entry) => {
 					replaced.insert(path.into());
 					staged.push(entry);
@@ -608,7 +646,8 @@ impl GitRepo {
 
 	/// Publish only the confirmed tree, then reconcile the real index under
 	/// its Git lock. Retrying the same parent/tree/message only finishes the
-	/// index; it never creates a second commit or rolls the ref back.
+	/// index; it never creates a second commit, appends to HEAD's reflog again,
+	/// or rolls the ref back.
 	pub fn commit_create_scoped(
 		&self,
 		message: &str,
@@ -744,7 +783,7 @@ impl GitRepo {
 			{
 				return Err(Error::backend(OP, "commit tree changes an unconfirmed path"));
 			}
-			let same_content = index_diff_paths(&index, &reconciled).is_empty();
+			let differing_paths = index_diff_paths(&index, &reconciled);
 			let same_unowned_flags = index.entries().iter().all(|entry| {
 				let path = entry.path(&index);
 				scope.contains(path)
@@ -752,18 +791,25 @@ impl GitRepo {
 						.entry_by_path(path)
 						.is_some_and(|other| entry.flags == other.flags)
 			});
-			if resumed && same_content && same_unowned_flags {
+			let intent = gix::index::entry::Flags::INTENT_TO_ADD;
+			if resumed
+				&& differing_paths.is_empty()
+				&& same_unowned_flags
+				&& index.entries().iter().all(|entry| {
+					let path = entry.path(&index);
+					!entry.flags.contains(intent)
+						|| !scope.contains(path)
+						|| reconciled
+							.entry_by_path(path)
+							.is_some_and(|other| other.flags.contains(intent))
+				}) {
 				result.index_updated = true;
 				return Ok(());
 			}
 			if sha256_file(&real_path)? != options.expected_index_version {
 				return Err(Error::backend(OP, "real index version changed"));
 			}
-			if index_diff_paths(&index, &reconciled)
-				.iter()
-				.any(|path| !scope.contains(path))
-				|| !same_unowned_flags
-			{
+			if differing_paths.iter().any(|path| !scope.contains(path)) || !same_unowned_flags {
 				return Err(Error::backend(
 					OP,
 					"reconciliation changes an unconfirmed index entry or flag",
@@ -782,11 +828,8 @@ impl GitRepo {
 					}
 					let flags = index.entry_by_path(path).map_or(entry.flags, |old| {
 						let mut flags = old.flags;
-						if !entry
-							.flags
-							.contains(gix::index::entry::Flags::INTENT_TO_ADD)
-						{
-							flags.remove(gix::index::entry::Flags::INTENT_TO_ADD);
+						if !entry.flags.contains(intent) {
+							flags.remove(intent);
 						}
 						flags
 					});
@@ -811,15 +854,16 @@ impl GitRepo {
 			}
 			index.sort_entries();
 			index.remove_tree();
-			// Prepare all bytes before touching the ref. Only the final rename
-			// remains fallible after CAS; its failure is returned as partial.
+			// Prepare all index bytes before touching the ref. Once published,
+			// report any failure to append HEAD's reflog or install this index.
 			index
 				.write_to(&mut index_lock, INDEX_WRITE)
 				.map_err(|err| Error::backend(OP, err))?;
 			index_lock.flush()?;
 			index_lock.with_mut(|file| file.sync_all())?;
 			let index_lock = index_lock.close()?;
-			if !resumed {
+			let reflog = if !resumed {
+				const REFLOG_MESSAGE: &str = "commit (scoped)";
 				let sign = repo
 					.config_snapshot()
 					.try_boolean("commit.gpgSign")
@@ -849,7 +893,7 @@ impl GitRepo {
 					&options.expected_head_ref,
 					id,
 					gix::refs::transaction::PreviousValue::MustExistAndMatch(parent.into()),
-					"commit (scoped)",
+					REFLOG_MESSAGE,
 					false,
 				) {
 					// A ref transaction may report a late I/O failure. Observe
@@ -863,10 +907,20 @@ impl GitRepo {
 				}
 				result.sha = Some(id_hex);
 				result.ref_updated = true;
+				// The exact branch CAS runs under HEAD.lock. A dereferencing
+				// gitoxide edit would try to take the same lock. Append after
+				// publication, but don't let a reflog failure discard the index.
+				append_scoped_head_reflog(&repo, parent, id, committer, REFLOG_MESSAGE)
+					.map_err(|err| Error::backend("git scoped commit HEAD reflog", err))
+			} else {
+				Ok(())
+			};
+			let index_install = index_lock.commit().map_err(|err| Error::backend(OP, err));
+			result.index_updated = index_install.is_ok();
+			match (reflog, index_install) {
+				(Err(reflog), Err(index)) => Err(Error::backend(OP, format!("{reflog}; {index}"))),
+				(reflog, index) => reflog.and(index.map(|_| ())),
 			}
-			index_lock.commit().map_err(|err| Error::backend(OP, err))?;
-			result.index_updated = true;
-			Ok(())
 		})();
 		match attempt {
 			Ok(()) => Ok(result),
@@ -1586,6 +1640,8 @@ impl GitRepo {
 
 	/// Strict effective-hook inspection for scoped operations. Interpolation
 	/// failures are blockers, not evidence that no hook exists.
+	/// An enabled configuration-defined hook without a file path is likewise
+	/// a blocker, rather than a missing hook.
 	pub fn hook_path_checked(&self, name: &str) -> Result<Option<PathBuf>> {
 		self.resolve_hook_path(name, true)
 	}
@@ -1638,7 +1694,21 @@ impl GitRepo {
 			)
 		};
 		let hook = dir.join(name);
-		Ok(hook_is_executable(&hook).then_some(hook))
+		if hook_is_executable(&hook) {
+			return Ok(Some(hook));
+		}
+		// Git 2.55's event switch only suppresses configured hooks, not files.
+		if strict
+			&& has_enabled_hook_registration(&config, name, || {
+				git_supports_hook_event_disable(self.root())
+			})
+		{
+			return Err(Error::backend(
+				"git hook path",
+				format!("active {name} hook is registered in Git configuration, not a file"),
+			));
+		}
+		Ok(None)
 	}
 
 	/// Remove a linked worktree, returning false when dirty and not forced.
@@ -1801,6 +1871,91 @@ fn hook_configured(repository: &GitRepo, name: &str) -> Result<bool> {
 				.iter()
 				.any(|event| event.as_ref() == name)
 		}))
+}
+
+/// Match registrations by hook id in configuration order. An empty event
+/// resets prior events for its id; an enabled event with no command is also
+/// a blocker because Git would reject it, even with the event disabled.
+fn has_enabled_hook_registration(
+	config: &gix::config::File<'_>,
+	name: &str,
+	supports_event_disable: impl FnOnce() -> bool,
+) -> bool {
+	let mut hooks = BTreeMap::new();
+	let mut event_disabled = false;
+	let mut event_is_hook_id = false;
+	for section in config.sections_by_name("hook").into_iter().flatten() {
+		let Some(id) = section.header().subsection_name() else {
+			continue;
+		};
+		let events = section.values("event");
+		let enabled_value = section.value_implicit("enabled").map(|value| {
+			value
+				.and_then(|value| gix::config::Boolean::try_from(value).ok())
+				.map(gix::config::Boolean::is_true)
+		});
+		if id == name {
+			// Git rejects a known event name used to register a hook, even if
+			// a later entry clears it. Command and parallel settings also
+			// prevent enabled=false from being an event-level switch.
+			if events.iter().any(|event| !event.is_empty())
+				|| matches!(section.value_implicit("event"), Some(None))
+			{
+				return true;
+			}
+			event_is_hook_id |= section.contains_value_name("command")
+				|| section.contains_value_name("parallel");
+			if let Some(enabled) = enabled_value {
+				event_disabled = enabled == Some(false);
+			}
+			continue;
+		}
+		let (registered, enabled, has_command) = hooks.entry(id).or_insert((false, Some(true), false));
+		for event in events {
+			if event.is_empty() || event.as_ref() == name {
+				*registered = !event.is_empty();
+			}
+		}
+		if let Some(value) = enabled_value {
+			*enabled = value;
+		}
+		if let Some(value) = section.value_implicit("command") {
+			*has_command = value.is_some();
+		}
+	}
+	let mut enabled_hooks = hooks
+		.into_values()
+		.filter(|(registered, enabled, _)| *registered && *enabled != Some(false))
+		.peekable();
+	enabled_hooks.peek().is_some()
+		&& (!event_disabled
+			|| event_is_hook_id
+			|| enabled_hooks.any(|(_, enabled, has_command)| enabled.is_none() || !has_command)
+			|| !supports_event_disable())
+}
+
+fn git_supports_hook_event_disable(root: &Path) -> bool {
+	// Older Git ignores event-level switches. A missing or unrecognized Git
+	// cannot establish that an otherwise active registration is disabled.
+	let args = ["--version".to_owned()];
+	let Ok(output) = super::cli::run_sync_capped(root, &args, super::cli::SYNC_TIMEOUT, 256) else {
+		return false;
+	};
+	if output.exit_code != 0 || super::cli::is_truncated(&output.stdout) {
+		return false;
+	}
+	let Some(version) = output
+		.stdout
+		.strip_prefix("git version ")
+		.and_then(|version| version.split_ascii_whitespace().next())
+	else {
+		return false;
+	};
+	let mut parts = version.split('.').map(str::parse::<u32>);
+	matches!(
+		(parts.next(), parts.next(), parts.next()),
+		(Some(Ok(2)), Some(Ok(55..)), Some(Ok(_))) | (Some(Ok(3..)), Some(Ok(_)), Some(Ok(_)))
+	)
 }
 
 /// Write a signed commit object through `git commit-tree -S`, which runs the
@@ -3200,6 +3355,139 @@ mod tests {
 		git(temp.path(), &["commit", "-qm", "base"]);
 		let repo = GitRepo::require(temp.path()).unwrap();
 		(temp, repo)
+	}
+
+	fn scoped_options(repo: &GitRepo, file: &str) -> ScopedCommitOptions {
+		let git_dir = &repo.info().git_dir;
+		let index_path = git_dir.join("commit.index");
+		let reconciled_index_path = git_dir.join("reconciled.index");
+		let files = vec![file.to_owned()];
+		repo.read_tree("HEAD", Some(&index_path)).unwrap();
+		repo.stage_files_into_index(&files, &index_path).unwrap();
+		fs::copy(&index_path, &reconciled_index_path).unwrap();
+		let expected_tree = repo.write_tree(Some(&index_path)).unwrap();
+		ScopedCommitOptions {
+			expected_head_ref: git(repo.root(), &["symbolic-ref", "HEAD"]),
+			expected_head_sha: repo.head_sha().unwrap().unwrap(),
+			expected_index_version: sha256_file(&git_dir.join("index")).unwrap(),
+			index_path,
+			reconciled_index_path,
+			expected_tree,
+			files,
+		}
+	}
+
+	#[test]
+	fn scoped_commit_blocks_configured_hooks_without_running_them() {
+		let (temp, repo) = fixture();
+		fs::write(temp.path().join("a"), "changed\n").unwrap();
+		let options = scoped_options(&repo, "a");
+		git(temp.path(), &["config", "hook.policy.event", "pre-commit"]);
+		git(temp.path(), &["config", "hook.policy.command", "echo ran > hook-ran"]);
+		assert!(repo.hook_path_checked("pre-commit").is_err());
+		let error = repo.commit_create_scoped("scoped", &options).unwrap_err();
+		assert!(error.to_string().contains("active pre-commit hook"));
+		assert_eq!(repo.head_sha().unwrap().unwrap(), options.expected_head_sha);
+		assert!(!temp.path().join("hook-ran").exists());
+
+		git(temp.path(), &["config", "hook.policy.enabled", "false"]);
+		assert!(repo.hook_path_checked("pre-commit").unwrap().is_none());
+		git(temp.path(), &["config", "hook.policy.enabled", "true"]);
+		git(temp.path(), &["config", "--add", "hook.policy.event", ""]);
+		assert!(repo.hook_path_checked("pre-commit").unwrap().is_none());
+		assert!(
+			repo
+				.commit_create_scoped("scoped", &options)
+				.unwrap()
+				.index_updated
+		);
+	}
+
+	#[test]
+	fn isolated_stage_uses_private_index_attributes() {
+		let (temp, repo) = fixture();
+		let attrs = temp.path().join(".gitattributes");
+		fs::write(&attrs, "*.txt text\n").unwrap();
+		git(temp.path(), &["add", ".gitattributes"]);
+		git(temp.path(), &["commit", "-qm", "text attributes"]);
+		fs::write(&attrs, "*.txt -text\n").unwrap();
+		git(temp.path(), &["add", ".gitattributes"]);
+		fs::remove_file(attrs).unwrap();
+		fs::write(temp.path().join("test.txt"), b"one\r\ntwo\r\n").unwrap();
+		let options = scoped_options(&repo, "test.txt");
+		let gix = repo.gix_fresh().unwrap();
+		let private = scoped_index(&gix, &options.index_path).unwrap();
+		let id = private
+			.entry_by_path("test.txt".as_bytes().as_bstr())
+			.unwrap()
+			.id;
+		assert_eq!(gix.find_blob(id).unwrap().data.as_slice(), b"one\ntwo\n");
+		assert!(
+			gix.open_index()
+				.unwrap()
+				.entry_by_path(b"test.txt".as_bstr())
+				.is_none()
+		);
+	}
+
+	#[test]
+	fn scoped_index_retry_clears_intent_to_add_even_if_content_matches() {
+		let (temp, repo) = fixture();
+		fs::write(temp.path().join("empty"), []).unwrap();
+		git(temp.path(), &["add", "-N", "empty"]);
+		let options = scoped_options(&repo, "empty");
+		let gix = repo.gix_fresh().unwrap();
+		let flags = || {
+			gix.open_index()
+				.unwrap()
+				.entry_by_path(b"empty".as_bstr())
+				.unwrap()
+				.flags
+		};
+		let intent = gix::index::entry::Flags::INTENT_TO_ADD;
+		assert!(flags().contains(intent));
+		// Leave only the ref published, as if the original index install failed.
+		let sha = repo
+			.commit_tree(
+				&options.expected_tree,
+				std::slice::from_ref(&options.expected_head_sha),
+				"scoped\n",
+				None,
+			)
+			.unwrap();
+		git(temp.path(), &["update-ref", "HEAD", &sha, &options.expected_head_sha]);
+		let result = repo.commit_create_scoped("scoped", &options).unwrap();
+		assert!(result.ref_updated && result.index_updated);
+		assert_eq!(result.sha.as_deref(), Some(sha.as_str()));
+		assert!(!flags().contains(intent));
+	}
+
+	#[test]
+	fn scoped_commit_updates_linked_head_and_branch_reflogs_once() {
+		let (temp, _) = fixture();
+		let linked = temp.path().join("linked");
+		git(temp.path(), &["config", "core.logAllRefUpdates", "true"]);
+		git(temp.path(), &["worktree", "add", "-q", "-b", "scope", linked.to_str().unwrap()]);
+		let repo = GitRepo::require(&linked).unwrap();
+		fs::write(linked.join("a"), "changed\n").unwrap();
+		let options = scoped_options(&repo, "a");
+		let head_log = |path: &Path| git(path, &["reflog", "show", "--format=%H", "HEAD"]);
+		let main_before = head_log(temp.path());
+		let linked_before = head_log(&linked);
+		let result = repo.commit_create_scoped("scoped", &options).unwrap();
+		assert!(result.ref_updated && result.index_updated);
+		let sha = result.sha.unwrap();
+		let published = head_log(&linked);
+		assert_eq!(published, format!("{sha}\n{linked_before}"));
+		assert_eq!(head_log(temp.path()), main_before);
+		assert_eq!(git(&linked, &["reflog", "show", "-1", "--format=%H", "refs/heads/scope"]), sha);
+		assert!(
+			repo
+				.commit_create_scoped("scoped", &options)
+				.unwrap()
+				.index_updated
+		);
+		assert_eq!(head_log(&linked), published);
 	}
 
 	#[test]

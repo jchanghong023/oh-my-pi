@@ -721,49 +721,63 @@ try {
 		it.skipIf(process.platform === "win32")(
 			"strict glob reports unreadable subtrees instead of claiming a complete inventory",
 			async () => {
-				const root = await fs.mkdtemp(path.join(os.tmpdir(), "native-strict-glob-"));
-				const blocked = path.join(root, "blocked");
-				try {
-					await fs.chmod(root, 0o755);
-					await fs.mkdir(blocked);
-					await fs.writeFile(path.join(blocked, "hidden.py"), "pass\n");
-					await fs.writeFile(path.join(root, "visible.py"), "pass\n");
-					await fs.chmod(blocked, 0);
-					if (process.getuid?.() === 0) {
-						// The child loads the real addon first, then drops root privileges to exercise OS permissions.
-						const script = `
-							const { glob } = await import(${JSON.stringify(new URL("../native/index.js", import.meta.url).href)});
-							process.chdir(${JSON.stringify(root)});
-							process.setgid(65534);
-							process.setuid(65534);
-							const options = { pattern: "**/*.py", path: ${JSON.stringify(root)} };
-							const ordinary = await glob(options);
-							let strictError;
-							try { await glob({ ...options, strictErrors: true }); }
-							catch (error) { strictError = String(error); }
-							console.log(JSON.stringify({ matches: ordinary.matches.map(match => match.path), strictError }));
-						`;
-						const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
-						const [output, errors, exitCode] = await Promise.all([
-							new Response(child.stdout).text(),
-							new Response(child.stderr).text(),
-							child.exited,
-						]);
-						if (exitCode !== 0) throw new Error(`Unprivileged native glob failed: ${errors}`);
-						expect(JSON.parse(output)).toEqual({
-							matches: ["visible.py"],
-							strictError: expect.stringContaining(blocked),
-						});
-					} else {
-						expect((await glob({ pattern: "**/*.py", path: root })).matches.map(match => match.path)).toEqual([
-							"visible.py",
-						]);
-						await expect(glob({ pattern: "**/*.py", path: root, strictErrors: true })).rejects.toThrow(blocked);
-					}
-				} finally {
-					await fs.chmod(blocked, 0o700).catch(() => {});
-					await fs.rm(root, { recursive: true, force: true });
-				}
+				const child = Bun.spawn(
+					[
+						process.execPath,
+						"-e",
+						`
+							import * as fs from "node:fs/promises";
+							import * as os from "node:os";
+							import * as path from "node:path";
+							const { glob } = await import(${JSON.stringify(addonUrl)});
+							const dropRoot = process.geteuid() === 0;
+							if (dropRoot) {
+								process.setgid(65534);
+								process.setuid(65534);
+							}
+							// After dropping root, only the actual unprivileged mkdir proves
+							// that TMPDIR (or a system temp directory) is usable.
+							const parents = new Set(dropRoot ? [os.tmpdir(), "/tmp", "/var/tmp"] : [os.tmpdir()]);
+							let root;
+							const errors = [];
+							for (const parent of parents) {
+								try {
+									root = await fs.mkdtemp(path.join(await fs.realpath(parent), "native-strict-glob-"));
+									break;
+								} catch (error) {
+									errors.push(error);
+								}
+							}
+							if (!root) throw new AggregateError(errors, "No writable temporary directory for strict glob");
+							const blocked = path.join(root, "blocked");
+							try {
+								await fs.mkdir(blocked);
+								await fs.writeFile(path.join(blocked, "hidden.py"), "pass\\n");
+								await fs.writeFile(path.join(root, "visible.py"), "pass\\n");
+								await fs.chmod(blocked, 0);
+								const options = { pattern: "**/*.py", path: root };
+								const ordinary = await glob(options);
+								let strictError;
+								try { await glob({ ...options, strictErrors: true }); }
+								catch (error) { strictError = String(error); }
+								console.log(JSON.stringify({ root, matches: ordinary.matches.map(match => match.path), strictError }));
+							} finally {
+								await fs.chmod(blocked, 0o700).catch(() => {});
+								await fs.rm(root, { recursive: true, force: true });
+							}
+						`,
+					],
+					{ stdout: "pipe", stderr: "pipe" },
+				);
+				const [output, errors, exitCode] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				if (exitCode !== 0) throw new Error(`Unprivileged native glob failed: ${errors}`);
+				const { root, matches, strictError } = JSON.parse(output);
+				expect(matches).toEqual(["visible.py"]);
+				expect(strictError).toContain(path.join(root, "blocked"));
 			},
 		);
 

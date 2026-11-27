@@ -2123,8 +2123,11 @@ export class CommandController {
 	 * Follow-ups queued behind the request wait in `compactionQueuedMessages` and flush once it ends.
 	 */
 	runYieldCompaction(): Promise<void> {
+		const request = this.ctx.yieldCompaction;
 		this.#yieldCompactionWatcher ??= this.#watchYieldCompaction().finally(() => {
 			this.#yieldCompactionWatcher = undefined;
+			// The pass can promote another /compact while flushing its follow-ups.
+			if (this.ctx.yieldCompaction && this.ctx.yieldCompaction !== request) this.ctx.runYieldCompaction();
 		});
 		return this.#yieldCompactionWatcher;
 	}
@@ -2134,6 +2137,11 @@ export class CommandController {
 		if (!request) return;
 		const session = this.ctx.session;
 		while (true) {
+			if (request.afterDispatch) await request.afterDispatch;
+			if (this.ctx.session !== session) {
+				if (this.ctx.yieldCompaction === request) this.ctx.restoreCompactionQueueToEditor();
+				return;
+			}
 			await session.waitForIdle();
 			// Input sent before the request reaches the session first, also while it is still dispatching.
 			await this.ctx.waitForSubmissionDispatches();

@@ -120,7 +120,7 @@ describe("composer completion sources", () => {
 					{ name: "usage", icon: "◴", iconName: "gauge", description: "Limits" },
 					{ name: "upload", icon: "\x1b[32m箱\x1b[0m", description: "Send" },
 					{ name: "undo", description: "Revert" },
-					{ name: "unmute", iconName: "volume", description: "Enable" },
+					{ name: "unmute", iconName: "wave", description: "Enable" },
 				],
 				process.cwd(),
 				[],
@@ -139,17 +139,17 @@ describe("composer completion sources", () => {
 			["usage", "gauge", [{ s: "mark", t: "u" }, { t: "sage" }]],
 			["upload", undefined, [{ s: "muted", t: "箱 " }, { s: "mark", t: "u" }, { t: "pload" }]],
 			["undo", undefined, [{ s: "mark", t: "u" }, { t: "ndo" }]],
-			["unmute", "volume", [{ s: "mark", t: "u" }, { t: "nmute" }]],
+			["unmute", "wave", [{ s: "mark", t: "u" }, { t: "nmute" }]],
 		]);
 
 		const env = corpusEnvironment("dark");
 		expect(plainRows(paintNode(env, popup, 60).rows)).toEqual([
-			"❯ ◴  usage       Limits",
+			"❯ ⚡ usage       Limits",
 			"  箱 upload      Send",
 			"     undo        Revert",
-			"     unmute      Enable",
+			"  ∿  unmute      Enable",
 		]);
-		expect(plainRows(paintNode(env, popup, 10).rows)).toEqual(["❯ ◴  usa", "  箱 upl", "     und", "     unm"]);
+		expect(plainRows(paintNode(env, popup, 10).rows)).toEqual(["❯ ⚡ usa", "  箱 upl", "     und", "  ∿  unm"]);
 		sendKey(composer.node, composer.field, key("\x1b[B"));
 		type(composer, "\t");
 		expect(composer.text()).toBe("/upload ");

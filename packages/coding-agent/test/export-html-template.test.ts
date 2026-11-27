@@ -150,8 +150,10 @@ describe("HTML export template", () => {
 		const viewer = scripts[2]!;
 		const viewerUrl = new URL(viewer.getAttribute("src")!);
 		expect(viewerUrl.origin).toBe("https://build.stencil.so");
-		expect(viewerUrl.pathname).toMatch(/^\/web\/omp\/\d+\.\d+\.\d+\/export-viewer-[a-f0-9]{64}\.js$/);
-		expect(viewer.getAttribute("integrity")).toMatch(/^sha256-[A-Za-z0-9+/]{43}=$/);
+		expect(viewerUrl.pathname).toBe(
+			"/web/omp/19.2.1/export-viewer-89198a2c1cf0f36d0e455c4623f0c68958b71eba7f0a08be089b63e68d40f981.js",
+		);
+		expect(viewer.getAttribute("integrity")).toBe("sha256-iRmKLBzw820ORVxGI/DGiVi3Hrp/Cgi+CJtj5o1A+YE=");
 		for (const script of scripts) {
 			expect(script.getAttribute("crossorigin")).toBe("anonymous");
 			expect(script.hasAttribute("defer")).toBe(true);

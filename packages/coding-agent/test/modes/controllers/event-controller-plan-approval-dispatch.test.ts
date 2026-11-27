@@ -1,6 +1,9 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type {
+	AgentSessionEvent,
+	LocalAgentSessionEventListener,
+} from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { PROPOSE_COMMAND_NAME } from "@oh-my-pi/pi-coding-agent/tools/details/resolve";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 import { initTheme } from "../../../src/ui/theme/service";
@@ -69,7 +72,7 @@ describe("EventController plan-approval dispatch", () => {
 		// message_update event queued behind it — the chat stayed blank until
 		// execution finished. The approval must instead be detached so later events
 		// keep dispatching mid-execution.
-		let listener: ((event: AgentSessionEvent) => void | Promise<void>) | undefined;
+		let listener: LocalAgentSessionEventListener | undefined;
 		// A pending gate stands in for the still-running execution turn: it never
 		// resolves during the assertions, so a later event that dispatches proves
 		// it did not wait for the run to finish. If a regression re-adds the
@@ -80,7 +83,7 @@ describe("EventController plan-approval dispatch", () => {
 
 		const ctx = createInteractiveModeContext({
 			session: {
-				subscribe: fn => {
+				subscribeLocal: fn => {
 					listener = fn;
 					return () => {};
 				},

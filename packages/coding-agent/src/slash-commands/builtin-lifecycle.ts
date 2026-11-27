@@ -6,6 +6,7 @@ import { errorMessage, logger, setProjectDir } from "@oh-my-pi/pi-utils";
 import { rescopeSessionToCwd } from "../session/cwd-rescope";
 import { memoryStatsUnavailableMessage, resolveMemoryBackend } from "../memory-backend";
 import { continuesConversation } from "../modes/utils/conversation-position";
+import type { InteractiveModeContext, YieldCompaction } from "../modes/types";
 import type { FreshSessionResult } from "../session/agent-session";
 import { COMPACT_MODES, findCompactMode, type ParsedCompactArgs, parseCompactArgs } from "../session/compact-modes";
 import { isInterruptReason } from "../session/messages";
@@ -20,7 +21,7 @@ import {
 } from "../session/session-worktree";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { resolveToCwd } from "../tools/path-utils";
-import { commandConsumed, usage } from "./helpers/parse";
+import { commandConsumed, parseSlashCommand, usage } from "./helpers/parse";
 import { handleSshAcp } from "./helpers/ssh";
 import type {
 	ParsedSlashCommand,
@@ -34,6 +35,22 @@ function parseCompactionCommand(command: ParsedSlashCommand): ParsedCompactArgs 
 	return command.name === "handoff"
 		? { mode: "handoff", instructions: command.args || undefined }
 		: parseCompactArgs(command.args);
+}
+
+/** Only foreground /compact is a barrier in an after-yield queue. */
+export function parseForegroundCompaction(text: string): ParsedCompactArgs | undefined {
+	const command = parseSlashCommand(text);
+	if (command?.name !== "compact") return undefined;
+	const parsed = parseCompactionCommand(command);
+	if ("error" in parsed || (parsed.mode && findCompactMode(parsed.mode)?.background)) return undefined;
+	return parsed;
+}
+
+export function queueYieldCompaction(ctx: InteractiveModeContext, request: YieldCompaction): void {
+	ctx.yieldCompaction = request;
+	ctx.updatePendingMessagesDisplay();
+	ctx.showStatus("Queued compaction for when the agent yields");
+	ctx.runYieldCompaction();
 }
 
 async function handleCompact(command: ParsedSlashCommand, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
@@ -96,10 +113,12 @@ async function handleCompactTui(command: ParsedSlashCommand, runtime: TuiSlashCo
 		// Background compaction doesn't hold the submission slot or its follow-ups.
 		void ctx.handleCompactCommand(parsed.instructions, parsed.mode);
 	} else if (origin && ctx.session.isStreaming) {
-		ctx.yieldCompaction = { ...origin, text: command.text, instructions: parsed.instructions, mode: parsed.mode };
-		ctx.updatePendingMessagesDisplay();
-		ctx.showStatus("Queued compaction for when the agent yields");
-		ctx.runYieldCompaction();
+		queueYieldCompaction(ctx, {
+			...origin,
+			text: command.text,
+			instructions: parsed.instructions,
+			mode: parsed.mode,
+		});
 	} else {
 		await ctx.handleCompactCommand(parsed.instructions, parsed.mode);
 	}

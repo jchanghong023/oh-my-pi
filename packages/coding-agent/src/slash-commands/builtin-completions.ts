@@ -16,6 +16,7 @@ import { getConfiguredThinkingLevelMetadata } from "../thinking/levels";
 import { expandTilde } from "../tools/path-utils";
 import type { SubcommandDef, TuiSlashCommandRuntime } from "./types";
 import { createModelMentionSource, type ModelMentionCandidateSource } from "../autocomplete/model-mention";
+import { parseCommandArgs } from "../utils/command-args";
 
 type EffortCompletionRuntime = {
 	ctx: {
@@ -413,13 +414,27 @@ export function buildCrawlArgumentCompletions(
 	const directories = buildDirectoryArgumentCompletions(projectCwd);
 	const flags = ["--recursive", "--no-scroll", "--output", "--concurrency", "--max-pages", "--max-depth", "--wait"];
 	return async argumentPrefix => {
-		const output = argumentPrefix.match(/^(.*(?:^|\s)--output\s+)(.*)$/);
+		const output = /^(.*?(?:^|[ \t])--output[ \t]+)([\s\S]*)$/u.exec(argumentPrefix);
 		if (output) {
 			const raw = output[2]!;
-			const quoted = raw.startsWith('"') || raw.startsWith("'");
 			const quote = raw[0];
-			if ((!quoted && !/\s/.test(raw)) || (quoted && !raw.slice(1).includes(quote!))) {
-				const prefix = quoted ? raw.slice(1) : raw;
+			const quoted = quote === '"' || quote === "'";
+			// An accepted directory is still an active path prefix after its closing quote.
+			const quotedValue =
+				quote === "'"
+					? /^'([^']*)'?$/u.exec(raw)?.[1]
+					: quote === '"'
+						? (process.platform === "win32" ? /^"([^"]*)"?$/u : /^"((?:[^"\\]|\\[\s\S])*)"?$/u).exec(raw)?.[1]
+						: undefined;
+			const prefix =
+				quotedValue !== undefined
+					? quote === '"' && process.platform !== "win32"
+						? parseCommandArgs(`"${quotedValue}"`, { strict: true })[0]
+						: quotedValue
+					: !quoted && !/\s/u.test(raw)
+						? raw
+						: undefined;
+			if (prefix !== undefined) {
 				const items = await directories(prefix);
 				return (
 					items?.map(item => ({

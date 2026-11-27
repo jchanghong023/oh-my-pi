@@ -204,7 +204,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 				detailed.indexOf("FINAL_ANSWER_AFTER_FAILED_TODO"),
 			);
 			expect(detailed).not.toContain("Warning:");
-			expect(session.sessionManager.buildSessionContext().messages).toEqual(snapshot);
+			expect(structuredClone(session.sessionManager.buildSessionContext().messages)).toEqual(snapshot);
 		},
 	);
 

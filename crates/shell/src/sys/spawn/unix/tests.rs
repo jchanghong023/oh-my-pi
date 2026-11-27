@@ -109,8 +109,22 @@ fn spawner(sessions: Sessions, grace: Duration) -> NativeSpawner {
 	NativeSpawner::new(SpawnConfig { grace, sessions, ..SpawnConfig::default() })
 }
 
+fn batch_supported() -> bool {
+	#[cfg(target_os = "linux")]
+	let supported =
+		crate::proctree::Process::from_pid(i32::try_from(std::process::id()).unwrap()).is_some();
+	#[cfg(not(target_os = "linux"))]
+	let supported = true;
+	supported
+}
+
 #[test]
 fn cancellation_wave_signals_shared_group_once() {
+	if !batch_supported() {
+		// Exactly-once delivery is a property of batching, not the
+		// owned-child fallback on hosts without pidfd support.
+		return;
+	}
 	let dir = tempfile::tempdir().unwrap();
 	let first_ready = dir.path().join("first");
 	let second_ready = dir.path().join("second");
@@ -158,11 +172,13 @@ fn foreground_wave_does_not_signal_other_group_members() {
 		.spawn(spec(&args, &env, PgroupSpec::Join(first.pid())))
 		.unwrap();
 	let pid = first.pid();
-	let wave = first
-		.signal_wave(Signal::Term, &[(pid, None)], &[], false)
-		.expect("batch supported");
-	assert!(wave.failed.is_empty());
-	first.record_wave_signal(Signal::Term, &wave);
+	if let Some(wave) = first.signal_wave(Signal::Term, &[(pid, None)], &[], false) {
+		assert!(wave.failed.is_empty());
+		first.record_wave_signal(Signal::Term, &wave);
+	} else {
+		assert!(!batch_supported(), "the host can pin the foreground child");
+		first.signal_single(Signal::Term).unwrap();
+	}
 	assert_eq!(wait(&mut first), ExitStatus::Signaled(Signal::Term));
 	assert!(live(second.pid() as i32), "foreground signal reached another group member");
 	second.signal(Signal::Kill).unwrap();
@@ -899,12 +915,15 @@ fn check_cancel_kills_orphan(batched: bool) {
 		let peer_args = argv(&["/bin/sleep", "30"]);
 		let mut peer = s.spawn(spec(&peer_args, &env, NEW)).unwrap();
 		let children = [(peer.pid(), peer.pgid()), (p.pid(), p.pgid())];
-		let wave = peer
-			.signal_wave(Signal::Term, &children, &[], true)
-			.expect("batch supported");
-		assert!(wave.failed.is_empty());
-		peer.record_wave_signal(Signal::Term, &wave);
-		p.record_wave_signal(Signal::Term, &wave);
+		if let Some(wave) = peer.signal_wave(Signal::Term, &children, &[], true) {
+			assert!(wave.failed.is_empty());
+			peer.record_wave_signal(Signal::Term, &wave);
+			p.record_wave_signal(Signal::Term, &wave);
+		} else {
+			assert!(!batch_supported(), "the host can pin both live children");
+			peer.signal(Signal::Term).unwrap();
+			p.signal(Signal::Term).unwrap();
+		}
 	} else {
 		p.signal(Signal::Term).unwrap();
 	}

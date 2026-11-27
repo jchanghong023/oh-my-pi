@@ -14,8 +14,8 @@ import { renderOrchestrateNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-k
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { cfgCompactionThresholdTokens } from "@oh-my-pi/pi-coding-agent/session/context-settings";
-import { type CustomMessage, convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { cfgCompactionEnabled, cfgCompactionThresholdTokens } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { type CustomMessage, convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionMaintenance } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createSubagentSettings } from "@oh-my-pi/pi-coding-agent/task/executor";
@@ -100,6 +100,8 @@ describe("AgentSession mid-run threshold compaction", () => {
 		options: {
 			extensionRunner?: ExtensionRunner;
 			onProviderCall?: (index: number) => void;
+			/** Hold the first terminal answer open so a true follow-up can be queued before it yields. */
+			firstTerminalResponseGate?: Promise<void>;
 			configureAgent?: (agent: Agent) => void;
 			persistHistory?: boolean;
 			toolResultDetails?: unknown;
@@ -157,7 +159,8 @@ describe("AgentSession mid-run threshold compaction", () => {
 				options.onProviderCall?.(index);
 				observedContexts.push(context.messages.map(message => JSON.stringify(message)));
 				const stream = new AssistantMessageEventStream();
-				const isToolTurn = index === 0;
+				const terminalGate = index === 0 ? options.firstTerminalResponseGate : undefined;
+				const isToolTurn = index === 0 && !terminalGate;
 				const message = isToolTurn
 					? {
 							role: "assistant" as const,
@@ -186,10 +189,12 @@ describe("AgentSession mid-run threshold compaction", () => {
 							stopReason: "stop" as const,
 							timestamp: Date.now(),
 						};
-				queueMicrotask(() => {
+				const emitResponse = () => {
 					stream.push({ type: "start", partial: message });
 					stream.push({ type: "done", reason: message.stopReason, message });
-				});
+				};
+				if (terminalGate) void terminalGate.then(emitResponse);
+				else queueMicrotask(emitResponse);
 				return stream;
 			},
 		});
@@ -905,8 +910,47 @@ describe("AgentSession mid-run threshold compaction", () => {
 		).toHaveLength(0);
 	});
 
-	it("retains a cancelled queued first user prompt without reviving its auto Goal notice on resume", async () => {
+	function expectQueuedGoalNotices(session: AgentSession, manager: SessionManager, notice?: CustomMessage): void {
+		const expected = notice
+			? [expect.objectContaining({ content: notice.content, attribution: "user", details: notice.details })]
+			: [];
+		expect(
+			session.messages.filter(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			),
+		).toEqual(expected);
+		expect(
+			manager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toEqual(expected);
+	}
+
+	function countProviderUserText(context: readonly string[], text: string): number {
+		return context
+			.map(value => JSON.parse(value))
+			.filter(
+				message =>
+					message.role === "user" &&
+					Array.isArray(message.content) &&
+					message.content.some(
+						(block: { type: string; text?: string }) => block.type === "text" && block.text === text,
+					),
+			).length;
+	}
+
+	function expectFirstQueuedGoalRequest(contexts: readonly string[][], objective: string, notice: string): void {
+		const first = contexts.findIndex(context => countProviderUserText(context, objective) > 0);
+		if (first === -1) throw new Error("Expected a provider request with the original queued Goal input");
+		for (const context of contexts.slice(0, first)) expect(countProviderUserText(context, notice)).toBe(0);
+		expect(countProviderUserText(contexts[first], objective)).toBe(1);
+		expect(countProviderUserText(contexts[first], notice)).toBe(1);
+	}
+
+	it("retains a stopped queued first user prompt and admits its auto Goal notice when that prompt is delivered", async () => {
 		const objective = "Ship the release after cancelled queued setup";
+		const userMessage = expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] });
+		const savedUserMessage = expect.objectContaining({ type: "message", message: userMessage });
 		const toolStarted = Promise.withResolvers<void>();
 		const releaseTool = Promise.withResolvers<void>();
 		const setupEntered = Promise.withResolvers<void>();
@@ -945,6 +989,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 			{ "compaction.enabled": false },
 			{
 				extensionRunner,
+				persistHistory: true,
 				tool: {
 					name: "task",
 					label: "Task",
@@ -959,6 +1004,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 			},
 		);
 		const running = session.prompt("start unrelated work before cancelled queued setup");
+		let resumedPrompt: ReturnType<AgentSession["prompt"]> | undefined;
 		try {
 			expect(
 				await raceWithTimeout(
@@ -980,31 +1026,24 @@ describe("AgentSession mid-run threshold compaction", () => {
 					false,
 				),
 			).toBe(true);
-			expect(observedContexts).toHaveLength(1);
-			const abort = session.abort({ reason: "Cancel the queued initial auto Goal setup" });
-			releaseSetup.resolve();
-			await abort;
-		} finally {
-			releaseTool.resolve();
-			releaseSetup.resolve();
-			await running;
-		}
-		expect(observedContexts).toHaveLength(1);
-		expect(session.agent.peekSteeringQueue()).toContainEqual(
-			expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
-		);
-		expect(session.messages).not.toContainEqual(
-			expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
-		);
-		expect(
-			sessionManager
-				.getBranch()
-				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
-		).toHaveLength(0);
-
-		await session.goalRuntime.resumeGoal();
-		const resumedPrompt = session.prompt("resume the cancelled queued release", { streamingBehavior: "steer" });
-		try {
+			// The native idle drain can otherwise take the restored steer before Goal resume.
+			await session.withQueueDrainPaused(async () => {
+				expect(observedContexts).toHaveLength(1);
+				expectQueuedGoalNotices(session, sessionManager);
+				const abort = session.abort({ reason: USER_INTERRUPT_LABEL });
+				releaseSetup.resolve();
+				await abort;
+				await running;
+				expect(observedContexts).toHaveLength(1);
+				expect(session.agent.peekSteeringQueue()).toContainEqual(userMessage);
+				expect(session.messages).not.toContainEqual(userMessage);
+				expect(sessionManager.getBranch()).not.toContainEqual(savedUserMessage);
+				expectQueuedGoalNotices(session, sessionManager);
+				const resumed = await session.goalRuntime.resumeGoal();
+				expect(resumed.goal.id).toBe(state.goal.id);
+				expectQueuedGoalNotices(session, sessionManager);
+			});
+			resumedPrompt = session.prompt("resume the cancelled queued release", { streamingBehavior: "steer" });
 			expect(
 				await raceWithTimeout(
 					redeliveryEntered.promise.then(() => true),
@@ -1012,74 +1051,76 @@ describe("AgentSession mid-run threshold compaction", () => {
 					false,
 				),
 			).toBe(true);
+			expect(observedContexts).toHaveLength(1);
+			expectQueuedGoalNotices(session, sessionManager);
 		} finally {
+			releaseTool.resolve();
+			releaseSetup.resolve();
 			releaseRedelivery.resolve();
+			await running;
 			await resumedPrompt;
 			await session.waitForIdle();
 		}
-		expect(
-			observedContexts.some(context =>
-				context
-					.map(value => JSON.parse(value))
-					.some(
-						message =>
-							message.role === "user" &&
-							Array.isArray(message.content) &&
-							message.content.some((block: { type: string; text?: string }) => block.text === objective),
-					),
-			),
-		).toBe(true);
-		expect(sessionManager.getBranch()).toContainEqual(
-			expect.objectContaining({
-				type: "message",
-				message: expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
-			}),
-		);
-		expect(
-			sessionManager
-				.getBranch()
-				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
-		).toHaveLength(0);
+		const expected = buildGoalAutoOrchestrateMessage(session.getLocalGoalModeState(), session.getEnabledToolNames());
+		if (typeof expected?.content !== "string") throw new Error("Expected resumed auto Goal notice text");
+		expectFirstQueuedGoalRequest(observedContexts, objective, expected.content);
+		expect(sessionManager.getBranch()).toContainEqual(savedUserMessage);
+		expectQueuedGoalNotices(session, sessionManager, expected);
 
 		await session.prompt("inspect the resumed queued release");
 		await session.waitForIdle();
 
-		const expected = buildGoalAutoOrchestrateMessage(session.getLocalGoalModeState(), session.getEnabledToolNames());
-		if (!expected) throw new Error("Expected resumed auto Goal notice content");
-		for (const context of observedContexts) {
-			expect(context.join("\n")).not.toContain(JSON.stringify(expected.content));
-		}
+		const latest = observedContexts.at(-1)!;
+		expect(countProviderUserText(latest, "inspect the resumed queued release")).toBe(1);
+		expect(countProviderUserText(latest, expected.content)).toBe(1);
+		expectQueuedGoalNotices(session, sessionManager, expected);
+
+		await sessionManager.flush();
+		const file = sessionManager.getSessionFile();
+		if (!file) throw new Error("Expected a persisted Goal delivery journal");
+		const journal = (await Bun.file(file).text())
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line));
 		expect(
-			session.messages.filter(
-				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			journal.filter(
+				entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
 			),
-		).toHaveLength(0);
-		expect(
-			sessionManager
-				.getBranch()
-				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
-		).toHaveLength(0);
+		).toEqual([
+			expect.objectContaining({ content: expected.content, attribution: "user", details: expected.details }),
+		]);
 	});
 
-	it.each(["steer", "followUp"] as const)(
-		"delivers a queued %s once without reviving cancelled initial Goal preparation",
-		async queue => {
-			const toolStarted = Promise.withResolvers<void>();
-			const releaseTool = Promise.withResolvers<void>();
+	it.each([
+		["steer", "steer", "steering"],
+		["followUp", "followUp", "followUp"],
+		["followUp promoted to steer", "followUp", "steering"],
+	] as const)(
+		"delivers a stopped queued %s with its initial Goal notice once after resuming the same Goal",
+		async (_label, queue, deliveryQueue) => {
+			const boundaryEntered = Promise.withResolvers<void>();
+			const releaseBoundary = Promise.withResolvers<void>();
+			const terminalFirstResponse = deliveryQueue === "followUp";
 			const prepared = Promise.withResolvers<CustomMessage>();
 			const releasePreparation = Promise.withResolvers<void>();
 			const { session, sessionManager, observedContexts } = await createHarness(
 				{ "compaction.enabled": false },
 				{
 					persistHistory: true,
+					// Autopilot promotes follow-ups to steering at completed tool batches that
+					// will continue. Only a terminal response exercises the native follow-up drain.
+					firstTerminalResponseGate: terminalFirstResponse ? releaseBoundary.promise : undefined,
+					onProviderCall: index => {
+						if (terminalFirstResponse && index === 0) boundaryEntered.resolve();
+					},
 					tool: {
 						name: "task",
 						label: "Task",
 						description: "Hold the current turn until the initial Goal source is queued",
 						parameters: type({}),
 						execute: async () => {
-							toolStarted.resolve();
-							await releaseTool.promise;
+							boundaryEntered.resolve();
+							await releaseBoundary.promise;
 							return { content: [{ type: "text" as const, text: "task completed" }] };
 						},
 					},
@@ -1092,7 +1133,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 			try {
 				expect(
 					await raceWithTimeout(
-						toolStarted.promise.then(() => true),
+						boundaryEntered.promise.then(() => true),
 						2_000,
 						false,
 					),
@@ -1115,28 +1156,62 @@ describe("AgentSession mid-run threshold compaction", () => {
 					prepared.resolve(notice);
 					await releasePreparation.promise;
 				});
-				releaseTool.resolve();
+				releaseBoundary.resolve();
 				const notice = await raceWithTimeout(prepared.promise, 2_000, undefined);
 				if (!notice) throw new Error("Expected the queued input's initial Goal notice to prepare");
 				expect(session.agent.peekUndeliveredQueuedMessages()).toContain(source);
+				expect(session.agent.peekDeliveringMessages(deliveryQueue)).toContain(source);
 				expect(session.messages).not.toContain(source);
-				const stopping = session.abort({ reason: "Stop before provider delivery" });
-				releasePreparation.resolve();
-				await stopping;
-				await running;
-				await session.waitForIdle();
-				await session.goalRuntime.resumeGoal();
-				await session.prompt("Inspect the resumed release");
-				await session.waitForIdle();
-				for (const context of observedContexts) {
-					expect(context.join("\n")).not.toContain(JSON.stringify(notice.content));
-				}
+				expect(observedContexts).toHaveLength(1);
+				expectQueuedGoalNotices(session, sessionManager);
+				await session.withQueueDrainPaused(async () => {
+					const stopping = session.abort({ reason: USER_INTERRUPT_LABEL });
+					releasePreparation.resolve();
+					await stopping;
+					await running;
+					await session.waitForIdle();
+					const restored =
+						deliveryQueue === "steering" ? session.agent.peekSteeringQueue() : session.agent.peekFollowUpQueue();
+					const other =
+						deliveryQueue === "steering" ? session.agent.peekFollowUpQueue() : session.agent.peekSteeringQueue();
+					expect(restored[0]).toBe(source);
+					expect(other).not.toContain(source);
+					expect(session.agent.peekUndeliveredQueuedMessages()).not.toContain(source);
+					expect(observedContexts).toHaveLength(1);
+					expect(session.messages).not.toContain(source);
+					expect(sessionManager.getBranch()).not.toContainEqual(
+						expect.objectContaining({ type: "message", message: expect.objectContaining(expectedUserMessage) }),
+					);
+					expectQueuedGoalNotices(session, sessionManager);
+					expect(session.getLocalGoalModeState()?.goal.status).toBe("paused");
+					const resumed = await session.goalRuntime.resumeGoal();
+					expect(resumed.goal.id).toBe(state.goal.id);
+					expectQueuedGoalNotices(session, sessionManager);
+				});
 			} finally {
-				releaseTool.resolve();
+				releaseBoundary.resolve();
 				releasePreparation.resolve();
 				detach?.();
 				await running;
 			}
+			const expected = buildGoalAutoOrchestrateMessage(
+				session.getLocalGoalModeState(),
+				session.getEnabledToolNames(),
+			);
+			if (typeof expected?.content !== "string") throw new Error("Expected resumed auto Goal notice text");
+			await session.prompt("Inspect the resumed release", { streamingBehavior: "steer" });
+			await session.waitForIdle();
+			expectFirstQueuedGoalRequest(observedContexts, objective, expected.content);
+			expectQueuedGoalNotices(session, sessionManager, expected);
+
+			const laterPrompt = "Inspect the delivered release again";
+			await session.prompt(laterPrompt);
+			await session.waitForIdle();
+			const latest = observedContexts.at(-1)!;
+			expect(countProviderUserText(latest, laterPrompt)).toBe(1);
+			expect(countProviderUserText(latest, objective)).toBe(1);
+			expect(countProviderUserText(latest, expected.content)).toBe(1);
+			expectQueuedGoalNotices(session, sessionManager, expected);
 			expect(session.agent.hasQueuedMessages()).toBe(false);
 			const file = sessionManager.getSessionFile();
 			if (!file) throw new Error("Expected a persisted Goal delivery journal");
@@ -1148,7 +1223,9 @@ describe("AgentSession mid-run threshold compaction", () => {
 					branch.filter(
 						entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
 					),
-				).toEqual([]);
+				).toEqual([
+					expect.objectContaining({ content: expected.content, attribution: "user", details: expected.details }),
+				]);
 				expect(
 					branch.filter(
 						entry =>
@@ -1408,6 +1485,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 			const { session, sessionManager } = await createHarness({
 				"compaction.enabled": false,
 				"compaction.autoContinue": false,
+				"compaction.keepRecentTokens": 1,
 			});
 			await session.prompt("seed normal completed history");
 			const state = { ...activeGoalState(), autoOrchestrate: true };
@@ -1417,18 +1495,28 @@ describe("AgentSession mid-run threshold compaction", () => {
 			await session.appendCustomMessage(initial);
 			const history = [...session.messages];
 			const branch = sessionManager.getBranch();
+			const compact = vi.spyOn(compactionModule, "compact");
 			if (outcome === "no-op") {
 				vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(undefined);
 			} else if (outcome === "failed") {
-				vi.spyOn(compactionModule, "compact").mockRejectedValue(new Error("deterministic summary failure"));
+				compact.mockRejectedValue(new Error("deterministic summary failure"));
 			} else {
-				vi.spyOn(compactionModule, "compact").mockImplementation(async () => {
+				compact.mockImplementation(async () => {
 					session.abortCompaction();
 					throw new compactionModule.CompactionCancelledError();
 				});
 			}
 
-			await expect(session.compact()).rejects.toThrow();
+			if (outcome === "no-op") {
+				await expect(session.compact()).rejects.toThrow("Nothing to compact");
+				expect(compact).not.toHaveBeenCalled();
+			} else if (outcome === "failed") {
+				await expect(session.compact()).rejects.toThrow("deterministic summary failure");
+				expect(compact).toHaveBeenCalledTimes(1);
+			} else {
+				await expect(session.compact()).rejects.toBeInstanceOf(compactionModule.CompactionCancelledError);
+				expect(compact).toHaveBeenCalledTimes(1);
+			}
 
 			expect(session.messages).toEqual(history);
 			expect(sessionManager.getBranch()).toEqual(branch);
@@ -1516,6 +1604,84 @@ describe("AgentSession mid-run threshold compaction", () => {
 		expect(input).toContain("CURRENT_REPLACEMENT_FULL_OBJECTIVE");
 		expect(input).not.toContain("OBSOLETE_GOAL_MUST_NOT_REAPPEAR");
 	});
+
+	it.each(["pause", "replace", "activate"] as const)(
+		"uses current Goal state when an armed compaction start observer can %s it",
+		async transition => {
+			const runMaintenance = SessionMaintenance.prototype.runPrePromptCompactionIfNeeded;
+			const captured: { maintenance?: SessionMaintenance } = {};
+			vi.spyOn(SessionMaintenance.prototype, "runPrePromptCompactionIfNeeded").mockImplementationOnce(
+				function (this: SessionMaintenance, messages) {
+					captured.maintenance = this;
+					return runMaintenance.call(this, messages);
+				},
+			);
+			const { session, sessionManager } = await createHarness({
+				"compaction.enabled": false,
+				"compaction.asyncEnabled": true,
+				"compaction.autoContinue": false,
+				"compaction.thresholdTokens": 50_000,
+				"compaction.keepRecentTokens": 1,
+			});
+			await session.prompt("Summarizable history. ".repeat(400));
+			await session.prompt("A short recent turn to preserve.");
+			const { maintenance } = captured;
+			if (!maintenance) throw new Error("Expected the session's maintenance to be initialized");
+
+			const base = activeGoalState();
+			const old = {
+				...base,
+				autoOrchestrate: true,
+				goal: { ...base.goal, objective: "OBSOLETE_SPECULATION_GOAL" },
+			};
+			const current = {
+				...old,
+				goal: { ...old.goal, id: "current-speculation-goal", objective: "CURRENT_SPECULATION_GOAL" },
+			};
+			if (transition !== "activate") session.setGoalModeState(old);
+			const compact = mockCompaction("ARMED GOAL COMPACTION");
+			cfgCompactionEnabled.override(session.settings, true);
+			maintenance.maybeStartSpeculativeCompaction(49_000, session.model!.contextWindow!);
+			for (let i = 0; i < 100 && session.compactionSpeculation !== "armed"; i++) await Promise.resolve();
+			expect(session.compactionSpeculation).toBe("armed");
+
+			const onStart = vi.fn(() => {
+				session.setGoalModeState(transition === "pause" ? { ...old, enabled: false } : current);
+			});
+			const unsubscribe = session.subscribeLocal(event => {
+				if (event.type === "auto_compaction_start") onStart();
+			});
+			try {
+				await maintenance.runAutoCompaction("threshold", false, { triggerContextTokens: 50_000 });
+			} finally {
+				unsubscribe();
+			}
+
+			const branch = sessionManager.getBranch();
+			expect(onStart).toHaveBeenCalledTimes(1);
+			expect(compact).toHaveBeenCalledTimes(1);
+			expect(branch.find(entry => entry.type === "compaction")).toMatchObject({ summary: "ARMED GOAL COMPACTION" });
+			const expected =
+				transition === "pause"
+					? []
+					: [
+							expect.objectContaining({
+								content: expect.stringContaining(current.goal.objective),
+								details: expect.objectContaining({ goalId: current.goal.id }),
+							}),
+						];
+			expect(
+				branch.filter(
+					entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+				),
+			).toEqual(expected);
+			expect(
+				session.messages.filter(
+					message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+				),
+			).toEqual(expected);
+		},
+	);
 
 	it("continues below the mid-run threshold while message_end notifications remain pending", async () => {
 		const releaseMessageEnd = Promise.withResolvers<void>();

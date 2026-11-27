@@ -563,9 +563,19 @@ pub(crate) fn path_bytes(path: &Path) -> Cow<'_, [u8]> {
 			Some(offset) => bytes = Cow::Owned(bytes[offset..].to_vec()),
 			None => {},
 		}
-		if bytes.contains(&b'\\') {
-			forward_slashes(bytes.to_mut());
-		}
+	}
+	slash_path_bytes(bytes)
+}
+
+/// A link target's wire spelling, preserving Windows verbatim prefixes so
+/// safety checks, comparison and recreation interpret the same target.
+pub(crate) fn link_target_bytes(path: &Path) -> Cow<'_, [u8]> {
+	slash_path_bytes(crate::host::os_bytes_lossy(path.as_os_str()))
+}
+
+fn slash_path_bytes(mut bytes: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
+	if cfg!(windows) && bytes.contains(&b'\\') {
+		forward_slashes(bytes.to_mut());
 	}
 	bytes
 }
@@ -1337,6 +1347,19 @@ mod tests {
 		assert_eq!(&*path_bytes(Path::new(r"\\?\UNC\server\share\dir")), b"//server/share/dir");
 		assert!(within_confine(Path::new(r"\\?\C:\data\jail\x"), root));
 		assert_eq!(clean_local_fname_flags(b"//server/share/dir/.", CFN_DROP_TRAILING_DOT_DIR).unwrap(), b"//server/share/dir");
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn link_targets_keep_verbatim_windows_prefixes() {
+		for (native, wire) in [
+			(r"\\?\C:\data\file", &b"//?/C:/data/file"[..]),
+			(r"\\?\UNC\server\share\file", &b"//?/UNC/server/share/file"[..]),
+		] {
+			let target = link_target_bytes(Path::new(native));
+			assert_eq!(&*target, wire);
+			assert!(unsafe_symlink(&target, b"dir/link"));
+		}
 	}
 
 	#[cfg(unix)]

@@ -607,12 +607,12 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		const unattendedTimeout = answered.timedOut && autopilot;
 		if (unattendedTimeout && (!(await unattendedTimeout.currentAfterUsage()) || dialogSignal.aborted))
 			throw abortError();
-		// A timeout submits what the form holds; with a required field still empty that is no answer, not data.
+		// Validate what will actually be sent: shared names can overwrite a valid control's value.
+		// The silent form also checks each control and whether an initial recommendation was in effect.
 		if (
 			answered.timedOut &&
-			(unattendedTimeout
-				? answered.hasValidRecommendation !== true
-				: named.some(field => fieldError(field, answered.data[field.name!]) !== undefined))
+			((unattendedTimeout && answered.hasValidRecommendation !== true) ||
+				named.some(field => fieldError(field, answered.data[field.name!]) !== undefined))
 		) {
 			return {
 				content: [

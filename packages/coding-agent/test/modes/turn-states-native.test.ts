@@ -61,7 +61,7 @@ describe("turn states", () => {
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated(),
+			settings: Settings.isolated({ "display.mode": "detailed" }),
 			modelRegistry,
 		});
 		term = createModeTerminal({ columns: 120, rows: 32 });
@@ -99,10 +99,12 @@ describe("turn states", () => {
 		const reply = parentOf(ui.node("section"));
 		const kinds = () => ui.get(reply).c.map(child => ui.get(child).k);
 		expect(kinds()).toEqual(["section", "md"]);
-		mode.hideThinkingBlock = true;
+		mode.toggleThinkingBlockVisibility();
+		expect(mode.settings.getGlobalSettings().hideThinkingBlock).toBe(true);
 		expect(kinds()).toEqual(["md"]);
 		expect(ui.node("md").p.text).toBe("Answer after thinking.");
-		mode.hideThinkingBlock = false;
+		mode.toggleThinkingBlockVisibility();
+		expect(mode.settings.getGlobalSettings().hideThinkingBlock).toBe(false);
 		expect(kinds()).toEqual(["section", "md"]);
 	});
 

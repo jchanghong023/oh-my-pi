@@ -1198,12 +1198,15 @@ async fn a_script_its_command_ran_is_one_frame_under_that_command() {
 	let file = dir.path().join("script.sh");
 	let body = "x=1\nf() { echo \"$1\"; }\nf a\nf b\n";
 	std::fs::write(&file, body).unwrap();
+	let file =
+		String::from_utf8(crate::bash::vm::quote::sh_single_quote(file.to_string_lossy().as_bytes()))
+			.unwrap();
 	let shell = Shell::new(None);
 	// The engine compiles such a script one command at a time; each is a
 	// unit of its own, none of them in the command text.
 	for (script, runner) in [
-		(format!("bash {} | cat", file.display()), "bash "),
-		(format!(". {}", file.display()), "source("),
+		(format!("bash {file} | cat"), "bash "),
+		(format!(". {file}"), "source("),
 		(format!("s='{body}'; eval \"$s\""), "eval "),
 	] {
 		let trace = run(&shell, &script).await;

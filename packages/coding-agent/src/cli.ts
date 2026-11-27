@@ -36,6 +36,7 @@ import {
 	SHELL_PROCESS_SELECTOR,
 } from "@oh-my-pi/pi-utils/worker-host";
 import { installSqliteLockShim } from "@oh-my-pi/pi-natives/sqlite-locks";
+import type { AuthBrokerAction } from "./cli/auth-broker-cli";
 import { isNativeShell, runNativeShell } from "./cli/native-shell";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import {
@@ -148,6 +149,25 @@ async function installNetworkBootstrap(): Promise<void> {
 	const { applyForkNetworkDefaults, installGlobalProxyFetch } = await import("@oh-my-pi/pi-ai/utils/proxy");
 	applyForkNetworkDefaults();
 	installGlobalProxyFetch();
+}
+
+async function startAuthBrokerCli(action: AuthBrokerAction): Promise<void> {
+	if (isProcessEntry) {
+		const { initializeDiagnosticLogging, setTransports } = await import("@oh-my-pi/pi-utils/logger");
+		// The supervisor captures the service's structured logs from stdout.
+		if (action === "serve") setTransports({ console: true, file: false });
+		initializeDiagnosticLogging("cli");
+	}
+	await installNetworkBootstrap();
+}
+
+async function loadAuthBrokerCliCommand() {
+	const { default: AuthBroker } = await import("./commands/auth-broker");
+	return class extends AuthBroker {
+		override run(): Promise<void> {
+			return super.run(startAuthBrokerCli);
+		}
+	};
 }
 
 // Worker-host entry declaration (Worker threads and worker subprocesses
@@ -598,6 +618,7 @@ export async function runCli(argv: string[]): Promise<void> {
 	}
 	const command = resolved.argv[0];
 	runningCommand = command;
+	const isAuthBroker = command === "auth-broker";
 
 	const helpOrVersion =
 		resolvedArgv[0] === "--help" ||
@@ -636,11 +657,16 @@ export async function runCli(argv: string[]): Promise<void> {
 
 	// Once the speculative composer owns stdin, diagnostic and network setup
 	// can yield without dropping input typed during initialization.
-	if (!helpOrVersion && isProcessEntry) {
+	// The broker defers both steps until its action is parsed; proxy setup can
+	// itself log and must not open a file before `serve` chooses stdout.
+	if (!helpOrVersion && isProcessEntry && !isAuthBroker) {
 		const { initializeDiagnosticLogging } = await import("@oh-my-pi/pi-utils/logger");
 		initializeDiagnosticLogging("cli");
 	}
-	await Promise.all([setFullProcessName(), helpOrVersion ? Promise.resolve() : installNetworkBootstrap()]);
+	await Promise.all([
+		setFullProcessName(),
+		helpOrVersion || isAuthBroker ? Promise.resolve() : installNetworkBootstrap(),
+	]);
 
 	if (resolvedArgv[0] === "--smoke-test") {
 		await runSmokeTest();
@@ -649,7 +675,13 @@ export async function runCli(argv: string[]): Promise<void> {
 
 	try {
 		const { run } = await import("@oh-my-pi/pi-utils/cli");
-		await run({ bin: APP_NAME, version: VERSION, argv: resolved.argv, commands, metadataHelp: showHelp });
+		await run({
+			bin: APP_NAME,
+			version: VERSION,
+			argv: resolved.argv,
+			commands: isAuthBroker ? [{ name: command, load: loadAuthBrokerCliCommand }] : commands,
+			metadataHelp: showHelp,
+		});
 	} finally {
 		stopStartupComposer?.();
 	}

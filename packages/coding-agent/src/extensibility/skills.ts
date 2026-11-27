@@ -163,6 +163,7 @@ interface CollisionResolution {
 /**
  * Resolve a same-name skill against what is already loaded.
  * - Precedence, when raw names collide:
+ *   0. Shared skills keep priority even if an alias preserves package ownership.
  *   1. An authored skill always outranks a registry-installed package
  *      (`omp skill install`, the `skillshare` provider) — installed steps
  *      aside regardless of admission order.
@@ -190,6 +191,7 @@ function resolveCollision(
 	namespace: string,
 	shared: boolean,
 	allowOverride: boolean,
+	isNameExcluded: (name: string) => boolean,
 ): CollisionResolution | undefined {
 	const existingEntries = [...admitted.entries()].filter(([_, e]) => e.rawName === candidate.name);
 	if (existingEntries.length === 0) {
@@ -218,6 +220,7 @@ function resolveCollision(
 		allowOverride &&
 		bareSkill &&
 		bareEntry &&
+		!bareEntry.shared &&
 		((bareInstalled && !candidateInstalled) || (candidateCustom && !bareCustom))
 	) {
 		if (identical.includes(candidate.name)) return { name: candidate.name, dropped: identical };
@@ -233,7 +236,15 @@ function resolveCollision(
 			},
 		};
 	}
-	if (identical.length > 0) return undefined;
+	// An excluded alias cannot cover another namespace. Within its own
+	// namespace, a duplicate must not bypass the exclusion via a suffix.
+	if (
+		identical.some(
+			name => name === candidate.name || !isNameExcluded(name) || admitted.get(name)!.namespace === namespace,
+		)
+	) {
+		return undefined;
+	}
 
 	// Otherwise the already-admitted skill keeps the bare name (first-admitted
 	// wins, or the authored skill over an installed package); only the new
@@ -468,6 +479,7 @@ export async function loadSkillCatalog(
 	const disabledSkillNames = new Set(
 		(disabledExtensions ?? []).filter(id => id.startsWith("skill:")).map(id => id.slice(6)),
 	);
+	const isNameExcluded = (name: string) => disabledSkillNames.has(name) || matchesIgnorePatterns(name);
 	// Active sources resolve first. Opted-out/provider-disabled sources are
 	// retained for management, but cannot claim a name ahead of active skills.
 	const authoredSkills = result.all.filter(capSkill => capSkill._source.provider !== MANAGED_SKILLS_PROVIDER_ID);
@@ -549,6 +561,7 @@ export async function loadSkillCatalog(
 			namespace,
 			shared,
 			!skill.disabledReason,
+			isNameExcluded,
 		);
 		if (!resolved) return undefined;
 		const { name, warning, dropped, displaced } = resolved;
@@ -887,9 +900,8 @@ export async function isSkillSuperseded(
 	skill: Pick<Skill, "filePath">,
 	holder: SkillRediscoveryHost,
 ): Promise<boolean> {
-	return (
-		holder.refreshSkills !== undefined && (await isSupersededPluginPath(skill.filePath, os.homedir(), holder.cwd))
-	);
+	if (!holder.refreshSkills) return false;
+	return withActiveSettings(holder.settings, () => isSupersededPluginPath(skill.filePath, os.homedir(), holder.cwd));
 }
 
 /**

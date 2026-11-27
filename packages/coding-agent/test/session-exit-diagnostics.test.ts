@@ -249,6 +249,10 @@ describe("session exit diagnostics", () => {
 
 	it("does not fork a session another live process owns when this process only loaded it", async () => {
 		tempDir = TempDir.createSync("@pi-unowned-session-exit-");
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model to exist");
 		const creator = SessionManager.create(tempDir.path(), tempDir.path());
 		creator.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
 		creator.appendMessage({ ...pendingAssistant, content: [{ type: "text", text: "done" }], stopReason: "stop" });
@@ -287,10 +291,29 @@ describe("session exit diagnostics", () => {
 			const sessionManager = await SessionManager.open(sessionFile, tempDir.path(), undefined, {
 				suppressBreadcrumb: true,
 			});
+			const agent = new Agent({
+				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+				convertToLlm,
+			});
+			// Runtime startup must be rejected before a non-owner could record an exit.
 			try {
-				expect(sessionManager.getEntries().some(entry => entry.type === "message")).toBe(true);
+				expect(
+					sessionManager
+						.getEntries()
+						.some(entry => entry.type === "message" && entry.message.role === "assistant"),
+				).toBe(true);
+				expect(() => {
+					session = new AgentSession({
+						agent,
+						sessionManager,
+						settings: Settings.isolated({ "compaction.enabled": false }),
+						modelRegistry,
+					});
+				}).toThrow("another live omp owner holds it");
 			} finally {
-				await sessionManager.close();
+				if (session) await session.dispose();
+				else await sessionManager.close();
+				session = undefined;
 			}
 
 			expect(fs.readFileSync(sessionFile, "utf8")).toBe(transcript);

@@ -7,15 +7,17 @@
 - Restored the complete upstream model catalog alongside the fork's company, CodeAgent and Ascend models.
 - Default company GLM-5.3 to medium thinking, offer low/medium/xhigh/max, and send xhigh as the gateway's ultra effort instead of exposing unreliable high or unverified minimal.
 - Replaced the built-in CodeAgent model with `deepseek-v4.1-flash-1017` and increased its context window to 409,600 tokens.
+- Ascend's catalog rates are placeholders: no rate card is available, and the zero amounts do not mean the models are free.
 
 ### Added
 
-- Added `company/Deepseek-v4.1-Flash` to the offline intranet model catalog with the same configuration as `DeepSeek-V4-Flash-public`.
+- Added `company/Deepseek-v4.1-Flash` to the offline intranet model catalog with text and image input. `company/DeepSeek-V4-Flash-public` remains text-only.
 
 ### Fixed
 
 - Offline model commands retain the cached Codex client version without contacting the npm registry.
 - Restored Alibaba Token Plan login and chat models, including China (Beijing) and international (Singapore) regions.
+- The KDL compiler now rejects `keep-bundled-names` on runtime-only providers that have no `default-model`, rather than accepting a directive that has no effect there.
 
 ### Removed
 

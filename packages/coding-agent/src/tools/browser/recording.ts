@@ -188,9 +188,7 @@ interface StrictRecordingFinalization {
 	durationMs: number;
 	sourceStopped: boolean;
 	cursorRemoved: boolean;
-	encoded: boolean;
-	contactSheet?: string;
-	result?: RecordingStopResult;
+	outcome?: { result: RecordingStopResult } | { error: RecordingOutputError };
 }
 
 /** Named user-facing recording failure raised by every `tab.record*` helper. */
@@ -198,6 +196,13 @@ export class BrowserRecordingError extends ToolError {
 	constructor(message: string) {
 		super(message);
 		this.name = "BrowserRecordingError";
+	}
+}
+
+/** The recording's source was released, but saving its output failed. */
+class RecordingOutputError extends BrowserRecordingError {
+	constructor(error: unknown) {
+		super(recordingError(error, "tab.recordStop()").message);
 	}
 }
 
@@ -590,37 +595,9 @@ export class RecordingController {
 				await Bun.write(fallback, bytes);
 				active.frames.push({ path: fallback, timestampMs: 0 });
 			}
-			await encodeRecording(active, durationMs, context.signal);
-			let contactSheet: string | undefined;
-			if (active.options.contactSheet) {
-				const sheet = await buildChangedFrameContactSheetPng(
-					active.path,
-					{
-						outputPath: contactPath,
-						fps: active.options.fps,
-						threshold: active.options.contactSheetThreshold,
-						maxTiles: MAX_CONTACT_SHEET_TILES,
-					},
-					context.signal,
-				);
-				contactSheet = sheet.path;
-				if (context.output) {
-					const resized = await resizeImage(
-						{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
-						{ excludeWebP: context.excludeWebP },
-					);
-					context.output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
-				}
-			}
-			const stat = await fs.stat(active.path);
+			const result = await this.#saveOutput(active, durationMs, context);
 			finalized = true;
-			return {
-				path: active.path,
-				durationMs,
-				frames: active.frames.length,
-				bytes: stat.size,
-				...(contactSheet ? { contactSheet } : {}),
-			};
+			return result;
 		} catch (error) {
 			throw recordingError(error, "tab.recordStop()");
 		} finally {
@@ -636,7 +613,7 @@ export class RecordingController {
 		}
 	}
 
-	/** Keep completed stages and their inputs until every strict cleanup stage succeeds. */
+	/** Retain unconfirmed resource releases for retry, not a failed output attempt. */
 	async #stopStrict(context: RecordingStopContext): Promise<RecordingStopResult> {
 		const active = this.#active;
 		if (!active) throw new BrowserRecordingError("tab.recordStop() requires an active recording");
@@ -647,7 +624,6 @@ export class RecordingController {
 			durationMs: Math.max(0, Date.now() - active.startedAt),
 			sourceStopped: false,
 			cursorRemoved: false,
-			encoded: false,
 		});
 		try {
 			if (!state.sourceStopped) {
@@ -659,72 +635,68 @@ export class RecordingController {
 				await active.source.removeCursor({ strict: true });
 				state.cursorRemoved = true;
 			}
-			if (active.writeError) {
-				// All frame bytes have already been released; only the spool can still be cleaned up.
-				await removeWithRetries(active.spool.path());
-				this.#active = undefined;
-				throw new RecordingFrameWriteError(active.writeError);
-			}
-			if (active.frames.length === 0) {
-				const bytes = active.source.isGone?.()
-					? undefined
-					: await active.source.captureFrame(active.options.quality, context.signal).catch(error => {
-							if (!active.source.isGone?.()) throw error;
-							return undefined;
-						});
-				if (bytes === undefined) {
-					await removeWithRetries(active.spool.path());
-					this.#active = undefined;
-					throw new RecordingSourceGoneError();
+			if (!state.outcome) {
+				try {
+					if (active.writeError) throw new RecordingFrameWriteError(active.writeError);
+					if (active.frames.length === 0) {
+						if (active.source.isGone?.()) throw new RecordingSourceGoneError();
+						const bytes = await active.source.captureFrame(active.options.quality, context.signal);
+						const fallback = active.spool.join("frame-000000000.jpg");
+						await Bun.write(fallback, bytes);
+						active.frames.push({ path: fallback, timestampMs: 0 });
+					}
+					state.outcome = { result: await this.#saveOutput(active, state.durationMs, context) };
+				} catch (error) {
+					state.outcome = { error: new RecordingOutputError(error) };
 				}
-				const fallback = active.spool.join("frame-000000000.jpg");
-				await Bun.write(fallback, bytes);
-				active.frames.push({ path: fallback, timestampMs: 0 });
 			}
-			if (!state.encoded) {
-				await encodeRecording(active, state.durationMs, context.signal);
-				state.encoded = true;
-			}
-			if (active.options.contactSheet && !state.contactSheet) {
-				const sheet = await buildChangedFrameContactSheetPng(
-					active.path,
-					{
-						outputPath: `${active.path}.contact.png`,
-						fps: active.options.fps,
-						threshold: active.options.contactSheetThreshold,
-						maxTiles: MAX_CONTACT_SHEET_TILES,
-					},
-					context.signal,
-				);
-				if (context.output) {
-					const resized = await resizeImage(
-						{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
-						{ excludeWebP: context.excludeWebP },
-					);
-					context.output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
-				}
-				state.contactSheet = sheet.path;
-			}
-			if (!state.result) {
-				const stat = await fs.stat(active.path);
-				state.result = {
-					path: active.path,
-					durationMs: state.durationMs,
-					frames: active.frames.length,
-					bytes: stat.size,
-					...(state.contactSheet ? { contactSheet: state.contactSheet } : {}),
-				};
-			}
-			// TempDir.remove() caches rejections; use its removal helper so a failed
-			// attempt remains retryable without re-encoding the completed output.
+			// TempDir.remove() caches rejections; a failed spool removal must remain retryable.
 			await removeWithRetries(active.spool.path());
-			if (this.#active === active) this.#active = undefined;
-			return state.result;
+			this.#active = undefined;
+			if ("error" in state.outcome) throw state.outcome.error;
+			return state.outcome.result;
 		} catch (error) {
 			throw recordingError(error, "tab.recordStop()");
 		} finally {
 			active.finalizing = false;
 		}
+	}
+
+	async #saveOutput(
+		active: ActiveRecording,
+		durationMs: number,
+		context: RecordingStopContext,
+	): Promise<RecordingStopResult> {
+		await encodeRecording(active, durationMs, context.signal);
+		let contactSheet: string | undefined;
+		if (active.options.contactSheet) {
+			const sheet = await buildChangedFrameContactSheetPng(
+				active.path,
+				{
+					outputPath: `${active.path}.contact.png`,
+					fps: active.options.fps,
+					threshold: active.options.contactSheetThreshold,
+					maxTiles: MAX_CONTACT_SHEET_TILES,
+				},
+				context.signal,
+			);
+			if (context.output) {
+				const resized = await resizeImage(
+					{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
+					{ excludeWebP: context.excludeWebP },
+				);
+				context.output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+			}
+			contactSheet = sheet.path;
+		}
+		const stat = await fs.stat(active.path);
+		return {
+			path: active.path,
+			durationMs,
+			frames: active.frames.length,
+			bytes: stat.size,
+			...(contactSheet ? { contactSheet } : {}),
+		};
 	}
 
 	/** Finalize an active recording, then immediately begin another. */
@@ -752,13 +724,13 @@ export class RecordingController {
 		};
 	}
 
-	/** Finalize during teardown; strict cleanup retains failed stages for retry. */
+	/** Finalize during teardown; strict cleanup retains unfinished resource releases for retry. */
 	async close(options?: { strict?: boolean }): Promise<void> {
 		if (!this.#active) return;
 		try {
 			await this.stop({}, options);
 		} catch (error) {
-			if (!(error instanceof RecordingFrameWriteError || error instanceof RecordingSourceGoneError)) throw error;
+			if (!(error instanceof RecordingOutputError || error instanceof RecordingFrameWriteError)) throw error;
 			logger.warn("Failed to finalize browser recording during close", { error: error.message });
 		}
 	}

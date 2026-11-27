@@ -2438,9 +2438,8 @@ export class WorkerCore {
 		let initialCrash = false;
 		try {
 			session = await target.createCDPSession();
-			// Enabling Inspector on Edge replays targetCrashed for a renderer that was already
-			// dead before this session attached. That is not a second crash: reload that
-			// target, then treat subsequent crash events as failures of the replacement.
+			// Enabling Inspector replays targetCrashed for an already dead renderer.
+			// Only a page omp owns may be reloaded by implicit worker recovery.
 			let inspecting = false;
 			const reloaded = Promise.withResolvers<void>();
 			session.on("Inspector.targetCrashed", () => {
@@ -2450,6 +2449,9 @@ export class WorkerCore {
 			session.on("Inspector.targetReloadedAfterCrash", () => reloaded.resolve());
 			await session.send("Inspector.enable").catch(() => undefined);
 			inspecting = true;
+			if (initialCrash && !this.#ownsPage) {
+				throw new RendererCrashedError("The borrowed page's renderer is still crashed; omp did not reload it");
+			}
 			if (initialCrash) {
 				await session.send("Page.reload");
 				await reloaded.promise;

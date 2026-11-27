@@ -128,6 +128,46 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 		);
 	}, 30_000);
 
+	it("loads OMP settings while waiting for the company startup snapshot", async () => {
+		const env = await isolatedEnv();
+		const companySettingsPath = path.join(env.CLAUDE_CONFIG_DIR!, "settings.json");
+		await probeBenchRuntime(
+			env,
+			`
+			const gate = Promise.withResolvers();
+			const realFile = Bun.file.bind(Bun);
+			let readingSnapshot = false;
+			Bun.file = (path, ...args) => {
+				const file = realFile(path, ...args);
+				if (String(path) !== ${JSON.stringify(companySettingsPath)} || readingSnapshot) return file;
+				return { text: async () => {
+					readingSnapshot = true;
+					await gate.promise;
+					return file.text();
+				} };
+			};
+			const init = Settings.init;
+			let settingsLoad;
+			Settings.init = options => (settingsLoad = init.call(Settings, options));
+			let runtimeReady = false;
+			const run = withRuntime({ offline: true }, async runtime => {
+				runtimeReady = true;
+				assert.equal(await resolve(runtime, "@smol"), "company/Qwen3.8-27B");
+			});
+			void run.catch(() => {});
+			try {
+				assert.ok(readingSnapshot, "the company credential read is in flight");
+				assert.ok(settingsLoad, "OMP settings load starts before the snapshot is ready");
+				await settingsLoad;
+				assert.equal(runtimeReady, false, "the runtime still waits for the snapshot");
+			} finally {
+				gate.resolve();
+				await run;
+			}
+		`,
+		);
+	}, 30_000);
+
 	it("keeps company selectors unavailable without a company config under OMP_OFFLINE", async () => {
 		const stderr = await probeBenchRuntime(
 			await isolatedEnv(null),

@@ -37,14 +37,18 @@ function find(node: NativeNode, match: (node: NativeNode) => boolean): NativeNod
 	return undefined;
 }
 
-test("the native composer cache fact describes the next message only when cache status is known", () => {
+test.each(["left", "right"] as const)("the native composer cache fact describes the next message on the %s", side => {
 	const env = corpusEnvironment("dark");
 	createRoot(dispose => {
 		try {
 			const base = corpusStatusFacts();
 			const facts = signal<StatusFacts>(base);
 			const { extras } = composerFacts({
-				settings: () => ({ preset: "custom", leftSegments: ["cache"], rightSegments: [] }),
+				settings: () => ({
+					preset: "custom",
+					leftSegments: side === "left" ? ["cache"] : [],
+					rightSegments: side === "right" ? ["cache"] : [],
+				}),
 				facts,
 				click: action => ({ click: action }),
 			});
@@ -61,7 +65,8 @@ test("the native composer cache fact describes the next message only when cache 
 						key: "cache",
 						p: {
 							role: "omp.composer.cache",
-							side: "right",
+							side,
+							priority: 1,
 							aria: "Likely cached, no expiry",
 							actions: { click: "status.cache" },
 							hovercard: {

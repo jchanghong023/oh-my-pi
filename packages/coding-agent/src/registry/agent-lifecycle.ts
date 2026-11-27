@@ -199,7 +199,10 @@ function findRelease<T extends OrdinaryRelease | StrictRelease>(
 ): T | undefined {
 	if (expected === undefined && current) return releases.get(current);
 	for (const entry of releases.values()) {
-		if (entry.ref.id === id && (expected === undefined || expected === entry.ref || expected === entry.cleanup.live)) {
+		if (
+			entry.ref.id === id &&
+			(expected === undefined || expected === entry.ref || expected === entry.cleanup.live)
+		) {
 			return entry;
 		}
 	}
@@ -239,22 +242,20 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	/** The installed lifecycle, lazily a local manager bound to the global registry. */
 	static global(): AgentLifecycleApi {
 		if (AgentLifecycleManager.#installed) return AgentLifecycleManager.#installed;
+		const registry = AgentRegistry.global();
 		const current = AgentLifecycleManager.#global;
-		if (current) {
-			// The manager captures its registry at construction and subscribes to
-			// it for the manager's lifetime. A test that swaps the global registry
-			// (`AgentRegistry.resetGlobalForTests`) without also resetting this
-			// manager would strand it on the dead instance: terminal transitions
-			// (`release`) would mutate the old registry while consumers subscribe
-			// to the new one, so `status_changed` never reaches them (issue #11432).
-			// Rebind by retiring the stale manager and reconstructing against the
-			// current global registry. In production the registry is never reset, so
-			// this always short-circuits and the singleton is stable.
-			if (current.#registry === AgentRegistry.global()) return current;
-			current.#retire();
+		if (current && current.#registry === registry && !current.#disposed) return current;
+
+		const next = new AgentLifecycleManager(registry);
+		if (current && current.#registry === registry) {
+			// A failed or still-draining strict shutdown must not service new
+			// live work, but its exact pending cleanup routes remain retryable.
+			next.#strictReleases = current.#strictReleases;
+		} else {
+			if (current) current.#retire();
 		}
-		AgentLifecycleManager.#global = new AgentLifecycleManager();
-		return AgentLifecycleManager.#global;
+		AgentLifecycleManager.#global = next;
+		return next;
 	}
 
 	/** Install the process-global lifecycle. Worker bootstrap only. */
@@ -287,7 +288,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	readonly #registry: AgentRegistryApi;
 	readonly #adopted = new Map<string, AdoptedAgent>();
 	/** Failed strict cleanup stays owned even if the registry replaces its generation. */
-	readonly #strictReleases = new Map<AgentRef, StrictRelease>();
+	#strictReleases = new Map<AgentRef, StrictRelease>();
 	/**
 	 * In-flight park attempts, each bound to the ref it started from. A park is
 	 * cancelable until the live session is detached; after detach, ensureLive
@@ -820,6 +821,12 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		// A strict owner (including a descendant reserved for bottom-up cleanup)
 		// must keep its disposal and resource hooks retryable.
 		if (!ref || this.#strictReleases.has(ref)) return false;
+		if (
+			options?.tombstone &&
+			(ref.history?.executionEnded || (ref.sessionFile && isExecutionEndPending(this.#registry, ref.sessionFile)))
+		) {
+			return false;
+		}
 		if (pending) {
 			if (options?.tombstone && !pending.tombstone) {
 				pending.tombstone = true;
@@ -988,6 +995,26 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			ancestors.push(parent);
 			seen.add(parentId);
 			child = parent;
+		}
+		// A removed or replaced intermediate may break the lineage without
+		// changing which native artifact tree owns the original descendant.
+		// Do not override a proven route to another live root (including one
+		// reopening the same transcript under a different session key).
+		if (
+			root?.sessionFile &&
+			ref.parentId &&
+			ref.sessionFile &&
+			child.kind !== "main" &&
+			!seen.has(root.id) &&
+			!(
+				child.parentId === root.id &&
+				child.parentSessionKey !== undefined &&
+				this.#sessionKey(root) !== undefined
+			) &&
+			path.resolve(ref.sessionFile) !== path.resolve(root.sessionFile) &&
+			sessionFileBelongsToRoot(ref.sessionFile, root.sessionFile)
+		) {
+			ancestors.push(root);
 		}
 		return ancestors;
 	}

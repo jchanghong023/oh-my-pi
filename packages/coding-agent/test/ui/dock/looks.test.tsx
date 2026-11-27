@@ -273,7 +273,7 @@ test("queued messages keep one line each", () => {
 		"",
 		" Steering · 1",
 		"   1. first ↵ second",
-		"   └ ⌥↑ to edit",
+		expect.stringMatching(/^   └ (?:⌥|Alt\+)↑ to edit$/),
 	]);
 });
 

@@ -31,10 +31,10 @@ describe("status bar preview for Tern", () => {
 			expect(root.kind).toBe("status");
 			expect((root.props() as { role?: string }).role).toBe("omp.status");
 			const segs = new Map(root.children().map(seg => [seg.key(), seg.props() as Record<string, unknown>]));
-			expect(segs.get("pi")).toMatchObject({ side: "left", priority: 11 });
+			expect(segs.get("pi")).toMatchObject({ side: "left", priority: 12 });
 			expect(segs.get("pi")?.actions).toBeUndefined();
-			expect(segs.get("model")).toMatchObject({ priority: 1009, actions: { click: "status.model" } });
-			expect(segs.get("path")).toMatchObject({ priority: 5, min: { w: "12ch" }, actions: { click: "status.path" } });
+			expect(segs.get("model")).toMatchObject({ priority: 1011, actions: { click: "status.model" } });
+			expect(segs.get("path")).toMatchObject({ priority: 7, min: { w: "12ch" }, actions: { click: "status.path" } });
 			expect(segs.get("context_pct")).toMatchObject({ priority: 1002, actions: { click: "status.context" } });
 		} finally {
 			dispose();

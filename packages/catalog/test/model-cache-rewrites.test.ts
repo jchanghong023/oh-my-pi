@@ -4,11 +4,17 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getModelCacheWriteStats, readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import {
+	closeModelCache,
+	getModelCacheWriteStats,
+	readModelCache,
+	writeModelCache,
+} from "@oh-my-pi/pi-catalog/model-cache";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import { modelsDevCatalogFallback } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
+import { __resetDirsFromEnvForTests } from "@oh-my-pi/pi-utils/dirs";
 import { removeWithRetries } from "../../utils/src/temp";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -67,6 +73,53 @@ describe("model cache write churn", () => {
 			await removeWithRetries(tempDir);
 			tempDir = "";
 			dbPath = "";
+		}
+	});
+
+	it("uses the selected performance root without reading or rewriting the old default cache", async () => {
+		const keys = [
+			"OMP_CONFIG_ROOT",
+			"OMP_CACHE_DIR",
+			"OMP_OFFLINE",
+			"OMP_PROFILE",
+			"PI_PROFILE",
+			"PI_CODING_AGENT_DIR",
+		] as const;
+		const saved = new Map(keys.map(key => [key, process.env[key]] as const));
+		const persistent = path.join(tempDir, "persistent");
+		const legacyPath = path.join(persistent, "agent", "models.db");
+		const cache = path.join(tempDir, "cache");
+		const selected = process.platform === "linux" ? path.join(cache, String(process.getuid!())) : cache;
+		const selectedPath = path.join(selected, "agent", "models.db");
+		const now = () => 2_000;
+		await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+		try {
+			process.env.OMP_CONFIG_ROOT = persistent;
+			delete process.env.OMP_PROFILE;
+			delete process.env.PI_PROFILE;
+			delete process.env.OMP_CACHE_DIR;
+			delete process.env.OMP_OFFLINE;
+			delete process.env.PI_CODING_AGENT_DIR;
+			__resetDirsFromEnvForTests();
+			expect(writeModelCache("rewrite-test", 1_000, [model("legacy")], true, "fp")).toBe("written");
+			const legacy = payloadRow(legacyPath, "rewrite-test");
+			expect(legacy?.updated_at).toBe(1_000);
+
+			process.env.OMP_CACHE_DIR = cache;
+			__resetDirsFromEnvForTests();
+			expect(readModelCache("rewrite-test", TTL_MS, now)).toBeNull();
+			expect(writeModelCache("rewrite-test", 2_000, [model("selected")], true, "fp")).toBe("written");
+			expect(payloadRow(selectedPath, "rewrite-test")?.updated_at).toBe(2_000);
+			expect(readModelCache("rewrite-test", TTL_MS, now)?.models.map(m => m.id)).toEqual(["selected"]);
+			expect(payloadRow(legacyPath, "rewrite-test")).toEqual(legacy);
+			expect(readModelCache("rewrite-test", TTL_MS, now, legacyPath)?.models.map(m => m.id)).toEqual(["legacy"]);
+		} finally {
+			closeModelCache();
+			for (const [key, value] of saved) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			__resetDirsFromEnvForTests();
 		}
 	});
 

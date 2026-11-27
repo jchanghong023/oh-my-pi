@@ -264,9 +264,13 @@ export function getStoredOAuthProviders(credentials: Pick<CredentialsApi, "list"
 	const known = new Map(getAllOAuthProviders().map(provider => [provider.id, provider]));
 	const stored = new Map<string, OAuthProviderInfo>();
 	for (const { provider } of credentials.list(undefined, { includePaused: true })) {
-		if (stored.has(provider) || provider !== getOAuthCredentialProvider(provider)) continue;
+		if (stored.has(provider)) continue;
 		const entry = known.get(provider);
-		stored.set(provider, entry?.available ? entry : { id: provider, name: entry?.name ?? provider, available: true });
+		const directEntry = entry && (entry.storeCredentialsAs ?? entry.id) === provider ? entry : undefined;
+		stored.set(
+			provider,
+			directEntry?.available ? directEntry : { id: provider, name: directEntry?.name ?? provider, available: true },
+		);
 	}
 	return [...stored.values()];
 }
@@ -281,6 +285,6 @@ export function getOAuthProviders(): OAuthProviderInfo[] {
 /** Provider id that stores `providerId`'s credentials: login aliases (`openai-codex-device`) map to their target (`openai-codex`). */
 export function getOAuthCredentialProvider(providerId: string): string {
 	const provider =
-		builtInOAuthProviders.find(candidate => candidate.id === providerId) ?? customOAuthProviders.get(providerId);
+		customOAuthProviders.get(providerId) ?? builtInOAuthProviders.find(candidate => candidate.id === providerId);
 	return provider?.storeCredentialsAs ?? providerId;
 }

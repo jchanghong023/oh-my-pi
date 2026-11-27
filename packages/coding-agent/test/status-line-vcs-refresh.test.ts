@@ -5,13 +5,14 @@
  * skipped one runs once the run yields), and a cwd change drops the old
  * repository's facts.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { GitStatus, StatusLineSettings } from "@oh-my-pi/pi-coding-agent/modes/view-model/status-line/types";
 import type { VcsGitRepo, VcsHeadState, VcsRepo, VcsStatusSummary } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import * as utils from "@oh-my-pi/pi-utils";
 import { disposeStatusLines, flushStatus, lineText, statusLine, statusSession } from "./helpers/session-status-line";
+import { restoreEnvValue } from "./helpers/settings-test-state";
 
 const CLEAN: GitStatus = [0, 0, 0, 0, 0, 0, 0, 0];
 
@@ -36,10 +37,18 @@ afterAll(() => {
 	resetSettingsForTest();
 });
 
+let originalOffline: string | undefined;
+
+beforeEach(() => {
+	originalOffline = process.env.OMP_OFFLINE;
+	restoreEnvValue("OMP_OFFLINE", "0");
+});
+
 afterEach(() => {
 	disposeStatusLines();
 	vi.restoreAllMocks();
 	vi.useRealTimers();
+	restoreEnvValue("OMP_OFFLINE", originalOffline);
 });
 
 /** A git repository on `branch` (read at every HEAD read). */
@@ -197,9 +206,8 @@ describe("status line VCS refresh", () => {
 		["win32", "1", READ_INTERVAL_MS],
 	] as const)("limits event-driven reads with %s offline=%s", async (platform, offline, interval) => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
-		const originalOffline = process.env.OMP_OFFLINE;
 		Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
-		process.env.OMP_OFFLINE = offline;
+		restoreEnvValue("OMP_OFFLINE", offline);
 		try {
 			vi.useFakeTimers();
 			vi.spyOn(utils, "getProjectDir").mockReturnValue("/repo/ttl");
@@ -230,8 +238,6 @@ describe("status line VCS refresh", () => {
 			expect(lineText(line)).toContain("Changes: 7");
 		} finally {
 			Object.defineProperty(process, "platform", originalPlatform);
-			if (originalOffline === undefined) delete process.env.OMP_OFFLINE;
-			else process.env.OMP_OFFLINE = originalOffline;
 		}
 	});
 

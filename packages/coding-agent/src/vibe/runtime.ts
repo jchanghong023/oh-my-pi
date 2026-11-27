@@ -40,7 +40,6 @@ import { getBundledAgent } from "../task/agents";
 import { type ExecutorOptions, runSubagentFollowUpTurn, runSubprocess } from "../task/executor";
 import { generateTaskName, sanitizeAgentId } from "../task/name-generator";
 import { AgentOutputManager } from "../task/output-manager";
-import { canColdReviveSubagent } from "../task/persisted-revive";
 import { type AgentDefinition } from "../task/types";
 import { type AgentProgress, oneLineLabel, type SingleResult } from "../task/task-details";
 import type { ToolSession } from "../tools";
@@ -60,6 +59,10 @@ import {
 import { type VibeCli } from "../tools/details/vibe";
 
 import { cfgTaskAgentAccountPools, cfgTaskAgentModelOverrides } from "../task/settings";
+
+// Only persisted worker reconciliation needs the cold-revive implementation.
+const loadPersistedRevive = () => import("../task/persisted-revive");
+
 /**
  * CLI flavor → bundled agent type. This IS the model-tier mapping: `sonic`
  * carries `model: "@smol"` (the configured fast/low-latency role) and `task`
@@ -604,14 +607,10 @@ export class VibeSessionRegistry {
 		if (!relative || path.isAbsolute(relative) || relative.startsWith(`..${path.sep}`) || relative === "..") {
 			return undefined;
 		}
-		try {
-			const persisted = await SessionManager.peekSessionInit(childSessionFile);
-			return persisted?.init
-				? { sessionFile: childSessionFile, canColdRevive: canColdReviveSubagent(persisted.init) }
-				: undefined;
-		} catch {
-			return undefined;
-		}
+		const persisted = await SessionManager.peekSessionInit(childSessionFile).catch(() => undefined);
+		if (!persisted?.init) return undefined;
+		const { canColdReviveSubagent } = await loadPersistedRevive();
+		return { sessionFile: childSessionFile, canColdRevive: canColdReviveSubagent(persisted.init) };
 	}
 
 	#trackAgentRelease(id: string, ref: AgentRef, action: "detach" | "release"): TrackedVibeTeardown {
@@ -1052,7 +1051,7 @@ export class VibeSessionRegistry {
 		const records = [...this.#records.values()].filter(record => matchesScope(record, scope));
 		const teardown = records.map(record => ({
 			record,
-			ref: record.readOnlyHistory ? undefined : this.#registeredAgent(record),
+			ref: this.#registeredAgent(record),
 			job: record.turn && manager ? manager.getJob(record.turn.jobId) : undefined,
 		}));
 		for (const { record } of teardown) {
@@ -1083,7 +1082,6 @@ export class VibeSessionRegistry {
 				});
 				this.#continueSuspendedCleanup(scope, record, jobTask);
 			}
-			if (record.readOnlyHistory) continue;
 			if (this.#records.has(scopeKey(scope, record.id))) continue;
 			const lateRef = this.#registeredAgent(record);
 			if (lateRef && lateRef !== ref) {

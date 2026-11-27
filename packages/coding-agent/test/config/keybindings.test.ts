@@ -355,13 +355,13 @@ describe("KeybindingsManager.create", () => {
 
 	it("merges default user keybindings when create uses the active profile with no arguments (#4867)", async () => {
 		const saved = {
-			PI_CONFIG_DIR: process.env.PI_CONFIG_DIR,
+			OMP_CONFIG_ROOT: process.env.OMP_CONFIG_ROOT,
 			PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
 			OMP_PROFILE: process.env.OMP_PROFILE,
 			PI_PROFILE: process.env.PI_PROFILE,
 		};
 		try {
-			process.env.PI_CONFIG_DIR = path.relative(os.homedir(), tempDir);
+			process.env.OMP_CONFIG_ROOT = tempDir;
 			__resetDirsFromEnvForTests();
 			const defaultAgentDir = path.join(getProfileRootDir(undefined), "agent");
 			const profileAgentDir = path.join(getProfileRootDir("work"), "agent");

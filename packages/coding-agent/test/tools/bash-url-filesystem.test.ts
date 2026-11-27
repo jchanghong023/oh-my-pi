@@ -7,6 +7,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveLocalRoot } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
+import { canCreateSymlinks } from "../helpers/symlink-privilege";
 
 let tempDir: string;
 let localRoot: string;
@@ -68,8 +69,7 @@ describe("bash internal URLs through the shell filesystem", () => {
 		},
 	);
 
-	// Like URL-to-URL symlinks above, host file symlinks require a Windows privilege.
-	it.skipIf(process.platform === "win32")("links a host path to the file a backed URL aliases", async () => {
+	it.skipIf(!canCreateSymlinks())("links a host path to the file a backed URL aliases", async () => {
 		const { text, isError } = await run(
 			"printf 'body\\n' > local://source.txt && ln -s local://source.txt host-link && cat host-link",
 		);

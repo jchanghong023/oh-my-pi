@@ -877,10 +877,12 @@ async function loadPlanReference(
  * Isolated runs `session` spawns work in ovnfs checkouts, which record it, when
  * `isolation.backend` is auto and ovnfs is found, else in native clones.
  */
-function openIsolatedWorkspace(session: ToolSession): OpenWorkspace {
+function openIsolatedWorkspace(session: ToolSession, preserveNativePath: boolean): OpenWorkspace {
 	const backend = cfgIsolationBackend.get(session.settings);
 	const ovnfs = backend === "auto" ? ovnfsCommand(session.settings) : undefined;
-	return ovnfs ? ovnfsWorkspace(ovnfs, owningSessionId(session)) : nativeWorkspace(parseIsolationBackend(backend));
+	return ovnfs
+		? ovnfsWorkspace(ovnfs, owningSessionId(session))
+		: nativeWorkspace(parseIsolationBackend(backend), preserveNativePath);
 }
 
 function buildFailureResult(
@@ -1056,6 +1058,8 @@ async function runAdmittedSubagent(
 	let settled: SingleResult | undefined;
 	let retainSalvagedArtifact = false;
 	let artifactsFinalized = false;
+	let sharedObservationPending = false;
+	let cleanupAfterSharedObservation: (() => Promise<void>) | undefined;
 	const finalizeArtifacts = async (initializationFailed = false): Promise<void> => {
 		if (!lease.temporary || artifactsFinalized) return;
 		artifactsFinalized = true;
@@ -1065,9 +1069,18 @@ async function runAdmittedSubagent(
 				retainSalvagedArtifact ||
 				(request.retainArtifacts && (completedSuccessfully || hasValidStructuredOutput)) ||
 				(policy.isIsolated && (!policy.applyChanges || changesApplied === false || requiresRecoveryArtifacts)));
-		const cleanupArtifacts = async (): Promise<void> => {
+		const removeArtifacts = async (): Promise<void> => {
 			await fs.rm(lease.artifactsDir, { recursive: true, force: true });
 			lease.unregister?.();
+		};
+		const cleanupArtifacts = async (): Promise<void> => {
+			if (sharedObservationPending) {
+				// Even a retained handle's caller may request cleanup before the
+				// kept-alive child is released. The observer still owns the bytes.
+				cleanupAfterSharedObservation = removeArtifacts;
+				return;
+			}
+			await removeArtifacts();
 		};
 		if (shouldRetainArtifacts) {
 			// The caller owns disposal once its retained handle is no longer needed.
@@ -1106,6 +1119,7 @@ async function runAdmittedSubagent(
 			};
 		}
 		let sharedResult: SingleResult | undefined;
+		let sharedReleaseStarted = false;
 		const observeSharedResult = async (result: SingleResult): Promise<void> => {
 			await deferredCleanup;
 			if (spawnFailed) return;
@@ -1115,8 +1129,14 @@ async function runAdmittedSubagent(
 		if (!policy.isIsolated && (hooks?.beforeCapture || hooks?.afterResult)) {
 			const release = baseOptions.onRelease;
 			baseOptions.onRelease = async () => {
+				sharedReleaseStarted = true;
 				await release?.();
-				if (sharedResult) await observeSharedResult(sharedResult);
+				if (sharedResult && sharedObservationPending) {
+					await observeSharedResult(sharedResult);
+					sharedObservationPending = false;
+				}
+				await cleanupAfterSharedObservation?.();
+				cleanupAfterSharedObservation = undefined;
 			};
 		}
 		baseOptions.onCleanupDeferred = completion => {
@@ -1155,16 +1175,19 @@ async function runAdmittedSubagent(
 				settled = result;
 				sharedResult = result;
 				if (hooks?.beforeCapture || hooks?.afterResult) {
-					if (baseOptions.keepAlive === false || !AgentLifecycleManager.global().has(id)) {
-						await observeSharedResult(result);
-					}
+					sharedObservationPending =
+						!sharedReleaseStarted && baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(id);
+					if (!sharedObservationPending) await observeSharedResult(result);
 				}
 			} else {
 				result = await runIsolatedSubprocess({
 					baseOptions,
 					context: isolationContext,
 					preserveCwd: spawnOverrides?.preserveCwd,
-					openWorkspace: openIsolatedWorkspace(request.session),
+					openWorkspace: openIsolatedWorkspace(
+						request.session,
+						baseOptions.keepAlive !== false && !!(hooks?.beforeCapture || hooks?.afterResult),
+					),
 					agentId: id,
 					mergeMode: policy.mergeMode,
 					artifactsDir: lease.artifactsDir,

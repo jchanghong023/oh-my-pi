@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- Cancelled embedding requests report cancellation, and strict embeddings reject dimension changes between batches.
 - Company embeddings honor provider disabling and private CAs. Offline embedding requests do not forward memory text through redirects.
 - Embedding requests can retry when a transient HTTP error returns headers but its body stalls.
 - OpenRouter embeddings prefer the stored OpenRouter credential over environment fallbacks and do not use an unrelated OpenAI key.

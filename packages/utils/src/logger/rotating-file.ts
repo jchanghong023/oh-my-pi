@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { localDay, prepareLogDirectory } from "../dirs";
-import { isEexist } from "../fs-error";
+import { hasFsCode, isEexist } from "../fs-error";
 
 /** Write batching for {@link RotatingFileSink}. */
 export interface RotatingFileBatchOptions {
@@ -34,7 +34,7 @@ export interface RotatingFileOptions {
 	 * staying pinned to a file the sink later prunes.
 	 */
 	readonly onRotate?: (filePath: string) => void;
-	/** Lazily create/validate the destination, tried once after a primary failure. */
+	/** Lazily resolve the alternative destination if the primary fails. */
 	readonly fallbackDirectory?: () => string;
 	/** Return an optional already-formatted recovery record; never called recursively. */
 	readonly onFailure?: (error: unknown, stage: string, recoveredPath?: string) => string | undefined;
@@ -66,12 +66,14 @@ export class RotatingFileSink {
 	readonly #fallbackDirectory: RotatingFileOptions["fallbackDirectory"];
 	readonly #onFailure: RotatingFileOptions["onFailure"];
 	#fallbackAttempted = false;
-	#failed = false;
+	#fallbackPath: string | undefined;
+	#unavailableReported = false;
 	/** Files this sink created, oldest first. */
 	readonly #files: string[] = [];
 	#activeDay: string | undefined;
 	#activeIndex = 0;
 	#activePath: string | undefined;
+	#lastOpenedPath: string | undefined;
 	/** Size of the active file including buffered records not yet written. */
 	#activeBytes = 0;
 	#closed = false;
@@ -103,11 +105,11 @@ export class RotatingFileSink {
 	}
 
 	#openFd(filePath: string): void {
-		this.#closeFd();
+		let fd: number;
 		const requirePrivate = prepareLogDirectory(path.dirname(filePath));
 		for (;;) {
 			try {
-				this.#fd = fs.openSync(
+				fd = fs.openSync(
 					filePath,
 					fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_APPEND,
 					requirePrivate ? 0o600 : undefined,
@@ -121,6 +123,9 @@ export class RotatingFileSink {
 				filePath = this.#activePath!;
 			}
 		}
+		this.#closeFd();
+		this.#fd = fd;
+		this.#lastOpenedPath = filePath;
 		this.#registerFile(filePath);
 		try {
 			this.#onRotate?.(filePath);
@@ -150,12 +155,12 @@ export class RotatingFileSink {
 		}, "open");
 		// Preparation can enqueue recovery/retention warnings even when INFO is filtered.
 		this.flush();
-		return this.#failed ? undefined : this.#activePath;
+		return this.currentPath;
 	}
 
-	/** Current destination, including any user-level fallback. */
+	/** Last successfully opened destination, even if a later write or rotation failed. */
 	get filePath(): string | undefined {
-		return this.#failed ? undefined : this.#activePath;
+		return this.#lastOpenedPath;
 	}
 
 	#notifyFailure(error: unknown, stage: string, recoveredPath?: string): string | undefined {
@@ -166,47 +171,74 @@ export class RotatingFileSink {
 		}
 	}
 
-	#recover(action: () => void, stage: string): void {
-		if (this.#closed || this.#failed) return;
+	#recover(action: () => void, stage: string): boolean {
+		if (this.#closed) return false;
 		try {
 			action();
-			return;
+			return true;
 		} catch (error) {
-			if (!this.#fallbackAttempted && this.#fallbackDirectory) {
-				this.#fallbackAttempted = true;
-				try {
-					// Validation can throw; contain it in the same boundary as opening.
-					const fallback = this.#fallbackDirectory();
-					if (path.relative(fallback, this.#directory) === "") throw error;
-					this.#closeFd();
-					this.#directory = fallback;
-					const day = this.#activeDay ?? localDay(new Date());
-					this.#activeIndex = 0;
-					this.#setActivePath(day, 0);
-					this.#activeBytes += this.#pendingBytes;
-					this.#openFd(this.#activePath!);
-					const recovery = this.#notifyFailure(error, stage, this.#activePath);
-					if (recovery) {
-						const record = `${recovery}${os.EOL}`;
-						this.#pending = record + this.#pending;
-						const bytes = Buffer.byteLength(record, "utf8");
-						this.#pendingBytes += bytes;
-						this.#activeBytes += bytes;
+			let failure = error;
+			if (this.#directory === this.configuredDirectory && this.#fallbackDirectory) {
+				if (!this.#fallbackAttempted) {
+					this.#fallbackAttempted = true;
+					try {
+						const fallback = this.#fallbackDirectory();
+						if (path.relative(fallback, this.configuredDirectory) !== "") this.#fallbackPath = fallback;
+					} catch (fallbackError) {
+						failure = fallbackError;
 					}
-					action();
-					return;
-				} catch (fallbackError) {
-					this.#notifyFailure(fallbackError, stage);
 				}
-			} else {
-				this.#notifyFailure(error, stage);
+				if (this.#fallbackPath) {
+					const primaryPath = this.#activePath;
+					const primaryDay = this.#activeDay;
+					const primaryIndex = this.#activeIndex;
+					const primaryBytes = this.#activeBytes;
+					this.#directory = this.#fallbackPath;
+					this.#activeDay ??= localDay(new Date());
+					this.#activeIndex = 0;
+					this.#setActivePath(this.#activeDay, 0);
+					this.#activeBytes += this.#pendingBytes;
+					try {
+						this.#openFd(this.#activePath!);
+					} catch (fallbackError) {
+						// Opening did not replace the primary descriptor. Retry the
+						// primary on the next record rather than pinning a failed fallback.
+						this.#directory = this.configuredDirectory;
+						this.#activePath = primaryPath;
+						this.#activeDay = primaryDay;
+						this.#activeIndex = primaryIndex;
+						this.#activeBytes = primaryBytes;
+						failure = fallbackError;
+					}
+					if (this.#directory === this.#fallbackPath) {
+						const recovery = this.#notifyFailure(error, stage, this.#activePath);
+						if (recovery) {
+							const record = `${recovery}${os.EOL}`;
+							this.#pending = record + this.#pending;
+							const bytes = Buffer.byteLength(record, "utf8");
+							this.#pendingBytes += bytes;
+							this.#activeBytes += bytes;
+						}
+						try {
+							action();
+							return true;
+						} catch (fallbackError) {
+							failure = fallbackError;
+						}
+					}
+				}
 			}
-			this.#failed = true;
+			if (!this.#unavailableReported) {
+				this.#unavailableReported = true;
+				this.#notifyFailure(failure, stage);
+			}
+			// Drop only this failed batch to bound memory; later writes still try.
+			this.#activeBytes = this.#fd === undefined ? 0 : this.#activeBytes - this.#pendingBytes;
 			this.#pending = "";
 			this.#pendingBytes = 0;
 			clearTimeout(this.#flushTimer);
 			this.#flushTimer = undefined;
-			this.#closeFd();
+			return false;
 		}
 	}
 	/**
@@ -217,8 +249,7 @@ export class RotatingFileSink {
 	 * reuse it.
 	 */
 	write(line: string, flushNow = false, day = localDay(new Date())): void {
-		this.#recover(() => this.#selectFile(day), "rotate");
-		if (this.#closed || this.#failed) return;
+		if (!this.#recover(() => this.#selectFile(day), "rotate")) return;
 		const record = `${line}${os.EOL}`;
 		const bytes = Buffer.byteLength(record, "utf8");
 		this.#pending += record;
@@ -258,6 +289,11 @@ export class RotatingFileSink {
 			// The LF ends a complete record on every platform, including CRLF on Windows.
 			// Keep the whole torn record, if any, ahead of the records not yet attempted.
 			const replayOffset = off === 0 ? 0 : buf.lastIndexOf(0x0a, off - 1) + 1;
+			// Space/quota failures can recover on this descriptor. A torn line
+			// or other descriptor failure must not be followed by more records.
+			if (off !== replayOffset || (!hasFsCode(error, "ENOSPC") && !hasFsCode(error, "EDQUOT"))) {
+				this.#closeFd();
+			}
 			if (replayOffset > 0) {
 				this.#pending = buf.toString("utf8", replayOffset);
 				this.#pendingBytes = buf.length - replayOffset;

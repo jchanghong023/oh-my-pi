@@ -23,10 +23,11 @@ const ONE_PX_PNG = Buffer.from(
 
 describe("attached image chip token", () => {
 	let dir: string;
+	let settings: Settings;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
-		await Settings.init({ inMemory: true, overrides: { "images.autoResize": false } });
+		settings = await Settings.init({ inMemory: true, overrides: { "images.autoResize": false } });
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-image-chip-"));
 	});
 
@@ -40,8 +41,10 @@ describe("attached image chip token", () => {
 		const composer = new Composer({ symbol: key => nerd[key] ?? "" });
 		const ctx = {
 			composer,
+			settings,
 			shell: { focused: () => composer.field },
 			sessionManager: {
+				getSessionId: () => "image-chip",
 				getCwd: () => dir,
 				putBlob: async () => ({ hash: "h", path: "/tmp/h.png", displayPath: "/tmp/h.png" }),
 			},

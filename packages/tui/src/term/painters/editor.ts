@@ -241,13 +241,13 @@ export function lastLayout(node: UiNode): EditorRow[] {
 const kCompletionLayout = Symbol("pi-tui.editor.completion-layout");
 
 interface CompletionLayoutHolder {
-	[kCompletionLayout]?: { cx: Pick<PaintContext, "viewportHeight">; rowsFromCaret: number };
+	[kCompletionLayout]?: { cx: Pick<PaintContext, "focused" | "viewportHeight">; rowsFromCaret: number };
 }
 
 /** Record the rows from the caret through the composer chrome, before its completion popup. */
 export function setTerminalCompletionLayout(
 	node: UiNode,
-	cx: Pick<PaintContext, "viewportHeight">,
+	cx: Pick<PaintContext, "focused" | "viewportHeight">,
 	rowsFromCaret: number,
 ): void {
 	const holder = node as CompletionLayoutHolder;
@@ -261,7 +261,7 @@ export function setTerminalCompletionLayout(
 /** Whether the terminal can display a completion row without hiding the caret. */
 export function hasTerminalCompletionRoom(node: UiNode): boolean {
 	const layout = (node as CompletionLayoutHolder)[kCompletionLayout];
-	if (!layout) return true;
+	if (!layout || !layout.cx.focused(node)) return true;
 	const height = layout.cx.viewportHeight;
 	return height === undefined || height > layout.rowsFromCaret;
 }

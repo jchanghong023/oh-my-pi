@@ -667,6 +667,23 @@ fn blocking<T: Send + 'static + ToNapiValue + TypeName>(
 	})
 }
 
+/// Once a synchronous write starts, its actual outcome must reach JS even
+/// if the signal aborts before the promise is settled.
+fn blocking_mutation<T: Send + 'static + ToNapiValue + TypeName>(
+	tag: &'static str,
+	repo: Arc<omp_vcs::git::GitRepo>,
+	signal: Option<Unknown>,
+	f: impl FnOnce(&omp_vcs::git::GitRepo) -> omp_vcs::Result<T> + Send + 'static,
+) -> Promise<T> {
+	let before_start = task::CancelToken::new(None, signal);
+	task::blocking_mapped(tag, (), rich_error, canceled_error, move |_| {
+		if before_start.heartbeat().is_err() {
+			return Err(omp_vcs::Error::Canceled);
+		}
+		catch_panic(tag, || f(&repo))
+	})
+}
+
 fn repo_blocking<T: Send + 'static + ToNapiValue + TypeName>(
 	tag: &'static str,
 	repo: omp_vcs::Repo,
@@ -1057,6 +1074,7 @@ impl VcsGitRepo {
 	}
 
 	/// Resolve an effective executable hook without executing it.
+	/// Rejects when an active configuration-defined hook has no file path.
 	#[napi]
 	pub fn hook_path(&self, name: String, signal: Option<Unknown>) -> Promise<Either<String, Null>> {
 		blocking("vcs.hookPath", self.inner.clone(), signal, move |repo| {
@@ -1453,6 +1471,7 @@ impl VcsGitRepo {
 	}
 
 	/// Hook-free confirmed-tree commit with locked, resumable index publication.
+	/// Cancellation is honored before the write starts, not during settlement.
 	#[napi]
 	pub fn commit_create_scoped(
 		&self,
@@ -1461,7 +1480,7 @@ impl VcsGitRepo {
 		signal: Option<Unknown>,
 	) -> Promise<VcsScopedCommitResult> {
 		let options = options.into();
-		blocking("vcs.commitCreateScoped", self.inner.clone(), signal, move |repo| {
+		blocking_mutation("vcs.commitCreateScoped", self.inner.clone(), signal, move |repo| {
 			repo
 				.commit_create_scoped(&message, &options)
 				.map(Into::into)
@@ -1650,6 +1669,7 @@ impl VcsGitRepo {
 	}
 
 	/// Guard worktree preimages and report every path's actual partial outcome.
+	/// Cancellation is honored before the write starts, not during settlement.
 	#[napi]
 	pub fn apply_owned_patch(
 		&self,
@@ -1658,7 +1678,7 @@ impl VcsGitRepo {
 		signal: Option<Unknown>,
 	) -> Promise<VcsOwnedPatchResult> {
 		let options = options.into();
-		blocking("vcs.applyOwnedPatch", self.inner.clone(), signal, move |repo| {
+		blocking_mutation("vcs.applyOwnedPatch", self.inner.clone(), signal, move |repo| {
 			repo.apply_owned_patch(&patch, &options).map(Into::into)
 		})
 	}

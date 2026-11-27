@@ -4,7 +4,6 @@
 
 ### Breaking Changes
 
-- Moved `convertImageToPng`, `convertImageToPngShared`, `cachedPngConversion` and `imagePayloadKey` from `@oh-my-pi/pi-tui/chat/image-loading` to `@oh-my-pi/pi-tui/png-conversion`; import them from the new path ([#19829](https://github.com/can1357/oh-my-pi/pull/19829) by [@jaredlyon](https://github.com/jaredlyon))
 - `OutputSinkOptions.artifactPath`/`artifactId` are replaced by `allocateArtifact` (`ArtifactAllocator`), which the sink calls only when output first overflows its inline view
 - Removed the `windows-altgr` module (`translateWindowsAltGrSequence`, `readAltGrLayer`, `createRightAltLatch`, `RIGHT_ALT_LATCH_MS`, `AltGrHost`, `KeyboardLayoutHandle`); AltGr recovery is `translateWindowsAltGrSequence` in `@oh-my-pi/pi-natives`
 - Removed the fork-only blocked todo state and blocker note from the TUI todo types.
@@ -12,11 +11,18 @@
 
 ### Fixed
 
+- Terminal resizing preserves visible completions, and clipped completion rows no longer prevent ordinary status rows from pushing stable output into scrollback.
 - SIXEL and iTerm2 images no longer draw over other rows or scroll the terminal under the frame: images taller than the screen are fitted within it, and a live image whose first rows the viewport cuts off is left out until they fit ([#20620](https://github.com/can1357/oh-my-pi/pull/20620) by [@JustasMasiulis](https://github.com/JustasMasiulis))
 - Code blocks in a streaming reply now reach scrollback line by line as they scroll off screen, instead of staying out of reach until the block ends ([#13676](https://github.com/can1357/oh-my-pi/issues/13676), [#20561](https://github.com/can1357/oh-my-pi/pull/20561) by [@Frexxis](https://github.com/Frexxis))
 - Reduced idle CPU use on Windows after `/restart` ([#20518](https://github.com/can1357/oh-my-pi/pull/20518) by [@ethancawse](https://github.com/ethancawse)).
 - Reopened lost Tern surfaces on an `unknown surface` reply, stopped frames if the reopen was rejected, and kept recognizable broken TSP replies out of the editor ([#20550](https://github.com/can1357/oh-my-pi/issues/20550)).
 - Typing in a Tern composer keeps echoing while an agent streams, instead of stalling for seconds when Tern is slow to acknowledge frames. ([#20463](https://github.com/can1357/oh-my-pi/pull/20463) by [@Xytronix](https://github.com/Xytronix))
+
+### Release Notes Errata
+
+- **PNG conversion:** The 19.1.0 migration note points to a nonexistent `@oh-my-pi/pi-tui/png-conversion` entry point. Import `convertImageToPng` from `@oh-my-pi/pi-coding-agent/utils/png-conversion` if you need the standalone helper. Neither that TUI path nor `@oh-my-pi/pi-tui/chat/image-loading` exports the conversion helpers.
+- **19.2.1:** This release added the annotated-image `change` event, which reaches the node's `onChange` without an `item`, and fixed frame-acknowledgment stall warnings for panes in background Tern tabs. Both entries appear under 17.0.1 by mistake. Handling terminal `features` events without waiting for a new hello was already documented in 19.1.0.
+- **18.8.6+fork.305:** This fork release, not upstream 18.8.7, fixed wrapped box-editor status rows, startup border and narrow-preview alignment, and missing alias login providers in the logout picker when their credentials are shared.
 
 ## [19.2.1] - 2026-11-25
 

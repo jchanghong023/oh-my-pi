@@ -10,6 +10,7 @@
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { isPidAlive } from "@oh-my-pi/pi-utils/pid";
 import { $ } from "bun";
 import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/host-detect";
 import { stampNativeVersion } from "../../../scripts/stamp-native-version";
@@ -66,6 +67,28 @@ async function installGeneratedBindings(outputDir: string): Promise<void> {
 	}
 }
 
+async function cleanupStaleAddonBackups(): Promise<void> {
+	const entries = await fs.readdir(nativeDir, { withFileTypes: true });
+	const stale = [];
+	for (const entry of entries) {
+		if (!entry.isFile()) continue;
+		const match = /^(pi_natives\.win32-[\w-]+\.node)\.old\.([1-9]\d*)$/.exec(entry.name);
+		if (!match || isPidAlive(Number(match[2]))) continue;
+		stale.push({ name: entry.name, target: match[1], pid: match[2] });
+	}
+	if (stale.length === 0) return;
+
+	// Re-scan after checking the installers have exited. Failed rollback
+	// retains both the old addon and its same-PID staged replacement.
+	const current = await fs.readdir(nativeDir, { withFileTypes: true });
+	for (const { name, target, pid } of stale) {
+		const stagedPrefix = `${target}.tmp.${pid}.`;
+		if (!current.some(entry => entry.name === target && entry.isFile())) continue;
+		if (current.some(entry => entry.name.startsWith(stagedPrefix))) continue;
+		await fs.unlink(path.join(nativeDir, name)).catch(() => {});
+	}
+}
+
 export async function buildBindings(): Promise<void> {
 	if (process.argv.length > 2) {
 		throw new Error("Usage: bun packages/natives/scripts/build-bindings.ts");
@@ -96,6 +119,7 @@ export async function buildBindings(): Promise<void> {
 	console.log(`Building omp-natives bindings for ${process.platform}-${process.arch}${variantSuffix} (local)…`);
 
 	await fs.mkdir(nativeDir, { recursive: true });
+	if (process.platform === "win32") await cleanupStaleAddonBackups().catch(() => {});
 	await fs.mkdir(path.join(nativeDir, ".build"), { recursive: true });
 	const buildOutputDir = await fs.mkdtemp(
 		path.join(nativeDir, ".build", `${process.platform}-${process.arch}-${effectiveVariant ?? "default"}-local-`),

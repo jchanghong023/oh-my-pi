@@ -80,6 +80,7 @@ import type {
 	AuthGatewayServerHandle,
 	AuthGatewayFormatModule as FormatModule,
 	AuthGatewayParsedRequest as ParsedFormatRequest,
+	AuthGatewayStreamControl,
 } from "./types";
 import { DEFAULT_AUTH_GATEWAY_BIND } from "./types";
 
@@ -318,7 +319,10 @@ class EmbeddedToolTurns {
 	// bounded both by count and by the approximate UTF-16 size of their payloads.
 	static readonly maxTurns = 2048;
 	static readonly maxBytes = 16 * 1024 * 1024;
-	#turns = new Map<string, { message: AssistantMessage; bytes: number }>();
+	#turns = new Map<
+		string,
+		{ message: AssistantMessage; bytes: number; replay?: readonly openaiResponses.ResponsesReplayPart[] }
+	>();
 	#bytes = 0;
 	#closed = false;
 
@@ -333,7 +337,12 @@ class EmbeddedToolTurns {
 		return calls.length > 0 ? JSON.stringify([sessionId, calls]) : undefined;
 	}
 
-	remember(sessionId: string, message: AssistantMessage, toWireId?: (id: string) => string): void {
+	remember(
+		sessionId: string,
+		message: AssistantMessage,
+		toWireId?: (id: string) => string,
+		replay?: readonly openaiResponses.ResponsesReplayPart[],
+	): void {
 		if (this.#closed) return;
 		const key = this.#key(sessionId, message, toWireId);
 		if (!key) return;
@@ -342,9 +351,9 @@ class EmbeddedToolTurns {
 			this.#bytes -= previous.bytes;
 			this.#turns.delete(key);
 		}
-		const bytes = (key.length + JSON.stringify(message).length) * 2;
+		const bytes = (key.length + JSON.stringify(message).length + (replay ? JSON.stringify(replay).length : 0)) * 2;
 		if (bytes > EmbeddedToolTurns.maxBytes) return;
-		this.#turns.set(key, { message, bytes });
+		this.#turns.set(key, { message, bytes, replay });
 		this.#bytes += bytes;
 		while (this.#turns.size > EmbeddedToolTurns.maxTurns || this.#bytes > EmbeddedToolTurns.maxBytes) {
 			const oldest = this.#turns.keys().next().value;
@@ -354,25 +363,61 @@ class EmbeddedToolTurns {
 		}
 	}
 
-	restore(sessionId: string, context: Context, isResponses: boolean): void {
+	restore(sessionId: string, context: Context): void {
 		if (this.#turns.size === 0) return;
 		const restored: Context["messages"] = [];
-		for (const message of context.messages) {
+		let restoredBoundary = 0;
+		let trailingReplay: readonly openaiResponses.ResponsesReplayPart[] | undefined;
+		for (let message of context.messages) {
+			if (trailingReplay && message.role === "assistant") {
+				let start = 0;
+				while (
+					start < message.content.length &&
+					openaiResponses.isReplayedOutputPart(message.content[start], trailingReplay)
+				) {
+					start++;
+				}
+				if (start === message.content.length) continue;
+				if (start) message = { ...message, content: message.content.slice(start) };
+			}
+			trailingReplay = undefined;
 			const key = message.role === "assistant" ? this.#key(sessionId, message) : undefined;
 			const turn = key === undefined ? undefined : this.#turns.get(key);
 			if (key === undefined || !turn || message.role !== "assistant") {
 				restored.push(message);
 				continue;
 			}
-			// The Responses parser appends calls to the preceding text item,
-			// even if that item is independent of the cached turn.
-			const text = isResponses ? message.content[0] : undefined;
-			if (text?.type === "text" && !openaiResponses.matchesOutputText(turn.message, text)) {
-				restored.push({ ...message, content: [text] });
+			if (turn.replay) {
+				const replay = turn.replay;
+				// The Responses parser can spread one turn across assistant messages
+				// and can attach its first reasoning or call to an earlier message.
+				for (
+					let previous = restored.at(-1);
+					restored.length > restoredBoundary && previous?.role === "assistant";
+					previous = restored.at(-1)
+				) {
+					let keep = previous.content.length;
+					while (keep > 0 && openaiResponses.isReplayedOutputPart(previous.content[keep - 1], replay)) keep--;
+					if (keep === 0) {
+						restored.pop();
+					} else {
+						if (keep < previous.content.length) {
+							restored[restored.length - 1] = { ...previous, content: previous.content.slice(0, keep) };
+						}
+						break;
+					}
+				}
+				const unrelated = message.content.filter(
+					part =>
+						part.type !== "toolCall" && !openaiResponses.isReplayedOutputPart(part, replay, "matched-message"),
+				);
+				if (unrelated.length) restored.push({ ...message, content: unrelated });
+				trailingReplay = replay;
 			}
 			this.#turns.delete(key);
 			this.#turns.set(key, turn);
 			restored.push(turn.message);
+			restoredBoundary = restored.length;
 		}
 		context.messages = restored;
 	}
@@ -483,10 +528,12 @@ async function handleFormatEndpoint(
 			])
 		: sessionId;
 	const isResponses = route.module === openaiResponses;
-	// Responses echoes only the wire call ID; keep the native ID in the cached turn.
-	const toWireToolCallId = isResponses ? openaiResponses.wireCallId : undefined;
+	const rememberResponsesTurn: openaiResponses.ResponsesReplayRecorder | undefined =
+		isResponses && toolTurns
+			? (message, replay) => toolTurns.remember(toolTurnSessionId, message, openaiResponses.wireCallId, replay)
+			: undefined;
 	parsed.options.promptCacheKey = sessionId;
-	toolTurns?.restore(toolTurnSessionId, parsed.context, isResponses);
+	toolTurns?.restore(toolTurnSessionId, parsed.context);
 
 	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
 	// expected to resolve the credential and pass it as `options.apiKey`.
@@ -550,8 +597,9 @@ async function handleFormatEndpoint(
 		try {
 			if (controller.signal.aborted) return clientClosedResponse(route);
 			const message = await completeSimple(model, parsed.context, streamOpts);
-			if (message.stopReason !== "error" && message.stopReason !== "aborted")
-				toolTurns?.remember(toolTurnSessionId, message, toWireToolCallId);
+			if (!isResponses && message.stopReason !== "error" && message.stopReason !== "aborted") {
+				toolTurns?.remember(toolTurnSessionId, message);
+			}
 			recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
 			if (message.stopReason === "aborted" || message.stopReason === "error") {
 				const errorMessage =
@@ -571,7 +619,9 @@ async function handleFormatEndpoint(
 			}
 			return json(
 				200,
-				route.module.encodeResponse(message, parsed.modelId),
+				isResponses
+					? openaiResponses.encodeResponse(message, parsed.modelId, rememberResponsesTurn)
+					: route.module.encodeResponse(message, parsed.modelId),
 				gatewayResponseHeaders(model, { requestId, costUsd: message.usage.cost.total, startedAt }),
 			);
 		} catch (error) {
@@ -622,14 +672,14 @@ async function handleFormatEndpoint(
 
 		// Remember before exposing the terminal event: the client may immediately
 		// send tool results on another concurrent request when it sees that event.
-		if (toolTurns) {
+		if (toolTurns && !isResponses) {
 			const iterate = events[Symbol.asyncIterator].bind(events);
 			let terminalSeen = false;
 			events[Symbol.asyncIterator] = async function* () {
 				for await (const event of { [Symbol.asyncIterator]: iterate }) {
 					if (event.type === "done") {
 						terminalSeen = true;
-						toolTurns.remember(toolTurnSessionId, event.message, toWireToolCallId);
+						toolTurns.remember(toolTurnSessionId, event.message);
 					} else if (event.type === "error") {
 						terminalSeen = true;
 					}
@@ -638,18 +688,21 @@ async function handleFormatEndpoint(
 				// Some providers end with a result but no terminal event.
 				const message = terminalSeen ? undefined : await events.result().catch(() => undefined);
 				if (message && message.stopReason !== "error" && message.stopReason !== "aborted") {
-					toolTurns.remember(toolTurnSessionId, message, toWireToolCallId);
+					toolTurns.remember(toolTurnSessionId, message);
 				}
 			};
 		}
-		const sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options, {
+		const control: AuthGatewayStreamControl = {
 			signal: controller.signal,
 			onCancel: reason => {
 				if (!controller.signal.aborted) {
 					controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
 				}
 			},
-		});
+		};
+		const sseStream = isResponses
+			? openaiResponses.encodeStream(events, parsed.modelId, parsed.options, control, rememberResponsesTurn)
+			: route.module.encodeStream(events, parsed.modelId, parsed.options, control);
 		return new Response(sseStream, {
 			status: 200,
 			headers: {

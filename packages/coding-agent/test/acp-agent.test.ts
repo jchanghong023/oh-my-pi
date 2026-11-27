@@ -147,9 +147,7 @@ class FakeAgentSession {
 	fastMode = false;
 	clientBridge: ClientBridge | undefined;
 	forcedToolChoice: string | undefined;
-	get settings(): Settings {
-		return Settings.instance;
-	}
+	readonly settings = Settings.instance;
 	promptCalls: string[] = [];
 	steerCalls: Array<{ text: string; images: unknown[] }> = [];
 	followUpCalls: Array<{ text: string; images: unknown[] }> = [];

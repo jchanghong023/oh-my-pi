@@ -6,7 +6,7 @@
  *
  * Contract: a cached PR is only rendered for the branch it was resolved on.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { StatusLineSettings } from "@oh-my-pi/pi-coding-agent/modes/view-model/status-line/types";
 import { github } from "@oh-my-pi/pi-coding-agent/utils/github";
@@ -14,6 +14,7 @@ import type { VcsGitRepo, VcsGitRepoInfo, VcsHeadState, VcsRepo } from "@oh-my-p
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { disposeStatusLines, flushStatus, lineText, statusLine, statusSession } from "./helpers/session-status-line";
+import { restoreEnvValue } from "./helpers/settings-test-state";
 
 const originalProjectDir = getProjectDir();
 const root = "/repo/pr-branch-switch";
@@ -123,10 +124,18 @@ afterAll(() => {
 	setProjectDir(originalProjectDir);
 });
 
+let originalOffline: string | undefined;
+
+beforeEach(() => {
+	originalOffline = process.env.OMP_OFFLINE;
+	restoreEnvValue("OMP_OFFLINE", "0");
+});
+
 afterEach(() => {
 	disposeStatusLines();
 	vi.restoreAllMocks();
 	vi.useRealTimers();
+	restoreEnvValue("OMP_OFFLINE", originalOffline);
 });
 
 describe("status line PR segment across branch switches", () => {

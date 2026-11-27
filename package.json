@@ -68,6 +68,7 @@
 	"type": "module",
 	"scripts": {
 		"setup": "bun scripts/setup.ts",
+		"postsetup": "bun run gen:export-viewer && bun run gen:relay-extension",
 		"dev": "bun --cwd=packages/coding-agent src/cli.ts",
 		"local": "bun scripts/local.ts",
 		"cnb": "bun scripts/cnb.ts",

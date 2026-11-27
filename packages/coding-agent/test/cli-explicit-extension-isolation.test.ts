@@ -12,6 +12,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { SYMLINKS_USABLE } from "./helpers/symlink-support";
 
 let tempDir: TempDir;
 let authStorage: AuthStorage;
@@ -115,8 +116,7 @@ test.each([
 	},
 );
 
-// File symlinks require Developer Mode on Windows; the retargeting fixture cannot be built.
-test.skipIf(process.platform === "win32")(
+test.skipIf(!SYMLINKS_USABLE)(
 	"trusted extension allowlists are canonical and cannot be expanded by retargeting a symlink",
 	async () => {
 		const trustedTarget = tempDir.join("trusted-target.ts");
@@ -124,7 +124,7 @@ test.skipIf(process.platform === "win32")(
 		const trustedLink = tempDir.join("trusted.ts");
 		await Bun.write(trustedTarget, "export default function () {}");
 		await Bun.write(`${replacementDir}/ambient.ts`, "export default function () {}");
-		await symlink(trustedTarget, trustedLink);
+		await symlink(trustedTarget, trustedLink, "file");
 
 		const parsed = parseArgs(["--trusted-extension", trustedLink]);
 		const settings = Settings.isolated();
@@ -135,7 +135,7 @@ test.skipIf(process.platform === "win32")(
 		expect(options.additionalExtensionPaths).toEqual([realpathSync.native(trustedTarget)]);
 
 		await unlink(trustedLink);
-		await symlink(replacementDir, trustedLink);
+		await symlink(replacementDir, trustedLink, "dir");
 		const result = await loadSessionExtensions(options, tempDir.path(), settings, new EventBus());
 
 		expect(result.errors).toEqual([]);

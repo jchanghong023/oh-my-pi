@@ -1074,7 +1074,7 @@ impl Gen<'_> {
 			Ftype::Dir => true,
 			Ftype::Symlink => match loc.tree.read_link(&loc.rel) {
 				Ok(target) => {
-					let target = crate::rsync::paths::path_bytes(&target);
+					let target = paths::link_target_bytes(&target);
 					!target.is_empty() && *target == *file.link.as_deref().unwrap_or_default()
 				},
 				Err(_) => false,

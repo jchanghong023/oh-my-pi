@@ -223,18 +223,22 @@ describe("AgentSession eval preludes", () => {
 		expect(result.output.trim()).toBe("True");
 	});
 
-	it("reconciles browser MCP filtering on live browser toggles", async () => {
-		const manager = new MCPManager(registryDir, async () => ({
+	it.each([
+		{ backend: "available JS Eval", evalJs: true },
+		{ backend: "unprobed Python only", evalJs: false },
+	])("reconciles browser MCP filtering on live browser toggles with $backend", async ({ evalJs }) => {
+		const cwd = fs.mkdtempSync(path.join(registryDir, "browser-filter-"));
+		const manager = new MCPManager(cwd, async () => ({
 			configs: {},
 			sources: {},
 			exaApiKeys: [],
 		}));
-		const settings = Settings.isolated({ "browser.enabled": false, "eval.js": false });
+		const settings = Settings.isolated({ "browser.enabled": false, "eval.js": evalJs, "eval.py": true });
 		const { session } = await createAgentSession({
-			cwd: registryDir,
+			cwd,
 			agentDir: registryDir,
 			modelRegistry,
-			sessionManager: SessionManager.inMemory(),
+			sessionManager: SessionManager.inMemory(cwd),
 			settings,
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
@@ -250,8 +254,8 @@ describe("AgentSession eval preludes", () => {
 
 		cfgBrowserEnabled.override(settings, true);
 		await Promise.resolve();
-		// An unprobed Python backend cannot replace browser MCP, even with the prelude enabled.
-		expect(reconcile).toHaveBeenNthCalledWith(1, false);
+		// Only the available JS backend can replace browser MCP; Python has not been probed in this cwd.
+		expect(reconcile).toHaveBeenNthCalledWith(1, evalJs);
 		const enableReconcile = reconcile.mock.results[0];
 		if (!enableReconcile || enableReconcile.type !== "return") throw new Error("Expected browser MCP reconcile");
 		await enableReconcile.value;

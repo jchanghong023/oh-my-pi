@@ -22,8 +22,8 @@ import {
 export interface PreviewStatus {
 	/** Status for the shape's top chrome at `width` cells. */
 	top(attachment: StatusAttachment, width: number): ComposerStatusContent | undefined;
-	/** The bottom bar and its overflow with `groups` at `width` cells. */
-	bottom(groups: "full" | "left", width: number): readonly string[];
+	/** The bottom bar and its overflow; `topChipInset` is set when there is a top rule chip. */
+	bottom(groups: "full" | "left", width: number, topChipInset?: number): readonly string[];
 }
 
 /** Narrowest preview. */
@@ -89,7 +89,8 @@ export function composerShapePreviewRows(theme: Theme, id: string, width: number
 	if (bottom !== undefined) rows.push(bottom);
 	const bar = shape.bottomBar ?? "none";
 	if (bar !== "none" && status) {
-		const statusRows = status.bottom(bar, width);
+		const topChipInset = shape.statusAttachment === "top-rule-chip" ? side * 2 : undefined;
+		const statusRows = status.bottom(bar, width, topChipInset);
 		if (statusRows.length > 0) {
 			if (shape.bottomBarGap) rows.push("");
 			rows.push(...statusRows);
@@ -104,7 +105,7 @@ function paintPreview(node: UiNode, cx: PaintContext): Block {
 	const chrome = look?.status;
 	const status: PreviewStatus | undefined = chrome && {
 		top: (attachment, width) => chrome.composerStatus(cx, attachment, width),
-		bottom: (groups, width) => chrome.bottomBar(cx, groups, width),
+		bottom: (groups, width, topChipInset) => chrome.bottomBar(cx, groups, width, topChipInset),
 	};
 	const rows = look ? composerShapePreviewRows(cx.theme, look.shape, cx.width, status) : [];
 	return { rows: ["", cx.theme.style("muted", "Preview:"), ...rows] };

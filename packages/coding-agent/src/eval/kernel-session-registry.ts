@@ -415,6 +415,7 @@ export function createKernelSessionRegistry<
 			shutdowns.push(settleShutdown(session, false));
 		}
 		const results = await Promise.all(shutdowns);
+		let errors: Error[] | undefined;
 		for (let i = 0; i < toShutdown.length; i += 1) {
 			const session = toShutdown[i];
 			const result = results[i];
@@ -430,7 +431,16 @@ export function createKernelSessionRegistry<
 				reason,
 			});
 			if (!sessions.has(session.sessionKey)) sessions.set(session.sessionKey, session);
+			if (options?.strict) {
+				(errors ??= []).push(
+					new Error(`${descriptor.languageLabel} kernel shutdown not confirmed for session ${session.sessionId}`, {
+						cause: result.status === "rejected" ? result.reason : undefined,
+					}),
+				);
+			}
 		}
+		if (errors)
+			throw new AggregateError(errors, `Failed to shut down one or more ${descriptor.languageLabel} kernels`);
 	}
 
 	function peekLiveKernel(cwd: string, options: TOptions): TKernel | undefined {

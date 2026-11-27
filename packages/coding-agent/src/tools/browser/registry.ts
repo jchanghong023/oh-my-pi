@@ -1,5 +1,6 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isCompiledBinary, logger, untilAborted, workerHostEntry } from "@oh-my-pi/pi-utils";
+import { isCompiledBinary, logger, untilAborted, withTimeout, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import type { Browser, CDPSession } from "puppeteer-core";
 import { ToolAbortError } from "../tool-errors";
@@ -22,7 +23,7 @@ import type { RelayKind } from "./relay/kind";
 import { requestRelayRestart, UPDATE_RELAY_EXTENSION, waitForRelayExtension } from "./relay/probe";
 import { ensureSharedBrowser } from "./shared-daemon";
 import type { TernKind } from "./tern/kind";
-import { TernSocketClient } from "./tern/wire";
+import { TernError, TernSocketClient } from "./tern/wire";
 import type { UnitLease } from "./unit-lease";
 import { WebKitHost } from "./webkit/host";
 import type { WebKitKind } from "./webkit/kind";
@@ -76,7 +77,9 @@ export interface CmuxBrowserHandle extends BrowserHandleCommon {
 export interface TernBrowserHandle extends BrowserHandleCommon {
 	kind: TernKind;
 	/** The daemon connection every tab of this handle drives its PiP through. */
-	tern: TernSocketClient;
+	readonly tern: TernSocketClient;
+	/** Identity of the listening socket when this connection was established. */
+	readonly socketIdentity?: string;
 }
 
 /** omp's own WebKit host process, whose headless web views (one block each) are this handle's tabs. */
@@ -247,6 +250,28 @@ export function normalizeConnectedCdpUrl(rawCdpUrl: string): string {
 	return cdpUrl;
 }
 
+async function ternSocketIdentity(socketPath: string): Promise<string | undefined> {
+	const stat = await fs.stat(socketPath, { bigint: true }).catch(() => undefined);
+	if (stat?.isSocket()) return `${stat.dev}:${stat.ino}:${stat.ctimeNs}`;
+}
+
+/** Reconnect to release blocks on the original daemon only. */
+export async function connectTernForCleanup(handle: TernBrowserHandle, timeoutMs: number): Promise<TernSocketClient> {
+	const { socketPath } = handle.kind;
+	const { socketIdentity } = handle;
+	const mismatch = () => new ToolError("Cannot confirm the original Tern daemon socket for browser cleanup");
+	if (socketIdentity === undefined || (await ternSocketIdentity(socketPath)) !== socketIdentity) throw mismatch();
+	const client = new TernSocketClient({ socketPath });
+	try {
+		await withTimeout(client.connect(), timeoutMs, "Timed out connecting to the original Tern daemon");
+		if ((await ternSocketIdentity(socketPath)) !== socketIdentity) throw mismatch();
+		return client;
+	} catch (error) {
+		client.close();
+		throw error;
+	}
+}
+
 async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions): Promise<BrowserHandle> {
 	if (kind.kind === "cmux") {
 		const client = new CmuxSocketClient({ socketPath: kind.socketPath, password: kind.password });
@@ -265,9 +290,14 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 		};
 	}
 	if (kind.kind === "tern") {
+		const socketIdentity = await ternSocketIdentity(kind.socketPath);
 		const tern = new TernSocketClient({ socketPath: kind.socketPath });
 		await tern.connect();
-		return { key: browserKey(kind), kind, tern, refCount: 0 };
+		if ((await ternSocketIdentity(kind.socketPath)) !== socketIdentity) {
+			tern.close();
+			throw new TernError("connect", "The Tern daemon socket changed while connecting");
+		}
+		return { key: browserKey(kind), kind, tern, socketIdentity, refCount: 0 };
 	}
 	if (kind.kind === "webkit") {
 		return {

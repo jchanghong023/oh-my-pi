@@ -974,7 +974,7 @@ async function listTargets(
 				text = describeCdpTargets(targets, "Chrome pages via the relay");
 			} else if ("tern" in browser) {
 				const blocks = await listTernBlocks(browser.tern, { timeoutMs, signal: listSignal });
-				const taken = ternBlocksTaken();
+				const taken = ternBlocksTaken(browser);
 				targets = ternTargets(blocks, taken);
 				text = describeTernTargets(blocks, taken);
 			} else {

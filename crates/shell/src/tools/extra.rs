@@ -552,7 +552,9 @@ impl Lookup {
 	/// `xargs sh -c …`), or a session command of the run in flight
 	/// ([`PiHost::resolve`](crate::host::PiHost)).
 	fn builtin(&self, name: &BStr, raw_args: bool) -> bool {
-		if IntrinsicId::lookup(name, ModeId::Bash).is_some() {
+		if IntrinsicId::lookup(name, ModeId::Bash).is_some()
+			|| crate::sys::shebang::is_self_shell(name)
+		{
 			return true;
 		}
 		if raw_args {
@@ -563,7 +565,6 @@ impl Lookup {
 		}
 		self.config.lookup(name).is_some()
 			|| self.config.native_extra(name).is_some()
-			|| crate::sys::shebang::is_self_shell(name)
 			|| self.config.commands.lookup(name).is_some()
 	}
 }
@@ -656,6 +657,21 @@ mod tests {
 					.any(|part| part == program.as_bytes())
 			);
 		}
+		for shell in crate::sys::shebang::SELF_SHELLS {
+			let command = ShellCommand::new(vec![
+				shell.into(),
+				"-c".into(),
+				"printf %s \"$1\"".into(),
+				"_".into(),
+				name.into(),
+			]);
+			let resolved = lookup
+				.program(&command)
+				.expect("embedded shell without a PATH binary");
+			assert!(matches!(resolved, Program::Builtin));
+			assert_eq!(script(command, &resolved, &[]).args.unwrap()[4].as_slice(), name.as_bytes());
+		}
+
 		let command =
 			ShellCommand::new(vec!["time".into(), "-l".into(), "/bin/cat".into(), name.into()]);
 		let resolved = lookup

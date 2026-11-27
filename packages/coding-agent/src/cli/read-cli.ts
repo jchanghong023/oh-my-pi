@@ -9,7 +9,7 @@ import { getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { COMPANY_PROVIDER_ID, getCompanyConfigError } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
-import { expandRoleAlias } from "../config/model-resolver";
+import { disabledProviderIds, expandRoleAlias } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import { initializeWithSettings } from "../discovery";
 import { cfgDisasmBackend, installStatus, releaseDatabases, resolveWorkerRuntime } from "../disasm";
@@ -111,18 +111,24 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 		};
 
 		const resolveVisionModel = async (): Promise<ResolvedImageQuestionModel> => {
-			const companyError = (await initializeModels()) ? getCompanyConfigError() : undefined;
-			if (!companyError) return resolveImageQuestionModel(session);
+			const offline = await initializeModels();
+			if (!offline || disabledProviderIds(settings).has(COMPANY_PROVIDER_ID) || !getCompanyConfigError()) {
+				return resolveImageQuestionModel(session);
+			}
+			// Initialization already printed the specific configuration error once.
+			const unavailable = new Error(
+				"Image questions require an available company model or an explicit non-company vision/default role.",
+			);
 			// A configured non-company route is an explicit choice, not a fallback.
 			// Keep a broken company selection from falling through to @default.
 			if (expandRoleAlias("@vision", settings).toLowerCase().startsWith(`${COMPANY_PROVIDER_ID}/`)) {
-				throw new Error(companyError);
+				throw unavailable;
 			}
 			let resolved: ResolvedImageQuestionModel;
 			try {
 				resolved = resolveImageQuestionModel(session);
 			} catch {
-				throw new Error(companyError);
+				throw unavailable;
 			}
 			const role = resolved.selectedPattern === "@vision" ? "vision" : "default";
 			if (
@@ -130,7 +136,7 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 				!settings.getModelRole(role) ||
 				resolved.model.provider === COMPANY_PROVIDER_ID
 			) {
-				throw new Error(companyError);
+				throw unavailable;
 			}
 			return resolved;
 		};

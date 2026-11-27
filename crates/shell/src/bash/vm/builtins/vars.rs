@@ -1682,6 +1682,8 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 		DeclareKind::Export | DeclareKind::Readonly => Level::Dynamic,
 	};
 	let mut status = 0;
+	// A non-UTF-8 export name is a usage error even when another operand fails.
+	let mut usage_status = 0;
 	if print && (kind != DeclareKind::Export || !args.iter().any(|a| a.contains(&b'='))) {
 		let mut out = Vec::new();
 		for name in o.rest {
@@ -1690,7 +1692,7 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 				let operand = String::from_utf8_lossy(name);
 				if kind == DeclareKind::Export {
 					ctx.usage(format!("{operand}: invalid variable name"));
-					status = 2;
+					usage_status = 2;
 				} else {
 					ctx.usage(format!("{operand}: not found"));
 					status = 1;
@@ -1719,7 +1721,7 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 			}
 		}
 		ctx.out(&out);
-		return done(status);
+		return done(std::cmp::max(status, usage_status));
 	}
 	let first = args.len() - o.rest.len();
 	let special = matches!(kind, DeclareKind::Readonly | DeclareKind::Export);
@@ -1748,7 +1750,7 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 			let operand = String::from_utf8_lossy(arg);
 			if kind == DeclareKind::Export {
 				ctx.usage(format!("{operand}: invalid variable name"));
-				status = 2;
+				usage_status = 2;
 			} else {
 				ctx.usage(format!("{operand}: not a valid variable name"));
 				status = 1;
@@ -2401,7 +2403,10 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 					// the line (bash `jump_to_top_level (DISCARD)`).
 					Err(d @ Diag::ArithSubscript { .. }) => {
 						ctx.diag(d);
-						return Ok(super::Outcome { status: 1, control: super::Control::DiscardAll });
+						return Ok(super::Outcome {
+							status:  std::cmp::max(1, usage_status),
+							control: super::Control::DiscardAll,
+						});
 					},
 					Err(d) => {
 						ctx.err(d);
@@ -2419,7 +2424,7 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 			},
 		}
 	}
-	done(status)
+	done(std::cmp::max(status, usage_status))
 }
 
 /// The `(key, append, value)` elements of a compound value
@@ -2607,6 +2612,7 @@ fn declare_functions(
 	let names_only = o.has(b'F');
 	let mut out = Vec::new();
 	let mut status = 0;
+	let mut usage_status = 0;
 	// `declare -f[rx] NAME`.
 	let attr_line = |out: &mut Vec<u8>, name: &[u8], attrs: Attrs| {
 		out.extend_from_slice(b"declare -f");
@@ -2646,7 +2652,7 @@ fn declare_functions(
 			let operand = String::from_utf8_lossy(name);
 			if kind == DeclareKind::Export && std::str::from_utf8(name).is_err() {
 				ctx.usage(format!("{operand}: invalid variable name"));
-				status = 2;
+				usage_status = 2;
 			} else if !modify {
 				ctx.usage(format!("{operand}: not found"));
 				status = 1;
@@ -2721,7 +2727,7 @@ fn declare_functions(
 		}
 	}
 	ctx.out(&out);
-	done(status)
+	done(std::cmp::max(status, usage_status))
 }
 
 /// `unset -f name`: a readonly function stays (status 1).

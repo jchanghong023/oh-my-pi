@@ -134,11 +134,14 @@ describe("settings memory page and search", () => {
 	it("puts the exact global settings search hit before incidental matches", () => {
 		const comp = createSelector();
 		const label = settingLabel("providers.fetch");
-		comp.type(label);
+		// A fresh whole-label search must not inherit the index of the old page's row.
+		comp.press("down");
+		comp.press("down");
+		comp.paste(label);
 		const cursor = currentTheme().symbols.symbol("nav.cursor") || ">";
-		const selected = settingsScreen(comp)
-			.split("\n")
-			.find(line => line.includes(`${cursor} ${label}`));
+		const screen = settingsScreen(comp);
+		expect(screen).toContain(settingLabel("images.urls.enabled"));
+		const selected = screen.split("\n").find(line => line.includes(`${cursor} ${label}`));
 		expect(selected).toBeDefined();
 	});
 

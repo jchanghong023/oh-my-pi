@@ -39,7 +39,7 @@ import {
 	warnOnPathConflict,
 } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 import Update from "@oh-my-pi/pi-coding-agent/commands/update";
-import { $which, removeWithRetries } from "@oh-my-pi/pi-utils";
+import { $which, logger, removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 import { canCreateSymlinks } from "./helpers/symlink-privilege";
 import { updateRepositoryTests } from "./helpers/update-repository-test";
@@ -834,6 +834,9 @@ describe("update-cli npm rename contract", () => {
 });
 
 describe("migrateRenamedInstall transaction", () => {
+	const recoveryRepository = "mirror/omp";
+	const { it: forkIt } = updateRepositoryTests(import.meta.path, recoveryRepository);
+	const { it: upstreamIt } = updateRepositoryTests(import.meta.path, "");
 	const release: ReleaseInfo = {
 		tag: "v999.1.0",
 		version: "999.1.0",
@@ -879,10 +882,18 @@ describe("migrateRenamedInstall transaction", () => {
 
 	it("installs the new package before removing the old one and verifies the result", async () => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
+		const info = vi.spyOn(logger, "info").mockImplementation(() => {});
 		const { steps, calls } = scriptedSteps({ install: [0], verify: [true] });
 
 		await migrateRenamedInstall(release, steps);
 		expect(calls).toEqual(["install", "removeOld", "verify"]);
+		expect(info).toHaveBeenCalledWith(
+			"Updater diagnostic",
+			expect.objectContaining({
+				event: "update_rename_install_result_completed",
+				old_package_cleanup_attempted: false,
+			}),
+		);
 	});
 
 	it("restores the bin link by reinstalling when old-package removal breaks verification", async () => {
@@ -905,14 +916,24 @@ describe("migrateRenamedInstall transaction", () => {
 		expect(logs.some(line => line.includes("could not remove the old"))).toBe(true);
 	});
 
-	it("aborts with a recovery hint when verification still fails after the restore install", async () => {
+	forkIt("aborts with a recovery hint when verification still fails after the restore install", async () => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
 		const { steps, calls } = scriptedSteps({ install: [0, 0], verify: [false, false] });
 
 		await expect(migrateRenamedInstall(release, steps)).rejects.toThrow(
-			"reinstall with: https://github.com/jchanghong023/oh-my-pi/releases/latest",
+			`reinstall with: https://github.com/${recoveryRepository}/releases/latest`,
 		);
 		expect(calls).toEqual(["install", "removeOld", "verify", "install", "verify"]);
+	});
+
+	upstreamIt("uses the platform binary installer when official rename recovery fails", async () => {
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const { steps } = scriptedSteps({ install: [0, 0], verify: [false, false] });
+		const installer =
+			process.platform === "win32"
+				? "& ([scriptblock]::Create((irm https://omp.sh/install.ps1))) -Binary"
+				: "curl -fsSL https://omp.sh/install | sh -s -- --binary";
+		await expect(migrateRenamedInstall(release, steps)).rejects.toThrow(`reinstall with: ${installer}`);
 	});
 });
 
@@ -1774,6 +1795,7 @@ describe("update-cli binary replacement", () => {
 		const tempPath = `${targetPath}.new`;
 		const backupPath = `${targetPath}.bak`;
 		await Bun.write(tempPath, "new binary");
+		const info = vi.spyOn(logger, "info").mockImplementation(() => {});
 
 		const result = await replaceBinaryForUpdate({
 			targetPath,
@@ -1786,6 +1808,15 @@ describe("update-cli binary replacement", () => {
 		expect(result.ok).toBe(true);
 		expect(await Bun.file(targetPath).text()).toBe("new binary");
 		expect(await Bun.file(backupPath).exists()).toBe(false);
+		expect(info).toHaveBeenCalledWith(
+			"Updater diagnostic",
+			expect.objectContaining({
+				event: "update_replacement_state_completed",
+				old_binary_touched: false,
+				backup_retained: false,
+			}),
+		);
+		expect(info).not.toHaveBeenCalledWith("Updater diagnostic", expect.objectContaining({ stage: "backup_cleanup" }));
 	});
 });
 
@@ -1874,6 +1905,27 @@ describe("update-cli stale update artifact sweep", () => {
 		expect(await Bun.file(path.join(dir, "notes.bak")).exists()).toBe(true);
 		expect(await Bun.file(`${targetPath}.config.bak`).exists()).toBe(true);
 		expect(await Bun.file(`${targetPath}.config.new`).exists()).toBe(true);
+	});
+
+	it("does not retain a download that disappears after the directory scan", async () => {
+		const dir = await makeTempDir();
+		const target = path.join(dir, "omp.exe");
+		const temp = `${target}.123.456.new`;
+		await Bun.write(temp, "download");
+		const stat = vi.spyOn(nodeFs.promises, "stat").mockImplementationOnce(async file => {
+			await fs.unlink(file);
+			throw Object.assign(new Error("file disappeared"), { code: "ENOENT" });
+		});
+		const info = vi.spyOn(logger, "info").mockImplementation(() => {});
+
+		await sweepStaleUpdateArtifacts(target);
+
+		expect(stat).toHaveBeenCalledWith(temp);
+		expect(await Bun.file(temp).exists()).toBe(false);
+		expect(info).toHaveBeenCalledWith(
+			"Updater diagnostic",
+			expect.objectContaining({ event: "update_artifact_sweep_completed", retained_count: 0 }),
+		);
 	});
 });
 
@@ -2022,8 +2074,12 @@ describe("update-cli script-shim takeover", () => {
 		const exe = `#!/bin/sh\necho omp/${version}\n`;
 
 		const { build, fetchImpl } = offer(exe);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
 		await updateViaShimTakeover(path.join(dir, "omp.cmd"), build, { fetchImpl, verifyBinary });
+		expect(log).toHaveBeenCalledWith(
+			expect.stringContaining(`Updated to ${version} at ${path.join(dir, "omp.exe")}`),
+		);
 
 		expect(await Bun.file(path.join(dir, "omp.exe")).text()).toBe(exe);
 		for (const name in shims) {

@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import { embedConfiguredApi } from "@oh-my-pi/pi-mnemopi/core/embeddings";
-import { withMnemopiRuntimeOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
+import {
+	type ResolvedMnemopiEmbeddingRuntimeOptions,
+	withMnemopiRuntimeOptions,
+} from "@oh-my-pi/pi-mnemopi/core/runtime-options";
 
 const spies: Array<{ mockRestore(): void }> = [];
 afterEach(() => {
@@ -18,7 +21,11 @@ function mockFetch(implementation: (...args: Parameters<typeof fetch>) => Promis
 	return track(vi.spyOn(globalThis, "fetch")).mockImplementation(Object.assign(implementation, { preconnect }));
 }
 
-function embed(signal: AbortSignal, texts = ["section"]) {
+function embed(
+	signal: AbortSignal,
+	texts = ["section"],
+	options: Pick<ResolvedMnemopiEmbeddingRuntimeOptions, "batchSize" | "onRequestFailed" | "requestMaxAttempts"> = {},
+) {
 	return withMnemopiRuntimeOptions(
 		{
 			embeddings: {
@@ -32,6 +39,7 @@ function embed(signal: AbortSignal, texts = ["section"]) {
 				requestRetryDelayMs: 10_000,
 				retryTimeouts: true,
 				signal,
+				...options,
 			},
 		},
 		() => embedConfiguredApi(texts),
@@ -176,6 +184,50 @@ describe("embedding request timeout recovery", () => {
 		await expect(embed(caller.signal)).rejects.toMatchObject({ name: "AbortError" });
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
+
+	it.each([
+		{ status: 403, retries: 0 },
+		{ status: 503, retries: 1 },
+	])(
+		"rejects without partial data when cancelled reading the terminal HTTP $status body",
+		async ({ status, retries }) => {
+			captureTimeouts();
+			const caller = new AbortController();
+			const reason = new DOMException("cancelled during error body read", "AbortError");
+			const onRequestFailed = vi.fn();
+			let bodyReads = 0;
+			const terminal = new Response(
+				new ReadableStream<Uint8Array>(
+					{
+						pull(controller) {
+							bodyReads++;
+							caller.abort(reason);
+							controller.error(new Error("fixture response body interrupted"));
+						},
+					},
+					{ highWaterMark: 0 },
+				),
+				{ status },
+			);
+			let calls = 0;
+			const fetch = mockFetch(async () => {
+				if (++calls === 1) return reply();
+				return calls === 2 && retries > 0 ? new Response("busy", { status }) : terminal;
+			});
+
+			await expect(
+				embed(caller.signal, ["valid first batch", "cancelled batch", "never requested"], {
+					batchSize: 1,
+					onRequestFailed,
+					requestMaxAttempts: 2,
+				}),
+			).rejects.toBe(reason);
+			expect(bodyReads).toBe(1);
+			expect(fetch).toHaveBeenCalledTimes(2 + retries);
+			expect(scheduler.wait).toHaveBeenCalledTimes(retries);
+			expect(onRequestFailed).not.toHaveBeenCalled();
+		},
+	);
 
 	it("does not retry a successful HTTP response with invalid vectors", async () => {
 		captureTimeouts();

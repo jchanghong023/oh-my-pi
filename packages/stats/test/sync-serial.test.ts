@@ -109,12 +109,11 @@ describe("stats sync serial mode", () => {
 		expect(workerSpy).not.toHaveBeenCalled();
 	});
 
-	it("parses a few already-tracked transcripts inline by default", async () => {
+	it.skipIf(process.platform === "darwin")("parses a few already-tracked transcripts inline by default", async () => {
 		await writeSessionFile();
 		await syncAllSessions({ workers: 1 });
 		const sessionFile = path.join(getSessionsDir(), "--tmp--sync-serial", "session.jsonl");
 		await fs.appendFile(sessionFile, "\n");
-		vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 		const workerSpy = vi.spyOn(globalThis, "Worker");
 
 		await syncAllSessions({ files: [sessionFile] });

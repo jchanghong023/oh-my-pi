@@ -50,7 +50,7 @@ describe("EventController tool intent", () => {
 		const card = pendingTools.get("tc-bash");
 		if (!card) throw new Error("no card for the call");
 		expect(headTarget(card)).toContain("Listing the working tree...");
-		expect(ctx.setWorkingMessage).toHaveBeenLastCalledWith("Listing the working tree");
+		expect(ctx.setWorkingMessage).toHaveBeenLastCalledWith("Listing the working tree", false, "tool-intent");
 	});
 
 	it("keeps the intent when tool_execution_start refreshes a streamed card", async () => {
@@ -63,7 +63,7 @@ describe("EventController tool intent", () => {
 		const card = pendingTools.get("tc-bash");
 		if (!card) throw new Error("no streamed card for the call");
 		expect(headTarget(card)).toContain("Listing the working tree");
-		expect(ctx.setWorkingMessage).toHaveBeenLastCalledWith("Listing the working tree");
+		expect(ctx.setWorkingMessage).toHaveBeenLastCalledWith("Listing the working tree", false, "tool-intent");
 		await controller.handleEvent(start(args.i));
 		expect(headTarget(card)).toContain("Listing the working tree");
 	});

@@ -11,6 +11,7 @@ import { isReadableUrlPath } from "./details/read";
 import * as fs from "node:fs";
 import { contextLocalProtocolOptions } from "../internal-urls/context";
 import { InternalUrlRouter } from "../internal-urls/router";
+import { splitUrlScheme } from "../internal-urls/url-scheme";
 import type { ToolSession } from "./index";
 import { approvalCacheKeyForPath } from "./approval-cache";
 import { resolveToCwd } from "./path-utils";
@@ -96,6 +97,14 @@ export function approvalTargetNamesFile(target: string): boolean {
 	}
 }
 
+/** The unfurled filesystem path for a normalized session-local URI, before any cache-key folding. */
+export function approvalLocalBackingPath(normalized: string, session: ToolSession): string | undefined {
+	if (splitUrlScheme(normalized)?.scheme !== "local") return undefined;
+	return InternalUrlRouter.instance().locateSync(normalized, {
+		localProtocolOptions: contextLocalProtocolOptions(session),
+	});
+}
+
 /**
  * Normalize one tool argument into an approval-cache key, or `undefined` when
  * the argument is empty. Unresolvable-but-non-empty targets fall back to their
@@ -108,8 +117,8 @@ export function approvalTargetKey(cwd: string, target: string, session?: ToolSes
 	if (trimmed.length === 0) return undefined;
 	const router = InternalUrlRouter.instance();
 	const normalized = router.normalize(trimmed);
-	if (session && normalized.startsWith("local://")) {
-		const backing = router.locateSync(normalized, { localProtocolOptions: contextLocalProtocolOptions(session) });
+	if (session) {
+		const backing = approvalLocalBackingPath(normalized, session);
 		if (backing !== undefined) return approvalCacheKeyForPath(backing);
 	}
 	if (router.canHandle(normalized)) return normalized;

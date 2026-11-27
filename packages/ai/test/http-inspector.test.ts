@@ -111,49 +111,75 @@ describe("buildHttp400DumpPayload", () => {
 });
 
 describe("declared authentication rejected-request diagnostics", () => {
-	it("persists useful native HTTP 400 diagnostics without an arbitrary declared header credential", async () => {
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-declared-auth-dump-"));
-		const secret = "fixture-declared-header-material";
-		const modelId = "declared-header-diagnostic-model";
-		const requests: Array<{ authenticated: boolean; path: string; body: unknown }> = [];
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			async fetch(request) {
-				const authenticated =
-					request.headers.get("x-route") === secret &&
-					!request.headers.has("authorization") &&
-					!request.headers.has("x-api-key") &&
-					!request.headers.has("api-key");
-				requests.push({
-					authenticated,
-					path: new URL(request.url).pathname,
-					body: await request.json(),
-				});
-				if (!authenticated) {
-					return Response.json({ error: { message: "Missing declared authentication" } }, { status: 401 });
-				}
-				return Response.json(
-					{
-						error: {
-							message: `fixture request content rejected; route=${secret}`,
-							type: "invalid_request_error",
+	it.each([
+		{
+			name: "an arbitrary declared header",
+			api: "openai-completions",
+			authHeader: "X-rOuTe",
+			secret: "fixture-declared-header-material",
+		},
+		{
+			name: "a bare token from a declared Bearer header",
+			api: "openai-completions",
+			authHeader: "AuThOrIzAtIoN",
+			secret: "fixture-declared-bearer-material",
+		},
+		{
+			name: "a trimmed Azure API key",
+			api: "azure-openai-responses",
+			authHeader: "api-key",
+			secret: "fixture-declared-azure-material",
+		},
+	])(
+		"persists useful native HTTP 400 diagnostics without exposing $name",
+		async ({ api, authHeader, secret }) => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-declared-auth-dump-"));
+			const header = authHeader.toLowerCase();
+			const azure = api === "azure-openai-responses";
+			const wireValue = header === "authorization" ? `bEaReR ${secret}` : secret;
+			const requestAuth = azure ? { apiKey: `  ${secret}\t ` } : { headers: { [authHeader]: wireValue } };
+			const requestPath = azure ? "/v1/responses" : "/v1/chat/completions";
+			const userText = "Retain this diagnostic request body";
+			const modelId = "declared-header-diagnostic-model";
+			const requests: Array<{ authenticated: boolean; path: string; body: unknown }> = [];
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				async fetch(request) {
+					const authenticated =
+						request.headers.get(header) === wireValue &&
+						["x-route", "authorization", "x-api-key", "api-key"].every(
+							name => name === header || !request.headers.has(name),
+						);
+					requests.push({
+						authenticated,
+						path: new URL(request.url).pathname,
+						body: await request.json(),
+					});
+					if (!authenticated) {
+						return Response.json({ error: { message: "Missing declared authentication" } }, { status: 401 });
+					}
+					return Response.json(
+						{
+							error: {
+								message: `fixture request content rejected; route=${secret}`,
+								type: "invalid_request_error",
+							},
 						},
-					},
-					{ status: 400 },
-				);
-			},
-		});
-		// A normal CLI child exercises real persistence; Bun's test process intentionally
-		// does not write rejected-request dumps. No test-runtime guard is overridden.
-		const script = `
+						{ status: 400 },
+					);
+				},
+			});
+			// A normal CLI child exercises real persistence; Bun's test process intentionally
+			// does not write rejected-request dumps. No test-runtime guard is overridden.
+			const script = `
 			import { buildModel } from "@oh-my-pi/pi-catalog/build";
 			import { streamSimple } from ${JSON.stringify(new URL("../src/stream.ts", import.meta.url).href)};
 			import type { SimpleStreamOptions } from ${JSON.stringify(new URL("../src/types.ts", import.meta.url).href)};
 			const model = buildModel({
 				id: ${JSON.stringify(modelId)},
 				name: "Declared header diagnostic fixture",
-				api: "openai-completions",
+				api: ${JSON.stringify(api)},
 				provider: "declared-header-diagnostic-local-fixture",
 				baseUrl: ${JSON.stringify(`${server.url.origin}/v1`)},
 				reasoning: false,
@@ -163,90 +189,98 @@ describe("declared authentication rejected-request diagnostics", () => {
 				maxTokens: 128,
 			});
 			const options: SimpleStreamOptions = {
-				requestAuth: { headers: { "X-rOuTe": ${JSON.stringify(secret)} } },
+				requestAuth: ${JSON.stringify(requestAuth)},
 				headers: { "x-diagnostic-label": "ordinary-routing-context" },
 				signal: AbortSignal.timeout(5000),
 			};
 			const result = await streamSimple(model, {
-				messages: [{ role: "user", content: "Retain this diagnostic request body", timestamp: 0 }],
+				messages: [{ role: "user", content: ${JSON.stringify(userText)}, timestamp: 0 }],
 			}, options).result();
 			console.log(JSON.stringify({ stopReason: result.stopReason, errorMessage: result.errorMessage }));
 		`;
-		const child = Bun.spawn([process.execPath, "--eval", script], {
-			cwd: import.meta.dir,
-			env: {
-				PATH: process.env.PATH,
-				SystemRoot: process.env.SystemRoot,
-				WINDIR: process.env.WINDIR,
-				TEMP: root,
-				TMP: root,
-				TMPDIR: root,
-				HOME: root,
-				USERPROFILE: root,
-				OMP_CONFIG_ROOT: path.join(root, "config"),
-			},
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		// Real subprocess/network integration needs a wall-clock hang watchdog;
-		// fake timers cannot terminate an unresponsive child process.
-		const timeout = setTimeout(() => child.kill(), 10_000);
-		try {
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(child.stdout).text(),
-				new Response(child.stderr).text(),
-				child.exited,
-			]);
-			// Boolean privacy assertions cannot print the fixture credential on failure.
-			expect(stdout.includes(secret)).toBe(false);
-			expect(stderr.includes(secret)).toBe(false);
-			expect(exitCode).toBe(0);
-			expect(requests).toHaveLength(1);
-			expect(requests[0]?.authenticated).toBe(true);
-			expect(requests[0]?.path).toBe("/v1/chat/completions");
-			const result = JSON.parse(stdout) as { stopReason: string; errorMessage: string };
-			expect(result.stopReason).toBe("error");
-			expect(result.errorMessage).toContain("400");
-			expect(result.errorMessage).toContain("fixture request content rejected");
-			const dumpPath = result.errorMessage
-				.split("\n")
-				.find(line => line.startsWith("raw-http-request="))
-				?.slice("raw-http-request=".length);
-			expect(dumpPath).toBeDefined();
-			if (!dumpPath) throw new Error("Native rejection did not persist its diagnostic request");
-			expect(path.relative(root, dumpPath).startsWith("..")).toBe(false);
-			expect(path.isAbsolute(path.relative(root, dumpPath))).toBe(false);
-			const serialized = await fs.readFile(dumpPath, "utf8");
-			expect(serialized.includes(secret)).toBe(false);
-			const payload = JSON.parse(serialized);
-			expect(Object.keys(payload).sort()).toEqual(
-				["provider", "api", "model", "method", "url", "headers", "body", "errorResponse"].sort(),
-			);
-			expect(payload.provider).toBe("declared-header-diagnostic-local-fixture");
-			expect(payload.api).toBe("openai-completions");
-			expect(payload.model).toBe(modelId);
-			expect(payload.method).toBe("POST");
-			expect(payload.url).toBe(`${server.url.origin}/v1/chat/completions`);
-			expect(payload.body).toEqual(requests[0]?.body);
-			expect(payload.body.model).toBe(modelId);
-			expect(payload.body.messages).toContainEqual({
-				role: "user",
-				content: "Retain this diagnostic request body",
+			const child = Bun.spawn([process.execPath, "--eval", script], {
+				cwd: import.meta.dir,
+				env: {
+					PATH: process.env.PATH,
+					SystemRoot: process.env.SystemRoot,
+					WINDIR: process.env.WINDIR,
+					TEMP: root,
+					TMP: root,
+					TMPDIR: root,
+					HOME: root,
+					USERPROFILE: root,
+					OMP_CONFIG_ROOT: path.join(root, "config"),
+				},
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
 			});
-			const headers = new Headers(payload.headers);
-			expect(headers.get("x-route")).toBe("[redacted]");
-			expect(headers.get("x-diagnostic-label")).toBe("ordinary-routing-context");
-			expect(payload.errorResponse.status).toBe(400);
-			expect(payload.errorResponse.message).toContain("fixture request content rejected");
-		} finally {
-			clearTimeout(timeout);
-			child.kill();
-			await child.exited;
-			await server.stop(true);
-			await fs.rm(root, { recursive: true, force: true });
-		}
-	}, 15_000);
+			// Real subprocess/network integration needs a wall-clock hang watchdog;
+			// fake timers cannot terminate an unresponsive child process.
+			const timeout = setTimeout(() => child.kill(), 10_000);
+			try {
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				// Boolean privacy assertions cannot print the fixture credential on failure.
+				expect(stdout.includes(secret)).toBe(false);
+				expect(stderr.includes(secret)).toBe(false);
+				expect(exitCode).toBe(0);
+				expect(requests).toHaveLength(1);
+				expect(requests[0]?.authenticated).toBe(true);
+				expect(requests[0]?.path).toBe(requestPath);
+				const result = JSON.parse(stdout) as { stopReason: string; errorMessage: string };
+				expect(result.stopReason).toBe("error");
+				expect(result.errorMessage).toContain("400");
+				expect(result.errorMessage).toContain("fixture request content rejected; route=[redacted]");
+				const dumpPath = result.errorMessage
+					.split("\n")
+					.find(line => line.startsWith("raw-http-request="))
+					?.slice("raw-http-request=".length);
+				expect(dumpPath).toBeDefined();
+				if (!dumpPath) throw new Error("Native rejection did not persist its diagnostic request");
+				expect(path.relative(root, dumpPath).startsWith("..")).toBe(false);
+				expect(path.isAbsolute(path.relative(root, dumpPath))).toBe(false);
+				const serialized = await fs.readFile(dumpPath, "utf8");
+				expect(serialized.includes(secret)).toBe(false);
+				const payload = JSON.parse(serialized);
+				if (!azure) {
+					expect(Object.keys(payload).sort()).toEqual(
+						["provider", "api", "model", "method", "url", "headers", "body", "errorResponse"].sort(),
+					);
+				}
+				expect(payload.provider).toBe("declared-header-diagnostic-local-fixture");
+				expect(payload.api).toBe(api);
+				expect(payload.model).toBe(modelId);
+				expect(payload.method).toBe("POST");
+				expect(payload.url).toBe(`${server.url.origin}${requestPath}${azure ? "[redacted-query]" : ""}`);
+				expect(payload.body).toEqual(requests[0]?.body);
+				expect(payload.body.model).toBe(modelId);
+				if (azure) {
+					expect(payload.body.input).toContainEqual({
+						role: "user",
+						content: [{ type: "input_text", text: userText }],
+					});
+				} else {
+					expect(payload.body.messages).toContainEqual({ role: "user", content: userText });
+					const headers = new Headers(payload.headers);
+					expect(headers.get(header)).toBe("[redacted]");
+					expect(headers.get("x-diagnostic-label")).toBe("ordinary-routing-context");
+				}
+				expect(payload.errorResponse.status).toBe(400);
+				expect(payload.errorResponse.message).toContain("fixture request content rejected; route=[redacted]");
+			} finally {
+				clearTimeout(timeout);
+				child.kill();
+				await child.exited;
+				await server.stop(true);
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		},
+		15_000,
+	);
 });
 
 describe("shouldDumpRejectedRequest", () => {

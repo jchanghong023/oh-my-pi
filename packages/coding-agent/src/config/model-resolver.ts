@@ -1374,7 +1374,7 @@ function hasOwnKey<T extends object>(value: T, key: PropertyKey): key is keyof T
 	return Object.hasOwn(value, key);
 }
 
-type RoleLookup = ModelRoleLookup & Partial<Pick<Settings, "getDictationLanguage">>;
+type RoleLookup = ModelRoleLookup & Partial<Pick<Settings, "getDictationLanguage" | "overlayParent">>;
 
 /** Built-in priority patterns for a role, following {@link ROLE_PRIORITY_ALIAS}. */
 export function rolePriorityDefaults(role: string, settings?: RoleLookup): string[] {
@@ -1414,6 +1414,17 @@ function resolveNestedRolePatterns(
 			continue;
 		}
 		if (visited.has(aliasRole)) {
+			// A stamped subagent advisor may point through a custom alias back to
+			// the advisor it replaced. Expand that reference in the owner's view,
+			// retaining both its configured candidates and automatic provenance.
+			if (aliasRole === "advisor" && visited.size > 1 && visited.values().next().value === "advisor") {
+				const owner = settings?.overlayParent?.();
+				if (owner && owner.getModelRole("advisor") !== settings?.getModelRole("advisor")) {
+					const inherited = resolveConfiguredRolePattern(pattern, owner);
+					if (inherited) resolved.push(...inherited);
+					continue;
+				}
+			}
 			resolved.push(
 				...roleDefaults.map(candidate => ({
 					...candidate,
@@ -1705,8 +1716,10 @@ export function resolveAgentAdvisorRolePattern(pattern: string, settings?: Model
 export interface ResolvedModelRoleValue {
 	model: Model<Api> | undefined;
 	thinkingLevel?: ConfiguredThinkingLevel;
-	/** matchedPatternIndex identifies the first configured pattern that matched an available model. */
+	/** Index of the winning pattern in the expanded role value. */
 	matchedPatternIndex?: number;
+	/** The expanded candidate that matched, including its configured or automatic provenance. */
+	matchedPattern?: ResolvedRolePattern;
 	explicitThinkingLevel: boolean;
 	warning: string | undefined;
 }
@@ -1819,7 +1832,9 @@ function matchRolePatterns(
 	for (const [patternIndex, pattern] of effectivePatterns.entries()) {
 		const resolved = match(pattern);
 		if (resolved.model) {
-			return toResolvedRoleValue(resolved.model, resolved, patternIndex);
+			const result = toResolvedRoleValue(resolved.model, resolved, patternIndex);
+			result.matchedPattern = pattern;
+			return result;
 		}
 		if (!warning && resolved.warning) {
 			warning = resolved.warning;

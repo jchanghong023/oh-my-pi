@@ -62,9 +62,19 @@ async function fetchGrammar(
 	}
 }
 
+function getPrivateGrammarCacheUid(dir: string): number | undefined {
+	const root = resolveLinuxPrivateCacheRoot();
+	return root ? getPrivateNativeCacheUid(path.dirname(dir), root) : undefined;
+}
+
 async function installLocked(info: WasmGrammarInfo, dir: string, dest: string, base: string): Promise<boolean> {
 	try {
-		await fs.mkdir(dir, { recursive: true });
+		const uid = getPrivateGrammarCacheUid(dir);
+		if (uid === undefined) {
+			await fs.mkdir(dir, { recursive: true });
+		} else if (!prepareLinuxPrivateCacheDirectory(dir, uid)) {
+			throw new Error("Linux shared-memory cache directory unavailable");
+		}
 		return await withFileLock(
 			`${dest}.install`,
 			async () => {
@@ -116,9 +126,7 @@ export function installGrammar(info: WasmGrammarInfo, dir: string = getNativeGra
 async function installDefaultGrammar(info: WasmGrammarInfo): Promise<boolean> {
 	const dir = getNativeGrammarsDir();
 	if (!(await installGrammar(info, dir))) return false;
-	const privateCacheRoot = resolveLinuxPrivateCacheRoot();
-	if (!privateCacheRoot) return true;
-	const uid = getPrivateNativeCacheUid(path.dirname(dir), privateCacheRoot);
+	const uid = getPrivateGrammarCacheUid(dir);
 	if (uid === undefined) return true;
 
 	// The addon may have started while the shared-memory cache was unavailable.

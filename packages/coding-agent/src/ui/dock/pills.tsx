@@ -2,10 +2,10 @@
 /**
  * The HUD pills row (`pills` slot, native only), right-aligned above the
  * activity line: one running-work counter (`omp.hud.pill`) with an agents
- * segment and a background-jobs segment, each present only while it has
- * something to count. The agents segment stays as a muted icon while the
- * session still holds agents the hub can inspect, so the click into the hub
- * outlives the last running subagent. While jobs draw widgets the jobs
+ * segment and a background-jobs segment. The agents segment stays clickable
+ * when the composer already shows its count, and as a muted icon while the
+ * session still holds agents the hub can inspect after the last one stops.
+ * While jobs draw widgets, the jobs
  * segment adds the freshest widget's figure and mini spark, and a hover card
  * of their tiles. On a host that draws the tray the row is hidden: the tray
  * shows running work.
@@ -169,7 +169,11 @@ export function MiniSpark(props: { readonly spark: JobWidgetSparkBlock }): JSXNo
 	);
 }
 
-function AgentsSegment(props: { readonly running: number; readonly inSession: number }): JSXNode {
+function AgentsSegment(props: {
+	readonly running: number;
+	readonly inSession: number;
+	readonly hideCount: boolean;
+}): JSXNode {
 	const shortcut = formatTooltipDoubleTap("left");
 	if (props.running === 0) {
 		const label = `No agents running · ${props.inSession} in this session`;
@@ -199,7 +203,7 @@ function AgentsSegment(props: { readonly running: number; readonly inSession: nu
 			actions={{ click: "agents.open" }}
 		>
 			<icon key="icon" name="users" tone="accent" />
-			<text key="count" spans={[{ t: String(props.running), s: "num" }]} wrap="none" />
+			{!props.hideCount && <text key="count" spans={[{ t: String(props.running), s: "num" }]} wrap="none" />}
 		</row>
 	);
 }
@@ -235,7 +239,10 @@ function JobsSegment(props: { readonly running: number; readonly entries: readon
 }
 
 /** See the module docs. */
-export function HudPills(props: { readonly model: HudPillsModel }): JSXNode {
+export function HudPills(props: {
+	readonly model: HudPillsModel;
+	readonly composerShowsAgentCount?: () => boolean;
+}): JSXNode {
 	const model = props.model;
 	const agents = computed(() => {
 		if (!model.showAgents()) return undefined;
@@ -259,7 +266,13 @@ export function HudPills(props: { readonly model: HudPillsModel }): JSXNode {
 			<row role="omp.hud" justify="end" hidden={empty || undefined} onAction={onAction}>
 				{!empty && (
 					<row key="running" role="omp.hud.pill" align="center">
-						{a && <AgentsSegment running={a.running} inSession={a.inSession} />}
+						{a && (
+							<AgentsSegment
+								running={a.running}
+								inSession={a.inSession}
+								hideCount={props.composerShowsAgentCount?.() === true}
+							/>
+						)}
 						{j && <JobsSegment running={j.running} entries={j.entries} />}
 					</row>
 				)}

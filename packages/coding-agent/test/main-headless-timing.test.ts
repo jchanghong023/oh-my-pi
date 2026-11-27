@@ -6,13 +6,15 @@
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { parseArgs, type Args } from "@oh-my-pi/pi-coding-agent/cli/args";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { clearOmpExtensionCliRoots } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
+import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { logger, postmortem, TempDir } from "@oh-my-pi/pi-utils";
 
 const tempDirs: TempDir[] = [];
@@ -45,15 +47,29 @@ describe("startup timing after a headless runner starts", () => {
 		const dir = TempDir.createSync("@pi-headless-timing-");
 		tempDirs.push(dir);
 		const authStorage = await AuthStorage.create(":memory:");
-		const manager = SessionManager.create(dir.path(), `${dir.path()}/sessions`);
+		let manager: SessionManager | undefined;
+		const settings = Settings.isolated();
+		const listeners = new Set<(event: AgentSessionEvent) => void>();
+		const disposers: Array<() => void> = [];
+		let disposal: Promise<void> | undefined;
+		let recordedDuringStartup: boolean | undefined;
 		let recordedDuringPrompt: boolean | undefined;
 		const session = {
 			extensionRunner: undefined,
 			model: { provider: "anthropic", id: "test-model" },
-			settings: Settings.isolated(),
-			sessionManager: manager,
-			subscribeLocal: () => () => {},
-			addDisposer: () => {},
+			settings,
+			get sessionManager() {
+				return manager;
+			},
+			subscribe: (listener: (event: AgentSessionEvent) => void) => {
+				listeners.add(listener);
+				return () => {
+					listeners.delete(listener);
+				};
+			},
+			addDisposer: (dispose: () => void) => {
+				disposers.push(dispose);
+			},
 			setScopedModelsRefresher: () => {},
 			getAllToolNames: () => [],
 			validateRetryFallbackChains: () => {},
@@ -65,26 +81,47 @@ describe("startup timing after a headless runner starts", () => {
 			waitForAdvisorCatchup: async () => true,
 			prompt: async () => {
 				recordedDuringPrompt = spanRecorded();
+				return true;
 			},
-			dispose: () => manager.close(),
+			dispose: () =>
+				(disposal ??= (async () => {
+					for (const dispose of disposers.splice(0)) dispose();
+					listeners.clear();
+					await manager?.close();
+				})()),
 		} as unknown as AgentSession;
 		const quitSpy = spyOn(postmortem, "quit").mockImplementation(async () => {});
+		// Don't leave the process-global reviver pointing at this fake session and its closed auth storage.
+		const reviverSpy = spyOn(AgentLifecycleManager.global(), "setPersistedSubagentReviverFactory").mockImplementation(
+			() => {},
+		);
+		// Model discovery can otherwise outlive the in-memory auth storage.
+		const refreshSpy = spyOn(ModelRegistry.prototype, "refreshInBackground").mockImplementation(() => {});
 		// Print mode intentionally keeps recording under PI_TIMING; this case covers the default.
 		const savedTiming = process.env.PI_TIMING;
 		delete process.env.PI_TIMING;
+		const argv = ["--print", "--no-session", "hello"];
 		try {
-			await runRootCommand(headlessArgs(["--print", "hello"], dir.path()), ["--print", "hello"], {
+			await runRootCommand(headlessArgs(argv, dir.path()), argv, {
 				discoverAuthStorage: async () => authStorage,
-				settings: Settings.isolated(),
-				createAgentSession: async () => ({ session }) as unknown as CreateAgentSessionResult,
+				settings,
+				createAgentSession: async options => {
+					manager = options?.sessionManager;
+					if (!manager) throw new Error("Missing print session manager");
+					recordedDuringStartup = spanRecorded();
+					return { session } as unknown as CreateAgentSessionResult;
+				},
 			});
 		} finally {
 			if (savedTiming !== undefined) process.env.PI_TIMING = savedTiming;
 			logger.endTiming();
 			quitSpy.mockRestore();
+			reviverSpy.mockRestore();
+			refreshSpy.mockRestore();
+			await session.dispose().catch(() => undefined);
 			authStorage.close();
-			await manager.close().catch(() => undefined);
 		}
+		expect(recordedDuringStartup).toBe(true);
 		expect(recordedDuringPrompt).toBe(false);
 	}, 15_000);
 

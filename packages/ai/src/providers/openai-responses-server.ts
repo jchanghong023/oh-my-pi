@@ -774,32 +774,57 @@ function sameMessageSignature(a: MessageSignature | undefined, b: MessageSignatu
 	return a?.id === b?.id && a?.phase === b?.phase;
 }
 
-/** Match a parsed history block against a whole Responses text output item. */
-export function matchesOutputText(message: AssistantMessage, text: TextContent): boolean {
-	const wireSignature = parseTextSignature(text.textSignature);
-	let groupText: string | undefined;
-	let groupSignature: MessageSignature | undefined;
-	// Unsigned blocks receive generated IDs when encoded.
-	const matchesGroup = () =>
-		groupText === text.text && (!groupSignature || sameMessageSignature(groupSignature, wireSignature));
+export type ResponsesReplayPart = TextContent | { type: "thinking"; itemId: string };
+export type ResponsesReplayRecorder = (message: AssistantMessage, parts: readonly ResponsesReplayPart[]) => void;
 
-	for (const part of message.content) {
-		if (part.type === "text") {
-			const signature = parseTextSignature(part.textSignature);
-			if (sameMessageSignature(groupSignature, signature)) {
-				groupText = (groupText ?? "") + part.text;
-			} else {
-				if (matchesGroup()) return true;
-				groupText = part.text;
-				groupSignature = signature;
-			}
-		} else if (part.type === "thinking" || part.type === "toolCall") {
-			if (matchesGroup()) return true;
-			groupText = undefined;
-			groupSignature = undefined;
-		}
+/** Record the actual wire items: final JSON and SSE may group text differently and mint different IDs. */
+function rememberReplay(
+	record: ResponsesReplayRecorder | undefined,
+	message: AssistantMessage,
+	items: readonly OutputItem[],
+	streamedItems?: readonly OutputItem[],
+): void {
+	if (
+		!record ||
+		message.stopReason === "error" ||
+		message.stopReason === "aborted" ||
+		!message.content.some(part => part.type === "toolCall")
+	) {
+		return;
 	}
-	return matchesGroup();
+	const replay: ResponsesReplayPart[] = [];
+	const append = (output: readonly OutputItem[]) => {
+		for (const item of output) {
+			if (item.type === "message") {
+				const text = item.content.map(part => part.text).join("");
+				if (text) replay.push({ type: "text", text, textSignature: encodeTextSignatureV1(item.id, item.phase) });
+			} else if (item.type === "reasoning") {
+				replay.push({ type: "thinking", itemId: item.id });
+			}
+		}
+	};
+	append(items);
+	if (streamedItems) append(streamedItems);
+	record(message, replay);
+}
+
+/** Unsigned text can only be matched inside the parser message already identified by its tool calls. */
+export function isReplayedOutputPart(
+	block: AssistantMessage["content"][number],
+	replay: readonly ResponsesReplayPart[],
+	scope: "neighbor" | "matched-message" = "neighbor",
+): boolean {
+	if (block.type === "text") {
+		const signature = block.textSignature;
+		if (signature === undefined && scope !== "matched-message") return false;
+		return replay.some(
+			item =>
+				item.type === "text" &&
+				(signature === undefined || item.textSignature === signature) &&
+				item.text === block.text,
+		);
+	}
+	return block.type === "thinking" && replay.some(item => item.type === "thinking" && item.itemId === block.itemId);
 }
 
 /**
@@ -915,8 +940,13 @@ function buildResponseEnvelope(
 
 // ─── encodeResponse (non-streaming) ─────────────────────────────────────────
 
-export function encodeResponse(message: AssistantMessage, requestedModelId: string): Record<string, unknown> {
+export function encodeResponse(
+	message: AssistantMessage,
+	requestedModelId: string,
+	recordReplay?: ResponsesReplayRecorder,
+): Record<string, unknown> {
 	const items = buildOutputItems(message);
+	rememberReplay(recordReplay, message, items);
 	return buildResponseEnvelope(
 		message,
 		requestedModelId,
@@ -976,6 +1006,7 @@ export function encodeStream(
 	requestedModelId: string,
 	_options?: ParsedRequest["options"],
 	control?: AuthGatewayStreamControl,
+	recordReplay?: ResponsesReplayRecorder,
 ): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	const responseId = makeRespId();
@@ -1488,6 +1519,7 @@ export function encodeStream(
 				// Build the canonical output from the final message so non-streaming
 				// readers see the exact same shape they'd get from encodeResponse().
 				const items = message ? buildOutputItems(message) : finishedItems;
+				if (message) rememberReplay(recordReplay, message, items, finishedItems);
 				const usage = message ? buildUsage(message) : null;
 				const status = message ? responseStatusForStopReason(message) : "completed";
 				const terminalEvent =

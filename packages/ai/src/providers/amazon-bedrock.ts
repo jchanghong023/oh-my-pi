@@ -16,10 +16,12 @@ import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { $flag, fetchWithRetry, logger, parseStreamingJsonThrottled, USER_AGENT } from "@oh-my-pi/pi-utils";
+import { NO_AUTH_SENTINEL } from "../auth-retry";
 import { renderDemotedThinking } from "../dialect/demotion";
 import * as AIError from "../error";
 import { parseToolCallArguments } from "../utils/tool-call-arguments";
 import { resolveAwsBearerToken } from "../registry/aws";
+import { AUTHENTICATED_SENTINEL } from "../registry/types";
 import type {
 	Api,
 	AssistantMessage,
@@ -36,7 +38,13 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types";
-import { isRecord, normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
+import {
+	getHeaderCaseInsensitive,
+	isRecord,
+	normalizeSystemPrompts,
+	normalizeToolCallId,
+	resolveCacheRetention,
+} from "../utils";
 import { resolveAwsAmbientRegion } from "../utils/aws-profile";
 import {
 	clearStreamingPartialJson,
@@ -45,7 +53,7 @@ import {
 	kStreamingPartialJson,
 } from "../utils/block-symbols";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import type { RawHttpRequestDump } from "../utils/http-inspector";
+import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
 import { armPreResponseTimeout, getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs } from "../utils/idle-iterator";
 import { toolWireSchema } from "../utils/schema/wire";
 import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
@@ -163,6 +171,18 @@ export interface BedrockOptions extends StreamOptions {
 }
 
 function resolveBearerToken(options: BedrockOptions): string | undefined {
+	if (options.requestAuth !== undefined) {
+		const authorization = getHeaderCaseInsensitive(options.requestAuth.headers, "Authorization")?.trim();
+		const token = authorization
+			? /^Bearer[ \t]+(\S+)$/i.exec(authorization)?.[1]
+			: options.requestAuth.apiKey?.trim();
+		if (!token || token === AUTHENTICATED_SENTINEL || token === NO_AUTH_SENTINEL) {
+			throw new AIError.ConfigurationError(
+				"Explicit Bedrock auth requires an API key or a Bearer Authorization header.",
+			);
+		}
+		return token;
+	}
 	return resolveAwsBearerToken(options.apiKey, options.bearerToken);
 }
 
@@ -210,8 +230,7 @@ async function sendBedrockRequest(
 	// Caller headers are merged BEFORE signing, so SigV4 covers them and they
 	// reach the wire; tracing/attribution headers (including those set by a
 	// `before_provider_headers` extension) work here as on every other provider.
-	// `model.headers` first, `options.headers` second: `StreamOptions.headers` is
-	// documented as merged ON TOP of model-defined headers.
+	// Request auth has the final say over ordinary model and caller headers.
 	//
 	// The signer's OWN headers are dropped first, and that is load-bearing:
 	// `signRequest` lets a caller value overwrite `host`/`x-amz-*` in the map it
@@ -223,7 +242,7 @@ async function sendBedrockRequest(
 	// SigV4 signs as one value while fetch joins both into a single comma-joined
 	// wire header, so AWS validates different bytes than were signed.
 	const callerHeaders: Record<string, string> = {};
-	for (const source of [model.headers, options.headers]) {
+	for (const source of [model.headers, options.headers, options.requestAuth?.headers]) {
 		for (const [name, value] of Object.entries(source ?? {})) {
 			const field = name.toLowerCase();
 			if (SIGNER_OWNED_HEADERS.has(field) || BEDROCK_RESERVED_HEADERS.has(field)) continue;
@@ -319,6 +338,27 @@ async function sendBedrockRequest(
 		watchdog.clear();
 	}
 	return { response, responseBody };
+}
+
+async function summarizeBedrockHttpError(
+	model: Model<"bedrock-converse-stream">,
+	requestAuth: BedrockOptions["requestAuth"],
+	status: number,
+	body: string,
+): Promise<string> {
+	const maxLength = 1000;
+	// Finalization redacts the error, but truncating first could leave a partial
+	// credential that the redactor can no longer match. No status is passed to
+	// the inspector here: only the finalizer may persist the real request dump.
+	if (requestAuth !== undefined && body.length > maxLength) {
+		body = await appendRawHttpRequestDumpFor400(body, undefined, {
+			provider: model.provider,
+			api: model.api,
+			model: model.id,
+			requestAuth,
+		});
+	}
+	return `Bedrock HTTP ${status}: ${body.slice(0, maxLength)}`;
 }
 
 function inferRegionFromBedrockArn(modelId: string): string | undefined {
@@ -732,7 +772,12 @@ function createBedrockAnthropicCompactionClient(
 								invalidateAwsCredentialCache({ profile: options.profile, region });
 							}
 							throw new AIError.BedrockApiError(
-								`Bedrock HTTP ${sent.response.status}: ${(sent.responseBody ?? "").slice(0, 1000)}`,
+								await summarizeBedrockHttpError(
+									model,
+									options.requestAuth,
+									sent.response.status,
+									sent.responseBody ?? "",
+								),
 								sent.response.status,
 								{ headers: sent.response.headers },
 							);
@@ -899,6 +944,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 					method: "POST",
 					url: resolveBedrockRequestUrl(model, base, "converse-stream").url,
 					body: commandInput,
+					requestAuth: options.requestAuth,
 				};
 				({ response } = await sendBedrockRequest(model, options, region, base, commandInput, "converse-stream"));
 				if (response.ok) break;
@@ -908,7 +954,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 					invalidateAwsCredentialCache({ profile: options.profile, region });
 				}
 				const errBody = await response.text().catch(() => "");
-				const errorMessage = `Bedrock HTTP ${response.status}: ${errBody.slice(0, 1000)}`;
+				const errorMessage = await summarizeBedrockHttpError(model, options.requestAuth, response.status, errBody);
 				if (
 					!prefixBindingRetryAttempted &&
 					options.anthropicPrefixMismatchBehavior !== "error" &&

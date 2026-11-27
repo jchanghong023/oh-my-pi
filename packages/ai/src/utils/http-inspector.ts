@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { parseOtariCredential } from "@oh-my-pi/pi-catalog/wire/otari";
 import { getLogsDir, isBunTestRuntime, isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error/flags";
 import type { StreamOptions } from "../types";
@@ -285,15 +286,34 @@ function sanitizeDump(dump: RawHttpRequestDump): RawHttpRequestDump {
 function redactDeclaredCredentials<T>(value: T, dump: RawHttpRequestDump): T {
 	const auth = dump.requestAuth;
 	if (!auth) return value;
-	const credentials = new Set(Object.values(auth.headers ?? {}));
-	if (auth.apiKey) credentials.add(auth.apiKey);
+	const credentials = new Set<string>();
+	const addCredential = (value: string, isHeader = false): void => {
+		const trimmed = value.trim();
+		if (!trimmed) return;
+		credentials.add(value);
+		credentials.add(trimmed);
+		if (isHeader) {
+			const bearer = /^Bearer[ \t]+(\S+)$/i.exec(trimmed)?.[1];
+			if (bearer) credentials.add(bearer);
+		}
+	};
+	if (auth.apiKey) {
+		addCredential(auth.apiKey);
+		// Otari can declare a token and its region as JSON but sends only the token.
+		if (dump.provider === "otari") {
+			const token = parseOtariCredential(auth.apiKey)?.token;
+			if (token) addCredential(token);
+		}
+	}
+	if (auth.headers) {
+		for (const headerValue of Object.values(auth.headers)) addCredential(headerValue, true);
+	}
 	if (auth.headers && dump.headers) {
 		const declaredNames = new Set(Object.keys(auth.headers).map(name => name.toLowerCase()));
 		for (const [name, headerValue] of Object.entries(dump.headers)) {
-			if (declaredNames.has(name.toLowerCase())) credentials.add(headerValue);
+			if (declaredNames.has(name.toLowerCase())) addCredential(headerValue, true);
 		}
 	}
-	credentials.delete("");
 	if (credentials.size === 0) return value;
 	// Longer credentials must be removed first when one contains another.
 	const secrets = [...credentials].sort((a, b) => b.length - a.length);

@@ -20,7 +20,7 @@ import {
 
 const GIT_CLONE_TIMEOUT_MS = 30 * 60 * 1000;
 
-/** Remove abandoned clone checkouts before adding or refreshing a marketplace without touching in-flight clones. */
+/** Remove abandoned clone checkouts on enabled startup or explicit marketplace writes, without touching in-flight clones. */
 export async function pruneAbandonedMarketplaceClones(cacheDir: string): Promise<void> {
 	const entries = await fs.readdir(cacheDir, { withFileTypes: true }).catch(err => {
 		if (isEnoent(err)) return [];
@@ -330,15 +330,22 @@ async function cloneAndReadCatalog(url: string, source: string, cacheDir: string
 	}
 }
 
-/**
- * Promote a temporary clone directory to its final cache location.
- *
- * Callers should invoke this only after duplicate/drift checks pass.
- * Removes any existing directory at the target path before renaming.
- */
-export async function promoteCloneToCache(tmpDir: string, cacheDir: string, name: string): Promise<string> {
-	const finalDir = path.join(cacheDir, name);
-	await fs.rm(finalDir, { recursive: true, force: true });
-	await fs.rename(tmpDir, finalDir);
-	return finalDir;
+/** Promote a staged clone; migrations must not replace an occupied destination. */
+export async function promoteCloneToCache(
+	tmpDir: string,
+	cacheDir: string,
+	name: string,
+	replaceExisting = true,
+): Promise<string> {
+	const destination = path.join(cacheDir, name);
+	if (replaceExisting) {
+		await fs.rm(destination, { recursive: true, force: true });
+	} else {
+		const occupied = await fs.lstat(destination).catch(err => {
+			if (!isEnoent(err)) throw err;
+		});
+		if (occupied) throw new Error(`Marketplace cache destination already exists: ${destination}`);
+	}
+	await fs.rename(tmpDir, destination);
+	return destination;
 }

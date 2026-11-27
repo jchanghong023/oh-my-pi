@@ -2735,8 +2735,10 @@ mod tests {
 		assert_eq!(
 			std::fs::read_to_string(tree.path().join("sgconfig.yml")).unwrap(),
 			format!(
-				"ruleDirs:\n- {0}/rules\ntestConfigs:\n- testDir: {0}/rule-tests\nutilDirs:\n- {0}/utils\n",
-				root.display()
+				"ruleDirs:\n- {}\ntestConfigs:\n- testDir: {}\nutilDirs:\n- {}\n",
+				root.join("rules").display(),
+				root.join("rule-tests").display(),
+				root.join("utils").display()
 			)
 		);
 		for dir in ["rules", "rule-tests", "utils"] {
@@ -2769,7 +2771,11 @@ mod tests {
 		assert_eq!((code, err.as_str()), (0, ""), "{out}");
 		assert_eq!(
 			out,
-			format!("Created rules at {0}/rules/my-rule.yml\nCreated test at {0}/rule-tests/my-rule-test.yml\n", root.display())
+			format!(
+				"Created rules at {}\nCreated test at {}\n",
+				root.join("rules").join("my-rule.yml").display(),
+				root.join("rule-tests").join("my-rule-test.yml").display()
+			)
 		);
 		assert_eq!(
 			std::fs::read_to_string(tree.path().join("rules").join("my-rule.yml")).unwrap(),

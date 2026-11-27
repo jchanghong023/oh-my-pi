@@ -865,6 +865,7 @@ export class ModelRegistry {
 				: wrapFetchForExtraCa(fetch));
 		if (
 			!this.#ignoreLocalModelConfig &&
+			!offlineFromEnv() &&
 			!isCompanyLaneActive() &&
 			!getDisabledProviderIdsFromSettings(this.#settings).has(CODEAGENT_PROVIDER_ID)
 		)
@@ -1977,6 +1978,7 @@ export class ModelRegistry {
 		}
 		if (
 			process.platform === "win32" &&
+			!offlineFromEnv() &&
 			!isCompanyLaneActive() &&
 			(!providerFilter || providerFilter.has(CODEAGENT_PROVIDER_ID))
 		) {
@@ -4732,6 +4734,8 @@ export class ModelRegistry {
 	getDiscoveryFailures({ runtimeOnly }: { runtimeOnly: boolean }): ProviderDiscoveryState[] {
 		const failures: ProviderDiscoveryState[] = [];
 		for (const state of this.#providerDiscoveryStates.values()) {
+			// Company status describes startup configuration, not a catalog discovery attempt.
+			if (state.provider === COMPANY_PROVIDER_ID) continue;
 			if (state.error !== undefined && (!runtimeOnly || this.#runtimeModelManagers.has(state.provider))) {
 				failures.push(state);
 			}

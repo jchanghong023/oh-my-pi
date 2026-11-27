@@ -1,6 +1,5 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import * as os from "node:os";
 import * as path from "node:path";
 import { closeDb, initDb, insertMessageStats, STATS_BUSY_TIMEOUT_MS_ENV } from "@oh-my-pi/omp-stats/db";
 import type { MessageStats } from "@oh-my-pi/omp-stats/types";
@@ -8,9 +7,8 @@ import { getAgentDir, getStatsDbPath, setAgentDir, TempDir } from "@oh-my-pi/pi-
 import { loadDailyActivity } from "../src/stats/activity-client";
 import type { StatsActivityWorkerOutbound } from "../src/stats/activity-protocol";
 
-// The activity worker resolves stats.db from the environment it inherits, so the
-// temp agent directory goes through PI_CONFIG_DIR, and XDG overrides are cleared
-// so the default profile cannot redirect it to a shared XDG data dir.
+// The activity worker resolves stats.db from its inherited OMP_CONFIG_ROOT.
+// Use an absolute root so the temp directory can be on another Windows drive.
 const XDG_KEYS = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
 const originalAgentDir = getAgentDir();
 const originalEnv: Record<string, string | undefined> = {};
@@ -18,13 +16,12 @@ let tempDir: TempDir | undefined;
 
 beforeEach(() => {
 	tempDir = TempDir.createSync("@omp-stats-activity-lock-");
-	for (const key of [...XDG_KEYS, "PI_CONFIG_DIR", STATS_BUSY_TIMEOUT_MS_ENV]) {
+	for (const key of [...XDG_KEYS, "OMP_CONFIG_ROOT", STATS_BUSY_TIMEOUT_MS_ENV]) {
 		originalEnv[key] = process.env[key];
 		delete process.env[key];
 	}
-	const configDir = path.relative(os.homedir(), tempDir.join("config"));
-	process.env.PI_CONFIG_DIR = configDir;
-	setAgentDir(path.join(os.homedir(), configDir, "agent"));
+	process.env.OMP_CONFIG_ROOT = tempDir.join("config");
+	setAgentDir(tempDir.join("config", "agent"));
 });
 
 afterEach(() => {

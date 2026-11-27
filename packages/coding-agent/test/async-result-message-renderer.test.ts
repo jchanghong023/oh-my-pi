@@ -5,7 +5,7 @@ import { printRows } from "../src/ui/print-rows";
 import { AsyncResult } from "../src/ui/transcript/messages/async-cards";
 import type { FrameRenderer } from "../src/ui/transcript/messages/frame";
 
-const BUILT_IN = "Background job completed";
+const BUILT_IN = "bg_1 npm test";
 const DIAGNOSTIC = "fixture schema validation failed";
 
 function renderCard(renderer: FrameRenderer, visible = true): string {

@@ -20,10 +20,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { Composer } from "../src/ui/composer/composer";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 // A real, decodable 1x1 PNG standing in for the copied screenshot's bytes.
 const FILE_PNG = Buffer.from(
@@ -37,7 +40,7 @@ const FILE_PNG = Buffer.from(
 const ICON_PNG_BASE64 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mP8z8Dwn4EIwDiqEAAmvwPxaR3sQwAAAABJRU5ErkJggg==";
 
-function createCtx() {
+function createCtx(cwd: string) {
 	const composer = new Composer();
 	const pasteText = vi.spyOn(composer, "insertText");
 	const insertAtom = vi.spyOn(composer, "insertAtom");
@@ -45,10 +48,8 @@ function createCtx() {
 	const ctx = {
 		composer,
 		shell: { focused: () => composer.field },
-		sessionManager: {
-			getCwd: () => process.cwd(),
-			putBlob: async () => ({ hash: "h", path: "/tmp/h.png", displayPath: "/tmp/h.png" }),
-		} as unknown as InteractiveModeContext["sessionManager"],
+		settings: Settings.isolated({ "images.autoResize": false }),
+		sessionManager: SessionManager.create(cwd, path.join(cwd, "sessions")),
 		showStatus,
 	} as unknown as InteractiveModeContext;
 	return {
@@ -66,23 +67,23 @@ function createCtx() {
 describe("InputController.handleImagePaste (issue #8769)", () => {
 	let tmpDir: string;
 	let imgPath: string;
+	let settingsState: SettingsTestState | undefined;
 
 	beforeEach(async () => {
+		settingsState = beginSettingsTest();
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-8769-"));
+		setAgentDir(tmpDir);
 		imgPath = path.join(tmpDir, "screenshot.png");
 		await fs.writeFile(imgPath, FILE_PNG);
-		resetSettingsForTest();
-		await Settings.init({ inMemory: true, overrides: { "images.autoResize": false } });
 	});
 
 	afterEach(async () => {
+		restoreSettingsTestState(settingsState);
 		await fs.rm(tmpDir, { recursive: true, force: true });
-		resetSettingsForTest();
-		vi.restoreAllMocks();
 	});
 
 	it("attaches the file bytes, not the co-advertised Finder icon bitmap", async () => {
-		const { ctx, spies } = createCtx();
+		const { ctx, spies } = createCtx(tmpDir);
 		const readImage = vi.fn(async () => ({
 			// Finder's generated file-icon bitmap; arboard::get_image succeeds with this.
 			data: Buffer.from(ICON_PNG_BASE64, "base64"),
@@ -107,7 +108,7 @@ describe("InputController.handleImagePaste (issue #8769)", () => {
 	});
 
 	it("still attaches a pure bitmap pasteboard (screenshot/browser copy) with no file URL", async () => {
-		const { ctx, spies } = createCtx();
+		const { ctx, spies } = createCtx(tmpDir);
 		const readMacFileUrls = vi.fn(async () => [] as string[]);
 		const controller = new InputController(ctx, {
 			readImage: async () =>
@@ -128,8 +129,8 @@ describe("InputController.handleImagePaste (issue #8769)", () => {
 	});
 
 	it("falls to the bitmap when the file URL is a non-image file", async () => {
-		const { ctx, spies } = createCtx();
-		const readMacFileUrls = vi.fn(async () => ["/Users/me/Documents/report.pdf"]);
+		const { ctx, spies } = createCtx(tmpDir);
+		const readMacFileUrls = vi.fn(async () => [path.join(tmpDir, "report.pdf")]);
 		const controller = new InputController(ctx, {
 			readImage: async () =>
 				({

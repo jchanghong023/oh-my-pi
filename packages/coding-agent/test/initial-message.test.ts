@@ -39,4 +39,25 @@ describe("buildInitialMessage", () => {
 		expect(result.initialImages).toBeUndefined();
 		expect(parsed.messages).toEqual(["first", "second"]);
 	});
+
+	it.each(["/review file.ts", "/custom-command arg"])("keeps %s as a CLI message when @file is empty", message => {
+		const parsed = createArgs([message, "second"]);
+
+		const result = buildInitialMessage({ parsed, fileText: "", fileImages: [] });
+
+		expect(result.initialMessage).toBeUndefined();
+		expect(result.initialImages).toBeUndefined();
+		expect(parsed.messages).toEqual([message, "second"]);
+	});
+
+	it("still combines the first CLI message with images when @file text is empty", () => {
+		const parsed = createArgs(["first", "second"]);
+		const images: ImageContent[] = [{ type: "image", data: "abc123", mimeType: "image/png" }];
+
+		const result = buildInitialMessage({ parsed, fileText: "", fileImages: images });
+
+		expect(result.initialMessage).toBe("first");
+		expect(result.initialImages).toEqual(images);
+		expect(parsed.messages).toEqual(["second"]);
+	});
 });

@@ -651,7 +651,7 @@ export async function cancelAgentRegistration(
 ): Promise<CancelOutcome> {
 	const registry = session.agentRegistry;
 	const ref = registry?.get(id);
-	if (ref?.kind !== "sub") {
+	if (!registry || ref?.kind !== "sub") {
 		return { id, status: "not_found", message: `Background job not found: ${id}` };
 	}
 	if (id === ownerId) {
@@ -660,16 +660,26 @@ export async function cancelAgentRegistration(
 	if (ref.parentId !== ownerId) {
 		return { id, status: "not_found", message: `Agent ${id} was not spawned by you and cannot be cancelled.` };
 	}
+	if (ref.history?.executionEnded) {
+		return { id, status: "already_completed", message: `Agent ${id} has already completed.` };
+	}
 	const lifecycle = session.agentLifecycle?.();
 	try {
 		if (ref.status === "running" && ref.session) {
 			await ref.session.abort({ reason });
 		}
-		if (lifecycle) {
-			await lifecycle.release(id, undefined, { tombstone: true });
-		} else {
-			await ref.session?.dispose();
-			registry?.unregister(id);
+		// Aborting can yield to cleanup or a replacement under the same id.
+		let cancelled = false;
+		if (registry.get(id) === ref && !ref.history?.executionEnded) {
+			if (lifecycle) {
+				cancelled = await lifecycle.release(id, ref, { tombstone: true });
+			} else {
+				await ref.session?.dispose();
+				cancelled = !ref.history?.executionEnded && registry.unregister(id, ref);
+			}
+		}
+		if (!cancelled) {
+			return { id, status: "already_completed", message: `Agent ${id} is no longer cancellable.` };
 		}
 	} catch (error) {
 		return {

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { $which } from "@oh-my-pi/pi-utils";
+import { requireTestPython } from "./run-prelude";
 
-const pythonPath = Bun.env.PYTHON ?? $which("python3") ?? $which("python");
+const pythonPath = await requireTestPython();
 const runnerPath = path.resolve(import.meta.dir, "../../../src/eval/py/runner.py");
 
 interface RunnerFrame {
@@ -14,7 +14,6 @@ interface RunnerFrame {
 }
 
 async function executeCell(code: string): Promise<RunnerFrame[]> {
-	if (!pythonPath) throw new Error("Python is required for the runner regression");
 	const proc = Bun.spawn([pythonPath, "-u", runnerPath], {
 		stdin: "pipe",
 		stdout: "pipe",
@@ -60,7 +59,7 @@ function expectSuccess(frames: RunnerFrame[], marker: string): void {
 	).toContain(marker);
 }
 
-describe.skipIf(!pythonPath)("Python runner quoted-source transformation", () => {
+describe("Python runner quoted-source transformation", () => {
 	it("preserves raw triple-quoted generated source and magic-looking literal lines", async () => {
 		const payload = [
 			"bool malformedRejected=!SlopArena.IsValid();",

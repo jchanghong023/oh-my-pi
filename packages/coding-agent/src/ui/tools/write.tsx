@@ -6,8 +6,8 @@
  * `agent://`, `proc://` and `cfg://` URLs are a peer message, process input
  * or a setting change instead.
  *
- * Terminal looks: `write` (files) and `write-card` (URL writes), both in
- * `src/ui/styles/tools/write.ts`.
+ * Terminal looks: `write` (files), `write-card` (URL writes), and the
+ * shared `edit` diff card for successful conflict resolutions.
  */
 import * as path from "node:path";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
@@ -16,6 +16,7 @@ import { parseCompactDiff } from "@oh-my-pi/pi-tui/text/diff";
 import { shortenHome } from "@oh-my-pi/pi-tui/text/sanitize";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import type { EditToolPerFileResult } from "../../tools/details/edit";
+import "../styles/tools/edit";
 import type {
 	ToolActivity,
 	ToolFigure,
@@ -27,6 +28,7 @@ import type {
 } from "./contract";
 import { cleanText, ErrorText, NoteText } from "./agent-common";
 import { resultText } from "./default";
+import type { EditBodyPart, EditTerm } from "./edit";
 import {
 	countLines,
 	DiagnosticsSection,
@@ -529,17 +531,32 @@ export const writePresenter: ToolPresenter<WriteArgs, WriteDetails> = {
 				term,
 			};
 		const conflicts = result.details?.conflictChanges;
-		if (conflicts !== undefined && !partial) {
+		if (conflicts?.length && !partial) {
+			const body: JSXNode[] = [];
+			const parts: EditBodyPart[] = [];
+			for (const change of conflicts) {
+				const target = cleanText(displayPath(change.path));
+				body.push(
+					<section key={change.path} head={[{ s: "path", t: target }]}>
+						<diff path={change.path} hunks={parseCompactDiff(change.diff)} />
+					</section>,
+				);
+				parts.push({ k: "note", text: target }, { k: "diff", path: change.path, diff: change.diff });
+			}
+			if (diagnostics) {
+				body.push(<DiagnosticsSection diagnostics={diagnostics} />);
+				parts.push({ k: "diagnostics", diagnostics });
+			}
 			return {
 				head: { ...head, meta: undefined },
-				body: [
-					...conflicts.map(change => (
-						<diff key={change.path} path={change.path} hunks={parseCompactDiff(change.diff)} />
-					)),
-					<DiagnosticsSection diagnostics={diagnostics} />,
-				],
+				body,
 				preview: "children",
-				term,
+				term: {
+					look: "edit",
+					edit: {
+						cards: [{ kind: "card", title: "Write", path: raw, icon: "edit", body: parts, phase: "success" }],
+					} satisfies EditTerm,
+				},
 			};
 		}
 		const progress = resultText(result);

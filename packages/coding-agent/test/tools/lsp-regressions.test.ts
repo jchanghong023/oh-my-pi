@@ -6246,13 +6246,8 @@ describe("lsp regressions", () => {
 	});
 
 	it("does not delete the source when a rename target resolves to the same file", async () => {
-		// A case-only rename on a case-insensitive filesystem yields distinct path
-		// strings that resolve to one inode. Reproduce that deterministically: on
-		// case-sensitive filesystems with a symlinked parent directory (`dir/f.ts`
-		// and `dirlink/f.ts` are the same file), and on Windows directly, where
-		// NTFS resolves the case-only rename `dir/f.ts` → `dir/F.ts` to the same
-		// file without needing symlink privileges. The overwrite branch must skip
-		// removing the destination, or it deletes the source before the rename.
+		// A directory alias gives two paths to the same file regardless of volume case sensitivity.
+		// Displacing the overwrite target would also move the source.
 		const tempDir = TempDir.createSync("@omp-lsp-same-file-rename-");
 		try {
 			const realDir = path.join(tempDir.path(), "dir");
@@ -6260,14 +6255,9 @@ describe("lsp regressions", () => {
 			const filePath = path.join(realDir, "f.ts");
 			await Bun.write(filePath, "SOURCE");
 
-			let newFilePath: string;
-			if (process.platform === "win32") {
-				newFilePath = path.join(realDir, "F.ts");
-			} else {
-				const linkDir = path.join(tempDir.path(), "dirlink");
-				fs.symlinkSync(realDir, linkDir);
-				newFilePath = path.join(linkDir, "f.ts");
-			}
+			const linkDir = path.join(tempDir.path(), "dirlink");
+			fs.symlinkSync(realDir, linkDir, process.platform === "win32" ? "junction" : "dir");
+			const newFilePath = path.join(linkDir, "f.ts");
 
 			const renameOp: RenameFile = {
 				kind: "rename",

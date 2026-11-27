@@ -49,7 +49,6 @@ export async function generateTaskLabel(
 			text,
 			registry,
 			settings,
-			cwd,
 			sessionId,
 			currentModel,
 			undefined,
@@ -57,6 +56,7 @@ export async function generateTaskLabel(
 			signal,
 			undefined,
 			onUsage,
+			cwd,
 		);
 		if (!label || labelEchoesHandle(sessionId, label)) return null;
 		return label;

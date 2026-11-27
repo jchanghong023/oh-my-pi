@@ -11,6 +11,9 @@ import { DEFAULT_NPM_REGISTRY } from "../cli/npm-registry";
 import type { Skill } from "../extensibility/skills";
 import bundledArchive from "./resource-archive";
 import { specDrivenSourceFingerprint } from "./resource-fingerprint";
+import { isPathInside, resolveSpecDrivenResourcePath } from "./resource-path";
+
+export { resolveSpecDrivenResourcePath };
 
 export type SpecDrivenResourceSource = "openspec" | "superpowers" | "jch";
 export interface SpecDrivenSkillEntry {
@@ -88,30 +91,6 @@ const bundledSkillNames = new Set([
 
 export function hasBundledSpecDrivenSkill(name: string): boolean {
 	return bundledSkillNames.has(name);
-}
-
-function inside(root: string, target: string): boolean {
-	const relative = path.relative(root, target);
-	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
-}
-
-/** Also checks canonical containment: junctions/symlinks cannot redirect trusted execution. */
-export async function resolveSpecDrivenResourcePath(root: string, relativePath: string): Promise<string> {
-	if (
-		!relativePath ||
-		relativePath.includes("\\") ||
-		path.posix.isAbsolute(relativePath) ||
-		/^[a-z]:/i.test(relativePath) ||
-		relativePath.split("/").some(segment => segment === ".." || segment === "." || segment === "")
-	) {
-		throw new Error(`Invalid bundled resource path: ${relativePath}`);
-	}
-	const canonicalRoot = await fs.realpath(root);
-	const target = path.resolve(root, relativePath);
-	if (!inside(path.resolve(root), target)) throw new Error("Bundled resource escapes root");
-	const canonical = await fs.realpath(target);
-	if (!inside(canonicalRoot, canonical)) throw new Error("Bundled resource escapes canonical root");
-	return canonical;
 }
 
 let extraction: Promise<SpecDrivenResources> | undefined;
@@ -258,7 +237,7 @@ export async function loadSpecDrivenSkill(source: SpecDrivenResourceSource, name
 		jch: resources.jchRoot,
 	}[source];
 	const filePath = await resolveSpecDrivenResourcePath(resources.root, entry.path);
-	if (!inside(await fs.realpath(containRoot), filePath)) throw new Error("Bundled skill escapes source root");
+	if (!isPathInside(await fs.realpath(containRoot), filePath)) throw new Error("Bundled skill escapes source root");
 	const content = await fs.readFile(filePath, "utf8");
 	const digest = resources.manifest.files.find(file => file.path === entry.path)?.sha256;
 	if (!digest || crypto.createHash("sha256").update(content).digest("hex") !== digest)

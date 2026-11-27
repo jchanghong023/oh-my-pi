@@ -214,9 +214,8 @@ export interface AsyncJob {
 	 * Disposal closure for a detached spawn's temporary artifacts directory
 	 * that `runStructuredSubagent()` retained past completion (so a
 	 * delayed `agent://<id>` handle in an `async-result` delivery still
-	 * resolves). The manager invokes and clears this exactly once — on
-	 * eviction or manager disposal — so the retained directory does not
-	 * outlive the job row it was kept alive for.
+	 * resolves). The manager invokes this on eviction or disposal; a failed
+	 * strict disposal keeps the callback available for retry.
 	 */
 	retainedArtifactsCleanup?: () => Promise<void>;
 }
@@ -495,6 +494,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 	readonly #watchedJobs = new Set<string>();
 	readonly #consumedJobResults = new Set<string>();
 	readonly #evictionTimers = new Map<string, NodeJS.Timeout>();
+	readonly #strictRetainedArtifactsCleanups = new WeakMap<AsyncJob, Promise<void>>();
 	readonly #evicted = new Map<string, EvictedJob>();
 	readonly #releasedForegroundJobs = new Set<string>();
 	#nextAutoId = 1;
@@ -1172,15 +1172,37 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		const jobsSettled = await this.#waitForAllUntil(deadline);
 		const drained = await this.drainDeliveries({ timeoutMs: Math.max(deadline - Date.now(), 0) });
 		this.#clearEvictionTimers();
-		if (options?.strict && (!jobsSettled || !drained)) {
-			throw new Error("Async jobs or completion deliveries did not settle during strict disposal");
+		if (options?.strict) {
+			if (!jobsSettled || !drained) {
+				throw new Error("Async jobs or completion deliveries did not settle during strict disposal");
+			}
+			const cleanups: Promise<void>[] = [];
+			for (const job of this.#jobs.values()) {
+				const cleanup = job.retainedArtifactsCleanup;
+				if (!cleanup) continue;
+				let pending = this.#strictRetainedArtifactsCleanups.get(job);
+				if (!pending) {
+					pending = Promise.resolve()
+						.then(cleanup)
+						.then(() => {
+							job.retainedArtifactsCleanup = undefined;
+						})
+						.finally(() => this.#strictRetainedArtifactsCleanups.delete(job));
+					this.#strictRetainedArtifactsCleanups.set(job, pending);
+				}
+				cleanups.push(pending);
+			}
+			const results = Promise.allSettled(cleanups);
+			if (cleanups.length > 0 && !(await this.#waitForDeliveryPromise(results, deadline))) {
+				throw new Error("Async job retained artifacts cleanup did not settle during strict disposal");
+			}
+			const failures = (await results).flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+			if (failures.length) throw new AggregateError(failures, "Async job retained artifacts cleanup failed");
+		} else {
+			// The manager is closing, so don't delay best-effort cleanup by the
+			// normal grace period for reading a delivered artifact.
+			for (const job of this.#jobs.values()) this.#runRetainedArtifactsCleanup(job, { bypassGrace: true });
 		}
-		// Bypass the grace-period sleep: dispose has already drained/cancelled
-		// deliveries above, so there is nothing left for the model to read via
-		// `agent://<id>` — sleeping the retention window here would only leak
-		// temp dirs for up to `retainedArtifactsCleanupGraceMs` (or past
-		// process exit, since dispose does not await these cleanups).
-		for (const job of this.#jobs.values()) this.#runRetainedArtifactsCleanup(job, { bypassGrace: true });
 		this.#jobs.clear();
 		this.#agentParents.clear();
 		this.#deliveries.length = 0;
@@ -1297,7 +1319,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 	 */
 	#runRetainedArtifactsCleanup(job: AsyncJob, options?: { bypassGrace?: boolean }): void {
 		const cleanup = job.retainedArtifactsCleanup;
-		if (!cleanup) return;
+		if (!cleanup || this.#strictRetainedArtifactsCleanups.has(job)) return;
 		job.retainedArtifactsCleanup = undefined;
 		const jobId = job.id;
 		const bypassGrace = options?.bypassGrace === true;
@@ -1760,7 +1782,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		this.#deliveryQueueChanged = Promise.withResolvers<void>();
 	}
 
-	async #waitForDeliveryPromise(promise: Promise<void> | undefined, deadline: number): Promise<boolean> {
+	async #waitForDeliveryPromise(promise: Promise<unknown> | undefined, deadline: number): Promise<boolean> {
 		if (!promise) return true;
 		if (deadline === Number.POSITIVE_INFINITY) {
 			await promise;

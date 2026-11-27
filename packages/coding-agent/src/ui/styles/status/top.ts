@@ -17,7 +17,7 @@
 import type { UiNode } from "@oh-my-pi/pi-tui";
 import { type Block, defineRolePainter, EMPTY_BLOCK, type PaintContext } from "@oh-my-pi/pi-tui/term/paint";
 import { fitStatus, type StatusFit } from "@oh-my-pi/pi-tui/term/painters/status";
-import { visibleWidth } from "@oh-my-pi/pi-tui/text/width";
+import { truncate, visibleWidth } from "@oh-my-pi/pi-tui/text/width";
 import { fgSgr } from "@oh-my-pi/pi-tui/theme/color";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
 import { TOP_RULE_CHIP_RESERVE } from "../composer/shapes";
@@ -222,7 +222,8 @@ function paintTop(node: UiNode, cx: PaintContext): Block {
 					return gaugeWidth <= width ? gaugeWidth : count > 1 ? 1 : 0;
 				},
 			});
-	if (fit.left.length === 0 && fit.right.length === 0 && look.attachment !== "top-border") return EMPTY_BLOCK;
+	if (fit.left.length === 0 && fit.right.length === 0 && look.attachment !== "top-border" && !embedded)
+		return EMPTY_BLOCK;
 
 	const fg = theme.fgSgr("text");
 	const sepSgr = theme.fgSgr("statusLineSep");
@@ -250,6 +251,20 @@ function paintTop(node: UiNode, cx: PaintContext): Block {
 	if (look.attachment === "top-border") {
 		const overflow = embedded && gap < gaugeWidth ? look.segs : segs;
 		rows.push(...statusOverflow(cx, overflow, fit));
+	} else if (band && embedded && gap < gaugeWidth && width > 0) {
+		if (gaugeWidth <= width) rows.push(gauge(look, gaugeWidth, true, cx));
+		else {
+			// At widths smaller than the label itself, wrap the two values before truncating either.
+			const cut = (text: string) => truncate(text, width, theme.symbols.ellipsis);
+			const capacity = theme.fg("muted", cut(formatNumber(window)));
+			if (percent === null) rows.push(capacity);
+			else {
+				const usage = theme.fg(percent > 100 ? "error" : "borderAccent", cut(embeddedPercent(percent)));
+				const compact = `${usage} ${theme.fg("statusLineSep", "·")} ${capacity}`;
+				if (visibleWidth(compact) <= width) rows.push(compact);
+				else rows.push(usage, capacity);
+			}
+		}
 	}
 	return {
 		rows: look.faint ? rows.map(line => `\x1b[2m${line.replaceAll(RESET, `${RESET}\x1b[2m`)}\x1b[22m`) : rows,

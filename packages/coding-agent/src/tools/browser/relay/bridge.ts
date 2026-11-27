@@ -1974,6 +1974,7 @@ export class RelayBridge {
 					this.#reply(conn, msg, tab.refusal ? { targetInfo: info, refusal: tab.refusal } : { targetInfo: info });
 					return;
 				}
+				const inst = this.#instanceNamedByTarget(raw);
 				this.#reply(conn, msg, {
 					targetInfo: {
 						targetId: "relay-browser",
@@ -1983,6 +1984,8 @@ export class RelayBridge {
 						attached: true,
 						canAccessOpener: false,
 					} satisfies TargetInfo,
+					// A different browser's hello (or an empty relay) cannot establish absence.
+					...(inst?.socket && inst.info ? { ompTargetGone: true } : {}),
 				});
 				return;
 			}

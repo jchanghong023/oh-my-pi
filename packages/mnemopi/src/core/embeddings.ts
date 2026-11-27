@@ -435,17 +435,24 @@ async function embedApi(texts: readonly string[], role: EmbeddingRole = "documen
 		return embedApiBatch(texts, role);
 	}
 	const matrix: EmbeddingMatrix = [];
+	const strict = activeEmbeddingOptions()?.strictApi === true;
+	let expectedDimension: number | undefined;
 	for (let offset = 0; offset < texts.length; offset += size) {
-		const part = await embedApiBatch(texts.slice(offset, offset + size), role);
+		const part = await embedApiBatch(texts.slice(offset, offset + size), role, expectedDimension);
 		if (part === null) {
 			return null;
 		}
+		if (strict) expectedDimension ??= part[0]?.length;
 		matrix.push(...part);
 	}
 	return matrix;
 }
 
-async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Promise<EmbeddingMatrix | null> {
+async function embedApiBatch(
+	texts: readonly string[],
+	role: EmbeddingRole,
+	expectedDimension?: number,
+): Promise<EmbeddingMatrix | null> {
 	const inherited = logger.getLogContext();
 	return logger.withLogContext(
 		{
@@ -616,6 +623,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 								elapsed_ms: performance.now() - startedAt,
 							});
 							const detail = (await res.text().catch(() => "")).trim();
+							callerSignal?.throwIfAborted();
 							throw new ProviderHttpError(detail || "mnemopi embedding request unauthorized (401)", 401, {
 								headers: res.headers,
 							});
@@ -626,6 +634,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 				);
 				if (!response.ok) {
 					const detail = await response.text().catch(() => "");
+					callerSignal?.throwIfAborted();
 					return degraded("http_error", undefined, detail);
 				}
 				stage = "response_decode";
@@ -662,7 +671,7 @@ async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Pro
 							}
 							indexed[row.index as number] = row;
 						}
-						const dimension = indexed[0].embedding.length;
+						const dimension = expectedDimension ?? indexed[0].embedding.length;
 						if (
 							indexed.some(
 								row => row.embedding.length !== dimension || !row.embedding.some(value => value !== 0),

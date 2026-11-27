@@ -1,6 +1,40 @@
-# Bundled Opus defaults to /MD even when cmake-rs passes /MT for Rust's
-# crt-static target feature. Keep its runtime choice aligned with Rust.
-set(OPUS_STATIC_RUNTIME OFF CACHE BOOL "Match Rust's CRT linkage" FORCE)
-if("$ENV{CARGO_CFG_TARGET_FEATURE}" MATCHES "(^|,)crt-static(,|$)")
-  set(OPUS_STATIC_RUNTIME ON CACHE BOOL "Match Rust's CRT linkage" FORCE)
+# cmake-rs still selects the hyphenated, then underscored target key. This
+# wrapper is Cargo's default for the latter; restore the lower-priority lookup.
+if(NOT DEFINED _omp_msvc_toolchain)
+  if("$ENV{HOST}" STREQUAL "$ENV{TARGET}")
+    set(_omp_msvc_toolchain_key HOST_CMAKE_TOOLCHAIN_FILE)
+  else()
+    set(_omp_msvc_toolchain_key TARGET_CMAKE_TOOLCHAIN_FILE)
+  endif()
+  if(DEFINED ENV{${_omp_msvc_toolchain_key}})
+    set(_omp_msvc_toolchain "$ENV{${_omp_msvc_toolchain_key}}")
+  else()
+    set(_omp_msvc_toolchain "$ENV{CMAKE_TOOLCHAIN_FILE}")
+  endif()
+  unset(_omp_msvc_toolchain_key)
+
+  if(NOT "${_omp_msvc_toolchain}" STREQUAL "")
+    get_filename_component(_omp_msvc_toolchain_path "${_omp_msvc_toolchain}" ABSOLUTE BASE_DIR "${CMAKE_BINARY_DIR}")
+    if(NOT EXISTS "${_omp_msvc_toolchain_path}" AND NOT IS_ABSOLUTE "${_omp_msvc_toolchain}")
+      get_filename_component(_omp_msvc_toolchain_path "${_omp_msvc_toolchain}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+    endif()
+    set(_omp_msvc_toolchain "${_omp_msvc_toolchain_path}")
+    unset(_omp_msvc_toolchain_path)
+  endif()
+endif()
+
+if(NOT "${_omp_msvc_toolchain}" STREQUAL "" AND NOT "${_omp_msvc_toolchain}" STREQUAL "${CMAKE_CURRENT_LIST_FILE}")
+  include("${_omp_msvc_toolchain}")
+endif()
+# Keep the selected absolute path (or empty selection) in compiler probes.
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES _omp_msvc_toolchain)
+list(REMOVE_DUPLICATES CMAKE_TRY_COMPILE_PLATFORM_VARIABLES)
+
+# Only default bundled Opus to Rust's CRT; honor explicit CMake settings.
+if(NOT DEFINED OPUS_STATIC_RUNTIME)
+  if("$ENV{CARGO_CFG_TARGET_FEATURE}" MATCHES "(^|,)crt-static(,|$)")
+    set(OPUS_STATIC_RUNTIME ON CACHE BOOL "Match Rust's CRT linkage")
+  else()
+    set(OPUS_STATIC_RUNTIME OFF CACHE BOOL "Match Rust's CRT linkage")
+  endif()
 endif()

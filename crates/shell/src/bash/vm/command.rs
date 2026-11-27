@@ -4887,7 +4887,19 @@ fn finish(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op) -> Flow {
 		None => Flow::Next,
 		Some(Transfer::Return(n)) => Flow::Return(n),
 		Some(Transfer::Break { n, cont }) => Flow::Break { n, cont },
-		Some(Transfer::Exit(n)) => Flow::Exit(n),
+		Some(Transfer::Exit(n)) => {
+			// A zsh function trap can unwind before reaching exit_shell.
+			// An explicit exit is not a signal death, even for the same code.
+			if vp.trap_frames != 0
+				&& vp.mode.dialect() == crate::bash::ids::Dialect::Zsh
+				&& let Some(run) = vp.runs.front()
+				&& let std::collections::hash_map::Entry::Occupied(entry) = k.run_signals.entry(run.id)
+				&& matches!(entry.get(), super::RunSignal::TailExternal(_))
+			{
+				entry.remove();
+			}
+			Flow::Exit(n)
+		},
 		Some(Transfer::DiscardAll(n)) => {
 			let command = matches!(
 				state::record(cx.store, vp, Key::Misc(MiscKey::RunOrigin)),

@@ -6,14 +6,14 @@ import { createInteractiveModeContext } from "../helpers/interactive-mode-contex
 interface Harness {
 	ctx: InteractiveModeContext;
 	toggleRecording: Mock<() => Promise<void>>;
-	emitNotice: Mock<InteractiveModeContext["session"]["emitNotice"]>;
+	showError: Mock<InteractiveModeContext["showError"]>;
 	editorText(): string;
 }
 
 function createHarness(draft: string): Harness {
 	let text = draft;
 	const toggleRecording = vi.fn(async () => {});
-	const emitNotice = vi.fn<InteractiveModeContext["session"]["emitNotice"]>(() => {});
+	const showError = vi.fn<InteractiveModeContext["showError"]>();
 	const ctx = createInteractiveModeContext({
 		composer: {
 			text: () => text,
@@ -22,14 +22,14 @@ function createHarness(draft: string): Harness {
 			},
 		},
 		toggleRecording,
-		session: { emitNotice },
+		showError,
 	});
-	return { ctx, toggleRecording, emitNotice, editorText: () => text };
+	return { ctx, toggleRecording, showError, editorText: () => text };
 }
 
 const COMMANDS: ReadonlyArray<readonly [string, (h: Harness) => void]> = [
 	["/record", h => expect(h.toggleRecording).toHaveBeenCalledTimes(1)],
-	["/skills search", h => expect(h.emitNotice).toHaveBeenCalledWith("error", "Usage: /skills search <query>")],
+	["/skills search", h => expect(h.showError).toHaveBeenCalledWith("Usage: /skills search <query>")],
 ];
 
 describe("builtin commands and detached drafts", () => {

@@ -614,6 +614,7 @@ import {
 	cfgDefaultThinkingLevel,
 	cfgExternalThinking,
 	cfgPowerSleepPrevention,
+	cfgPrewalkAuto,
 	cfgPrewalkAutoTarget,
 	cfgPrewalkEnabled,
 	cfgPrewalkFrom,
@@ -1213,12 +1214,16 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Initial Goal provenance follows its original input, never the provider payload or restored history. */
 	readonly #goalAutoOrchestrateInitialSources = new WeakMap<
 		AgentMessage,
-		{ goalId: string; generation: number; manualResume?: boolean }
+		{ goalId: string; sessionId: string; sessionGeneration: number; manualResume: boolean }
 	>();
 	#autopilotRun?: GoalAutopilotRequest["run"];
 	/** Explicit resume can request initial delivery without authorizing another request. */
 	#autopilotResumeSource?: { goalId: string; sessionGeneration: number };
-	#autopilotAdmission?: { goalId: string; sessionGeneration: number; promptGeneration: number };
+	#autopilotAdmission?: {
+		run: GoalAutopilotRequest["run"];
+		promptGeneration: number;
+		awaitingResponse: boolean;
+	};
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -4424,7 +4429,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Emit an event to all listeners */
 	#emit(event: LocalAgentSessionEvent): void {
 		this.#modelStage = nextModelStage(this.#modelStage, event);
-		if (event.type === "message_start" && isUserAuthoredMessage(event.message)) {
+		if (
+			event.type === "message_start" &&
+			isUserAuthoredMessage(event.message) &&
+			!(event.message.role === "user" && (event.message.synthetic || event.message.attribution === "agent"))
+		) {
 			this.#latestTurnToolDiffs.start(this.sessionId);
 		}
 		// Listener array is copy-on-write (see `subscribe`), so iterating the
@@ -5052,7 +5061,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			return;
 		}
 		this.#persistSessionMessageIfMissing(message);
-		if (admittedAutopilotGoalId) {
+		if (admittedAutopilotGoalId && this.#goalModeState?.goal.id === admittedAutopilotGoalId) {
 			this.sessionManager.appendCustomEntry(GOAL_AUTOPILOT_ADMISSION_ENTRY, admittedAutopilotGoalId);
 		}
 	}
@@ -5359,16 +5368,26 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			event.message.completedAt = Date.now();
 			this.#tools.bindReplyToCapturedPrompt(event.message);
 			const admission = this.#autopilotAdmission;
-			this.#autopilotAdmission = undefined;
-			// A saved initial notice is not proof of delivery. Confirm it with the
-			// first response before committing the durable admission to this branch.
-			if (
-				admission?.sessionGeneration === this.#sessionGeneration &&
-				admission.promptGeneration === eventPromptGeneration &&
-				event.message.stopReason !== "error" &&
-				event.message.stopReason !== "aborted"
-			) {
-				admittedAutopilotGoalId = admission.goalId;
+			if (admission) {
+				if (
+					admission.run !== this.#autopilotRun ||
+					admission.run.sessionGeneration !== this.#sessionGeneration ||
+					admission.promptGeneration !== eventPromptGeneration
+				) {
+					this.#autopilotAdmission = undefined;
+				} else if (admission.awaitingResponse) {
+					admission.awaitingResponse = false;
+					// An error isn't proof of delivery. Leave admission pending so
+					// the next native provider attempt can confirm it instead.
+					if (
+						event.message.stopReason !== "error" &&
+						event.message.stopReason !== "aborted" &&
+						!this.#recovery.isClassifierRefusal(event.message)
+					) {
+						admittedAutopilotGoalId = admission.run.goalId;
+						this.#autopilotAdmission = undefined;
+					}
+				}
 			}
 		}
 		// Turn-boundary maintenance awaits this commit before draining steering;
@@ -7444,7 +7463,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#strictDisposalRequested = false;
 	#strictDisposeCleanup?: Set<() => void | Promise<void>>;
 	#strictDisposeFinalizers?: Set<() => void | Promise<void>>;
-	#strictShutdownEvent?: Promise<boolean | void>;
+	#strictShutdownEvent?: Promise<void>;
 	dispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
 		if (options.strict) this.#strictDisposalRequested = true;
 		if (this.#strictDisposalRequested) {
@@ -7609,6 +7628,33 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 	}
 
+	async #closeTodoBackendAndEmitShutdown(strict = false): Promise<void> {
+		// Stop accepting Todo updates before shutdown releases the extension state.
+		// A backend can still have a queued update even if the setting changed.
+		try {
+			await this.#extensionRunner?.closeTodoBackend();
+		} catch (error) {
+			if (strict) throw error;
+			logger.warn("Failed to close the todo backend", { error: String(error) });
+		}
+		try {
+			await emitSessionShutdownEvent(this.#extensionRunner);
+		} catch (error) {
+			logger.warn("Failed to emit session_shutdown event", { error: String(error) });
+		}
+	}
+
+	async #reapAndReleaseShellSessions(strict = false): Promise<void> {
+		// Reap while the shells still hold their `&` jobs.
+		try {
+			await this.#leftoverProcesses.reap();
+		} catch (error) {
+			if (strict) throw error;
+			logger.warn("Session dispose: leftover process reaping failed", { error: String(error) });
+		}
+		releaseShellSessions(this.sessionManager.getSessionId());
+	}
+
 	async #doStrictDispose(options: AgentSessionDisposeOptions): Promise<void> {
 		this.beginDispose({ strict: true });
 		if (!this.#strictDisposeCleanup) {
@@ -7638,6 +7684,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// Retain each failed operation and its captured resource; successful
 			// operations are removed individually rather than replayed on retry.
 			this.#strictDisposeCleanup = new Set<() => void | Promise<void>>([
+				() => this.#reapAndReleaseShellSessions(true),
 				() =>
 					withTimeout(
 						postPromptDrain,
@@ -7681,7 +7728,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					await memoryStates;
 					await flushSharpshooterExtraction(this, options.mnemopiConsolidateTimeoutMs, { strict: true });
 				},
-				() => releaseShellSessions(this.sessionManager.getSessionId()),
 			]);
 			this.#strictDisposeFinalizers = new Set<() => void | Promise<void>>([
 				() => releaseSharpshooterSession(this),
@@ -7704,14 +7750,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					if (this.#providerSessionState.get(key) === state) this.#providerSessionState.delete(key);
 				});
 			}
-			this.#strictShutdownEvent = this.#disposePreparationCall
-				? Promise.resolve()
-				: emitSessionShutdownEvent(this.#extensionRunner).catch(error => {
-						logger.warn("Failed to emit session_shutdown event", { error: String(error) });
-					});
 			this.agent.setProviderResponseInterceptor(undefined);
 			this.agent.setRawSseEventInterceptor(undefined);
 		}
+		this.#strictShutdownEvent ??= (
+			this.#disposePreparationCall?.then(() => undefined) ?? this.#closeTodoBackendAndEmitShutdown(true)
+		).catch(error => {
+			this.#strictShutdownEvent = undefined;
+			throw error;
+		});
 		await this.#strictShutdownEvent;
 		for (const dispose of this.#disposers.splice(0)) this.#strictDisposeCleanup.add(dispose);
 		const cleanup = this.#strictDisposeCleanup;
@@ -7790,20 +7837,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#cancelExitRecorder = undefined;
 		this.#cancelFatalRecoveryHint?.();
 		this.#cancelFatalRecoveryHint = undefined;
-		// The last todo change may still be on its way to the backend: `omp -p` exits right after its final tool call.
-		// From here on a backend gets no further list: its extension releases state on `session_shutdown`. Not asked
-		// of the setting: a list can still be queued for a backend the user has since switched away from. As with
-		// the shutdown event below, a failure here must not keep the session from being torn down.
-		try {
-			await this.#extensionRunner?.closeTodoBackend();
-		} catch (error) {
-			logger.warn("Failed to close the todo backend", { error: String(error) });
-		}
-		try {
-			await emitSessionShutdownEvent(this.#extensionRunner);
-		} catch (error) {
-			logger.warn("Failed to emit session_shutdown event", { error: String(error) });
-		}
+		await this.#closeTodoBackendAndEmitShutdown();
 
 		// Stop fallback extension timers before aborting deferred work they could enqueue.
 		this.#fallbackExtensionTimers?.clearAll();
@@ -7837,14 +7871,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			logger.warn("Session dispose: Sharpshooter release failed", { error: String(error) });
 		}
 		const advisorRecorderClosed = this.#advisors.recorderClosed();
-		// The `&` processes the session's bash calls left behind, while its shells still hold
-		// them: `releaseShellSessions` below hands those shells off.
-		try {
-			await this.#leftoverProcesses.reap();
-		} catch (error) {
-			logger.warn("Session dispose: leftover process reaping failed", { error: String(error) });
-		}
-		releaseShellSessions(this.sessionManager.getSessionId());
+		await this.#reapAndReleaseShellSessions();
 		const results = await Promise.allSettled([
 			this.#disposeOwnedAsyncJobs(),
 			this.#eval.disposeKernels(),
@@ -9225,9 +9252,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// Refresh context here, never by manufacturing or requeueing a user turn.
 		const hasUserSubmission =
 			messages.some(isUserAuthoredQueuedMessage) ||
-			this.sessionManager
-				.getBranch()
-				.some(entry => entry.type === "message" && isUserAuthoredQueuedMessage(entry.message));
+			this.sessionManager.getBranchView().some(entry => {
+				if (entry.type === "message") return isUserAuthoredQueuedMessage(entry.message);
+				return entry.type === "custom_message" && entry.display && entry.attribution === "user";
+			});
 		const hasInheritedContext = state.enabled && state.inheritedScope !== undefined;
 		if (!hasUserSubmission && !hasInheritedContext) return prepared;
 		const context = await this.#buildWorkspaceModeMessage();
@@ -9743,19 +9771,19 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const sessionGeneration = this.#sessionGeneration;
 		if (this.#autopilotRun?.goalId !== goalId || this.#autopilotRun.sessionGeneration !== sessionGeneration) {
 			if (state.goal.status !== "active") return;
-			if (
-				!context.messages.some(message => {
-					const source = this.#goalAutoOrchestrateInitialSources.get(message);
-					return source?.goalId === goalId && source.generation === generation;
-				})
-			)
-				return;
-			this.#autopilotAdmission = { goalId, sessionGeneration, promptGeneration: generation };
+			if (!context.messages.some(message => this.#currentGoalAutoOrchestrateInitialSource(message))) return;
 			this.#autopilotResumeSource = undefined;
 			this.#autopilotRun = { goalId, sessionGeneration };
+			this.#autopilotAdmission = {
+				run: this.#autopilotRun,
+				promptGeneration: generation,
+				awaitingResponse: false,
+			};
 		}
 		const run = this.#autopilotRun;
 		if (state.goal.status === "budget-limited" && !run.review) return;
+		const admission = this.#autopilotAdmission;
+		if (admission?.run === run && admission.promptGeneration === generation) admission.awaitingResponse = true;
 		const isCurrent = () =>
 			!signal?.aborted &&
 			this.#autopilotRun === run &&
@@ -9806,9 +9834,29 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return notice;
 	}
 
-	#buildGoalAutoOrchestrateInitialContext(message: AgentMessage): CustomMessage | undefined {
+	#rememberGoalAutoOrchestrateInitialSource(message: AgentMessage, goalId: string, manualResume = false): void {
+		// Stopping invalidates prompt setup but can return this same message to
+		// the queue. Its ownership lasts until delivery or the transcript changes.
+		this.#goalAutoOrchestrateInitialSources.set(message, {
+			goalId,
+			sessionId: this.sessionManager.getSessionId(),
+			sessionGeneration: this.#sessionGeneration,
+			manualResume,
+		});
+	}
+
+	#currentGoalAutoOrchestrateInitialSource(message: AgentMessage) {
 		const source = this.#goalAutoOrchestrateInitialSources.get(message);
-		return source?.generation === this.#promptGeneration && !source.manualResume
+		return source?.sessionGeneration === this.#sessionGeneration &&
+			source.sessionId === this.sessionManager.getSessionId() &&
+			source.goalId === this.#goalModeState?.goal.id
+			? source
+			: undefined;
+	}
+
+	#buildGoalAutoOrchestrateInitialContext(message: AgentMessage): CustomMessage | undefined {
+		const source = this.#currentGoalAutoOrchestrateInitialSource(message);
+		return source && !source.manualResume
 			? this.#buildGoalAutoOrchestrateContext(undefined, source.goalId)
 			: undefined;
 	}
@@ -10604,7 +10652,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	): Promise<QueuedMessagePreparation | undefined> => {
 		const userMessages = messages.filter(isUserAuthoredQueuedMessage);
 		const first = userMessages[0];
-		const hasInitialSource = messages.some(message => this.#goalAutoOrchestrateInitialSources.has(message));
+		const hasInitialSource = messages.some(message => this.#currentGoalAutoOrchestrateInitialSource(message));
 		const resumeMessage =
 			!hasInitialSource && this.#pendingAutopilotResumeId() !== undefined
 				? userMessages.find(message => this.#pendingAutopilotResumeId(message) !== undefined)
@@ -10657,11 +10705,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				if (resumeMessage) {
 					const resumeGoalId = this.#pendingAutopilotResumeId(resumeMessage);
 					if (resumeGoalId !== undefined) {
-						this.#goalAutoOrchestrateInitialSources.set(resumeMessage, {
-							goalId: resumeGoalId,
-							generation,
-							manualResume: true,
-						});
+						this.#rememberGoalAutoOrchestrateInitialSource(resumeMessage, resumeGoalId, true);
 					}
 				}
 				// Construct only after async preparation and Agent's delivery ownership check.
@@ -10940,8 +10984,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 			// A capped session hands the prompt back without spending on judges or moving to a planner.
 			if (this.#refuseOverCostCap()) return false;
-			// Eligibility permits selecting a configured model; admitting a new turn
-			// requires resolving its actual authentication before any model work.
+			const isCurrent = () => this.#promptGeneration === generation && !setupAbort.signal.aborted;
+			const classifyPrewalk = () => this.#prewalk.classifyAuto(expandedText, setupAbort.signal, message, isCurrent);
+			// Only Escalate can replace the active model with an independently authenticated planner.
+			const routeBeforeAdmission = userTask && cfgPrewalkAuto.get(this.settings) === "escalate";
+			let autoPrewalk = routeBeforeAdmission ? await classifyPrewalk() : undefined;
+			if (!isCurrent()) return false;
 			const admissionModel = this.model;
 			if (!admissionModel) {
 				throw new PromptPreflightError(
@@ -10987,20 +11035,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// Auto-parallel splits typed prompts only; a skill prompt's body is instructions, not a list of tasks.
 			const autoParallel =
 				userTask && message.role === "user" ? this.#autoParallel.start(expandedText, setupAbort.signal) : undefined;
-			const autoPrewalk = userTask
-				? await this.#prewalk.classifyAuto(
-						expandedText,
-						setupAbort.signal,
-						message,
-						() => this.#promptGeneration === generation && !setupAbort.signal.aborted,
-					)
-				: undefined;
-			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 			if (hostAdmission?.auth === undefined || this.model !== admissionModel) {
 				const usageAllowed = await logger.time("prompt:usagePreflight", () =>
 					this.#runUsageAwarePreflightForNextModelCall(setupAbort.signal),
 				);
 				if (!usageAllowed) return false;
+			}
+			if (!isCurrent()) return false;
+			// Ordinary prewalk judges only admitted turns. If the setting changed during
+			// admission, defer Escalate to the next task rather than switch models here.
+			if (userTask && !routeBeforeAdmission && cfgPrewalkAuto.get(this.settings) !== "escalate") {
+				autoPrewalk = await classifyPrewalk();
+				if (!isCurrent()) return false;
 			}
 			// Flush any pending bash messages before the new prompt
 			await this.#bash.flushPending();
@@ -11236,11 +11282,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 				options?.onPromptAdmitted?.();
 				if (goalAutoOrchestrateInitialId)
-					this.#goalAutoOrchestrateInitialSources.set(message, {
-						goalId: goalAutoOrchestrateInitialId,
-						generation,
-						manualResume: options?.goalAutoOrchestrateInitialId === undefined,
-					});
+					this.#rememberGoalAutoOrchestrateInitialSource(
+						message,
+						goalAutoOrchestrateInitialId,
+						options?.goalAutoOrchestrateInitialId === undefined,
+					);
 				const dispatch = () =>
 					this.#recovery.promptAgentWithIdleRetry(messages, agentPromptOptions, () => {
 						// `agent.prompt` claims streaming synchronously before its
@@ -11817,7 +11863,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			timestamp ?? Date.now(),
 			rawText,
 			options,
-			sourceGeneration,
 		);
 		options?.onPromptQueued?.(queued);
 		options?.onPromptAdmitted?.();
@@ -11842,7 +11887,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		timestamp: number,
 		rawText: string,
 		options?: Pick<PromptOptions, "goalAutoOrchestrateInitialId">,
-		sourceGeneration = this.#promptGeneration,
 	): AgentMessage[] {
 		this.#allowQueuedMessageDrainRetry();
 		const userMessage: AgentMessage =
@@ -11850,10 +11894,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				? { role: "user", content, attribution, timestamp }
 				: { role: "user", content, steering: true, attribution, timestamp };
 		if (options?.goalAutoOrchestrateInitialId !== undefined) {
-			this.#goalAutoOrchestrateInitialSources.set(userMessage, {
-				goalId: options.goalAutoOrchestrateInitialId,
-				generation: sourceGeneration,
-			});
+			this.#rememberGoalAutoOrchestrateInitialSource(userMessage, options.goalAutoOrchestrateInitialId);
 		}
 		this.#queuedMessageRawText.set(userMessage, rawText);
 		const group = [...companions, userMessage];
@@ -12383,10 +12424,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			return true;
 		}
 		if (options?.goalAutoOrchestrateInitialId !== undefined) {
-			this.#goalAutoOrchestrateInitialSources.set(normalizedAppMessage, {
-				goalId: options.goalAutoOrchestrateInitialId,
-				generation: sourceGeneration,
-			});
+			this.#rememberGoalAutoOrchestrateInitialSource(normalizedAppMessage, options.goalAutoOrchestrateInitialId);
 		}
 		this.#allowQueuedMessageDrainRetry();
 		// Keyword notices and their user message must enter the queue in one synchronous phase.
@@ -13643,7 +13681,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				firstMessage,
 				this.#modelRegistry,
 				this.settings,
-				this.sessionManager.getCwd(),
 				sessionId,
 				this.model,
 				provider => buildSessionMetadata(sessionId, provider, this.#modelRegistry.authStorage),
@@ -13654,6 +13691,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					costGate.record(message.usage.cost.total);
 					this.#reportTitleUsage(usageOwner, "title", message, prompt);
 				},
+				this.sessionManager.getCwd(),
 			),
 		);
 		if (await this.#sessionGenerationChanged(sessionGeneration)) return null;
@@ -15863,9 +15901,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 		using _transition = this.#beginSessionTransition();
 		const previousSessionFile = this.sessionManager.getSessionFile();
-		const switchingToDifferentSession = previousSessionFile
-			? path.resolve(previousSessionFile) !== path.resolve(sessionPath)
-			: true;
 		// Emit session_before_switch event (can be cancelled)
 		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
 			const result = (await this.#extensionRunner.emit({
@@ -15890,15 +15925,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
 		const bashTransition = this.#bash.beginSessionTransition();
-		// Only same-session reloads compare against the prior context to detect
-		// rollback edits (`#didSessionMessagesChange` below). Building it for a
-		// different-session switch is a pure waste — and on huge pre-fix sessions
-		// it materializes every persisted snapcompact frame plus the
-		// `openaiRemoteCompaction.replacementHistory` payload into messages,
-		// blowing the heap before the new session even loads (issue #3846). The
-		// error-recovery path rebuilds the context on demand from the restored
-		// state instead.
-		const previousSessionContext = switchingToDifferentSession ? undefined : this.buildDisplaySessionContext();
 		// switchSession replaces these arrays wholesale during load/rollback, so retaining
 		// the existing message objects is sufficient and avoids structured-clone failures for
 		// extension/custom metadata that is valid to persist but not cloneable.
@@ -15957,15 +15983,23 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		let cwdChangeTarget: string | undefined;
 		using _sessionOwnership = this.sessionManager.retainRuntimeOwnership();
 		try {
+			const preparation = this.sessionManager.prepareSessionSwitch(sessionPath);
+			const target = typeof preparation === "boolean" ? preparation : await preparation;
+			const switchingToDifferentSession = typeof target === "boolean" ? target : target.different;
+			// Only reloads compare against the prior context to detect rollback
+			// edits. Materializing old snapcompact frames for a switch can
+			// blow the heap before the new session loads (issue #3846).
+			const previousSessionContext = switchingToDifferentSession ? undefined : this.buildDisplaySessionContext();
 			if (switchingToDifferentSession) {
-				// Stop and settle in-flight advisors while the old-session feeds can
-				// still observe message_end, then mute before swapping files.
+				// Stop and settle in-flight advisors while the old-session feeds
+				// can still observe message_end, then mute before swapping files.
 				await this.#advisors.drainAndDetachRecorders();
 			}
-			// The file may be reloaded at the same path with a different latest contract (or the
-			// switch rolled back via restoreState); re-read it on the next model call either way.
+			// Re-read the contract on the next model call, even after a same-file
+			// reload or if the switch rolls back via restoreState.
 			this.#sessionInit = undefined;
-			await this.sessionManager.setSessionFile(sessionPath);
+			if (typeof target === "boolean") await this.sessionManager.setSessionFile(sessionPath);
+			else await target.apply();
 			this.#bash.markSessionTransition(bashTransition);
 			const newCwd = this.sessionManager.getCwd();
 			const recordedCwd = this.sessionManager.getRecordedCwd() ?? previousSessionState.cwd;

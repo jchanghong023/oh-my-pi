@@ -39,7 +39,7 @@ import {
 import { holdPartialTableRow, speculativeStreamingSource } from "@oh-my-pi/pi-tui/text/markdown/index";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
-import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
+import type { TspMenuEntry, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { TurnUsageSummary } from "../../../modes/view-model/overlays/usage-row";
 import type { CacheInvalidation } from "../../../session/transcript/cache-invalidation-marker";
 import { chartFence, hasChartTable, lookupTableChart, splitTableCharts } from "../../../session/transcript/table-chart";
@@ -119,8 +119,8 @@ export interface AssistantMessageModel {
 	readonly turnUsage?: Reactive<TurnUsageSummary | undefined>;
 	/** A TTSR rule rewound this partial answer. */
 	readonly rewound?: Reactive<boolean>;
-	/** Whether a host handles transcript actions (controls are only shown when one does). */
-	readonly actions?: Reactive<boolean>;
+	/** Whether a host handles transcript actions; `"copy"` omits session-changing controls. */
+	readonly actions?: Reactive<boolean | "copy">;
 	/** Live thinking speed (tok/s); shown from 0.05 up. */
 	readonly thinkingRate?: Reactive<number>;
 	/** Clock for thinking durations (ms; default `performance.now`). */
@@ -213,7 +213,7 @@ type ErrorPart =
 			code?: string;
 			text: string;
 			preview: string;
-			actions: boolean;
+			actions: boolean | "copy";
 			termHidden: boolean;
 			/** Rows the message keeps while collapsed. */
 			lines?: number;
@@ -456,7 +456,6 @@ export function AssistantMessageBlock(props: { model: AssistantMessageModel }): 
 					else if (figure.kind !== "chart") out.set(`${figure.kind}:${slot()}`, figure);
 				}
 			} else if (content.type === "thinking") {
-				if (hideActivity) continue;
 				// A display message's thinking (`rawThinking` set) is already formatted: formatting it again
 				// would strip its fences a second time.
 				const raw = (content as { rawThinking?: string }).rawThinking;
@@ -470,7 +469,7 @@ export function AssistantMessageBlock(props: { model: AssistantMessageModel }): 
 				} else if (clock && clock.end === undefined) {
 					clock.end = untrack(now);
 				}
-				if (hide && !thinkingLive) continue;
+				if (hideActivity || (hide && !thinkingLive)) continue;
 				out.set(`k${i}`, {
 					kind: "thinking",
 					index: i,
@@ -528,7 +527,7 @@ export function AssistantMessageBlock(props: { model: AssistantMessageModel }): 
 
 	const answered = (): boolean => reply()?.answer.content.some(hasVisibleText) ?? false;
 	const rewound = (): boolean => flag(model.rewound, false);
-	const actions = (): boolean => flag(model.actions, false);
+	const actions = () => read(model.actions) ?? false;
 	const usage = (): TurnUsageSummary | undefined => read(model.turnUsage);
 	const slots = computed(() => [...parts().keys()], { equals: sameSlots });
 	const thinkingDots = (): { tokens: number; rate: number } | undefined => {
@@ -547,15 +546,9 @@ export function AssistantMessageBlock(props: { model: AssistantMessageModel }): 
 			role={() => (rewound() ? "omp.assistant.rewound" : "omp.assistant")}
 			actions={() => {
 				const at = reply()?.answer.timestamp;
-				return usage() && answered() && at !== undefined && !rewound() && actions()
-					? {
-							hold: turnHoldEntries("assistant", {
-								id: "copy-answer",
-								label: "Copy reply",
-								icon: "copy",
-							}),
-						}
-					: undefined;
+				if (!usage() || !answered() || at === undefined || rewound() || !actions()) return undefined;
+				const copy: TspMenuEntry = { id: "copy-answer", label: "Copy reply", icon: "copy" };
+				return { hold: actions() === "copy" ? [copy] : turnHoldEntries("assistant", copy) };
 			}}
 			term={() => ({ thinkingDots: thinkingDots() })}
 			onAction={act => {
@@ -567,7 +560,7 @@ export function AssistantMessageBlock(props: { model: AssistantMessageModel }): 
 						block.type === "text" && hasVisibleText(block) ? [block.text.trim()] : [],
 					);
 					if (blocks?.length) model.onAction?.(act, blocks.join("\n\n"));
-				} else model.onAction?.(act);
+				} else if (actions() !== "copy") model.onAction?.(act);
 			}}
 			onToggle={(collapsed, event) => {
 				if (!event.key.startsWith("k")) return;
@@ -657,7 +650,7 @@ function errorPart(message: AssistantMessage, model: AssistantMessageModel): Err
 		code,
 		text: detail,
 		preview: presentation.text,
-		actions: message.stopReason === "error" && (model.actions === undefined ? false : read(model.actions)),
+		actions: message.stopReason === "error" && (read(model.actions) ?? false),
 		termHidden: message.stopReason === "error" && pinned && !expanded,
 		...(expanded ? {} : { lines: ERROR_PREVIEW_ROWS }),
 	};
@@ -932,15 +925,19 @@ function FailedTurn(props: { error: () => ErrorPart | undefined }): JSXNode {
 				wrap="word"
 				lines={() => failed()?.lines}
 			/>
-			{() =>
-				failed()?.actions && (
-					<row key="actions" gap="sm" role="omp.error.actions">
-						{button("retry", "Retry", ["F5"], "Retry the failed turn")}
-						{button("copy-error", "Copy error", [], "Copy the error message")}
-						{button("switch-model", "Switch model", ["⌥P"], "Pick another model for this session")}
-					</row>
-				)
-			}
+			{() => {
+				const actions = failed()?.actions;
+				return (
+					actions && (
+						<row key="actions" gap="sm" role="omp.error.actions">
+							{actions === true && button("retry", "Retry", ["F5"], "Retry the failed turn")}
+							{button("copy-error", "Copy error", [], "Copy the error message")}
+							{actions === true &&
+								button("switch-model", "Switch model", ["⌥P"], "Pick another model for this session")}
+						</row>
+					)
+				);
+			}}
 		</card>
 	);
 }

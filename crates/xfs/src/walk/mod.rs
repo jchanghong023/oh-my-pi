@@ -346,8 +346,9 @@ const BATCHES_PER_WORKER: usize = 4;
 /// as one non-empty [`Batch`] through a bounded channel: a consumer that stops
 /// polling pauses the walk, and dropping the [`Walk`] cancels it. A
 /// directory's [`Action::SkipDir`] prunes it, [`Action::Stop`] ends the walk;
-/// `Skip` and `Continue` are the same here. Unreadable directories below the
-/// root are skipped and reported by [`Walk::into_errors`].
+/// `Skip` and `Continue` are the same here. Open and listing failures below
+/// the root are reported by [`Walk::into_errors`]; readable entries from an
+/// incomplete listing are still visited.
 ///
 /// # Errors
 /// [`WalkError::Root`] when `root` cannot be opened as a directory.

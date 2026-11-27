@@ -194,6 +194,7 @@ function focusHarness(): FocusHarness {
 				})),
 			);
 		},
+		refreshCompactPresentation() {},
 		reloadTodos: async (source: AgentViewSession) => {
 			todoSources.push(source);
 		},

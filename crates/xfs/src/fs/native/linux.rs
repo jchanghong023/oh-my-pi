@@ -28,7 +28,7 @@ use super::{
 	aligned_buf, is_dot_or_dot_dot, le16, le64,
 	unix::{Scratch, nanos, type_of_dt, type_of_mode},
 };
-use crate::fs::{Detail, FileInfo, FileType, Listing, Stamp};
+use crate::fs::{Detail, FileInfo, FileType, IncompleteListing, Listing, Stamp};
 
 /// On a 16-vCPU arm64 VM, 8 workers walked faster and steadier than 16
 /// (kernel contention on fd-table and dcache locks grows with thread count).
@@ -129,6 +129,7 @@ pub(super) fn list(
 	out: &mut Listing,
 ) -> io::Result<()> {
 	let buf = aligned_buf(&mut s.buf, LIST_BUF);
+	let mut incomplete = None;
 	loop {
 		// SAFETY: `buf` is writable for its whole length.
 		let n = unsafe {
@@ -143,7 +144,7 @@ pub(super) fn list(
 		}
 		let n = n as usize;
 		if n == 0 {
-			return Ok(());
+			break;
 		}
 		let mut next = 0i64;
 		let mut off = 0;
@@ -190,6 +191,13 @@ pub(super) fn list(
 							// Let the walker report the failed open of the child.
 							out.push(name, FileType::Dir, None, None, 0);
 						},
+						Err(err)
+							if dt == libc::DT_UNKNOWN && err.kind() == io::ErrorKind::PermissionDenied =>
+						{
+							// The name might be a directory. Report the
+							// omission after reading the remaining entries.
+							incomplete.get_or_insert(err);
+						},
 						_ => {},
 					}
 				},
@@ -201,8 +209,12 @@ pub(super) fn list(
 		// was returned, so the confirming empty call can be skipped. A batch cut
 		// short (buffer full, signal pending) carries the next real position.
 		if next == i64::from(i32::MAX) || next == i64::MAX {
-			return Ok(());
+			break;
 		}
+	}
+	match incomplete {
+		Some(error) => Err(io::Error::new(error.kind(), IncompleteListing(error))),
+		None => Ok(()),
 	}
 }
 

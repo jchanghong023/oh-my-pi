@@ -22,6 +22,7 @@ import type {
 	TeamMemberSlot,
 	TeamModelRef,
 } from "./config-types";
+import { cfgTeamMembers } from "./settings";
 
 export class TeamConfigError extends Error {
 	constructor(
@@ -308,7 +309,7 @@ export class TeamConfigService {
 				invalid("preview requires a nonempty clientRevision and members");
 			draft = selectors(preview.members, true);
 		}
-		const stored = await this.#persistentSettings.readUserSetting("team.members");
+		const stored = await this.#persistentSettings.readUserSetting(cfgTeamMembers.id);
 		if (!acceptedSave) this.#assertCurrent();
 		const catalog = this.#catalog();
 		const issues: TeamConfigIssue[] = stored.issues.map(issue => ({
@@ -332,11 +333,23 @@ export class TeamConfigService {
 				userMembers = this.#slots(stored.value, "userMembers", issues, catalog);
 			}
 		}
-		const projected = this.#settings.projectUserSetting("team.members", stored.value);
-		const effective = this.#projection(projected.value, projected.source, issues, catalog, false);
+		let value: unknown;
+		let provenance: SettingProvenance;
+		if (acceptedSave) {
+			value = this.#settings.rawValue(cfgTeamMembers);
+			// A higher layer can set null to mask the user roster; rawValue treats it as unset.
+			provenance =
+				value === undefined
+					? this.#settings.projectUserSetting(cfgTeamMembers.id, undefined).source
+					: cfgTeamMembers.provenance(this.#settings);
+		} else {
+			({ value, source: provenance } = this.#settings.projectUserSetting(cfgTeamMembers.id, stored.value));
+		}
+		const effective = this.#projection(value, provenance, issues, catalog, false);
 		if (
+			!acceptedSave &&
 			(readState === "invalid" || readState === "unreadable") &&
-			(projected.source === "global" || projected.source === "default")
+			(provenance === "global" || provenance === "default")
 		) {
 			effective.effectiveMembers = null;
 			effective.participants = [];
@@ -354,7 +367,7 @@ export class TeamConfigService {
 		};
 		if (preview !== undefined) {
 			const previewIssues: TeamConfigIssue[] = [];
-			const projection = this.#settings.projectUserSetting("team.members", draft);
+			const projection = this.#settings.projectUserSetting(cfgTeamMembers.id, draft);
 			const draftPreview: TeamConfigPreview = {
 				clientRevision: preview.clientRevision,
 				userMembers:
@@ -400,32 +413,48 @@ export class TeamConfigService {
 			throw new TeamConfigError("scope_not_allowed", "Only user scope is writable", noWrites());
 		if (typeof input.expectedRevision !== "string" || !input.expectedRevision.trim())
 			invalid("expectedRevision is required");
-		return this.#save(selectors(input.members, false), input.expectedRevision);
+		const requested = selectors(input.members, false);
+		this.#validateSlots(requested);
+		return this.#save(requested, input.expectedRevision);
+	}
+
+	/** Check a session-only roster against the same current catalog as a saved roster. */
+	validateTeamMembers(value: unknown): void {
+		this.#assertCurrent();
+		this.#checkedMembers(value);
 	}
 
 	/** Save the ordered provider/model IDs used by the setting's text interfaces. */
 	async saveTeamConfig(members: unknown, expectedRevision: string): Promise<TeamConfigSaveResult> {
 		this.#assertCurrent();
 		if (typeof expectedRevision !== "string" || !expectedRevision.trim()) invalid("expectedRevision is required");
-		if (!strings(members)) invalid("team.members must be an ordered string array");
-		return this.#save(members, expectedRevision);
+		return this.#save(this.#checkedMembers(members), expectedRevision);
 	}
 
-	async #save(requested: readonly string[] | undefined, expectedRevision: string): Promise<TeamConfigSaveResult> {
-		const catalog = this.#catalog();
+	#checkedMembers(value: unknown): string[] {
+		if (!strings(value)) invalid("team.members must be an ordered string array");
+		this.#validateSlots(value);
+		return value;
+	}
+
+	#validateSlots(requested: readonly string[] | undefined): void {
+		if (!requested?.length) return;
 		const issues: TeamConfigIssue[] = [];
-		if (requested?.length) this.#slots(requested, "userMembers", issues, catalog, undefined, () => true);
+		this.#slots(requested, "userMembers", issues, this.#catalog(), undefined, () => true);
 		if (issues.length)
 			throw new TeamConfigError(
 				"invalid_params",
 				`One or more members are unavailable: ${issues.map(issue => `${issue.selector}: ${issue.message}`).join("; ")}`,
 				{ ...noWrites(), issues },
 			);
+	}
+
+	async #save(requested: readonly string[] | undefined, expectedRevision: string): Promise<TeamConfigSaveResult> {
 		let receipt: UserSettingSaveResult;
 		let failure: { code: TeamConfigErrorCode; message: string } | undefined;
 		let storageIssues: TeamConfigIssue[] | undefined;
 		try {
-			receipt = await this.#persistentSettings.saveUserSetting("team.members", requested, expectedRevision);
+			receipt = await this.#persistentSettings.saveUserSetting(cfgTeamMembers.id, requested, expectedRevision);
 		} catch (error) {
 			if (error instanceof UserSettingError) {
 				receipt = error.data;
@@ -493,7 +522,9 @@ export class TeamConfigService {
 				? {
 						effectiveNote: !userMatches
 							? userMismatch
-							: "A higher-priority layer overrides the request or the effective roster is unavailable",
+							: config.source === "global" || config.source === "default"
+								? "The saved Team roster is not active in this session"
+								: "A higher-priority layer overrides the request or the effective roster is unavailable",
 					}
 				: {}),
 		};

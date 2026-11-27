@@ -212,10 +212,55 @@ describe("resume picker across git worktrees", () => {
 		await $`git worktree remove --force ${worktree} && git worktree remove --force ${linked} && git worktree prune`
 			.cwd(repo)
 			.quiet();
-		expect((await worktreeSessionDirs(repo, own)).sort()).toEqual([sibling, oldSibling, managed].sort());
+		expect([...(await worktreeSessionDirs(repo, own)).keys()].sort()).toEqual([sibling, oldSibling, managed].sort());
 		const nestedCwd = path.join(repo, "pkg");
-		expect(await worktreeSessionDirs(nestedCwd, sessionDirForCwd(nestedCwd, sessionsRoot))).toEqual([nested]);
-		expect(await worktreeSessionDirs(repo, path.join(sessionsRoot, "custom"))).toEqual([]);
+		expect([...(await worktreeSessionDirs(nestedCwd, sessionDirForCwd(nestedCwd, sessionsRoot))).keys()]).toEqual([
+			nested,
+		]);
+		expect((await worktreeSessionDirs(repo, path.join(sessionsRoot, "custom"))).size).toBe(0);
+	});
+
+	it("distinguishes a suffixed worktree from a numeric subfolder sharing its session bucket", async () => {
+		const { path: worktree } = await createSessionWorktree(repo, Settings.isolated(), "wt/collision");
+		const suffixed = `${worktree}-2`;
+		const worktreeSubfolder = path.join(worktree, "2");
+		const repoSubfolder = path.join(repo, "2");
+		await $`git worktree add -q -b wt/collision-suffix ${suffixed}`.cwd(repo).quiet();
+		fs.mkdirSync(worktreeSubfolder);
+		fs.mkdirSync(repoSubfolder);
+
+		const records = [];
+		for (const [cwd, title] of [
+			[suffixed, "Suffixed worktree root"],
+			[worktreeSubfolder, "Numeric worktree subfolder"],
+		] as const) {
+			const session = await answeredSession(cwd);
+			await session.setSessionName(title, "user");
+			await session.close();
+			records.push({ id: session.getSessionId(), cwd, path: session.getSessionFile()! });
+		}
+		const [rootRecord, subfolderRecord] = records;
+		expect(path.dirname(rootRecord.path)).toBe(path.dirname(subfolderRecord.path));
+
+		const checkOwnership = async (stranded: boolean) => {
+			const identity = ({ id, cwd, path }: SessionInfo) => ({ id, cwd, path });
+			for (const [cwd, own, other] of [
+				[repo, rootRecord, subfolderRecord],
+				[repoSubfolder, subfolderRecord, rootRecord],
+			] as const) {
+				const listing = await SessionManager.listForPicker(cwd);
+				expect(listing.sessions.map(identity)).toEqual([own]);
+				expect((await listing.complete).map(identity)).toEqual([own]);
+				expect(await SessionManager.isStrandedIn(own, cwd)).toBe(stranded);
+				expect(await SessionManager.isStrandedIn(other, cwd)).toBe(false);
+			}
+		};
+
+		await checkOwnership(false);
+		await $`git worktree remove --force ${suffixed} && git worktree remove --force ${worktree} && git worktree prune`
+			.cwd(repo)
+			.quiet();
+		await checkOwnership(true);
 	});
 
 	it("relocates a session filed under this folder whose recorded folder was moved away", async () => {

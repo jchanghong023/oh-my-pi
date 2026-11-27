@@ -69,11 +69,11 @@ async function createSharedFixture(): Promise<SharedFixture> {
 	const baseDir = TempDir.createSync("@pi-goal-mode-shared-");
 	const authStorage = await AuthStorage.create(path.join(baseDir.path(), "testauth.db"));
 	// The real prompt path gates on a resolvable key; never rely on ambient env.
-	authStorage.keys.setRuntime("ascend", "test-key");
+	authStorage.keys.setRuntime("anthropic", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage);
-	const model = modelRegistry.find("ascend", "qwen3.8-flash-next");
+	const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 	if (!model) {
-		throw new Error("Expected ascend/qwen3.8-flash-next to exist in registry");
+		throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 	}
 	return { authStorage, modelRegistry, model, baseDir };
 }
@@ -92,6 +92,13 @@ async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
 	const bootstrapToolSession = createToolSession(tempDir.path(), settings);
 	const initialTools = await createTools(bootstrapToolSession, ["read"]);
 	const toolRegistry = new Map<string, Tool>(initialTools.map(tool => [tool.name, tool] as const));
+	const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+	// Session restore resolves the provider and model id recorded by assistant replies.
+	const offlineModel = createMockModel({
+		provider: model.provider,
+		id: model.id,
+		handler: () => ({ content: ["Done"] }),
+	});
 
 	const session: AgentSession = new AgentSession({
 		agent: new Agent({
@@ -102,8 +109,19 @@ async function createGoalHarness(shared: SharedFixture): Promise<GoalHarness> {
 				messages: [],
 			},
 			convertToLlm,
+			streamFn: offlineModel.stream,
+			getToolContext: toolCall => ({
+				sessionManager,
+				modelRegistry,
+				model: session.model,
+				settings,
+				isIdle: () => !session.isStreaming,
+				hasQueuedMessages: () => session.agent.hasQueuedMessages(),
+				abort: () => session.abort(),
+				toolCall,
+			}),
 		}),
-		sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+		sessionManager,
 		settings,
 		modelRegistry,
 		toolRegistry,
@@ -598,6 +616,35 @@ describe("InteractiveMode goal mode integration", () => {
 		);
 	});
 
+	it("completes a reviewed Autopilot goal when the confirming response uses the last tokens", async () => {
+		await harness.mode.handleGoalModeCommand("Inspect the current task.", undefined, { autoOrchestrate: true });
+		await harness.session.goalRuntime.onBudgetMutated(4);
+
+		const complete = { type: "toolCall", name: "goal", arguments: { op: "complete" } } as const;
+		harness.session.agent.streamFn = createMockModel({
+			responses: [
+				{ content: [complete, complete], usage: { output: 1 } },
+				{ content: [complete], usage: { output: 3 } },
+				{ content: ["The goal is complete."] },
+			],
+		}).stream;
+		await harness.session.prompt("Verify the completed work.");
+
+		expect(
+			harness.session.messages.filter(message => message.role === "toolResult" && message.toolName === "goal"),
+		).toMatchObject([
+			{ isError: false, details: { goal: { status: "active" } } },
+			{ isError: false, details: { goal: { status: "active" } } },
+			{
+				isError: false,
+				details: {
+					goal: { status: "complete", tokenBudget: 4, tokensUsed: 4 },
+					completionBudgetReport: expect.stringContaining("tokens used: 4 of 4"),
+				},
+			},
+		]);
+	});
+
 	it("restores only each saved session's strict auto marker when reopening and switching", async () => {
 		await harness.mode.init({ suppressWelcomeIntro: true });
 		await executeBuiltinSlashCommand("/goal-autopilot Saved automatic objective", { ctx: harness.mode });
@@ -1065,7 +1112,7 @@ describe("InteractiveMode goal mode integration", () => {
 			},
 		]);
 		let providerCall = 0;
-		harness.session.agent.streamFn = () => {
+		harness.session.agent.streamFn = model => {
 			const index = providerCall++;
 			const toolTurn = index % 2 === 0;
 			const toolCallId = `call-${Math.floor(index / 2)}`;
@@ -1074,9 +1121,9 @@ describe("InteractiveMode goal mode integration", () => {
 				content: toolTurn
 					? [{ type: "toolCall" as const, id: toolCallId, name: "todo", arguments: { op: "view" } }]
 					: [{ type: "text" as const, text: "Verification remains complete." }],
-				api: "anthropic-messages" as const,
-				provider: "ascend" as const,
-				model: "qwen3.8-flash-next",
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
 				usage: {
 					input: 1,
 					output: 1,

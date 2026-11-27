@@ -422,11 +422,13 @@ export class UserSettingsStore {
 					const migratedTargets: UserSettingMutation[] = [];
 					const edits = mutations.flatMap(mutation => {
 						const { segments, value } = mutation;
-						if (value === undefined || isExaEnabled(segments)) migratedTargets.push(mutation);
+						const replacesMigratedValue =
+							isExaEnabled(segments) || (segments.length === 1 && segments[0] === "modelRoles");
+						if (value === undefined || replacesMigratedValue) migratedTargets.push(mutation);
 						const theme = this.#legacyTheme(active.raw, segments);
 						if (theme !== undefined) return this.#legacyThemeEdit(theme, mutation);
 						if (value === undefined) return this.#resetMutations(active.raw, segments);
-						if (isExaEnabled(segments)) return [...this.#resetMutations(active.raw, segments).slice(1), mutation];
+						if (replacesMigratedValue) return [...this.#resetMutations(active.raw, segments).slice(1), mutation];
 						return [mutation];
 					});
 					const confirms = (raw: RawSettings): boolean => {

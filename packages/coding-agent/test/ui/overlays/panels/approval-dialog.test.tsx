@@ -84,9 +84,9 @@ test("drafting overrides the native approval selection with Deny and restores it
 	));
 	const selected = () => ui.node("list").p?.selected;
 	const original = selected();
-	expect(original).toBe("once");
+	expect(original).toMatch(/(?:^|\/)once$/);
 	hasDraft.set(true);
-	expect(selected()).toBe("deny");
+	expect(selected()).toMatch(/(?:^|\/)deny$/);
 	hasDraft.set(false);
 	expect(selected()).toBe(original);
 });

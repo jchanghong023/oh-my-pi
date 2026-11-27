@@ -122,7 +122,7 @@ export const launchHelp = {
 			multiple: true,
 		}),
 		"no-extensions": Flags.boolean({
-			description: "Disable extension discovery (default; explicit -e paths still work)",
+			description: "Disable extension discovery (default except in ACP mode; explicit -e paths still work)",
 		}),
 		"no-skills": Flags.boolean({ description: "Disable skills discovery and loading" }),
 		skills: Flags.string({ description: "Comma-separated glob patterns to filter skills (e.g., git-*,docker)" }),

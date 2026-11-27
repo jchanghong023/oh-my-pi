@@ -44,6 +44,7 @@ import { TurnRecovery, type TurnRecoveryHost } from "@oh-my-pi/pi-coding-agent/s
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { restoreEnvValue } from "./helpers/settings-test-state";
 
 import {
 	cfgCompactionModelThresholds,
@@ -57,13 +58,20 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	let fixtureAuthStorage: AuthStorage;
 	let fixtureModelRegistry: ModelRegistry;
 	let previousCompanyLaneActive: boolean;
+	let previousOffline: string | undefined;
+	let previousClaudeConfigDir: string | undefined;
 	const authStoragesToClose: AuthStorage[] = [];
 
 	beforeAll(async () => {
 		previousCompanyLaneActive = companyProvider.isCompanyLaneActive();
+		previousOffline = process.env.OMP_OFFLINE;
+		previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+		restoreEnvValue("OMP_OFFLINE", undefined);
 		await companyProvider.setCompanyOfflineEnabled(false);
 		fixtureDir = path.join(os.tmpdir(), `pi-sdk-model-selection-fixture-${Snowflake.next()}`);
 		fs.mkdirSync(fixtureDir, { recursive: true });
+		// A real company lane must not read the host's Claude credentials.
+		restoreEnvValue("CLAUDE_CONFIG_DIR", path.join(fixtureDir, "claude"));
 		fixtureAuthStorage = createInMemoryAuthStorage();
 		fixtureModelRegistry = new ModelRegistry(fixtureAuthStorage, path.join(fixtureDir, "models.yml"));
 	});
@@ -78,6 +86,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		// Offline inheritance cases activate the real process lane through the SDK,
 		// even when their entry point is a spy. Restoring spies does not reset it.
 		await companyProvider.setCompanyOfflineEnabled(false);
+		restoreEnvValue("OMP_OFFLINE", undefined);
 		for (const authStorage of authStoragesToClose) {
 			authStorage.close();
 		}
@@ -94,6 +103,8 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	afterAll(async () => {
 		fixtureAuthStorage.close();
 		removeSyncWithRetries(fixtureDir);
+		restoreEnvValue("OMP_OFFLINE", previousOffline);
+		restoreEnvValue("CLAUDE_CONFIG_DIR", previousClaudeConfigDir);
 		await companyProvider.setCompanyOfflineEnabled(previousCompanyLaneActive);
 	});
 
@@ -188,27 +199,34 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test.each(["scope", "explicit", "spawn", "revive"] as const)(
-		"offline deferred %s keeps its runtime discovery policy after extension registration",
+	test.each(["scope", "explicit", "spawn", "revive", "company-explicit"] as const)(
+		"deferred %s selection keeps its offline discovery policy after extension registration",
 		async source => {
+			const companyOffline = source === "company-explicit";
+			if (companyOffline) restoreEnvValue("OMP_OFFLINE", "1");
 			const settings = Settings.isolated({ prewalk: { enabled: false } });
+			const provider = `offline-pattern-${Snowflake.next()}`;
+			// --models accepts globs; --model and inherited task selectors require a
+			// concrete provider/model selector rather than scope-pattern syntax.
+			const selector = source === "scope" ? `${provider}/*` : `${provider}/cached-runtime-model`;
+			const parsed = parseArgs([source === "scope" ? "--models" : "--model", selector]);
+			if (companyOffline) {
+				expect(parsed.intranetOffline).toBe(true);
+				await companyProvider.setCompanyOfflineEnabled(parsed.intranetOffline === true);
+			} else {
+				// Exercise the SDK option without enabling the process-wide policy.
+				parsed.intranetOffline = true;
+			}
 			const modelRegistry = new ModelRegistry(fixtureAuthStorage, path.join(tempDir, "models.yml"), { settings });
 			const fetchModels = vi.fn(dynamicOnlyProviderConfig.fetchDynamicModels!);
-			const provider = `offline-pattern-${Snowflake.next()}`;
 			const extension: ExtensionFactory = pi => {
 				pi.registerProvider(provider, {
 					...dynamicOnlyProviderConfig,
 					fetchDynamicModels: fetchModels,
 				});
 			};
-			// --models accepts globs; --model and inherited task selectors require a
-			// concrete provider/model selector rather than scope-pattern syntax.
-			const selector = source === "scope" ? `${provider}/*` : `${provider}/cached-runtime-model`;
 			const cliOptions = await buildCliSessionOptions(
-				{
-					...parseArgs([source === "scope" ? "--models" : "--model", selector]),
-					intranetOffline: true,
-				},
+				{ ...parsed, cwd: tempDir },
 				[],
 				SessionManager.inMemory(),
 				modelRegistry,
@@ -240,7 +258,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		},
 	);
 
-	test.each(["spawn", "revive", "explicit", "online-subagent"] as const)(
+	test.each(["spawn", "revive", "explicit", "online-subagent", "company-online-subagent"] as const)(
 		"cold config discovery respects the %s model-selection boundary",
 		async source => {
 			const provider = `task-discovery-${Snowflake.next()}`;
@@ -272,19 +290,22 @@ describe("createAgentSession deferred model pattern resolution", () => {
 				modelRoles: { task: pattern, default: "runtime-provider/runtime-model" },
 			});
 			const rolesBefore = { ...settings.getModelRoles() };
+			const companyOffline = source === "company-online-subagent";
+			const onlineSubagent = source === "online-subagent" || companyOffline;
+			if (companyOffline) restoreEnvValue("OMP_OFFLINE", "1");
 			const modelRegistry = new ModelRegistry(fixtureAuthStorage, modelsPath, { settings, fetch: localFetch });
 			const { session, modelFallbackMessage } = await createAgentSession({
 				...buildSessionOptions("@task"),
 				modelRegistry,
 				settings,
-				offline: source !== "online-subagent",
+				offline: !onlineSubagent,
 				// These are the existing spawn/revive identity inputs. Neither
 				// automatic caller marks its pattern as a CLI model selection.
-				taskDepth: source === "spawn" || source === "online-subagent" ? 1 : undefined,
+				taskDepth: source === "spawn" || onlineSubagent ? 1 : undefined,
 				parentTaskPrefix: source === "revive" ? "ColdTask" : undefined,
 			});
 			try {
-				if (source === "spawn" || source === "revive") {
+				if (source === "spawn" || source === "revive" || companyOffline) {
 					expect(modelListCalls).toBe(0);
 					expect(session.model).toBeUndefined();
 					expect(modelFallbackMessage).toContain("not found");
@@ -640,8 +661,14 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		authStoragesToClose.push(authStorage);
 		const modelsPath = path.join(tempDir, "models.yml");
 		const primerRegistry = new ModelRegistry(authStorage, modelsPath);
-		primerRegistry.registerProvider("runtime-provider", dynamicOnlyProviderConfig, "ext://runtime");
+		const fetchModels = vi.fn(dynamicOnlyProviderConfig.fetchDynamicModels!);
+		primerRegistry.registerProvider(
+			"runtime-provider",
+			{ ...dynamicOnlyProviderConfig, fetchDynamicModels: fetchModels },
+			"ext://runtime",
+		);
 		await primerRegistry.refreshRuntimeProviders("online");
+		expect(fetchModels).toHaveBeenCalledTimes(1);
 		const modelRegistry = new ModelRegistry(authStorage, modelsPath);
 
 		const { session, modelFallbackMessage } = await createAgentSession({

@@ -25,6 +25,8 @@ interface PauseRun {
 function startPause(session: object = idleSession()): PauseRun {
 	const statuses: string[] = [];
 	const ctx = createInteractiveModeContext({
+		// The background transcript still needs a renderable session when /pause opens no overlay.
+		viewSession: {},
 		showStatus: (message: string) => {
 			statuses.push(message);
 		},

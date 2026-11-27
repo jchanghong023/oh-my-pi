@@ -282,9 +282,8 @@ export async function closeCdpTarget(
 /**
  * {@link closeCdpTarget} for the omp relay, over a channel that answers browser-level `Target.*`
  * commands. The relay's `Target.getTargets` lists only tabs it can drive right now, not those of a
- * disconnected browser or with a dismissed debugger, so absence is read from `Target.getTargetInfo`:
- * it looks the id up among every tab the extensions reported, and answers an unknown id with the
- * browser target.
+ * disconnected browser or with a dismissed debugger. `Target.getTargetInfo` confirms absence only
+ * after the browser named by the target id has registered with the relay.
  */
 export async function closeRelayTarget(channel: Pick<CDPSession, "send">, targetId: string): Promise<boolean> {
 	try {
@@ -294,8 +293,8 @@ export async function closeRelayTarget(channel: Pick<CDPSession, "send">, target
 		// Closed already (the worker's own close), or the extension cannot answer.
 	}
 	try {
-		const { targetInfo } = await channel.send("Target.getTargetInfo", { targetId });
-		return targetInfo.targetId !== targetId;
+		const result = await channel.send("Target.getTargetInfo", { targetId });
+		return "ompTargetGone" in result && result.ompTargetGone === true;
 	} catch {
 		return false;
 	}

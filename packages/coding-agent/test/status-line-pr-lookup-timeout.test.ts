@@ -45,13 +45,13 @@ beforeEach(() => {
 	const gitRepository = {
 		headSync: () => fakeRefHead,
 		linkedWorktree: () => null,
+		statusChangeCounts: async () => [0, 0, 0, 0, 0, 0, 0, 0],
 	} as unknown as VcsGitRepo;
 	const repository = {
 		kind: () => "git",
 		asGit: () => gitRepository,
 		asJj: () => null,
 		root: () => "/fake",
-		statusSummary: async () => ({ staged: 0, unstaged: 0, untracked: 0 }),
 	} as unknown as VcsRepo;
 	vi.spyOn(vcs, "repo").mockReturnValue(repository);
 	vi.spyOn(vcs, "repoForDisplay").mockReturnValue(repository);

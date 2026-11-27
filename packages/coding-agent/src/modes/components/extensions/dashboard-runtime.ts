@@ -33,11 +33,13 @@ export function createExtensionDashboardRuntime(options: {
 		getDisabledExtensions: () => cfgDisabledExtensions.get(settings),
 		setDisabledExtensions: ids => cfgDisabledExtensions.set(settings, ids),
 		getProviders: () =>
-			getAllProvidersInfo().map(provider => ({
-				...provider,
-				userSourceEnabled: isUserSourceEnabled(provider.id),
-				foreignUserSource: isForeignUserProvider(provider.id),
-			})),
+			withActiveSettings(settings, () =>
+				getAllProvidersInfo().map(provider => ({
+					...provider,
+					userSourceEnabled: isUserSourceEnabled(provider.id),
+					foreignUserSource: isForeignUserProvider(provider.id),
+				})),
+			),
 		loadExtensions: disabledIds => {
 			resetCapabilities();
 			return withActiveSettings(settings, () =>
@@ -50,8 +52,8 @@ export function createExtensionDashboardRuntime(options: {
 				),
 			);
 		},
-		toggleProvider,
-		toggleUserSource,
+		toggleProvider: providerId => withActiveSettings(settings, () => toggleProvider(providerId)),
+		toggleUserSource: providerId => withActiveSettings(settings, () => toggleUserSource(providerId)),
 		async persistMcpToggle(name, enabled, sourcePath) {
 			await setMcpServerEnabled({
 				userPath: getMCPConfigPath("user", cwd),

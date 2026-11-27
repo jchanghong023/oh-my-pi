@@ -83,12 +83,6 @@ describe("Codex client version refresh", () => {
 		"respects OMP_OFFLINE=%j without discarding the cached version",
 		offline => {
 			const home = fs.mkdtempSync(path.join(os.tmpdir(), "codex-version-"));
-			const agentDir = path.join(home, "agent");
-			fs.mkdirSync(agentDir);
-			fs.writeFileSync(
-				path.join(agentDir, "codex-client-version.json"),
-				JSON.stringify({ version: "999.0.0", checkedAt: 0 }),
-			);
 			try {
 				const child = Bun.spawnSync(
 					[
@@ -100,6 +94,8 @@ describe("Codex client version refresh", () => {
 							fetchCount++;
 							return new Response(null, { status: 503 });
 						};
+						const { getCodexClientVersionPath } = await import("@oh-my-pi/pi-utils");
+						await Bun.write(getCodexClientVersionPath(), JSON.stringify({ version: "999.0.0", checkedAt: 0 }));
 						const { resolveModelCacheProviderId } = await import(${JSON.stringify(path.join(import.meta.dir, "../src/provider-models/cache-provider-id.ts"))});
 						const cacheProviderId = resolveModelCacheProviderId("openai-codex");
 						const passiveFetchCount = fetchCount;
@@ -109,12 +105,15 @@ describe("Codex client version refresh", () => {
 						`,
 					],
 					{
+						cwd: import.meta.dir,
 						env: {
 							...process.env,
 							NODE_ENV: "production",
 							PI_AI_CODEX_CLIENT_VERSION: "",
-							PI_CODING_AGENT_DIR: agentDir,
+							PI_CODING_AGENT_DIR: path.join(home, "agent"),
 							OMP_CONFIG_ROOT: path.join(home, ".omp"),
+							OMP_CACHE_DIR: path.join(home, "cache"),
+							OMP_PROFILE: "",
 							PI_PROFILE: "",
 							OMP_OFFLINE: offline,
 						},

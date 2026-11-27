@@ -31,16 +31,24 @@ export interface WorkingHost {
 	retryKey(): string;
 }
 
+/** Whether a label came from fresh tool output or a display-mode refresh. */
+export type WorkingMessageSource = "tool-intent" | "intent-refresh";
+
+interface WorkingLabel {
+	message: string | (() => string);
+	showInCompact: boolean;
+	fromIntent: boolean;
+}
+
 /** See the module docs. */
 export class WorkingRows {
 	readonly #host: WorkingHost;
 	#kind: WorkingKind | undefined;
-	#message: string | (() => string) = DEFAULT_WORKING_MESSAGE;
-	#showMessageInCompact = false;
+	#label?: WorkingLabel;
 	#spec?: WorkingSpec;
 	#compact = false;
 	/** A message set before the turn row exists; applied when it shows. */
-	#pending?: { message: string | (() => string); showInCompact: boolean };
+	#pending?: WorkingLabel;
 
 	constructor(host: WorkingHost) {
 		this.#host = host;
@@ -59,7 +67,7 @@ export class WorkingRows {
 
 	#syncRow(): void {
 		if (!this.#spec) return;
-		const hidden = this.#compact && this.#kind === "turn" && !this.#showMessageInCompact;
+		const hidden = this.#compact && this.#kind === "turn" && !this.#label?.showInCompact;
 		this.#host.status.row.set(hidden ? undefined : { kind: "working", spec: this.#spec });
 	}
 
@@ -85,10 +93,7 @@ export class WorkingRows {
 		this.#kind = undefined;
 		this.#spec = undefined;
 		this.#host.status.row.set(undefined);
-		if (wasTurn) {
-			this.#message = DEFAULT_WORKING_MESSAGE;
-			this.#showMessageInCompact = false;
-		}
+		if (wasTurn) this.#label = undefined;
 		this.syncRetryHint();
 		return true;
 	}
@@ -97,7 +102,10 @@ export class WorkingRows {
 	ensureTurn(): void {
 		if (this.#kind === undefined) {
 			this.show("turn", {
-				label: () => (typeof this.#message === "function" ? this.#message() : this.#message),
+				label: () => {
+					const message = this.#label?.message ?? DEFAULT_WORKING_MESSAGE;
+					return typeof message === "function" ? message() : message;
+				},
 				startedAt: this.#host.runStartedAt() ?? Date.now(),
 				...(this.#host.interruptKey() ? { interruptKey: this.#host.interruptKey() } : {}),
 			});
@@ -106,23 +114,26 @@ export class WorkingRows {
 	}
 
 	/** The turn row's label (no argument: the default); kept until the row shows when none does. */
-	setMessage(message?: string | (() => string), showInCompact = true): void {
-		if (message === undefined) this.#pending = undefined;
-		if (this.#kind === "turn") {
-			this.#message = message ?? DEFAULT_WORKING_MESSAGE;
-			this.#showMessageInCompact = message !== undefined && showInCompact;
-			this.#syncRow();
-		} else if (message !== undefined) {
-			this.#pending = { message, showInCompact };
+	setMessage(message?: string | (() => string), showInCompact = true, source?: WorkingMessageSource): void {
+		const previous = this.#pending ?? this.#label;
+		if (source === "intent-refresh" && previous && !previous.fromIntent) return;
+		if (message === undefined) {
+			this.#pending = undefined;
+			this.#label = undefined;
+		} else {
+			const label = { message, showInCompact, fromIntent: source !== undefined };
+			if (this.#kind === "turn") this.#label = label;
+			else this.#pending = label;
 		}
+		if (this.#kind === "turn") this.#syncRow();
 	}
 
 	/** Apply a message set before the turn row showed. */
 	applyPending(): void {
 		if (this.#pending === undefined || this.#kind !== "turn") return;
-		const { message, showInCompact } = this.#pending;
+		this.#label = this.#pending;
 		this.#pending = undefined;
-		this.setMessage(message, showInCompact);
+		this.#syncRow();
 	}
 
 	/** Show the idle "F5 to retry" row when the last turn died on a tool call and no working row holds the row. */

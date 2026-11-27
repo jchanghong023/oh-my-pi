@@ -131,8 +131,8 @@ export interface StatusLineProps {
 export interface StatusChrome {
 	/** Status for the composer's top chrome (`composer.setStatus`). */
 	readonly composerStatus: ComposerStatusSource;
-	/** The bottom bar and its overflow with `groups` at `width` cells. */
-	bottomBar(cx: PaintContext, groups: "full" | "left", width: number): readonly string[];
+	/** The bottom bar and its overflow; `topChipInset` is set when a matching top rule chip exists. */
+	bottomBar(cx: PaintContext, groups: "full" | "left", width: number, topChipInset?: number): readonly string[];
 }
 
 /** Terminal look facts of a top attachment (`omp.status.top`). */
@@ -227,15 +227,28 @@ export function createStatusLine(props: StatusLineProps): {
 		"top-band": top("top-band"),
 		"top-rule-chip": top("top-rule-chip"),
 	};
-	const bottom = (groups: StatusBarLook["groups"]): UiNode =>
-		(<status role="omp.status" term={(): StatusBarLook => ({ groups, segs: barSegs() })} />) as UiNode;
+	const bottom = (groups: StatusBarLook["groups"], topChipInset?: number): UiNode => {
+		const term = (): StatusBarLook => ({
+			groups,
+			segs: barSegs(),
+			...(topChipInset === undefined ? {} : { topChipInset }),
+		});
+		return (<status role="omp.status" term={term} />) as UiNode;
+	};
 	const bottoms = { full: bottom("both"), left: bottom("left") };
+	let chipBottom: { readonly inset: number; readonly node: UiNode } | undefined;
 	const chrome: StatusChrome = {
 		composerStatus(cx, attachment, width) {
 			const [row, ...overflow] = cx.paint(tops[attachment], width).rows;
 			return row ? { content: row, width: visibleWidth(row), overflow } : undefined;
 		},
-		bottomBar: (cx, groups, width) => cx.paint(bottoms[groups], width).rows,
+		bottomBar(cx, groups, width, topChipInset) {
+			if (groups === "full" || topChipInset === undefined) return cx.paint(bottoms[groups], width).rows;
+			if (chipBottom?.inset !== topChipInset) {
+				chipBottom = { inset: topChipInset, node: bottom("left", topChipInset) };
+			}
+			return cx.paint(chipBottom.node, width).rows;
+		},
 	};
 	const panel = (
 		<col role="omp.status.panel" term={(): StatusPanelLook => ({ placement: props.placement() })}>
@@ -248,7 +261,10 @@ export function createStatusLine(props: StatusLineProps): {
 				transparent={() => props.settings().transparent === true}
 				term={(): StatusBarLook => {
 					const placement = props.placement();
-					return { groups: placement.bar === "left" ? "left" : "both", topChipInset: placement.topChipInset ?? 0 };
+					return {
+						groups: placement.bar === "left" ? "left" : "both",
+						...(placement.topChipInset === undefined ? {} : { topChipInset: placement.topChipInset }),
+					};
 				}}
 			>
 				<For each={keys}>
@@ -293,13 +309,18 @@ export function createStatusLine(props: StatusLineProps): {
 }
 
 /** Where the standalone bar goes for a composer `shape` (its top chrome takes the status through `composerStatus`). */
-export function shapePlacement(shape: ComposerShape, autocomplete: boolean, paddingX?: number): StatusPlacement {
-	const bar = shape.bottomBar ?? "none";
-	const topChipInset =
-		bar === "left" && shape.statusAttachment === "top-rule-chip" && paddingX !== undefined
-			? 2 * shape.sideWidth(paddingX)
-			: 0;
-	return { bar, gap: shape.bottomBarGap === true, autocomplete, ...(topChipInset ? { topChipInset } : {}) };
+export function shapePlacement(
+	shape: ComposerShape,
+	autocomplete: boolean,
+	paddingX = shape.paddingX,
+): StatusPlacement {
+	const topChipInset = shape.statusAttachment === "top-rule-chip" ? 2 * shape.sideWidth(paddingX) : undefined;
+	return {
+		bar: shape.bottomBar ?? "none",
+		gap: shape.bottomBarGap === true,
+		autocomplete,
+		...(topChipInset === undefined ? {} : { topChipInset }),
+	};
 }
 
 export function StatusLine(props: StatusLineProps): JSXNode {

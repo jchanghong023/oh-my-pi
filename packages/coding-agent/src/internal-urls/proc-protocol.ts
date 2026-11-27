@@ -150,6 +150,11 @@ async function streamsResource(
 		throw new Error(evicted ? `No streams kept: ${describeEvictedJob(evicted)}` : `Background job not found: ${id}`);
 	}
 	const streams = job.process?.streams;
+	if (!streams && job.type !== "bash") {
+		throw new Error(
+			`proc://${id} has no streams: only bash jobs record their \`|\` stages and redirected files. Read proc://${id} for its output.`,
+		);
+	}
 	if (!streams)
 		return textResource(
 			url,

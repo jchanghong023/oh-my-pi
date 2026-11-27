@@ -551,14 +551,17 @@ function flushOnExit(code: number): void {
 	scheduledPruneDirs.clear();
 }
 
+function installExitFlush(): void {
+	if (exitFlushInstalled) return;
+	exitFlushInstalled = true;
+	process.on("exit", flushOnExit);
+}
+
 /** Build a rotating file sink with process-local rotation and shared retention. */
-function makeFileTransport(dir?: string): RotatingFileSink {
+function makeFileTransport(dir: string | undefined, levelRank: number): RotatingFileSink {
 	const logsDir = dir ?? getLogsDir();
 	let scheduledPruneDir: string | undefined;
-	if (!exitFlushInstalled) {
-		exitFlushInstalled = true;
-		process.on("exit", flushOnExit);
-	}
+	installExitFlush();
 	return new RotatingFileSink({
 		directory: logsDir,
 		filenamePrefix: "omp",
@@ -578,7 +581,7 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 		fallbackDirectory: () => fallbackLogsDir(logsDir),
 		onFailure: (error, stage, recoveredPath) => {
 			if (recoveredPath) {
-				if (isOfflineLevelFiltered("warn")) return undefined;
+				if (LOG_LEVEL_RANK.warn > levelRank) return undefined;
 				const event = stage === "retention" ? "log_retention_failed" : "log_directory_fallback";
 				return formatLogRecord(
 					"warn",
@@ -682,7 +685,7 @@ export function getCurrentLogPath(): string {
 /** Directory containing the current file destination, or the configured default. */
 export function getCurrentLogsDir(): string {
 	const filePath = activeTransports?.file?.filePath;
-	return filePath ? path.dirname(filePath) : getLogsDir();
+	return filePath ? path.dirname(filePath) : getConfiguredLogsDir();
 }
 
 /** Directory selected before any write failure redirected the file transport. */
@@ -698,38 +701,29 @@ export function prepareStderrLog(): string | undefined {
 	return getLocalTransports().file?.prepare();
 }
 
-/** Opt the executable into lifecycle diagnostics; pure logger/SDK users remain unchanged. */
+/** Opt the executable into lifecycle diagnostics after choosing its local transports. */
 export function initializeDiagnosticLogging(mode?: string): void {
 	if (diagnosticStartedAt !== undefined) return;
 	diagnosticStartedAt = performance.now();
 	if (isOfflineLevelFiltered("info")) return;
 	const transports = getLocalTransports();
-	const file = transports.file;
-	if (!file || LOG_LEVEL_RANK.info > transports.levelRank) return;
-	const actualPath = file.prepare();
-	if (!actualPath) return;
-	file.write(
-		formatLogRecord(
-			"info",
-			"application_started",
-			{
-				component: "application",
-				event: "application_started",
-				operation_id: `application-${process.pid}`,
-				stage: "startup",
-				elapsed_ms: 0,
-				app: APP_NAME,
-				version: VERSION,
-				platform: process.platform,
-				path: actualPath,
-				log_level: Object.entries(LOG_LEVEL_RANK).find(([, rank]) => rank === transports.levelRank)?.[0],
-				...(mode && /^(?:cli|daemon|interactive|headless|rpc|print)$/.test(mode) ? { mode } : {}),
-			},
-			formatLocalTimestamp(new Date()),
-			undefined,
-		),
-		true,
-	);
+	if (LOG_LEVEL_RANK.info > transports.levelRank || (!transports.file && !transports.console)) return;
+	installExitFlush();
+	const actualPath = transports.file?.prepare();
+	if (!actualPath && !transports.console) return;
+	emitLifecycleRecord(transports, "application_started", {
+		component: "application",
+		event: "application_started",
+		operation_id: `application-${process.pid}`,
+		stage: "startup",
+		elapsed_ms: 0,
+		app: APP_NAME,
+		version: VERSION,
+		platform: process.platform,
+		...(actualPath ? { path: actualPath } : {}),
+		log_level: Object.entries(LOG_LEVEL_RANK).find(([, rank]) => rank === transports.levelRank)?.[0],
+		...(mode && /^(?:cli|daemon|interactive|headless|rpc|print)$/.test(mode) ? { mode } : {}),
+	});
 }
 
 /** Flush lifecycle termination once, including hard exits that skip the exit event. */
@@ -737,8 +731,7 @@ export function shutdownDiagnosticLogging(exitCode = process.exitCode ?? 0): voi
 	if (diagnosticStartedAt === undefined || diagnosticStopped) return;
 	diagnosticStopped = true;
 	const transports = activeTransports;
-	const file = transports?.file;
-	if (!transports || !file?.filePath) return;
+	if (!transports || (!transports.file?.filePath && !transports.console)) return;
 	if (LOG_LEVEL_RANK.info > transports.levelRank) {
 		flush();
 		return;
@@ -751,12 +744,20 @@ export function shutdownDiagnosticLogging(exitCode = process.exitCode ?? 0): voi
 		exitCode,
 	};
 	for (const event of ["application_stopping", "application_stopped"]) {
-		file.write(
-			formatLogRecord("info", event, { ...context, event }, formatLocalTimestamp(new Date()), undefined),
-			true,
-		);
+		emitLifecycleRecord(transports, event, { ...context, event });
 	}
 	flush();
+}
+
+function emitLifecycleRecord(transports: LocalTransports, event: string, context: Record<string, unknown>): void {
+	try {
+		const now = new Date();
+		const line = formatLogRecord("info", event, context, formatLocalTimestamp(now), undefined);
+		transports.file?.write(line, true, localDay(now));
+		if (transports.console) fs.writeSync(1, `${line}${os.EOL}`);
+	} catch {
+		// A failed diagnostic must not change startup or exit behavior.
+	}
 }
 
 /** The file holding the latest local log record; absent when file logging is inactive. */
@@ -765,10 +766,11 @@ export function currentLogFile(): string | undefined {
 }
 
 function buildTransports(opts: { console?: boolean; file?: boolean | string }): LocalTransports {
+	const levelRank = resolveLevelRank();
 	return {
-		file: opts.file ? makeFileTransport(typeof opts.file === "string" ? opts.file : undefined) : undefined,
+		file: opts.file ? makeFileTransport(typeof opts.file === "string" ? opts.file : undefined, levelRank) : undefined,
 		console: opts.console === true,
-		levelRank: resolveLevelRank(),
+		levelRank,
 	};
 }
 

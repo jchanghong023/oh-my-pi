@@ -14,6 +14,8 @@ import {
 	readMarketplacesRegistry,
 	writeMarketplacesRegistry,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -120,12 +122,12 @@ function createTestContext(): TestContext {
 }
 
 /** Shares `ctx`'s user-level paths but has no project registry, like running omp outside the project. */
-function createOutsideProjectManager(tmpDir: string): MarketplaceManager {
+function createOutsideProjectManager(tmpDir: string, cacheRoot = path.join(tmpDir, "cache")): MarketplaceManager {
 	return new MarketplaceManager({
 		marketplacesRegistryPath: path.join(tmpDir, "marketplaces.json"),
 		installedRegistryPath: path.join(tmpDir, "installed_plugins.json"),
-		marketplacesCacheDir: path.join(tmpDir, "cache", "marketplaces"),
-		pluginsCacheDir: path.join(tmpDir, "cache", "plugins"),
+		marketplacesCacheDir: path.join(cacheRoot, "marketplaces"),
+		pluginsCacheDir: path.join(cacheRoot, "plugins"),
 	});
 }
 
@@ -229,7 +231,7 @@ describe("MarketplaceManager", () => {
 		expect(new Date(updated.updatedAt) >= new Date(added.addedAt)).toBe(true);
 	});
 
-	it("updateMarketplace expands a home-relative catalog path", async () => {
+	it("refreshes the registered legacy catalog without adopting an occupied active-cache directory", async () => {
 		const fakeHome = fs.mkdtempSync(path.join(ctx.tmpDir, "home-"));
 		const homedirSpy = spyOn(os, "homedir").mockReturnValue(fakeHome);
 		const registryPath = path.join(ctx.tmpDir, "marketplaces.json");
@@ -238,7 +240,17 @@ describe("MarketplaceManager", () => {
 
 		try {
 			const added = await ctx.manager.addMarketplace(FIXTURE_DIR);
+			const activeContent = fs.readFileSync(added.catalogPath, "utf8");
 			const catalogPath = "~/.omp/plugins/cache/marketplaces/test-marketplace/marketplace.json";
+			const legacyPath = path.join(fakeHome, catalogPath.slice(2));
+			const legacyCatalog = {
+				name: "test-marketplace",
+				owner: { name: "Test Author" },
+				plugins: [{ name: "hello-plugin", source: "./plugins/hello-plugin", version: "0.9.0" }],
+			};
+			const legacyContent = JSON.stringify(legacyCatalog);
+			fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+			fs.writeFileSync(legacyPath, legacyContent);
 			const registry = await readMarketplacesRegistry(registryPath);
 			await writeMarketplacesRegistry(registryPath, {
 				...registry,
@@ -247,13 +259,57 @@ describe("MarketplaceManager", () => {
 			fs.mkdirSync(cwd);
 			process.chdir(cwd);
 
-			await ctx.manager.updateMarketplace("test-marketplace");
+			expect(await ctx.manager.listAvailablePlugins("test-marketplace")).toMatchObject([{ version: "0.9.0" }]);
+			const updated = await ctx.manager.updateMarketplace("test-marketplace");
 
-			expect(fs.existsSync(path.join(fakeHome, catalogPath.slice(2)))).toBe(true);
+			expect(updated.catalogPath).toBe(legacyPath);
+			expect((await readMarketplacesRegistry(registryPath)).marketplaces).toEqual([updated]);
+			expect(await ctx.manager.listAvailablePlugins("test-marketplace")).toMatchObject([{ version: "1.0.0" }]);
+			expect(fs.readFileSync(added.catalogPath, "utf8")).toBe(activeContent);
 			expect(fs.existsSync(path.join(cwd, catalogPath))).toBe(false);
 		} finally {
 			process.chdir(originalCwd);
 			homedirSpy.mockRestore();
+		}
+	});
+
+	it("refuses to replace an unregistered Git checkout in a previous cache root", async () => {
+		const firstSource = "https://example.test/old-marketplace.git";
+		const newSource = "https://example.test/new-marketplace.git";
+		const cloneSpy = spyOn(vcs, "clone").mockImplementation(async (url, targetDir) => {
+			buildNamedMarketplace(targetDir, "test-marketplace", url === firstSource ? "old-plugin" : "new-plugin");
+			fs.mkdirSync(path.join(targetDir, ".git"));
+			fs.writeFileSync(path.join(targetDir, ".git", "origin"), url);
+		});
+		const gitSpy = spyOn(vcs, "git").mockImplementation(dir => {
+			const origin = fs.readFileSync(path.join(dir, ".git", "origin"), "utf8");
+			return { configGet: async (key: string) => (key === "remote.origin.url" ? origin : undefined) } as VcsGitRepo;
+		});
+		const secondRoot = path.join(ctx.tmpDir, "other-cache");
+		const secondManager = createOutsideProjectManager(ctx.tmpDir, secondRoot);
+
+		try {
+			const first = await ctx.manager.addMarketplace(firstSource);
+			const firstContent = fs.readFileSync(first.catalogPath, "utf8");
+			const moved = await secondManager.updateMarketplace(first.name);
+			expect(moved.catalogPath).toBe(path.join(secondRoot, "marketplaces", first.name, "marketplace.json"));
+			expect(fs.readFileSync(first.catalogPath, "utf8")).toBe(firstContent);
+
+			await secondManager.removeMarketplace(first.name);
+			expect(fs.existsSync(path.dirname(moved.catalogPath))).toBe(false);
+			expect(fs.readFileSync(first.catalogPath, "utf8")).toBe(firstContent);
+			const reAdded = await secondManager.addMarketplace(newSource);
+			const reAddedContent = fs.readFileSync(reAdded.catalogPath, "utf8");
+
+			await expect(ctx.manager.updateMarketplace(first.name)).rejects.toThrow(/cache destination already exists/);
+
+			expect(await ctx.manager.listMarketplaces()).toEqual([reAdded]);
+			expect(await ctx.manager.listAvailablePlugins(first.name)).toMatchObject([{ name: "new-plugin" }]);
+			expect(fs.readFileSync(reAdded.catalogPath, "utf8")).toBe(reAddedContent);
+			expect(fs.readFileSync(first.catalogPath, "utf8")).toBe(firstContent);
+		} finally {
+			gitSpy.mockRestore();
+			cloneSpy.mockRestore();
 		}
 	});
 
@@ -1448,22 +1504,73 @@ describe("MarketplaceManager", () => {
 			expect(results).toEqual([]);
 		});
 
-		it("adding a marketplace reaps abandoned clones but leaves active clones and marketplace caches intact", async () => {
-			const cacheDir = path.join(ctx.tmpDir, "cache", "marketplaces");
-			const abandoned = path.join(cacheDir, `.tmp-clone-${Date.now() - 31 * 60 * 1000}`);
-			const active = path.join(cacheDir, `.tmp-clone-${Date.now()}-inflight`);
-			const marketplace = path.join(cacheDir, "test-marketplace");
-			for (const dir of [abandoned, active, marketplace]) {
-				fs.mkdirSync(dir, { recursive: true });
-				fs.writeFileSync(path.join(dir, "catalog"), "preserve if active");
-			}
+		it.each(["local", "url"])(
+			"refreshes a %s marketplace without writing to its unavailable old cache",
+			async type => {
+				const sourcePath = path.join(mktDir, ".claude-plugin", "marketplace.json");
+				const source = type === "local" ? mktDir : "https://example.test/marketplace.json";
+				const fetchSpy =
+					type === "url"
+						? spyOn(globalThis, "fetch").mockImplementation(
+								Object.assign(async () => new Response(Bun.file(sourcePath)), {
+									preconnect: globalThis.fetch.preconnect,
+								}),
+							)
+						: undefined;
+				try {
+					const added = await ctx.manager.addMarketplace(source);
+					const previousContent = fs.readFileSync(added.catalogPath, "utf8");
+					const oldRoot = path.join(ctx.tmpDir, "cache");
+					const savedRoot = path.join(ctx.tmpDir, "saved-cache");
+					fs.renameSync(oldRoot, savedRoot);
+					// A path that cannot contain the old catalog on any platform, including when elevated.
+					fs.writeFileSync(oldRoot, "old cache unavailable");
+					const catalog = (await Bun.file(sourcePath).json()) as { plugins: Array<{ version: string }> };
+					catalog.plugins[0].version = "2.0.0";
+					await Bun.write(sourcePath, JSON.stringify(catalog));
 
-			await ctx.manager.addMarketplace(mktDir);
+					const newRoot = path.join(ctx.tmpDir, "new-cache");
+					const manager = createOutsideProjectManager(ctx.tmpDir, newRoot);
+					const updated = await manager.updateMarketplace(added.name);
 
-			expect(fs.existsSync(abandoned)).toBe(false);
-			expect(fs.readFileSync(path.join(active, "catalog"), "utf8")).toBe("preserve if active");
-			expect(fs.readFileSync(path.join(marketplace, "catalog"), "utf8")).toBe("preserve if active");
-		});
+					expect(updated.catalogPath).toBe(path.join(newRoot, "marketplaces", added.name, "marketplace.json"));
+					expect(updated.addedAt).toBe(added.addedAt);
+					expect(await manager.listMarketplaces()).toEqual([updated]);
+					expect(await manager.listAvailablePlugins(added.name)).toMatchObject([{ version: "2.0.0" }]);
+					expect(fs.readFileSync(oldRoot, "utf8")).toBe("old cache unavailable");
+					expect(fs.readFileSync(path.join(savedRoot, path.relative(oldRoot, added.catalogPath)), "utf8")).toBe(
+						previousContent,
+					);
+				} finally {
+					fetchSpy?.mockRestore();
+				}
+			},
+		);
+
+		it.each(["add", "startup refresh"])(
+			"%s reaps abandoned clones but leaves active clones and caches intact",
+			async operation => {
+				const cacheDir = path.join(ctx.tmpDir, "cache", "marketplaces");
+				const abandoned = path.join(cacheDir, `.tmp-clone-${Date.now() - 31 * 60 * 1000}`);
+				const active = path.join(cacheDir, `.tmp-clone-${Date.now()}-inflight`);
+				const marketplace = path.join(cacheDir, "test-marketplace");
+				for (const dir of [abandoned, active, marketplace]) {
+					fs.mkdirSync(dir, { recursive: true });
+					fs.writeFileSync(path.join(dir, "catalog"), "preserve if active");
+				}
+
+				if (operation === "add") {
+					await ctx.manager.addMarketplace(mktDir);
+				} else {
+					expect(await ctx.manager.listMarketplaces()).toEqual([]);
+					await ctx.manager.refreshStaleMarketplaces();
+				}
+
+				expect(fs.existsSync(abandoned)).toBe(false);
+				expect(fs.readFileSync(path.join(active, "catalog"), "utf8")).toBe("preserve if active");
+				expect(fs.readFileSync(path.join(marketplace, "catalog"), "utf8")).toBe("preserve if active");
+			},
+		);
 
 		it("keeps stale catalogs and installed plugins unchanged when browsing", async () => {
 			const added = await ctx.manager.addMarketplace(mktDir);

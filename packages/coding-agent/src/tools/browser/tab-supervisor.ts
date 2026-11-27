@@ -12,6 +12,7 @@ import {
 import type { Model } from "@oh-my-pi/pi-ai";
 import { resolveImageMaxEdge, resolveImageTokenization } from "@oh-my-pi/pi-catalog/compat/image-tokenization";
 import type { CDPSession, Page, Target, Viewport } from "puppeteer-core";
+import { daemonClient } from "../../daemon/client";
 import { callSessionTool } from "../../eval/js/tool-bridge";
 import { TOOL_TIMEOUTS } from "../tool-timeouts";
 import { webpExclusionForModel } from "../../utils/image-input";
@@ -41,6 +42,7 @@ import {
 	type BrowserKindTag,
 	type BrowserReleaseProgress,
 	type CmuxBrowserHandle,
+	connectTernForCleanup,
 	holdBrowser,
 	type PuppeteerBrowserHandle,
 	type PuppeteerBrowserKind,
@@ -73,6 +75,7 @@ import { listTernBlocks, noTernBlockError, pickTernBlock } from "./tern/blocks";
 import type * as Tern from "./tern/tern-tab";
 import { TernError } from "./tern/wire";
 import { newUploadStagingDir, removeUploadStaging, sweepUploadStaging } from "./upload-files";
+import { describeUnit, isLiveUnit } from "./unit-lease";
 import { WebKitUnavailableError } from "./webkit/host";
 
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
@@ -1026,14 +1029,21 @@ async function acquireCmuxTab(
 	}
 }
 
-/**
- * Browser blocks the live Tern tabs of this process (other than `except`)
- * drive, by block id to tab name: never adopted twice.
- */
-export function ternBlocksTaken(except?: string): Map<number, string> {
+/** Blocks on this daemon that another tab drives or still owes a strict release for. */
+export function ternBlocksTaken(browser: TernBrowserHandle, except?: TernTabSession): Map<number, string> {
 	const taken = new Map<number, string>();
-	for (const [name, tab] of tabs) {
-		if (name !== except && tab.backend === "tern" && tab.state === "alive") taken.set(tab.ternTab.block, name);
+	const onDaemon = (tab: TernTabSession): boolean =>
+		tab.browser === browser ||
+		(browser.socketIdentity !== undefined && browser.socketIdentity === tab.browser.socketIdentity);
+	for (const tab of tabs.values()) {
+		if (tab !== except && tab.backend === "tern" && tab.state === "alive" && onDaemon(tab)) {
+			taken.set(tab.ternTab.block, tab.name);
+		}
+	}
+	for (const tab of strictTabs) {
+		if (tab !== except && tab.backend === "tern" && !tab.ternTab.blockReleased && onDaemon(tab)) {
+			taken.set(tab.ternTab.block, tab.name);
+		}
 	}
 	return taken;
 }
@@ -1042,7 +1052,9 @@ export function ternBlocksTaken(except?: string): Map<number, string> {
 async function adoptsSameBlock(existing: TernTabSession, opts: AcquireTabOptions): Promise<boolean> {
 	if (!existing.ternTab.adopted || opts.target === undefined) return false;
 	const blocks = await listTernBlocks(existing.browser.tern, { timeoutMs: opts.timeoutMs, signal: opts.signal });
-	return pickTernBlock(blocks, opts.target, ternBlocksTaken(existing.name))?.block === existing.ternTab.block;
+	return (
+		pickTernBlock(blocks, opts.target, ternBlocksTaken(existing.browser, existing))?.block === existing.ternTab.block
+	);
 }
 
 /**
@@ -1059,6 +1071,7 @@ async function acquireTernTab(
 	assertNoMobileViewport(opts.viewport);
 	// Tern's driver stays out of sessions that never open a Tern tab.
 	const { TernTab } = await import("./tern/tern-tab");
+	const client = browser.tern;
 	const settings = {
 		name,
 		url: opts.url,
@@ -1071,20 +1084,21 @@ async function acquireTernTab(
 		downloadsPath: opts.downloadsPath,
 		userAgent: opts.userAgent,
 		insecure: opts.insecure,
+		reconnect: (timeoutMs: number) => connectTernForCleanup(browser, timeoutMs),
 	};
 	let ternTab: Tern.TernTab;
 	if (opts.target === undefined) {
-		ternTab = await TernTab.open(browser.tern, {
+		ternTab = await TernTab.open(client, {
 			...settings,
 			pane: browser.kind.pane,
 			viewport: opts.viewport ?? DEFAULT_VIEWPORT,
 		});
 	} else {
-		const blocks = await listTernBlocks(browser.tern, { timeoutMs: opts.timeoutMs, signal: opts.signal });
-		const taken = ternBlocksTaken(name);
+		const blocks = await listTernBlocks(client, { timeoutMs: opts.timeoutMs, signal: opts.signal });
+		const taken = ternBlocksTaken(browser);
 		const block = pickTernBlock(blocks, opts.target, taken);
 		if (!block) throw noTernBlockError(blocks, opts.target, taken);
-		ternTab = await TernTab.adopt(browser.tern, { ...settings, block, viewport: opts.viewport });
+		ternTab = await TernTab.adopt(client, { ...settings, block, viewport: opts.viewport });
 	}
 	try {
 		const info = await ternTab.readyInfo();
@@ -1567,7 +1581,9 @@ async function dispatchRun(
 				throw new RendererCrashedError(
 					reattached
 						? `${error.message}. The tab was reattached to a new worker and its page reloaded. ${RECYCLE_RESETS}`
-						: `${error.message}; the tab could not be reattached and was closed.`,
+						: tab.ownsPage
+							? `${error.message}; the tab could not be reattached and was closed.`
+							: `${error.message}; omp released the tab without reloading or closing the borrowed page.`,
 				);
 			}
 			if (error instanceof DebuggerDetachedError) {
@@ -2015,9 +2031,7 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 									return opts.strict;
 								},
 							})
-							.then(() =>
-								tab.backend === "tern" ? tab.browser.tern.connected : tab.browser.webkit.client.connected,
-							),
+							.then(() => tab.ternTab.blockReleased),
 					),
 				);
 			} catch (err) {
@@ -2047,21 +2061,11 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 					tab,
 					timeoutMs,
 					`cmux surface ${JSON.stringify(tab.targetId)} (surface.close)`,
-					trackCleanupStage(
-						tab,
-						"page",
-						tab.browser.client.request("surface.close", { surface_id: tab.targetId }, { timeoutMs }),
-					),
+					trackCleanupStage(tab, "page", closeOwnedCmuxSurface(tab, timeoutMs)),
 				);
 			} catch (err) {
 				if (opts.strict) throw err;
-				if (isLastSurfaceCloseError(err)) {
-					logger.debug("Leaving cmux browser surface open because it is the last surface in the workspace", {
-						error: err instanceof Error ? err.message : String(err),
-					});
-				} else {
-					closeError = err;
-				}
+				closeError = err;
 			}
 		}
 		if (opts.strict) return await releaseTabStrict(tab, name, opts, progress);
@@ -2200,7 +2204,7 @@ async function releaseTabStrict(
 			`cmux surface ${JSON.stringify(tab.targetId)} (surface.close)`,
 			async () => {
 				if (progress.wasAlive && tab.cmuxOwnsSurface) {
-					await tab.browser.client.request("surface.close", { surface_id: tab.targetId }, { timeoutMs });
+					await closeOwnedCmuxSurface(tab, timeoutMs);
 				}
 			},
 		);
@@ -2239,15 +2243,32 @@ async function releaseTabStrict(
 					},
 				);
 			} catch (error) {
-				// A page timeout can leave CDP work pending forever. The guarded
-				// health check is independently bounded and proves every page gone
-				// only after the broker confirms exit of this browser generation.
-				if (!stoppedSharedBrowsers.has(tab.browser)) {
-					const generation = tab.browser.daemonLease?.unit.generation;
-					if (!scope || !generation || !(await stopSharedBrowserIfUnreachable({ ...scope, generation }))) {
+				const { browser } = tab;
+				if (
+					opts.kill &&
+					browser.kind.kind === "spawned" &&
+					browser.subprocess &&
+					browser.refCount <= (progress.browserHoldReleased ? 0 : 1)
+				) {
+					// Strict release guards the last hold against new acquisitions while disposing
+					// the browser. The subprocess exit, not the failed CDP command, proves the page gone.
+					await strictCleanupStage(tab, "browser", timeoutMs, "browser handle", async () => {
+						if (browser.refCount > (progress.browserHoldReleased ? 0 : 1)) throw error;
+						await releaseTabBrowser(tab, opts, timeoutMs);
+					});
+					if (browser.refCount !== 0) throw error;
+					const subprocess = browser.subprocess;
+					await strictCleanupStage(tab, "kill", timeoutMs, "spawned browser process", () => subprocess.exited);
+				} else if (!stoppedSharedBrowsers.has(browser)) {
+					const unit = browser.daemonLease?.unit;
+					if (
+						!scope ||
+						!unit?.generation ||
+						!(await stopSharedBrowserIfUnreachable({ ...scope, generation: unit.generation, unitId: unit.id }))
+					) {
 						throw error;
 					}
-					stoppedSharedBrowsers.add(tab.browser);
+					stoppedSharedBrowsers.add(browser);
 				}
 				progress.done.add("page");
 			}
@@ -2665,9 +2686,15 @@ export function getTabsMapForTest(): Map<string, TabSession> {
 	return tabs;
 }
 
-function isLastSurfaceCloseError(err: unknown): boolean {
-	const message = err instanceof Error ? err.message : String(err);
-	return /last/i.test(message);
+async function closeOwnedCmuxSurface(tab: CmuxTabSession, timeoutMs: number): Promise<void> {
+	try {
+		await tab.browser.client.request("surface.close", { surface_id: tab.targetId }, { timeoutMs });
+	} catch (error) {
+		if (!(error instanceof Error) || !/\blast[ _-]+surface\b/i.test(error.message)) throw error;
+		logger.debug("Leaving cmux browser surface open because it is the last surface in the workspace", {
+			error: error.message,
+		});
+	}
 }
 
 function sameAllowedDomains(left: readonly string[], right: readonly string[] | undefined): boolean {
@@ -3256,6 +3283,21 @@ function recheckSharedBrowser(scope: SharedTargetScope): void {
 	});
 }
 
+/** A retained proc id survives restart; a different unit with the same name proves nothing. */
+async function sharedBrowserGenerationEnded(browser: PuppeteerBrowserHandle, timeoutMs: number): Promise<boolean> {
+	const unit = browser.daemonLease?.unit;
+	if (!browser.sharedDaemon || !unit?.id) return false;
+	const signal = AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
+	return await withTimeout(
+		(async () => {
+			const current = await describeUnit(await daemonClient(), unit.id, signal);
+			return current?.id === unit.id && (!isLiveUnit(current) || current.generation !== unit.generation);
+		})(),
+		timeoutMs,
+		"Timed out checking the original shared Chromium generation",
+	).catch(() => false);
+}
+
 /**
  * Best-effort cleanup for a forced-kill path: close the page the tab's worker
  * reported as created. A run caller is never a browser ref holder, so the
@@ -3270,6 +3312,10 @@ async function closeOrphanTarget(tab: WorkerTabSession, budgetMs: number, strict
 	const progress = cleanupProgress(tab);
 	let browser = tab.browser;
 	if (!browser.browser.connected) {
+		if (await sharedBrowserGenerationEnded(browser, budgetMs / 2)) {
+			stoppedSharedBrowsers.add(browser);
+			return true;
+		}
 		const process = browser.browser.process();
 		if (
 			browser.kind.kind === "headless" &&
@@ -3284,19 +3330,7 @@ async function closeOrphanTarget(tab: WorkerTabSession, budgetMs: number, strict
 		browser = progress.cleanupBrowser;
 	}
 	try {
-		let closed: boolean;
-		if (browser.kind.kind === "relay") {
-			const channel = browserConnection(browser.browser);
-			await closeRelayTarget(channel, tab.targetId);
-			try {
-				const { targetInfo } = await channel.send("Target.getTargetInfo", { targetId: tab.targetId });
-				closed = targetInfo.targetId !== tab.targetId;
-			} catch {
-				closed = false;
-			}
-		} else {
-			closed = await closeTargetById(browser, tab.targetId, budgetMs / 2);
-		}
+		const closed = await closeTargetById(browser, tab.targetId, budgetMs / 2);
 		if (closed) {
 			progress.done.add("page");
 			progress.strictPageConfirmed = true;

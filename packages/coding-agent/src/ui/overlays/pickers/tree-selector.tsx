@@ -6,9 +6,10 @@
  * to the selected entry (Shift+Enter summarizes the abandoned branch first);
  * Shift+L labels it (the label editor takes the preview pane).
  */
-import { batch, computed, effect, type JSXNode, type KeyEvent, signal } from "@oh-my-pi/pi-tui";
+import { batch, computed, effect, type JSXNode, type KeyEvent, nativeRendering, signal } from "@oh-my-pi/pi-tui";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
+import { wrapChars } from "@oh-my-pi/pi-tui/text/width";
 import { INTENT_FIELD, type TspPickerAction, type TspPickerItem, type TspSpan, type TspText } from "@oh-my-pi/pi-wire";
 import {
 	advisorLabel,
@@ -23,7 +24,12 @@ import {
 	stripSystemWrapperTags,
 	type TreeToolCall,
 } from "../../../modes/view-model/overlays/tree-entry-labels";
-import { isUserRequestEntry, type TranscriptEntryLike } from "../../../session/transcript/transcript-entry";
+import { toolResultReplies } from "../../../session/transcript/reply-write";
+import {
+	isUserRequestEntry,
+	type TranscriptEntryLike,
+	textContent,
+} from "../../../session/transcript/transcript-entry";
 import { resolveAssistantErrorPresentation } from "../../../session/transcript/transcript-render-helpers";
 import { fuzzyMatch } from "../../../utils/fuzzy";
 import { replaceTabs } from "../../../utils/text-width";
@@ -67,6 +73,8 @@ export interface TreeSelectorProps {
 	readonly currentLeafId: string | null;
 	/** Terminal rows (live when supplied as an accessor): the list pages by about half of them. */
 	readonly terminalHeight: number | (() => number);
+	/** Terminal columns, used to fit native detail continuations inside the tree. */
+	readonly terminalWidth?: () => number;
 	onSelect(entryId: string, options: { summarize: boolean }): void;
 	onCancel(): void;
 	onLabelChange?(entryId: string, label: string | undefined): void;
@@ -131,6 +139,7 @@ interface MessageLike {
 	exitCode?: number;
 	cancelled?: boolean;
 	isError?: boolean;
+	details?: unknown;
 }
 
 function messageOf(entry: SessionTreeEntry): MessageLike | undefined {
@@ -254,9 +263,13 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 		const message = messageOf(entry);
 		if (message?.role === "toolResult") {
 			const call = resultCalls.get(entry.id);
+			const content = message.content;
+			const output = typeof content === "string" || Array.isArray(content) ? textContent(content, "\n") : "";
+			const replies = toolResultReplies(message.details);
+			const result = replies.length === 0 ? output : [...replies, output].join("\n\n");
 			const args = call ? JSON.stringify(call.arguments) : "(unavailable)";
 			return sanitizeText(
-				`Status: ${message.isError ? "Failed" : "Success"}\nArguments: ${args}\nResult:\n${joinTextContent(message.content)}`,
+				`Status: ${message.isError ? "Failed" : "Success"}\nArguments: ${args}\nResult:\n${result}`,
 			);
 		}
 		if (message?.role === "bashExecution" || message?.role === "pythonExecution") {
@@ -391,10 +404,16 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 	/** The selection the user made; shown as its nearest visible row. */
 	const anchor = signal<string | null>(leafId ?? rows.at(-1)?.node.entry.id ?? null);
 	const selected = computed(() => nearestVisible(anchor()));
-	const expanded = signal<{ id: string; text: string; lines: string[] } | undefined>(undefined);
+	const expanded = signal<{ id: string; text: string } | undefined>(undefined);
 	const detailScroll = signal<{ offset: number; terminalMax?: number }>({ offset: 0 });
-	const nativeDetailMax = (details: { lines: readonly string[] }): number =>
-		Math.max(0, details.lines.length - detailHeight());
+	const nativeDetailLines = computed(() => {
+		const details = expanded();
+		if (!details || !nativeRendering()) return [];
+		// The side preview is hidden while expanded; leave room for the sheet and tree gutters.
+		const width = Math.max(2, Math.min(64, (props.terminalWidth?.() ?? 80) - 18));
+		return wrapChars(replaceTabs(details.text), width);
+	});
+	const nativeDetailMax = (): number => Math.max(0, nativeDetailLines().length - detailHeight());
 	const clampDetailScroll = (max: number): number => {
 		const scroll = detailScroll();
 		// Only the terminal painter knows how many rows the details wrapped into.
@@ -410,19 +429,27 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 		}
 		const scroll = detailScroll();
 		if (scroll.terminalMax === undefined) {
-			const max = nativeDetailMax(details);
+			const max = nativeDetailMax();
 			if (scroll.offset > max) detailScroll.set({ offset: max });
 		}
 	});
-	const toggleDetails = (): void => {
+	const canToggleDetails = (): boolean => {
 		const id = selected();
-		if (!id) return;
-		const node = nodeById.get(id);
-		const text = expanded()?.id === id || !node ? undefined : toolDetails(node.entry);
+		const node = id === null ? undefined : nodeById.get(id);
+		const role = node && messageOf(node.entry)?.role;
+		return role === "toolResult" || role === "bashExecution" || role === "pythonExecution";
+	};
+	const toggleDetails = (): boolean => {
+		const id = selected();
+		const node = id === null ? undefined : nodeById.get(id);
+		if (!node) return false;
+		const text = expanded()?.id === id ? undefined : toolDetails(node.entry);
+		if (text === undefined && expanded()?.id !== id) return false;
 		batch(() => {
 			detailScroll.set({ offset: 0 });
-			expanded.set(text === undefined ? undefined : { id, text, lines: text.split("\n") });
+			expanded.set(text === undefined ? undefined : { id: node.entry.id, text });
 		});
+		return true;
 	};
 	const index = (): number => visible().findIndex(row => row.node.entry.id === selected());
 	const selectAt = (at: number): void => {
@@ -566,14 +593,11 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			}
 			return true;
 		}
-		if (key.id === "alt+enter" || key.id === "alt+return") {
-			toggleDetails();
-			return true;
-		}
+		if ((key.id === "alt+enter" || key.id === "alt+return") && toggleDetails()) return true;
 		const details = expanded();
 		if (details && (key.id === "shift+up" || key.id === "shift+down")) {
 			const scroll = detailScroll();
-			const max = scroll.terminalMax ?? nativeDetailMax(details);
+			const max = scroll.terminalMax ?? nativeDetailMax();
 			const offset = Math.max(0, Math.min(max, Math.min(scroll.offset, max) + (key.id === "shift+up" ? -1 : 1)));
 			if (offset !== scroll.offset) detailScroll.set({ ...scroll, offset });
 			return true;
@@ -676,6 +700,31 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			};
 		}),
 	);
+	// TSP picker children are the side preview, so details travel as read-only continuation
+	// rows in the list itself. Neither their ids nor their positions enter session navigation.
+	let detailPrefix = "detail:";
+	while (rows.some(row => row.node.entry.id.startsWith(detailPrefix))) detailPrefix = `:${detailPrefix}`;
+	const detailItems = computed<TspPickerItem[] | undefined>(() => {
+		const details = expanded();
+		if (!details || details.id !== selected() || labelEditor() || !nativeRendering()) return undefined;
+		const offset = Math.min(detailScroll().offset, nativeDetailMax());
+		return nativeDetailLines()
+			.slice(offset, offset + detailHeight())
+			.map((line, index) => ({
+				id: `${detailPrefix}${index}`,
+				label: [{ t: line, s: "muted" }],
+				node: "marker",
+				disabled: true,
+			}));
+	});
+	const visibleOrder = computed(() => visible().map(row => row.node.entry.id));
+	const order = (): string[] => {
+		const ids = visibleOrder();
+		const details = detailItems();
+		if (!details?.length) return ids;
+		const at = ids.indexOf(expanded()!.id) + 1;
+		return [...ids.slice(0, at), ...details.map(detail => detail.id), ...ids.slice(at)];
+	};
 	const empty = (): TspText => {
 		if (rows.length === 0) return [{ t: "No entries found", s: "muted" }];
 		const query = search().text;
@@ -701,7 +750,7 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 					pickerAction("summarize", "Summarize & switch", ["shift", "enter"]),
 					pickerAction("label", "Label", ["shift", "l"]),
 					pickerAction("filter", "Filter", ["ctrl", "o"]),
-					pickerAction("details", "Tool details", ["alt", "enter"]),
+					...(canToggleDetails() ? [pickerAction("details", "Tool details", ["alt", "enter"])] : []),
 					closeAction(),
 				];
 	const onAction = (act: string, value?: string): void => {
@@ -726,7 +775,8 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			case "filter":
 				return cycleFilter(1);
 			case "details":
-				return toggleDetails();
+				toggleDetails();
+				return;
 			case "close":
 				return escape();
 			case "clear":
@@ -772,14 +822,15 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 				noun="entries"
 				size="lg"
 				layout="tree"
-				preview="side"
+				preview={() => (detailItems()?.length ? "none" : "side")}
 				query={() => search().text}
 				cursor={() => search().cursor}
 				placeholder="Search entries…"
 				tabs={FILTER_TABS}
 				tab={filter}
 				items={items}
-				order={() => visible().map(row => row.node.entry.id)}
+				itemsAdd={detailItems}
+				order={order}
 				selected={selected}
 				current={leafId === null ? [] : [leafId]}
 				total={rows.length}
@@ -823,21 +874,7 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 		const out: JSXNode[] = [];
 		const role = messageOf(entry)?.role;
 		if (role === "toolResult" || role === "bashExecution" || role === "pythonExecution") {
-			const details = expanded();
-			return [
-				<text text={parts} role="omp.picker.title" />,
-				details?.id === id ? (
-					<list max={{ lines: detailHeight() }}>
-						<text
-							text={() => {
-								const height = detailHeight();
-								const offset = Math.min(detailScroll().offset, nativeDetailMax(details));
-								return details.lines.slice(offset, offset + height).join("\n");
-							}}
-						/>
-					</list>
-				) : null,
-			];
+			return <text text={parts} role="omp.picker.title" />;
 		}
 		if (entry.type === "message" || entry.type === "custom_message") {
 			// What `/copy` would take of the entry, shown as the transcript shows it.

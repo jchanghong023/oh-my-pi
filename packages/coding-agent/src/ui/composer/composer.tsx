@@ -971,7 +971,10 @@ export class Composer {
 		}
 		this.#spaceHold ??= new SpaceHoldGesture(
 			count => this.deleteBeforeCursor(count),
-			() => !this.#jump && !this.completing() && (this.vimMode() === null || this.vimMode() === "insert"),
+			() =>
+				!this.#jump &&
+				(!this.completing() || !hasTerminalCompletionRoom(this.field)) &&
+				(this.vimMode() === null || this.vimMode() === "insert"),
 		);
 		this.#spaceHold.keys = keys;
 		this.#spaceHold.handler = handler;
@@ -1363,7 +1366,7 @@ export class Composer {
 	/** Accept the displayed item. Only Enter can submit; Tab and pointer picks complete in place. */
 	#accept(open: Completion, via: "enter" | "complete", index = open.selected): void {
 		const item = open.items[index];
-		if (this.#completion() !== open || !item) return;
+		if (this.#completion() !== open || !item || !hasTerminalCompletionRoom(this.field)) return;
 		const value = item.value;
 		const replacing = this.#replacing;
 		if (replacing) {
@@ -1516,7 +1519,7 @@ export class Composer {
 
 	/** With Shift+Enter as submit, backslash + newline-Enter submits even from a legacy terminal. */
 	#backslashSubmit(key: KeyEvent): boolean {
-		if (key.id !== "enter" || this.completing() || this.#disableSubmit() || this.#options.dictating?.()) return false;
+		if (key.id !== "enter" || this.#disableSubmit() || this.#options.dictating?.()) return false;
 		const kb = getKeybindings();
 		const cursor = this.#cursor();
 		if (
@@ -1560,7 +1563,6 @@ export class Composer {
 	/** Editor-local keys, without the app shortcuts that can replace a dialog owning the draft. */
 	handleDraftKey(key: KeyEvent): boolean {
 		if (key.kind === "release") return false;
-		if (this.#completion.peek() && !hasTerminalCompletionRoom(this.field)) this.#closeCompletion();
 		if (this.#finishJump(key)) return true;
 		const vim = this.#vim;
 		if (vim) {
@@ -1574,17 +1576,17 @@ export class Composer {
 				return true;
 			}
 		}
-		if (this.#backslashSubmit(key)) return true;
 		const bindings = getKeybindings();
 		const submit = bindings.matches(key, "tui.input.submit");
 		const tab = bindings.matches(key, "tui.input.tab");
 		const right = bindings.matches(key, "tui.editor.cursorRight");
 		const open = this.#completion();
-		if (open) {
-			if (bindings.matches(key, "tui.select.cancel")) {
-				this.#closeCompletion();
-				return true;
-			}
+		if (open && bindings.matches(key, "tui.select.cancel")) {
+			this.#closeCompletion();
+			return true;
+		}
+		// A short terminal only hides the popup; edits and caret moves invalidate it as usual.
+		if (open && hasTerminalCompletionRoom(this.field)) {
 			const count = open.items.length;
 			let selected: number;
 			if (bindings.matches(key, "tui.select.up")) selected = (open.selected + count - 1) % count;
@@ -1611,6 +1613,7 @@ export class Composer {
 			this.#completion.set({ ...open, selected, chosen: true });
 			return true;
 		}
+		if (this.#backslashSubmit(key)) return true;
 		if (submit && key.raw !== "\n") {
 			this.submit();
 			return true;

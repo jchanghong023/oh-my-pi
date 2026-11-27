@@ -32,6 +32,9 @@ export const STT_SUBMIT_TRIGGER_OPTIONS = [
 ] satisfies ReadonlyArray<{ value: SttSubmitTrigger; label: string; description: string }>;
 
 function cjkWordLocale(text: string, language: string | undefined): string | undefined {
+	// A CJK recognizer can return a lone non-CJK identifier, e.g. "foo-bar".
+	// Keep the whitespace threshold for that text instead of splitting it on punctuation.
+	if (!/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(text)) return undefined;
 	const code = normalizeSttLanguage(
 		language
 			?.trim()
@@ -88,11 +91,15 @@ export function evaluateSubmitTrigger(
 
 	if (trigger === "release") {
 		const locale = cjkWordLocale(trimmed, language);
-		if (!locale) return { submit: /\s/.test(trimmed), trimTrailing: 0 };
-
 		let words = 0;
-		for (const { isWordLike } of new Intl.Segmenter(locale, { granularity: "word" }).segment(trimmed)) {
-			if (isWordLike && ++words === 2) return { submit: true, trimTrailing: 0 };
+		if (locale) {
+			for (const { isWordLike } of new Intl.Segmenter(locale, { granularity: "word" }).segment(trimmed)) {
+				if (isWordLike && ++words === 2) return { submit: true, trimTrailing: 0 };
+			}
+		} else {
+			for (const word of trimmed.split(/\s+/u)) {
+				if (/[\p{L}\p{N}]/u.test(word) && ++words === 2) return { submit: true, trimTrailing: 0 };
+			}
 		}
 		return { submit: false, trimTrailing: 0 };
 	}

@@ -9,10 +9,12 @@ import {
 	__resetProjectDirCacheForTests,
 	directoryExists,
 	getAgentDir,
+	getBunStubDir,
 	getConfigRootDir,
 	getDocumentConversionCacheDir,
 	getDaemonDir,
 	getLogsDir,
+	getModelDbPath,
 	getPluginsDir,
 	getPuppeteerDir,
 	getSessionsDir,
@@ -213,6 +215,8 @@ it("keeps profile data, caches, and shared runtime state under the explicit root
 		expect(getLogsDir()).toBe(path.join(root, "logs"));
 		expect(getPuppeteerDir()).toBe(path.join(root, "puppeteer"));
 		expect(getSessionsDir()).toBe(path.join(root, "agent", "sessions"));
+		expect(getBunStubDir()).toBe(path.join(root, "cache", "bun-stub"));
+		expect(getModelDbPath()).toBe(path.join(root, "agent", "models.db"));
 		expect(getDocumentConversionCacheDir()).toBe(path.join(root, "agent", "cache", "document-conversions"));
 		expect(getDaemonDir()).toBe(path.join(root, "run", "daemon"));
 
@@ -221,6 +225,8 @@ it("keeps profile data, caches, and shared runtime state under the explicit root
 		expect(getConfigRootDir()).toBe(profileRoot);
 		expect(getLogsDir()).toBe(path.join(profileRoot, "logs"));
 		expect(getSessionsDir()).toBe(path.join(profileRoot, "agent", "sessions"));
+		expect(getBunStubDir()).toBe(path.join(profileRoot, "cache", "bun-stub"));
+		expect(getModelDbPath()).toBe(path.join(profileRoot, "agent", "models.db"));
 		expect(getDaemonDir()).toBe(path.join(root, "run", "daemon"));
 	} finally {
 		for (const [key, value] of originalEnv) {

@@ -527,6 +527,28 @@ pub fn is_not_regular(err: &io::Error) -> bool {
 	err.get_ref().is_some_and(|inner| inner.is::<NotRegular>())
 }
 
+/// A listing omitted an entry of unknown type but kept the entries it could read.
+#[derive(Debug)]
+pub(crate) struct IncompleteListing(io::Error);
+
+impl IncompleteListing {
+	pub(crate) fn is(error: &io::Error) -> bool {
+		error.get_ref().is_some_and(|inner| inner.is::<Self>())
+	}
+}
+
+impl std::fmt::Display for IncompleteListing {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "incomplete directory listing: {}", self.0)
+	}
+}
+
+impl std::error::Error for IncompleteListing {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		Some(&self.0)
+	}
+}
+
 /// Per-thread filesystem operations. Slices returned by a method stay valid
 /// until the next call of the same method.
 pub struct Session {
@@ -581,7 +603,8 @@ impl Session {
 	}
 
 	/// [`Self::list`] into a caller-owned listing (cleared first), so callers
-	/// can keep it while using the session again.
+	/// can keep it while using the session again. [`IncompleteListing`] leaves
+	/// the readable entries in `out`.
 	pub(crate) async fn list_into(
 		&mut self,
 		dir: &Dir,

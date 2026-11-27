@@ -17,6 +17,7 @@ const repoRoot = path.join(import.meta.dir, "..");
 const binariesDir = Bun.env.OMP_RELEASE_BINARY_DIR
 	? path.resolve(Bun.env.OMP_RELEASE_BINARY_DIR)
 	: path.join(repoRoot, "packages", "coding-agent", "binaries");
+const nativeDir = Bun.env.OMP_RELEASE_NATIVE_DIR?.trim();
 const entrypoint = path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts");
 const buildVersion = Bun.env.RELEASE_VERSION;
 const updateRepository = Bun.env.UPDATE_REPOSITORY;
@@ -139,7 +140,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 		outfile,
 		buildVersion,
 		updateRepository,
-		native: { ...target, nativeDir: Bun.env.OMP_RELEASE_NATIVE_DIR },
+		native: { ...target, nativeDir: nativeDir ? path.resolve(nativeDir) : undefined },
 		target: target.target,
 		minifyIdentifiers: true,
 		skipBuiltinCodesign: shouldAdhocSignDarwinBinary(target),

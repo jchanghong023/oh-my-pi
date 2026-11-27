@@ -49,7 +49,7 @@ import { formatKeyHint } from "../ui/keys/hints";
 import { readTodoLoop } from "../todoloop/parser";
 import { presentTodoLoopCheck, TodoLoopPresentation } from "../todoloop/presentation";
 import type { TodoLoopState } from "../todoloop/runner";
-import { parseCommandArgs } from "../utils/command-args";
+import { parseCommandArgs, startsWithQuotedCommandArg } from "../utils/command-args";
 
 const activeTodoLoops = new WeakSet<AgentSession>();
 const TODOLOOP_USAGE = "Usage: /todoloop <path> [--check]";
@@ -337,15 +337,13 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				session.sessionGeneration === generation &&
 				!session.isDisposed;
 			const args = parseCommandArgs(command.args, { preserveEmpty: true });
-			const check = args.at(-1) === "--check";
-			const paths = check ? args.slice(0, -1) : args;
+			const [inputPath, option] = args;
+			const check = option === "--check";
 			clearSubmittedText(runtime);
 			if (
-				paths.length !== 1 ||
-				!paths[0] ||
-				paths[0].startsWith("-") ||
-				paths[0].startsWith('"') ||
-				paths[0].startsWith("'")
+				args.length !== (check ? 2 : 1) ||
+				!inputPath ||
+				(/^[-"']/u.test(inputPath) && !startsWithQuotedCommandArg(command.args))
 			) {
 				ctx.showError(TODOLOOP_USAGE);
 				return;
@@ -358,7 +356,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showError("TodoLoop cannot start while the session is closing or changing.");
 				return;
 			}
-			const filePath = path.resolve(ctx.sessionManager.getCwd(), paths[0]);
+			const filePath = path.resolve(ctx.sessionManager.getCwd(), inputPath);
 			if (check) {
 				try {
 					const snapshot = await readTodoLoop(filePath);

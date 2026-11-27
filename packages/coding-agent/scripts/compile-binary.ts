@@ -5,7 +5,7 @@ import { embeddedAddonFiles, type EmbedOptions } from "../../natives/scripts/emb
 import { createBundlePlugins } from "./bundle-plugins";
 import { embeddedRelayExtensionFiles } from "./embed-relay-extension";
 import { buildDocsIndexPayload } from "./generate-docs-index";
-import { buildOpenWikiResources, resetOpenWikiResources, writeOpenWikiResources } from "./openwiki-resources";
+import { buildOpenWikiResourceText, openWikiResourceFile } from "./openwiki-resources";
 
 /**
  * Optional packages resolved at runtime rather than embedded. Ink loads
@@ -56,8 +56,6 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY = "1";
 	}
 	try {
-		const openWikiResources = await buildOpenWikiResources();
-		await writeOpenWikiResources(openWikiResources);
 		const output = await Bun.build({
 			entrypoints: [options.entrypoint],
 			root: options.repoRoot,
@@ -65,6 +63,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			files: {
 				...(options.native ? await embeddedAddonFiles(options.native) : {}),
 				...(await embeddedRelayExtensionFiles()),
+				[openWikiResourceFile]: await buildOpenWikiResourceText(),
 			},
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
@@ -111,7 +110,6 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			throw new Error(`Coding-agent binary bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
 		}
 	} finally {
-		await resetOpenWikiResources();
 		if (previousCodesignSetting === undefined) {
 			delete Bun.env.BUN_NO_CODESIGN_MACHO_BINARY;
 		} else {

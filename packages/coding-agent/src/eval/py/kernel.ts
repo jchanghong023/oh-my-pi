@@ -172,10 +172,14 @@ function enumerateEvalPythonRuntimes(cwd: string, baseEnv: Record<string, string
 export async function checkPythonKernelAvailability(
 	cwd: string,
 	interpreter?: string,
-	options?: { forceProbe?: boolean } & BackendProbeOptions,
+	options?: { forceProbe?: boolean; settings?: Settings } & BackendProbeOptions,
 ): Promise<PythonKernelAvailability> {
 	if (!options?.forceProbe && (isBunTestRuntime() || $flag("PI_PYTHON_SKIP_CHECK"))) {
 		return { ok: true };
+	}
+	// An isolated caller's shell settings must neither use nor populate the shared cache.
+	if (options?.settings) {
+		return probePythonKernelAvailability(path.resolve(cwd), interpreter, options);
 	}
 	const resolvedCwd = path.resolve(cwd);
 	const key = availabilityKey(resolvedCwd, interpreter);
@@ -215,10 +219,10 @@ function describePythonProbeExit(exitCode: number, minimumMinor: number): string
 async function probePythonKernelAvailability(
 	cwd: string,
 	interpreter?: string,
-	probeOpts?: BackendProbeOptions,
+	probeOpts?: BackendProbeOptions & { settings?: Settings },
 ): Promise<PythonKernelAvailability> {
 	try {
-		const settings = await Settings.init();
+		const settings = probeOpts?.settings ?? (await Settings.init());
 		const { env } = settings.getShellConfig();
 		const baseEnv = filterEnv(env);
 		const minimumMinor =
@@ -395,6 +399,20 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
 		}
 
 		let runtime = availability.runtime;
+		if (!runtime && !options.interpreter && process.platform === "win32" && isBunTestRuntime()) {
+			// Bun tests skip discovery up front, but a real launch must not pick an untested Store alias.
+			runtime = getCachedPythonKernelAvailability(options.cwd)?.runtime;
+			if (!runtime) {
+				const probed = await checkPythonKernelAvailability(options.cwd, undefined, {
+					forceProbe: true,
+					settings: Settings.isolated(),
+					signal: options.signal,
+					timeoutMs: getRemainingTimeMs(options.deadlineMs),
+				});
+				if (!probed.ok || !probed.runtime) throw new Error(probed.reason ?? "Python kernel unavailable");
+				runtime = probed.runtime;
+			}
+		}
 		if (!runtime) {
 			const { env: shellEnv } = (await Settings.init()).getShellConfig();
 			runtime = options.interpreter

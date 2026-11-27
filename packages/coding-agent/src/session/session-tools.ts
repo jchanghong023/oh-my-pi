@@ -531,7 +531,7 @@ export class SessionTools {
 	 * when the live route projection lists it: a frozen prompt never shipped it.
 	 */
 	#basePromptRoutedToolCommandNames: ReadonlySet<string> = new Set();
-	#toolRegistryMutationScope = new AsyncLocalStorage<{ generation: number; sessionId: string }>();
+	#toolRegistryMutationScope = new AsyncLocalStorage<{ generation: number | undefined; sessionId: string }>();
 	/**
 	 * Render-scoped candidate prompt surface. Rebuild frames run inside
 	 * `.run(candidate, …)` so tool getters read the candidate during render and
@@ -1066,12 +1066,20 @@ export class SessionTools {
 
 	/** Serializes every registry and presentation mutation for this session. */
 	runToolRegistryMutation<T>(mutation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+		return this.#runToolRegistryMutation("transcript", mutation, signal);
+	}
+
+	#runToolRegistryMutation<T>(
+		scope: "transcript" | "settings",
+		mutation: () => Promise<T>,
+		signal?: AbortSignal,
+	): Promise<T> {
 		if (this.#toolRegistryMutationScope.getStore()) {
 			this.#assertCurrentToolMutation();
 			return untilAborted(signal, mutation);
 		}
 		const owner = {
-			generation: this.#host.sessionGeneration(),
+			generation: scope === "transcript" ? this.#host.sessionGeneration() : undefined,
 			sessionId: this.#host.sessionManager.getSessionId(),
 		};
 		const serialized = this.#toolRegistryMutationTail.then(() =>
@@ -1097,7 +1105,7 @@ export class SessionTools {
 		// roll mutations back silently, so only generation/sessionId drift throws.
 		if (
 			owner &&
-			(owner.generation !== this.#host.sessionGeneration() ||
+			((owner.generation !== undefined && owner.generation !== this.#host.sessionGeneration()) ||
 				owner.sessionId !== this.#host.sessionManager.getSessionId())
 		) {
 			throw new Error("Session changed during the tool registry mutation.");
@@ -2615,7 +2623,8 @@ export class SessionTools {
 	 * Unrelated selections and MCP/extension tools are preserved.
 	 */
 	reconcileBuiltinTools({ refreshPrompt = true }: { refreshPrompt?: boolean } = {}): Promise<void> {
-		return this.runToolRegistryMutation(async () => {
+		// A settings change still owns this registry after a transcript-only reset.
+		return this.#runToolRegistryMutation("settings", async () => {
 			const reconcile = this.#reconcileSettingsGatedTools;
 			if (!reconcile || this.#host.isDisposed()) return;
 			// Sampled before the delta: it still carries names mounted under the

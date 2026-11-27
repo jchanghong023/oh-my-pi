@@ -1088,6 +1088,7 @@ mod tests {
 	#[test]
 	fn regex_actions_get_partial_captures_and_backtrack_dynamic_subpatterns() {
 		let output = eval(r#"
+			binmode STDOUT;
 			$^R = "outer";
 			"ab" =~ /(a)(?{ "failed" })x|(ab)(?{ "$^R:$^N" })/;
 			print $^R, "\n";
@@ -1103,6 +1104,7 @@ mod tests {
 	#[test]
 	fn interpolated_actions_require_lexical_authorization() {
 		let output = eval(r#"
+			binmode STDOUT;
 			my $needle = q{a(?{ 'code' })b};
 			eval { "ab" =~ /$needle/ };
 			if ($@ =~ /Eval-group not allowed/) { print "blocked\n"; }

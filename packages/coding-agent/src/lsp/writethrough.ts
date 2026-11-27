@@ -202,7 +202,7 @@ const mutationScope = new AsyncLocalStorage<WritethroughMutationScope>();
 
 const mutations = new Map<string, Promise<void>>();
 
-function mutationKey(file: string): string {
+function mutationKey(file: string, editorOwned = false): string {
 	let candidate = file;
 	const suffix: string[] = [];
 	for (;;) {
@@ -212,6 +212,11 @@ function mutationKey(file: string): string {
 			const absolute = path.join(fs.realpathSync.native(candidate), ...suffix.reverse());
 			return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 		} catch (error) {
+			if (editorOwned && isPermissionDeniedError(error)) {
+				// The editor can persist this path even when OMP cannot traverse it.
+				const absolute = path.resolve(file);
+				return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+			}
 			if (!isEnoent(error)) throw error;
 			const parent = path.dirname(candidate);
 			if (parent === candidate) throw error;
@@ -222,8 +227,12 @@ function mutationKey(file: string): string {
 }
 
 /** Serialize overlapping edits, writes, and formatter commits across sessions. */
-async function withFileMutationLocks<T>(files: readonly string[], run: () => Promise<T>): Promise<T> {
-	const keys = [...new Set(files.map(mutationKey))].sort();
+async function withFileMutationLocks<T>(
+	files: readonly string[],
+	run: () => Promise<T>,
+	editorOwned = false,
+): Promise<T> {
+	const keys = [...new Set(files.map(file => mutationKey(file, editorOwned)))].sort();
 	const pending = keys.map(key => mutations.get(key)).filter((value): value is Promise<void> => value !== undefined);
 	const gate = Promise.withResolvers<void>();
 	for (const key of keys) mutations.set(key, gate.promise);
@@ -234,6 +243,11 @@ async function withFileMutationLocks<T>(files: readonly string[], run: () => Pro
 		gate.resolve();
 		for (const key of keys) if (mutations.get(key) === gate.promise) mutations.delete(key);
 	}
+}
+
+/** Serialize an editor-owned write without requiring local traversal permission. */
+export function withEditorWriteMutationLock<T>(file: string, run: () => Promise<T>): Promise<T> {
+	return withFileMutationLocks([file], run, true);
 }
 
 /**
@@ -546,7 +560,6 @@ async function runLspWritethrough(
 	};
 	/** Commit {@link finalContent} unless those exact bytes are already on disk. */
 	const commitWrite = async (writeSignal?: AbortSignal) => {
-		writeSignal?.throwIfAborted();
 		if (diskContent !== finalContent) await writeContent(finalContent, writeSignal);
 	};
 	let committed: Promise<void> | undefined;
@@ -561,7 +574,7 @@ async function runLspWritethrough(
 	};
 	let writeNotified = false;
 	const notifyWriteCommitted = async (notifySignal: AbortSignal | undefined = signal) => {
-		if (writeNotified) return;
+		if (writeNotified || notifySignal?.aborted) return;
 		writeNotified = true;
 		try {
 			await notifyWorkspaceWatchedFiles(cwd, [{ filePath: dst, type: changeType }], notifySignal);
@@ -579,7 +592,7 @@ async function runLspWritethrough(
 			throw error;
 		}
 	};
-	if (!enableFormat && !enableDiagnostics) {
+	if (signal?.aborted || (!enableFormat && !enableDiagnostics)) {
 		await commitFinalWrite(signal);
 		await notifyWriteCommitted();
 		return { finalContent, diagnostics: undefined };

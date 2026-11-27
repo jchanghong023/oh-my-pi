@@ -29,7 +29,7 @@ import {
 	resolveAdvisorRoleSelection,
 	resolveModelRoleValue,
 } from "../../config/model-resolver";
-import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
+import { getUpstreamPin, routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { formatModelSelectorValue } from "../../config/model-selector";
 import { getRoleInfo } from "../../config/model-roles";
 import { settings, withActiveSettings } from "../../config/settings";
@@ -886,10 +886,9 @@ export class SelectorController {
 		const currentSelector = selectOnly
 			? selectOnly.currentSelector
 			: current && formatModelStringWithRouting(current);
-		// Preselect the effective Task model in task mode: the configured override,
-		// else the session model (the bundled task agent inherits it by default).
+		// With no override, the picker inherits the exact session model, not a reparsed selector.
 		const taskOverride = cfgTaskAgentModelOverrides.get(this.ctx.settings).task;
-		const taskSelector = (Array.isArray(taskOverride) ? taskOverride[0] : taskOverride) ?? currentSelector;
+		const taskSelector = Array.isArray(taskOverride) ? taskOverride[0] : taskOverride;
 		const menu = this.#claimMenu(menuKind);
 		const done = () => {
 			if (this.#openMenus.get(menuKind) !== menu) return;
@@ -917,7 +916,7 @@ export class SelectorController {
 					}
 					return;
 				}
-				const key = `model:${selector}:${thinkingLevel ?? ""}`;
+				const key = JSON.stringify([model.provider, model.id, getUpstreamPin(model), thinkingLevel]);
 				if (!isCurrent() || pickInFlightKey === key) return;
 				pickInFlightKey = key;
 				const pickId = ++latestPickId;
@@ -1018,6 +1017,7 @@ export class SelectorController {
 					source,
 					registry: this.ctx.session.modelRegistry,
 					scopedModels: this.ctx.session.scopedModels,
+					currentModel: selectOnly ? undefined : current,
 					callbacks,
 					options,
 					terminalRows: () => size().rows,
@@ -1759,6 +1759,7 @@ export class SelectorController {
 				roots: tree,
 				currentLeafId: realLeafId,
 				terminalHeight: () => this.ctx.shell.size().rows,
+				terminalWidth: () => this.ctx.shell.size().columns,
 				onSelect: async (entryId, options) => {
 					// Selecting the current leaf is normally a no-op (already there) —
 					// unless it's an `ask` toolResult, in which case the re-answer flow

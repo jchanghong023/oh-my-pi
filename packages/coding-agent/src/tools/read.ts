@@ -89,8 +89,13 @@ import {
 	scanFileForConflicts,
 } from "./conflict-detect";
 import { executeReadUrl, fetchReadUrl, parseReadUrlTarget, type ReadUrlEntry } from "./fetch";
-import { approvalDirectoryKey } from "./approval-cache";
-import { approvalTargetKey, approvalTargetNamesFile, isApprovalPublicUrl } from "./approval-targets";
+import { approvalCacheKeyForPath, approvalDirectoryKey } from "./approval-cache";
+import {
+	approvalLocalBackingPath,
+	approvalTargetKey,
+	approvalTargetNamesFile,
+	isApprovalPublicUrl,
+} from "./approval-targets";
 import {
 	postProcessToolResult,
 	resolveArtifactSpillThreshold,
@@ -876,7 +881,7 @@ function formatLocatedFileNotice(url: string, backingPath: string, size: number,
  * Peel `?q=<question>` (ask a vision model about an image) from a plain path or a URL whose
  * scheme declares {@link SchemeSpec.imageQuestion}; every other URL owns its query string.
  */
-function splitImageQuestionTarget(readPath: string): { path: string; question?: string } {
+export function splitImageQuestionTarget(readPath: string): { path: string; question?: string } {
 	if (readPath.includes("://")) {
 		const scheme = extractUriScheme(readPath);
 		if (!scheme || !InternalUrlRouter.instance().spec(scheme)?.imageQuestion) return { path: readPath };
@@ -1291,11 +1296,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			// only from inside this machine or network, so it is gated like a file.
 			if (isApprovalPublicUrl(selectorless)) return undefined;
 		}
-		const key = approvalTargetKey(this.session.cwd, selectorless, this.session);
-		if (key === undefined) return undefined;
+		const backing = approvalLocalBackingPath(router.normalize(selectorless.trim()), this.session);
 		// A directory read lists that folder itself, so it keys as the folder grant: approving it
 		// covers the folder's own entries, and a parent folder's grant never authorizes reading a
 		// subfolder's contents.
+		if (backing !== undefined) {
+			return [approvalTargetNamesFile(backing) ? approvalCacheKeyForPath(backing) : approvalDirectoryKey(backing)];
+		}
+		const key = approvalTargetKey(this.session.cwd, selectorless);
+		if (key === undefined) return undefined;
 		if (path.isAbsolute(key) && !approvalTargetNamesFile(key)) return [approvalDirectoryKey(key)];
 		return [key];
 	};

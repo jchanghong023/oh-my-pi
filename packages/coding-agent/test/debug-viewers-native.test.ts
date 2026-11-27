@@ -15,7 +15,7 @@ import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mod
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getLogPath, TempDir } from "@oh-my-pi/pi-utils";
+import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import type { TspNode, TspPickerProps } from "@oh-my-pi/pi-wire";
 import { initTheme } from "../src/ui/theme/service";
 import { setImageBlobWriter } from "../src/ui/transcript/image-links";
@@ -210,15 +210,23 @@ describe("debug viewers in a Tern terminal", () => {
 
 	it("opens the recent logs as a bare picker over the session: typing filters it, Escape returns to the menu", async () => {
 		const marker = `debug-viewers-${Bun.randomUUIDv7()}`;
-		const logPath = getLogPath();
+		await using ui = await nativeShell(mode.shell);
+		// The viewer tails the active sink, which can differ from the default dated path.
+		logger.flush();
+		const logPath = logger.getCurrentLogPath();
 		fs.mkdirSync(path.dirname(logPath), { recursive: true });
+		const entry = { timestamp: new Date().toISOString(), level: "warn", pid: process.pid, reason: "fixture" };
+		const other = "Unrelated log fixture";
 		fs.appendFileSync(
 			logPath,
-			`${JSON.stringify({ timestamp: new Date().toISOString(), level: "warn", pid: process.pid, message: `${marker} entry`, reason: "fixture" })}\n`,
+			`${JSON.stringify({ ...entry, message: other })}\n${JSON.stringify({ ...entry, message: `${marker} entry` })}\n`,
 		);
-		await using ui = await nativeShell(mode.shell);
 		await pick(ui, "logs");
-		await until(() => has(ui, "picker"));
+		await until(() => {
+			if (!has(ui, "picker")) return false;
+			const { items }: TspPickerProps = ui.node("picker").p;
+			return !!items?.some(item => item.label === `${marker} entry`) && items.some(item => item.label === other);
+		});
 
 		const picker = () => ui.node("picker");
 		expect(surfaceOf(ui, "screen")).toBeUndefined();

@@ -144,6 +144,7 @@ export function createSessionStub(
 		sessionFile: undefined,
 		skills: [],
 		customCommands: [],
+		configWarnings: [],
 		systemPrompt: [],
 		ttsrManager: undefined,
 		extensionRunner: undefined,
@@ -175,6 +176,10 @@ export function createSessionStub(
 		getActiveToolNames: () => [],
 		getEnabledToolNames: () => [],
 		getContextUsage: () => undefined,
+		getAdvisorCost: () => 0,
+		isFastModeActive: () => false,
+		getAnthropicSlowModeLabel: () => undefined,
+		getPrewalkState: () => undefined,
 		getGoalModeState: () => undefined,
 		getLocalGoalModeState: () => undefined,
 		getTodoPhases: () => [],
@@ -300,6 +305,7 @@ const RESOLVED_AHEAD: Record<string, true> = {
 	viewSession: true,
 	sessionManager: true,
 	settings: true,
+	hideToolActivity: true,
 };
 
 /** Build a controller-ready context; see the module doc for override semantics. */
@@ -532,6 +538,7 @@ export function createInteractiveModeContext(
 		setTodos: vi.fn(),
 	} satisfies ContextOverrides;
 	layer(ctx, overrides, RESOLVED_AHEAD);
+	ctx.hideToolActivity = overrides.hideToolActivity ?? false;
 	displays.set(ctx, display);
 	inputs.set(ctx, input);
 	const built = ctx as unknown as InteractiveModeContext;

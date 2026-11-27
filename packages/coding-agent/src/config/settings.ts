@@ -181,6 +181,7 @@ const CONFIG_WATCH_DEBOUNCE_MS = 200;
 /** Stat-poll interval for config sources while {@link Settings.startWatching} is active. */
 const CONFIG_POLL_INTERVAL_MS = 500;
 const EMPTY_MODEL_ROLE_DEFAULTS: Readonly<Record<string, string>> = Object.freeze({});
+const releasedScopedSettings = new WeakSet<Settings>();
 
 type ConfigOverlayReadResult = {
 	settings: RawSettings;
@@ -771,6 +772,7 @@ export class Settings {
 	#cwd: string;
 	#agentDir: string;
 	#storage: AgentStorageApi | null = null;
+	#retainScopedLease?: () => () => void;
 
 	#configFiles: string[] = [];
 	/** Global settings from config.yml/config.yaml */
@@ -796,6 +798,7 @@ export class Settings {
 	/** Settings whose runtime override is a soft-pinned default ({@link pinDefaultValue}). */
 	#softPins = new Set<AnySetting>();
 	#defaultModelRoles: Readonly<Record<string, string>> | undefined;
+	#scopedDefaultModelRoles: Readonly<Record<string, string>> | undefined;
 	/** Merged view (global + project + overrides) */
 	#merged: RawSettings = {};
 	/** Monotonic revision of merged layers and cwd-scoped resolution. */
@@ -963,6 +966,47 @@ export class Settings {
 	 */
 	static loadIsolated(options: SettingsOptions = {}): Promise<Settings> {
 		return Promise.try(() => new Settings(options).#load());
+	}
+
+	/** Load SDK-owned settings without pinning their database for the process lifetime. */
+	static async loadScoped(
+		options: Pick<SettingsOptions, "cwd" | "agentDir">,
+	): Promise<{ settings: Settings; release: () => void }> {
+		const settings = new Settings(options);
+		let releaseStorage: (() => void) | undefined;
+		let leases = 0;
+		const retain = () => {
+			leases++;
+			let released = false;
+			return () => {
+				if (released) return;
+				released = true;
+				if (--leases !== 0) return;
+				settings.#retainScopedLease = undefined;
+				releasedScopedSettings.add(settings);
+				settings.cancelPendingSaves();
+				settings.#storage = null;
+				releaseStorage?.();
+			};
+		};
+		settings.#retainScopedLease = retain;
+		const release = retain();
+		try {
+			await settings.#load(async dbPath => {
+				const lease = await AgentStorage.acquire(dbPath);
+				releaseStorage = lease.release;
+				return lease.storage;
+			});
+		} catch (error) {
+			release();
+			throw error;
+		}
+		return { settings, release };
+	}
+
+	/** Retain a live SDK-scoped instance; caller-owned instances need no SDK lease. @internal */
+	retainScoped(): (() => void) | undefined {
+		return this.#retainScopedLease?.();
 	}
 
 	/**
@@ -1139,6 +1183,7 @@ export class Settings {
 
 	/** Main thread: copy of this instance's own layers and scope, for building or refreshing a worker {@link mirror}. */
 	mirrorState(): SettingsMirrorState {
+		const defaultModelRoles = this.#ownModelRoleDefaults();
 		return {
 			generation: this.#layerGeneration,
 			cwd: this.#cwd,
@@ -1148,7 +1193,7 @@ export class Settings {
 			project: structuredClone(this.#project),
 			configOverlay: structuredClone(this.#configOverlay),
 			overrides: structuredClone(this.#overrides),
-			defaultModelRoles: this.#defaultModelRoles ? { ...this.#defaultModelRoles } : undefined,
+			defaultModelRoles: defaultModelRoles ? { ...defaultModelRoles } : undefined,
 			derived: this.#derived,
 			projectShellPathSource: this.#projectShellPathSource,
 			overlayShellPathSource: this.#overlayShellPathSource,
@@ -1174,6 +1219,8 @@ export class Settings {
 		this.#project = structuredClone(state.project);
 		this.#configOverlay = structuredClone(state.configOverlay);
 		this.#overrides = structuredClone(state.overrides);
+		if (!settingValuesEqual(this.#defaultModelRoles, state.defaultModelRoles))
+			this.#scopedDefaultModelRoles = undefined;
 		this.#defaultModelRoles = state.defaultModelRoles ? { ...state.defaultModelRoles } : undefined;
 		this.#derived = state.derived;
 		this.#projectShellPathSource = state.projectShellPathSource;
@@ -1281,7 +1328,6 @@ export class Settings {
 			] as const) {
 				if (getByPath(layer, setting.segments) !== undefined) source = name;
 			}
-			if (configuredValue(merged, setting, instance.#cwd) === undefined) source = "default";
 			return { merged, source };
 		};
 		const projected = project(this);
@@ -1289,10 +1335,17 @@ export class Settings {
 		const env = setting.envValue();
 		const useEnv =
 			env !== undefined &&
-			(!setting.envFallback ||
-				configured === undefined ||
-				(setting.envFallback === "blank" && typeof configured === "string" && configured.trim() === ""));
-		return { value: useEnv ? env : (configured ?? setting.default), source: useEnv ? "env" : projected.source };
+			(setting.envFallback
+				? configured === undefined ||
+					(setting.envFallback === "blank" && typeof configured === "string" && configured.trim() === "")
+				: !this.hasRuntimeOverride(setting));
+		// A higher layer's explicit null can suppress the global value while selecting the default.
+		const source =
+			configured === undefined &&
+			(projected.source === "global" || getByPath(projected.merged, setting.segments) !== null)
+				? "default"
+				: projected.source;
+		return { value: useEnv ? env : (configured ?? setting.default), source: useEnv ? "env" : source };
 	}
 
 	async saveUserSetting(id: string, value: unknown, expectedRevision: string): Promise<UserSettingSaveResult> {
@@ -1321,12 +1374,12 @@ export class Settings {
 		let receipt: UserSettingSaveResult | undefined;
 		const handleRefreshFailure = (error: unknown): void => {
 			if (receipt) {
-				throw new UserSettingError("execution_failed", `Failed to read saved user settings: ${String(error)}`, {
+				throw new UserSettingError("execution_failed", `Failed to refresh saved user settings: ${String(error)}`, {
 					...receipt,
 					saveState: "failed",
 				});
 			}
-			logger.warn("Settings: failed to read saved user settings", { error: String(error) });
+			logger.warn("Settings: failed to refresh saved user settings", { error: String(error) });
 		};
 		try {
 			receipt = await store.save([{ segments: setting.segments, value }], expectedRevision);
@@ -1345,7 +1398,7 @@ export class Settings {
 			try {
 				if (refresh) {
 					try {
-						await this.#refreshSavedGlobal(store);
+						await this.#refreshSavedGlobal(store, setting);
 					} catch (error) {
 						handleRefreshFailure(error);
 					}
@@ -1385,7 +1438,7 @@ export class Settings {
 							agentDir: root,
 							migrate: raw => instance.#migrateRawSettings(raw, false),
 						});
-						await instance.#refreshSavedGlobal(store);
+						await instance.#refreshSavedGlobal(store, setting);
 						if (!instance.#savesCancelled) instance.#notifyChange(setting, true);
 					});
 				})().catch(error => {
@@ -2403,7 +2456,7 @@ export class Settings {
 		preview.#configOverlay = this.#configOverlay;
 		preview.#overrides = { ...this.#overrides };
 		preview.#savedRuntimeModelRoleOverrides = new Map(this.#savedRuntimeModelRoleOverrides);
-		preview.#defaultModelRoles = this.#defaultModelRoles;
+		preview.#defaultModelRoles = this.#ownModelRoleDefaults();
 		preview.#remerge();
 		preview.replaceModelRoles(modelRoles);
 		return preview;
@@ -2432,19 +2485,52 @@ export class Settings {
 	}
 
 	#modelRoleDefaults(): Readonly<Record<string, string>> {
-		return this.#defaultModelRoles ?? (this.#parent ? this.#parent.#modelRoleDefaults() : EMPTY_MODEL_ROLE_DEFAULTS);
+		return (
+			this.#ownModelRoleDefaults() ?? (this.#parent ? this.#parent.#modelRoleDefaults() : EMPTY_MODEL_ROLE_DEFAULTS)
+		);
 	}
 
-	/** Process defaults yield to every configured role, including after reload and cwd changes. */
-	setModelRoleDefaults(roles: ReadOnlyDict<string>): void {
-		if (this.#mirror) return this.#forward(this.#mirror, { op: "setModelRoleDefaults", roles: { ...roles } });
+	#ownModelRoleDefaults(): Readonly<Record<string, string>> | undefined {
+		return this.#scopedDefaultModelRoles ?? this.#defaultModelRoles;
+	}
+
+	#collectModelRoleDefaults(roles: ReadOnlyDict<string>): Record<string, string> {
 		const defaults: Record<string, string> = {};
 		for (const [role, model] of Object.entries(roles)) {
 			if (model) defaults[role] = model;
 		}
-		if (settingValuesEqual(this.#defaultModelRoles, defaults)) return;
-		const prev = this.getModelRoles();
+		return defaults;
+	}
+
+	/** Install defaults for one SDK mode. Removal exposes the original own or inherited layer. */
+	installModelRoleDefaults(roles: ReadOnlyDict<string>): () => void {
+		const scoped = this.#collectModelRoleDefaults(roles);
+		this.#replaceModelRoleDefaults(this.#defaultModelRoles, scoped);
+		return () => {
+			if (this.#scopedDefaultModelRoles === scoped) this.#replaceModelRoleDefaults(this.#defaultModelRoles);
+		};
+	}
+
+	/** Process defaults yield to every configured role, including after reload and cwd changes. */
+	setModelRoleDefaults(roles: ReadOnlyDict<string>): void {
+		if (this.#mirror) {
+			this.#forward(this.#mirror, { op: "setModelRoleDefaults", roles: { ...roles } });
+			this.#replaceModelRoleDefaults(this.#defaultModelRoles);
+			return;
+		}
+		this.#replaceModelRoleDefaults(this.#collectModelRoleDefaults(roles));
+	}
+
+	#replaceModelRoleDefaults(
+		defaults: Readonly<Record<string, string>> | undefined,
+		scoped?: Readonly<Record<string, string>>,
+	): void {
+		// Even an equal caller write supersedes the SDK layer, which must never undo it later.
+		const changed = !settingValuesEqual(this.#ownModelRoleDefaults(), scoped ?? defaults);
+		const prev = changed ? this.getModelRoles() : undefined;
 		this.#defaultModelRoles = defaults;
+		this.#scopedDefaultModelRoles = scoped;
+		if (!changed) return;
 		this.#rebuildMerged();
 		this.#fireIfChanged(cfgModelRoles, prev);
 	}
@@ -2563,13 +2649,13 @@ export class Settings {
 	// Loading
 	// ─────────────────────────────────────────────────────────────────────────
 
-	async #load(): Promise<Settings> {
+	async #load(openStorage: (dbPath: string) => Promise<AgentStorage> = AgentStorage.open): Promise<Settings> {
 		// Project settings discovery is independent of the persist chain, while
 		// the persist steps themselves remain sequential. Wait for both branches
 		// to settle so simultaneous failures produce one catchable error without
 		// abandoning the other rejection.
 		const [globalResult, projectResult] = await Promise.allSettled([
-			this.#persist ? this.#loadGlobalSettings() : Promise.resolve(),
+			this.#persist ? this.#loadGlobalSettings(openStorage) : Promise.resolve(),
 			this.#readProjectSettings(true),
 		]);
 		if (globalResult.status === "rejected") throw globalResult.reason;
@@ -2584,8 +2670,8 @@ export class Settings {
 		this.#validateAll();
 		return this;
 	}
-	async #loadGlobalSettings(): Promise<void> {
-		this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
+	async #loadGlobalSettings(openStorage: (dbPath: string) => Promise<AgentStorage>): Promise<void> {
+		this.#storage = await openStorage(getAgentDbPath(this.#agentDir));
 		const existingConfig = await this.#loadExistingMainYaml();
 		if (existingConfig) {
 			this.#global = existingConfig;
@@ -4535,7 +4621,7 @@ export class Settings {
 		}
 	}
 	/** Read back the committed layer without overtaking an in-flight ordinary save or flushing pending edits. */
-	async #refreshSavedGlobal(store: UserSettingsStore): Promise<void> {
+	async #refreshSavedGlobal(store: UserSettingsStore, setting: AnySetting): Promise<void> {
 		for (;;) {
 			if (this.#savesCancelled) return;
 			const saving = this.#savePromise;
@@ -4548,7 +4634,9 @@ export class Settings {
 			const raw = await store.readActiveRaw();
 			if (this.#savesCancelled) return;
 			if (this.#savePromise || generation !== this.#persistedMutationGeneration) continue;
-			this.#adoptSavedGlobal(raw, this.#configPath ?? this.#agentDir);
+			if (!this.#adoptSavedGlobal(raw, this.#configPath ?? this.#agentDir, setting)) {
+				throw new Error(`The active settings could not adopt ${setting.id}.`);
+			}
 			return;
 		}
 	}
@@ -4556,21 +4644,30 @@ export class Settings {
 	/**
 	 * Adopts `saved` (config.yml as a save just wrote it) as the live global layer, first
 	 * re-applying every global write still pending — made after that save's snapshot, since saves
-	 * never overlap ({@link #chainSave}) — so a live value never regresses to its on-disk one. An
-	 * invalid result keeps the live layer, which is last good and already holds the save's writes,
-	 * like a keep-last-good reload; the file keeps the external edit for the user to fix.
+	 * never overlap ({@link #chainSave}) — so a live value never regresses to its on-disk one. If an
+	 * unrelated invalid disk edit prevents adoption, an explicit CAS save can still apply its own
+	 * setting to the last good layer. Ordinary saves already hold their writes in the live layer.
 	 * Notifies every setting whose effective value changed.
 	 */
-	#adoptSavedGlobal(saved: RawSettings, source: string): void {
+	#adoptSavedGlobal(saved: RawSettings, source: string, committedSetting?: AnySetting): boolean {
 		saved = this.#migrateRawSettings(saved, false);
 		this.#applyPendingGlobalWrites(saved);
 		this.#keepReadableValues(saved, this.#global, source);
-		if (!this.#acceptsLayers({ ...this.#ownLayers(), global: saved }, source)) return;
+		if (!this.#acceptsLayers({ ...this.#ownLayers(), global: saved }, source)) {
+			if (!committedSetting) return false;
+			const segments = committedSetting.segments;
+			const value = getByPath(saved, segments);
+			saved = structuredClone(this.#global);
+			if (value === undefined) deleteByPath(saved, segments);
+			else setByPath(saved, segments, value);
+			if (!this.#acceptsLayers({ ...this.#ownLayers(), global: saved }, source)) return false;
+		}
 		this.#persistedMutationGeneration++;
 		const previous = this.#snapshot();
 		this.#global = saved;
 		this.#rebuildMerged();
 		this.#fireChangesSince(previous);
+		return true;
 	}
 
 	/** Re-applies every global write still pending a save onto `target`, a global layer read from disk. */
@@ -4828,10 +4925,24 @@ export function isSettingsInitialized(): boolean {
  * best available scope; an unscoped lookup falls back to the global singleton.
  */
 export function findScopedSettings(cwd?: string, agentDir?: string): Settings | undefined {
-	return (
-		findSettingsContext(cwd, agentDir) ??
-		(cwd === undefined && agentDir === undefined ? (globalInstance ?? undefined) : undefined)
-	);
+	const scoped = findSettingsContext(cwd, agentDir);
+	if (scoped && !releasedScopedSettings.has(scoped)) return scoped;
+	if (cwd === undefined && agentDir === undefined) return globalInstance ?? undefined;
+	if (!scoped) return undefined;
+	// A disposed SDK view can remain reachable via its session. Do not let it shadow a live sibling.
+	const wantCwd = cwd === undefined ? undefined : path.normalize(cwd);
+	const wantAgentDir = agentDir === undefined ? undefined : path.normalize(agentDir);
+	let live: Settings | undefined;
+	forEachSettingsInstance(instance => {
+		if (
+			!releasedScopedSettings.has(instance) &&
+			(wantCwd === undefined || instance.getCwd() === wantCwd) &&
+			(wantAgentDir === undefined || instance.getAgentDir() === wantAgentDir)
+		) {
+			live = instance;
+		}
+	});
+	return live;
 }
 
 /**

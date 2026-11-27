@@ -84,6 +84,7 @@ export class ExtensionDashboardModel {
 	readonly expandGlyph: string;
 	#listIndex = 0;
 	#refresh = 0;
+	// MCP connections are keyed by server name, which different providers can share.
 	#providerMcpChanges = Promise.resolve();
 	#unsubscribers: (() => void)[] = [];
 	#rev = 0;

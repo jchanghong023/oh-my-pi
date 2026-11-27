@@ -1677,10 +1677,9 @@ struct UnixProc {
 	/// been woken by its readiness and check the exit status.
 	#[cfg(target_os = "linux")]
 	awaited:  bool,
-	/// A measured spawn's pipe from its helper, which reports the
-	/// program's usage there ([`measure`]).
+	/// A measured spawn's operand PID and usage pipe from its helper.
 	#[cfg(target_os = "linux")]
-	report:   Option<fs::File>,
+	report:   Option<measure::Started>,
 }
 
 impl UnixProc {
@@ -1756,6 +1755,36 @@ impl UnixProc {
 			}
 		}
 	}
+
+	/// Abandon a foreground-measured command without expanding its scope.
+	fn abandon_operand(&mut self, grace: Duration) {
+		let process = self.process().expect("Linux child identity");
+		let mut life = self.tracker.lock();
+		let action = life.abandon(Instant::now(), grace);
+		let kill_due = life.kill_due();
+		drop(life);
+		if let Abandon::Escalate { term, .. } = action {
+			if term {
+				let _ = process.signal_root(libc::SIGTERM);
+			}
+			if let Some(at) = kill_due {
+				let delayed = process.clone();
+				let started = thread::Builder::new()
+					.name("obash-kill".into())
+					.stack_size(SMALL_STACK)
+					.spawn(move || {
+						thread::sleep(at.saturating_duration_since(Instant::now()));
+						let _ = delayed.signal_root(libc::SIGKILL);
+					});
+				if started.is_err() {
+					let _ = process.signal_root(libc::SIGKILL);
+				}
+			}
+			self.unpark();
+		} else if !self.reaped {
+			self.shared.state.reap(self.pid);
+		}
+	}
 }
 
 impl ExtProc for UnixProc {
@@ -1765,7 +1794,14 @@ impl ExtProc for UnixProc {
 
 	#[cfg(target_os = "linux")]
 	fn process(&self) -> Option<crate::proctree::Process> {
-		Some(crate::proctree::Process::from_child(self.pid, &self.tracker))
+		if self.reaped {
+			return None;
+		}
+		let process = crate::proctree::Process::from_child(self.pid, &self.tracker);
+		Some(match &self.report {
+			Some(report) => process.with_measured_operand(report.operand),
+			None => process,
+		})
 	}
 
 	fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus> {
@@ -1804,6 +1840,25 @@ impl ExtProc for UnixProc {
 
 	fn signal_single(&mut self, sig: Signal) -> io::Result<()> {
 		let number = i32::from(sig.number(Platform::current()));
+		#[cfg(target_os = "linux")]
+		if self.reaped {
+			return Err(io::Error::from_raw_os_error(libc::ESRCH));
+		}
+		#[cfg(target_os = "linux")]
+		if self
+			.report
+			.as_ref()
+			.is_some_and(|report| report.operand_only)
+		{
+			if self
+				.process()
+				.is_some_and(|process| process.signal_root(number))
+			{
+				self.tracker.lock().signalled(sig);
+				return Ok(());
+			}
+			return Err(io::Error::from_raw_os_error(libc::ESRCH));
+		}
 		// SAFETY: the child is held unreaped for the lifetime of this handle.
 		if unsafe { libc::kill(self.pid, number) } == 0 {
 			self.tracker.lock().signalled(sig);
@@ -1821,6 +1876,26 @@ impl ExtProc for UnixProc {
 		groups: bool,
 	) -> Option<crate::proctree::SignalWave> {
 		let mut targets = crate::proctree::TerminationTargets::new();
+		let number = i32::from(sig.number(Platform::current()));
+		#[cfg(target_os = "linux")]
+		if !groups {
+			// The logged identity carries the operand PID for measured
+			// spawns. Only the owning handle may supply a missing record:
+			// reopening another native PID here could target its helper.
+			for process in extra {
+				targets.add_process(process.clone());
+			}
+			if children.iter().any(|&(pid, _)| pid == self.pid as u32)
+				&& !extra.iter().any(|process| process.pid() == self.pid)
+				&& let Some(process) = self.process()
+			{
+				targets.add_process(process);
+			}
+			let owned = children
+				.iter()
+				.filter_map(|&(pid, _)| i32::try_from(pid).ok());
+			return Some(targets.signal_roots_wave(number, owned));
+		}
 		let mut single = Vec::new();
 		for process in extra {
 			if children
@@ -1851,18 +1926,21 @@ impl ExtProc for UnixProc {
 				.filter(|_| groups)
 				.and_then(|id| i32::try_from(id).ok())
 			{
-				// Preserve the launch group even if its leader has exited.
+				// Preserve the launch group for any still-live members.
 				targets.add_pgid(pgid);
 				targets.add_process(process);
 			} else {
 				single.push(process);
 			}
 		}
-		let number = i32::from(sig.number(Platform::current()));
 		Some(targets.signal_wave(single, number))
 	}
 
 	fn record_wave_signal(&mut self, sig: Signal, wave: &crate::proctree::SignalWave) {
+		#[cfg(target_os = "linux")]
+		if let Some(report) = &mut self.report {
+			report.operand_only = wave.roots_only;
+		}
 		if matches!(sig, Signal::Term | Signal::Kill)
 			&& !self.detached
 			&& !matches!(self.scope, Scope::Process { .. })
@@ -1921,6 +1999,17 @@ impl Drop for UnixProc {
 			crate::sys::park::exits::forget(self.pid);
 		}
 		let grace = self.shared.config.grace;
+		#[cfg(target_os = "linux")]
+		if self
+			.report
+			.as_ref()
+			.is_some_and(|report| report.operand_only)
+			&& !self.detached
+			&& !self.tracker.lock().collected()
+		{
+			self.abandon_operand(grace);
+			return;
+		}
 		// Taken before anything is signalled, so no member is orphaned
 		// mid-walk. Only the engine polls the tracker, so an exit that is
 		// not collected now is not collected below either.

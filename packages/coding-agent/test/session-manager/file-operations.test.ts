@@ -468,11 +468,13 @@ describe("SessionManager legacy session migration persistence", () => {
 	it("keeps the next transcript resumable after deleting the active session", async () => {
 		const session = SessionManager.create(tempDir, tempDir);
 		session.appendMessage({ role: "user", content: "deleted conversation", timestamp: 1 });
+		session.appendMessage(makeAssistantMessage());
 		await session.flush();
 		const deletedFile = session.getSessionFile();
 		if (!deletedFile) throw new Error("Expected persisted session file");
 
 		try {
+			expect(fs.existsSync(deletedFile)).toBe(true);
 			await session.dropSession(deletedFile);
 			const freshFile = await session.newSession({ drop: true });
 			if (!freshFile) throw new Error("Expected new session file");

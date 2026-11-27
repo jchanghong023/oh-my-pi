@@ -44,6 +44,7 @@ interface AsyncQuiescenceHarness {
 	session: AgentSession;
 	prompts: string[];
 	abortCalls: () => number;
+	disposeNotice: () => string | undefined;
 	runEndWaits: () => number;
 	emitTerminalYield: (data: unknown) => void;
 	emitAssistant: (text: string, totalTokens?: number) => void;
@@ -52,7 +53,7 @@ interface AsyncQuiescenceHarness {
 
 interface AsyncSessionOptions {
 	abort?: () => Promise<void>;
-	dispose?: () => Promise<void>;
+	close?: AgentSession["dispose"];
 	/** The run is held open by this live child agent instead of a background job. */
 	childAgent?: string;
 }
@@ -79,6 +80,34 @@ function createAsyncSession(
 		? []
 		: [{ id: "job-1", label: "background build" }];
 	let toolCallSeq = 0;
+	let disposeNotice: string | undefined;
+	let ordinaryDisposal: Promise<void> | undefined;
+	let strictDisposal: Promise<void> | undefined;
+	let strictDisposalRequested = false;
+	const notifyDisposed: AgentSession["notifyDisposed"] = (reason = "disposed") => {
+		if (reason === "disposed" || !strictDisposalRequested) disposeNotice ??= reason;
+	};
+	const dispose: AgentSession["dispose"] = disposeOptions => {
+		strictDisposalRequested ||= disposeOptions?.strict === true;
+		if (strictDisposalRequested) {
+			// A strict owner waits for any in-flight ordinary close, even if it fails.
+			return (strictDisposal ??= (async () => {
+				await ordinaryDisposal?.catch(() => undefined);
+				await options.close?.({ ...disposeOptions, strict: true });
+				notifyDisposed();
+			})().catch(error => {
+				strictDisposal = undefined;
+				throw error;
+			}));
+		}
+		return (ordinaryDisposal ??= (async () => {
+			await options.close?.(disposeOptions);
+			if (!strictDisposalRequested) notifyDisposed();
+		})().catch(error => {
+			ordinaryDisposal = undefined;
+			throw error;
+		}));
+	};
 
 	const emit = (event: AgentSessionEvent) => {
 		// oxlint-disable-next-line unicorn/no-useless-spread -- listeners may change during dispatch
@@ -129,6 +158,7 @@ function createAsyncSession(
 		prompts,
 		abortCalls: () => abortCount,
 		runEndWaits: () => runEndWaitCount,
+		disposeNotice: () => disposeNotice,
 		emitTerminalYield,
 		emitAssistant,
 		finishJob,
@@ -177,7 +207,8 @@ function createAsyncSession(
 			abortCount += 1;
 			await options.abort?.();
 		},
-		dispose: options.dispose ?? (async () => {}),
+		dispose,
+		notifyDisposed,
 	};
 	harness.session = session as unknown as AgentSession;
 	return harness;
@@ -379,92 +410,103 @@ describe("runSubprocess async quiescence fresh-yield contract", () => {
 		expect(result.output).toContain("done");
 	});
 
-	it("preserves a successful yield across deferred cleanup and waits for every late resource", async () => {
-		const abortStarted = Promise.withResolvers<void>();
-		const abortGate = Promise.withResolvers<void>();
-		const disposeGate = Promise.withResolvers<void>();
-		const lateJobGate = Promise.withResolvers<void>();
-		const manager = new AsyncJobManager({});
-		const cleanupGraceMs = 0;
-		let lateJobId: string | undefined;
-		let deferredCleanup: Promise<void> | undefined;
-		const harness = createAsyncSession(
-			({ promptIndex, harness: h }) => {
-				if (promptIndex !== 1) return;
-				h.finishJob();
-				h.emitAssistant("captured before cleanup", 7);
-				h.emitTerminalYield({ report: "yielded output" });
-			},
-			{
-				abort: async () => {
-					abortStarted.resolve();
-					await abortGate.promise;
+	it.each(["abort", "owner job"] as const)(
+		"preserves a successful yield across deferred cleanup and waits for every late resource (%s settles last)",
+		async last => {
+			const abortGate = Promise.withResolvers<void>();
+			const closeGate = Promise.withResolvers<void>();
+			const lateJobGate = Promise.withResolvers<void>();
+			const manager = new AsyncJobManager({});
+			let lateJobId: string | undefined;
+			let deferredCleanup: Promise<void> | undefined;
+			const close = vi.fn<AgentSession["dispose"]>(async () => {
+				lateJobId = manager.register(
+					"task",
+					"shutdown-time job",
+					async () => {
+						await lateJobGate.promise;
+						return "late result";
+					},
+					{ ownerId: "cleanup-timeout" },
+				);
+				await closeGate.promise;
+			});
+			const harness = createAsyncSession(
+				({ promptIndex, harness: h }) => {
+					if (promptIndex !== 1) return;
+					h.finishJob();
+					h.emitAssistant("captured before cleanup", 7);
+					h.emitTerminalYield({ report: "yielded output" });
 				},
-				dispose: async () => {
-					lateJobId = manager.register(
-						"task",
-						"shutdown-time job",
-						async () => {
-							await lateJobGate.promise;
-							return "late result";
-						},
-						{ ownerId: "cleanup-timeout" },
-					);
-					await disposeGate.promise;
-				},
-			},
-		);
-		mockCreateAgentSession(harness.session);
+				{ abort: () => abortGate.promise, close },
+			);
+			mockCreateAgentSession(harness.session);
 
-		const run = runSubprocess({
-			cwd: "/tmp",
-			asyncJobManager: manager,
-			agent: baseAgent,
-			outputSchema: {},
-			task: "do the work",
-			index: 0,
-			id: "cleanup-timeout",
-			keepAlive: false,
-			cleanupGraceMs,
-			onCleanupDeferred: completion => {
-				deferredCleanup = completion;
-			},
-		});
-		await abortStarted.promise;
-		// abortStarted synchronizes with the in-flight cleanup; a zero grace
-		// exercises the deadline/deferred-ownership transition without sleeping.
+			try {
+				const result = await runSubprocess({
+					cwd: "/tmp",
+					asyncJobManager: manager,
+					agent: baseAgent,
+					outputSchema: {},
+					task: "do the work",
+					index: 0,
+					id: "cleanup-timeout",
+					keepAlive: false,
+					cleanupGraceMs: 0,
+					onCleanupDeferred: completion => {
+						deferredCleanup = completion;
+					},
+				});
+				// A successful yield stays accepted even with abort and ordinary close still pending (#9670).
+				expect(result.exitCode).toBe(0);
+				expect(result.aborted).toBe(false);
+				expect(result.abortReason).toBeUndefined();
+				expect(result.output).toContain("yielded output");
+				expect(result.usage?.totalTokens).toBe(7);
+				expect(harness.abortCalls()).toBeGreaterThan(0);
+				expect(close).toHaveBeenCalledTimes(1);
+				expect(close.mock.calls[0]?.[0]?.strict).not.toBe(true);
+				expect(harness.disposeNotice()).toBeUndefined();
+				expect(lateJobId).toBeDefined();
+				expect(deferredCleanup).toBeDefined();
 
-		const result = await run;
-		// The run yielded successfully; a teardown that drains past the cleanup
-		// deadline is handed off asynchronously and MUST NOT overwrite the
-		// successful outcome with an aborted status (issue #9670).
-		expect(result.exitCode).toBe(0);
-		expect(result.aborted).toBe(false);
-		expect(result.abortReason).toBeUndefined();
-		expect(result.output).toContain("yielded output");
-		expect(result.usage?.totalTokens).toBe(7);
-		expect(lateJobId).toBeDefined();
-		expect(deferredCleanup).toBeDefined();
+				let cleanupSettled = false;
+				const cleanupOutcome = deferredCleanup!.then(() => {
+					cleanupSettled = true;
+				});
+				const lateJob = manager.getJob(lateJobId!);
+				// The second reap must wait for close; a shutdown hook can still register work.
+				expect(lateJob?.status).toBe("running");
+				closeGate.reject(new Error("final transcript close failed"));
+				// Let the close rejection propagate and the second owner reap run.
+				await new Promise<void>(resolve => setImmediate(resolve));
+				expect(harness.disposeNotice()).toBe("dispose failed: Error: final transcript close failed");
+				expect(lateJob?.status).toBe("cancelled");
+				if (last === "abort") {
+					lateJobGate.resolve();
+					await lateJob?.promise;
+				} else {
+					abortGate.resolve();
+				}
+				await new Promise<void>(resolve => setImmediate(resolve));
+				expect(cleanupSettled).toBe(false);
 
-		let cleanupSettled = false;
-		const cleanupOutcome = deferredCleanup?.then(
-			() => {
-				cleanupSettled = true;
-			},
-			() => {
-				cleanupSettled = true;
-			},
-		);
-		abortGate.resolve();
-		disposeGate.reject(new Error("dispose failed"));
-		for (let attempt = 0; attempt < 10 && manager.getJob(lateJobId ?? "")?.status === "running"; attempt += 1) {
-			await Promise.resolve();
-		}
-		expect(cleanupSettled).toBe(false);
-		expect(manager.getJob(lateJobId ?? "")?.status).toBe("cancelled");
-
-		lateJobGate.resolve();
-		await cleanupOutcome;
-		expect(cleanupSettled).toBe(true);
-	}, 15_000);
+				abortGate.resolve();
+				lateJobGate.resolve();
+				await cleanupOutcome;
+				expect(cleanupSettled).toBe(true);
+			} finally {
+				// Unblock and drain the hand-off even when an assertion fails.
+				abortGate.resolve();
+				closeGate.resolve();
+				lateJobGate.resolve();
+				try {
+					await deferredCleanup;
+				} finally {
+					await manager.dispose();
+				}
+			}
+		},
+		15_000,
+	);
 });

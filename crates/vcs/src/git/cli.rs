@@ -65,6 +65,7 @@ const TRUNCATION_MARKER: &str = "\n[git subprocess output truncated at the captu
 struct OutputCapture {
 	output: CapturedBytes,
 	closed: bool,
+	eof:    bool,
 }
 
 impl OutputCapture {
@@ -290,8 +291,8 @@ async fn run_raw(cwd: &Path, args: &[String], options: &RunOptions) -> Result<Ca
 	let process_tree = match ProcessTree::new(child.id().expect("newly spawned git has a pid")) {
 		Ok(tree) => tree,
 		Err(err) => {
-			let _ = child.kill().await;
-			let _ = child.wait().await;
+			let _ = child.start_kill();
+			let _ = tokio::time::timeout(TERMINATE_GRACE, child.wait()).await;
 			return Err(Error::Io(err));
 		},
 	};
@@ -328,7 +329,7 @@ async fn run_raw(cwd: &Path, args: &[String], options: &RunOptions) -> Result<Ca
 	let exit = match status {
 		Ok(status) => status?,
 		Err(reason) => {
-			terminate(&mut child, &process_tree).await;
+			terminate(&mut child, process_tree).await;
 			stdout_task.abort();
 			stderr_task.abort();
 			let _ = tokio::join!(stdout_task, stderr_task);
@@ -350,11 +351,13 @@ async fn run_raw(cwd: &Path, args: &[String], options: &RunOptions) -> Result<Ca
 	.await;
 	stdout_task.abort();
 	stderr_task.abort();
-	let stdout_eof = drained.is_ok();
 	if let Ok(result) = drained {
 		result?;
 	}
-	let stdout = stdout_capture.lock().unwrap().take_bytes();
+	let (stdout, stdout_eof) = {
+		let mut capture = stdout_capture.lock().unwrap();
+		(capture.take_bytes(), capture.eof)
+	};
 	let stderr = stderr_capture.lock().unwrap().take_bytes();
 	Ok(CapturedOutput { exit_code: exit.code().unwrap_or(-1), stdout, stderr, stdout_eof })
 }
@@ -736,6 +739,7 @@ async fn read_capped(
 	loop {
 		let n = stream.read(&mut buf).await.map_err(Error::Io)?;
 		if n == 0 {
+			output.lock().unwrap().eof = true;
 			break;
 		}
 		if !output.lock().unwrap().append(&buf[..n], OUTPUT_LIMIT_BYTES) {
@@ -745,14 +749,19 @@ async fn read_capped(
 	Ok(())
 }
 
-/// Settle this invocation's process tree before returning cancellation or
-/// timeout. Windows pins every discovered descendant: killing Git alone
-/// leaves upload-pack/SSH handles alive. The caller also joins the readers.
-async fn terminate(child: &mut tokio::process::Child, process_tree: &ProcessTree) {
-	#[cfg(windows)]
-	process_tree.terminate().await;
-	#[cfg(not(windows))]
-	let () = *process_tree;
+/// Terminate Git and its discovered descendants, but don't wait indefinitely
+/// for Windows to finish cancelling their pending I/O.
+#[cfg(windows)]
+async fn terminate(child: &mut tokio::process::Child, process_tree: ProcessTree) {
+	let _ = tokio::time::timeout(TERMINATE_GRACE, async {
+		process_tree.terminate(child).await;
+		let _ = child.wait().await;
+	})
+	.await;
+}
+
+#[cfg(not(windows))]
+async fn terminate(child: &mut tokio::process::Child, (): ProcessTree) {
 	#[cfg(unix)]
 	if let Some(pid) = child.id() {
 		// SAFETY: plain kill(2) on a pid we own; no memory is touched.
@@ -779,16 +788,16 @@ mod windows_process {
 		collections::{HashMap, HashSet},
 		io,
 		os::windows::io::OwnedHandle,
-		sync::Arc,
 		time::Duration,
 	};
 
 	use omp_builtins::proc_sys as sys;
 
 	struct Process {
-		pid:     u32,
-		created: u64,
-		handle:  Arc<OwnedHandle>,
+		pid:         u32,
+		created:     u64,
+		handle:      OwnedHandle,
+		terminating: bool,
 	}
 
 	impl Process {
@@ -801,17 +810,7 @@ mod windows_process {
 			let created = sys::process_times(&handle)
 				.ok_or_else(io::Error::last_os_error)?
 				.0;
-			Ok(Self { pid, created, handle: Arc::new(handle) })
-		}
-
-		async fn exited(&self) {
-			if sys::exited(Arc::clone(&self.handle)).await.is_err() {
-				// A failed wait registration must not release the operation while
-				// an owned process still holds the working directory or its pipes.
-				while !sys::has_exited(&self.handle) {
-					tokio::time::sleep(Duration::from_millis(10)).await;
-				}
-			}
+			Ok(Self { pid, created, handle, terminating: false })
 		}
 	}
 
@@ -824,11 +823,18 @@ mod windows_process {
 			Ok(Self { root: Process::open(pid)? })
 		}
 
-		pub(super) async fn terminate(&self) {
+		pub(super) async fn terminate(mut self, child: &mut tokio::process::Child) {
 			let mut descendants: Vec<Process> = Vec::new();
 			let mut seen = HashSet::from([self.root.pid, std::process::id()]);
-			let mut terminated = false;
+			let mut first_wave = true;
 			loop {
+				// Check for completion before taking the snapshot. A snapshot
+				// taken while a termination is still pending is not the last one.
+				let settled = !first_wave
+					&& std::iter::once(&self.root)
+						.chain(&descendants)
+						.filter(|process| process.terminating)
+						.all(|process| sys::has_exited(&process.handle));
 				// Retain all pinned parents across waves, even after they exit:
 				// Windows preserves a descendant's original parent id. This catches
 				// children spawned during the preceding termination wave without
@@ -860,22 +866,28 @@ mod windows_process {
 						fresh.push(process);
 					}
 				}
-				if fresh.is_empty() && terminated {
-					break;
+				if fresh.is_empty() && !first_wave {
+					if settled {
+						break;
+					}
+					// Pending I/O can hold a process open for the full cleanup
+					// grace. Keep rescanning instead of waiting on that handle.
+					tokio::time::sleep(Duration::from_millis(50)).await;
+					continue;
 				}
-				// Stop parents before children can fork again; all handles remain
-				// pinned until a final snapshot finds no surviving new descendants.
-				let owned = std::iter::once(&self.root)
-					.chain(&descendants)
-					.chain(&fresh);
-				for process in owned.clone() {
-					let _ = sys::terminate(&process.handle);
+				// Stop parents before children can fork again. Use Tokio's
+				// spawn handle as a fallback without delaying it until reap.
+				if first_wave {
+					self.root.terminating =
+						sys::terminate(&self.root.handle) || child.start_kill().is_ok();
 				}
-				for process in owned {
-					process.exited().await;
+				for process in &mut fresh {
+					process.terminating = sys::terminate(&process.handle);
 				}
 				descendants.extend(fresh);
-				terminated = true;
+				first_wave = false;
+				// Let the shared cleanup deadline interrupt successive waves.
+				tokio::task::yield_now().await;
 			}
 		}
 	}
@@ -913,9 +925,6 @@ impl GitRepo {
 			..RunOptions::default()
 		})
 		.await?;
-		if output.stdout.truncated || output.stderr.truncated || !output.stdout_eof {
-			return Err(Error::backend(OP, "incomplete remote HEAD advertisement"));
-		}
 		if output.exit_code != 0 {
 			return Err(Error::Cli {
 				command:   format!("git {}", args.join(" ")),
@@ -923,6 +932,9 @@ impl GitRepo {
 				stdout:    output.stdout.into_text(),
 				stderr:    output.stderr.into_text(),
 			});
+		}
+		if output.stdout.truncated || !output.stdout_eof {
+			return Err(Error::backend(OP, "incomplete remote HEAD advertisement"));
 		}
 		let mut branch = None;
 		let mut sha = None;
@@ -1109,10 +1121,15 @@ mod tests {
 		}
 
 		fn args() -> [String; 3] {
+			Self::args_with_sleep_redirect("")
+		}
+
+		fn args_with_sleep_redirect(redirect: &str) -> [String; 3] {
 			[
 				"-c".to_owned(),
-				r#"alias.leak=!sh -c 'printf "out\n"; printf "err\n" >&2; sleep 20 & echo $! > sleep.pid'"#
-					.to_owned(),
+				format!(
+					r#"alias.leak=!sh -c 'printf "out\n"; printf "err\n" >&2; sleep 20{redirect} & echo $! > sleep.pid'"#
+				),
 				"leak".to_owned(),
 			]
 		}
@@ -1226,20 +1243,25 @@ mod tests {
 
 	#[cfg(unix)]
 	#[tokio::test]
-	async fn async_runner_bounds_drain_when_a_descendant_holds_pipes() {
-		let fixture = PipeHolder::new();
-		let started = std::time::Instant::now();
-		let out = run(fixture.0.path(), &PipeHolder::args(), &RunOptions {
-			read_only: true,
-			timeout: Some(SYNC_TIMEOUT),
-			..RunOptions::default()
-		})
-		.await
-		.expect("run alias");
-		assert!(started.elapsed() < Duration::from_secs(10), "drain outlived git");
-		assert_eq!(out.exit_code, 0, "alias failed: {out:?}");
-		assert_eq!(out.stdout, "out\n");
-		assert_eq!(out.stderr, "err\n");
+	async fn async_runner_bounds_drain_and_tracks_stdout_eof_independently() {
+		for (redirect, stdout_eof) in [("", false), (" >/dev/null", true)] {
+			let fixture = PipeHolder::new();
+			let started = std::time::Instant::now();
+			let args = PipeHolder::args_with_sleep_redirect(redirect);
+			let out = run_raw(fixture.0.path(), &args, &RunOptions {
+				read_only: true,
+				timeout: Some(SYNC_TIMEOUT),
+				..RunOptions::default()
+			})
+			.await
+			.expect("run alias");
+			assert!(started.elapsed() < Duration::from_secs(10), "drain outlived git");
+			assert_eq!(out.stdout_eof, stdout_eof);
+			let out = out.into_text();
+			assert_eq!(out.exit_code, 0, "alias failed: {out:?}");
+			assert_eq!(out.stdout, "out\n");
+			assert_eq!(out.stderr, "err\n");
+		}
 	}
 
 	/// Set on the re-executed child; carries the fixture repository it should

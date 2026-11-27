@@ -1,12 +1,23 @@
-/** A bash run's presented output as Tern is sent it: what the command printed, its closing newline included. */
+/** Bash transcript output as captured, described to Tern, and painted in the terminal. */
 import { expect, test } from "bun:test";
 import { createRoot, isUiNode, type UiNode } from "@oh-my-pi/pi-tui";
 import { paintNode, staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
 import { describeTree } from "@oh-my-pi/pi-tui/testing/corpus";
 import { PLAIN_THEME } from "@oh-my-pi/pi-tui/theme/plain";
+import type { TspShellProps } from "@oh-my-pi/pi-wire";
 import "../../../src/ui/styles/tools/bash";
+import "../../../src/ui/styles/tools/block";
 import { bashPresenter } from "../../../src/ui/tools/bash";
 import { ToolBlock, ToolCall } from "../../../src/ui/transcript/tool-block";
+
+function shellPresentation(tree: UiNode): TspShellProps["presentation"] {
+	const shell = tree
+		.children()[0]
+		?.children()
+		.find(child => child.kind === "shell");
+	if (!shell) throw new Error("the bash card must hold a shell node");
+	return (shell.props() as TspShellProps).presentation;
+}
 
 test("the shell presentation carries the run's output verbatim", () => {
 	createRoot(dispose => {
@@ -22,16 +33,7 @@ test("the shell presentation carries the run's output verbatim", () => {
 			call.updateResult({ content: [{ type: "text", text: "alpha\nbeta\n" }] }, false);
 			const tree = ToolBlock({ call });
 			if (!isUiNode(tree)) throw new Error("ToolBlock must build one node");
-			const find = (at: UiNode): UiNode | undefined =>
-				at.kind === "shell"
-					? at
-					: at
-							.children()
-							.map(find)
-							.find(found => found !== undefined);
-			const shell = find(tree);
-			if (!shell) throw new Error("the bash card must hold a shell node");
-			expect((shell.props() as { presentation?: { output?: string } }).presentation?.output).toBe("alpha\nbeta\n");
+			expect(shellPresentation(tree).output).toBe("alpha\nbeta\n");
 		} finally {
 			dispose();
 		}
@@ -49,14 +51,11 @@ test("keeps raw artifact references and folds only the execution notices into th
 			});
 			call.setArgsComplete();
 			call.setExecutionStarted();
+			const raw =
+				"diagnostic\n\n[raw output: local://195.log]\n\nWall time: 0.02 seconds\n\nCommand exited with code 23\n";
 			call.updateResult(
 				{
-					content: [
-						{
-							type: "text",
-							text: "diagnostic\n\n[raw output: local://195.log]\n\nWall time: 0.02 seconds\n\nCommand exited with code 23",
-						},
-					],
+					content: [{ type: "text", text: raw }],
 					details: { exitCode: 23, wallTimeMs: 20, wallTimeNoticeEmitted: true, timeoutSeconds: 300 },
 					isError: true,
 				},
@@ -68,15 +67,34 @@ test("keeps raw artifact references and folds only the execution notices into th
 			for (const expanded of [false, true]) {
 				call.setExpanded(expanded);
 				const terminal = Bun.stripANSI(paintNode(env, tree, 120).rows.join("\n"));
-				const native = JSON.stringify(describeTree(tree, env));
-				for (const view of [terminal, native]) {
-					expect(view).toContain("diagnostic");
-					expect(view).toContain("local://195.log");
-					expect(view).not.toContain("Command exited with code 23");
-					expect(view).not.toContain("Wall time: 0.02 seconds");
-				}
-				expect(terminal).toContain("20ms/5m");
-				expect(terminal).toContain("23");
+				const footer = terminal.trimEnd().split("\n").at(-1);
+				expect(terminal).toContain("diagnostic");
+				expect(terminal).not.toContain("Command exited with code 23");
+				expect(terminal).not.toContain("Wall time: 0.02 seconds");
+				expect(footer).toContain("local://195.log");
+				expect(footer).toContain("20ms/5m");
+				expect(footer).toContain("23");
+				// Tern gets the capture on its command node, but draws the separate output and footer segments.
+				expect(describeTree(tree, env)).toMatchObject({
+					p: { collapsed: !expanded },
+					c: [
+						{
+							p: { role: "omp.run" },
+							c: [
+								{ k: "shell", p: { role: "omp.tool.bash.command", presentation: { output: raw } } },
+								{ k: "ansi", p: { role: "omp.tool.bash.output", text: "diagnostic" } },
+								{
+									p: { role: "omp.run.foot" },
+									c: [
+										{ p: { role: "omp.run.state", spans: [{ t: "exit 23" }] } },
+										{ p: { role: "omp.run.time", stopped: 20 } },
+										{ p: { role: "omp.run.facts", spans: [{ t: "Artifact 195" }] } },
+									],
+								},
+							],
+						},
+					],
+				});
 			}
 		} finally {
 			dispose();
@@ -96,14 +114,33 @@ test("expanding a Bash card preserves the complete multiline command and its res
 			const tree = ToolBlock({ call });
 			if (!isUiNode(tree)) throw new Error("ToolBlock must build one node");
 			const env = staticEnvironment(PLAIN_THEME);
-			const native = () => JSON.stringify(describeTree(tree, env));
 			const terminal = () => Bun.stripANSI(paintNode(env, tree, 80).rows.join("\n"));
-			expect(native()).toContain(long);
-			expect(native()).toContain("echo finished");
-			expect(terminal()).toContain("echo finished");
+			for (const [mode, lastLine] of [
+				["pseudo", 'print("finished")'],
+				["raw", "echo finished"],
+			] as const) {
+				call.shellVizAction(`view:${mode}`);
+				const rows = shellPresentation(tree).rows.map(row => row.segments.map(segment => segment.text).join(""));
+				expect(rows[0]).toContain(long);
+				expect(rows[1]).toBe(lastLine);
+				const view = terminal();
+				expect(view.match(/x+/g)?.join("")).toBe(long);
+				expect(view).toContain(lastLine);
+			}
 			call.updateResult({ content: [{ type: "text", text: "raw process output" }] }, false);
 			expect(terminal()).toContain("raw process output");
-			expect(native()).toContain("raw process output");
+			expect(describeTree(tree, env)).toMatchObject({
+				p: { collapsed: false },
+				c: [
+					{
+						c: [
+							{ k: "shell" },
+							{ k: "ansi", p: { role: "omp.tool.bash.output", text: "raw process output" } },
+							{ p: { role: "omp.run.foot" } },
+						],
+					},
+				],
+			});
 		} finally {
 			dispose();
 		}

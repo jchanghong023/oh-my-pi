@@ -296,6 +296,21 @@ function lowerBound(values: readonly number[], value: number): number {
 	return lo;
 }
 
+/** Count covering rows in the part of a dock block that survives clipping. */
+function coveringRows(block: Block, start: number, end: number): number {
+	if (end <= start) return 0;
+	const total = Math.min(block.covering ?? 0, block.rows.length);
+	if (!block.coveringRanges || total === block.rows.length) {
+		return Math.max(0, end - Math.max(start, block.rows.length - total));
+	}
+	let count = 0;
+	for (const range of block.coveringRanges) {
+		if (range.start >= end) break;
+		count += Math.max(0, Math.min(end, range.end) - Math.max(start, range.start));
+	}
+	return count;
+}
+
 /** See the module docs. */
 export class TermBackend {
 	readonly #surface: Surface;
@@ -372,9 +387,11 @@ export class TermBackend {
 		this.#textSizing = signal(options.driver.capabilities.textSizing);
 		const terminalTextSizing = this.#textSizing;
 		const allowTextSizing = options.textSizing;
+		const clock = (cadence?: PaintCadence): number => this.#animationTime(cadence);
 		this.#env = {
 			theme: options.theme,
-			clock: cadence => this.#animationTime(cadence),
+			clock,
+			clockCadence: clock,
 			focus: options.surface.focused,
 			viewportHeight: this.#viewportHeight,
 			reduceMotion: this.#reduceMotion,
@@ -761,9 +778,9 @@ export class TermBackend {
 		if (visibleDockRows < dockRows) {
 			covering = 0;
 			for (const { block, top } of dock) {
-				const end = top + block.rows.length;
-				const start = end - Math.min(block.covering ?? 0, block.rows.length);
-				covering += Math.max(0, Math.min(dockEnd, end) - Math.max(dockStart, start));
+				const start = Math.max(0, dockStart - top);
+				const end = Math.min(block.rows.length, dockEnd - top);
+				covering += coveringRows(block, start, end);
 			}
 		}
 

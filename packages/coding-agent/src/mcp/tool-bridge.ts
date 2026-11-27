@@ -356,18 +356,18 @@ function buildResult(
 		providerName,
 	};
 	if (result.isError) {
-		if (content[0]?.type === "text") {
-			content[0] = {
-				type: "text",
-				text: content[0].text.trim()
-					? `Error: ${content[0].text}`
-					: `Error: MCP server "${serverName}" reported an error for tool "${mcpToolName}" without a text explanation.`,
-			};
+		const first = content[0];
+		if (first?.type === "text" && first.text.trim()) {
+			content[0] = { type: "text", text: `Error: ${first.text}` };
 		} else {
-			content.unshift({
-				type: "text",
-				text: `Error: MCP server "${serverName}" reported an error for tool "${mcpToolName}" without a text explanation.`,
-			});
+			const text = content.some(block => block.type === "text" && block.text.trim())
+				? "Error:"
+				: `Error: MCP server "${serverName}" reported an error for tool "${mcpToolName}" without a text explanation.`;
+			if (first?.type === "text") {
+				content[0] = { type: "text", text };
+			} else {
+				content.unshift({ type: "text", text });
+			}
 		}
 	}
 	// Any JSON value is allowed. Details carry the object form their consumers

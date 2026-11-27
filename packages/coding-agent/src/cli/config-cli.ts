@@ -287,7 +287,7 @@ async function saveTeamMembers(value: unknown, expectedRevision: string): Promis
 		{ initializeOfflineModelCommand, loadCliExtensionProviders },
 		{ AuthStorage },
 		{ loadEffectiveAuthAccountPolicyConfig },
-		{ TeamConfigService },
+		{ TeamConfigError, TeamConfigService },
 		{ getAgentDbPath },
 	] = await Promise.all([
 		import("../config/model-registry"),
@@ -305,11 +305,25 @@ async function saveTeamMembers(value: unknown, expectedRevision: string): Promis
 		await auth.credentials.reload();
 		await initializeOfflineModelCommand(scope);
 		const registry = new ModelRegistry(auth, undefined, { settings: scope });
-		await loadCliExtensionProviders(registry, scope, scope.getCwd(), { discoverModels: false });
+		// Like default TUI startup, the standalone command must not discover ambient extensions.
+		await loadCliExtensionProviders(registry, scope, scope.getCwd(), {
+			discoverModels: false,
+			disableExtensionDiscovery: true,
+		});
 		await registry.hydrateCredentialScopedModelCaches();
 		await registry.refreshRuntimeProviders("offline");
 		const service = new TeamConfigService({ getSettings: () => scope, getModelRegistry: () => registry });
 		return await service.saveTeamConfig(value, expectedRevision);
+	} catch (error) {
+		if (error instanceof TeamConfigError) {
+			const data = error.data;
+			if (data?.write.status === "saved") console.error("Write committed to the global config.");
+			else if (data) console.error(`Team write status: ${data.write.status}.`);
+			if (data?.effectiveNote && data.effectiveNote !== error.message) console.error(data.effectiveNote);
+			if (error.code === "invalid_params")
+				console.error("Team CLI validation uses only local credentials and cached model metadata.");
+		}
+		throw error;
 	} finally {
 		auth.close();
 	}
@@ -339,8 +353,6 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 		else await settings.saveUserSetting(def.path, parsed, snapshot.revision);
 	} catch (err) {
 		console.error(chalk.red(String(err)));
-		if (def.path === cfgTeamMembers.id)
-			console.error("Team CLI validation uses only local credentials and cached model metadata.");
 		process.exit(1);
 	}
 
@@ -351,7 +363,7 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 	const shadow = teamSave
 		? teamSave.effectiveMatchesRequested
 			? undefined
-			: (shadowingSource(def.setting) ?? {
+			: (shadowingSource(def.setting, teamSave.config.source ?? undefined) ?? {
 					json: { effectiveMatchesRequested: false },
 					message: teamSave.effectiveNote,
 				})
@@ -384,8 +396,10 @@ function globalValue(setting: AnySetting): unknown {
 }
 
 /** Where the effective value comes from when it is not the global config (or the default), if anywhere. */
-function shadowingSource(setting: AnySetting): { json: Record<string, string>; message: string } | undefined {
-	const provenance = setting.provenance(settings);
+function shadowingSource(
+	setting: AnySetting,
+	provenance = setting.provenance(settings),
+): { json: Record<string, string>; message: string } | undefined {
 	switch (provenance) {
 		case "global":
 		case "default":

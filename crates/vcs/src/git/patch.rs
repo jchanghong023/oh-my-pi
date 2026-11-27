@@ -12,7 +12,8 @@ mod owned_fs;
 
 use std::{
 	collections::{BTreeMap, BTreeSet},
-	fs, io,
+	fs,
+	io::{self, Read, Seek, Write},
 	path::{Component, Path, PathBuf},
 	time::Duration,
 };
@@ -291,24 +292,29 @@ fn owned_mode_matches(
 /// Optional filter failures must not silently become confirmed raw bytes;
 /// neither user configuration nor the ordinary patch APIs are changed.
 pub(super) fn require_owned_filter_success(repo: &mut gix::Repository) -> Result<()> {
-	let drivers: BTreeSet<_> = repo
+	let sections: Vec<_> = repo
 		.config_snapshot()
 		.sections_by_name("filter")
 		.into_iter()
 		.flatten()
-		.filter_map(|section| section.header().subsection_name().map(ToOwned::to_owned))
+		.filter(|section| section.header().subsection_name().is_some())
+		.map(|section| section.id())
 		.collect();
-	if !drivers.is_empty() {
-		let mut config = repo.config_snapshot_mut();
-		for driver in drivers {
-			config
-				.set_raw_value_by("filter", Some(driver.as_ref()), "required", "true")
-				.map_err(|err| Error::backend("git owned patch filter policy", err))?;
-		}
-		config
-			.commit()
-			.map_err(|err| Error::backend("git owned patch filter policy", err))?;
+	if sections.is_empty() {
+		return Ok(());
 	}
+	let mut config = repo.config_snapshot_mut();
+	// gitoxide builds a driver from each section and selects the first matching
+	// one. Updating by driver name would change only the last section.
+	for id in sections {
+		config
+			.section_mut_by_id(id)
+			.expect("section is present in the same config snapshot")
+			.set("required".try_into().expect("valid config key"), "true".into());
+	}
+	config
+		.commit()
+		.map_err(|err| Error::backend("git owned patch filter policy", err))?;
 	Ok(())
 }
 
@@ -340,6 +346,35 @@ fn owned_entry_bytes(
 	} else {
 		filter.git_to_worktree(path, bytes).map(Some)
 	}
+}
+
+fn owned_patch_destinations<'a>(
+	root: &'a fs::File,
+	paths: [Option<&'a str>; 2],
+	target: Option<&str>,
+	mode: Option<Mode>,
+	expected: &BTreeMap<&str, &OwnedPatchExpectation>,
+) -> Result<([Option<owned_fs::PinnedPath<'a>>; 2], bool)> {
+	let mut destinations = [None, None];
+	let mut already_done = true;
+	for (position, path) in paths.into_iter().enumerate() {
+		let Some(path) = path else { continue };
+		let destination = owned_fs::PinnedPath::open(root, Path::new(path))?;
+		let observed = destination.observe()?;
+		let actual = observed.as_ref().map(|(version, _)| version);
+		let is_after = actual == expected[path].after_version.as_ref()
+			&& owned_fs::mode_matches(
+				observed.as_ref().map(|(_, mode)| *mode),
+				Some(path) == target,
+				mode,
+			);
+		if !is_after && actual != expected[path].before_version.as_ref() {
+			return Err(Error::backend("git owned patch", format!("preimage changed: {path}")));
+		}
+		already_done &= is_after;
+		destinations[position] = Some(destination);
+	}
+	Ok((destinations, already_done))
 }
 
 impl GitRepo {
@@ -414,6 +449,7 @@ impl GitRepo {
 					));
 				}
 			}
+			drop(repo.objects.reset_object_memory());
 		}
 		Ok(OwnedPatchPreview { expected })
 	}
@@ -483,38 +519,29 @@ impl GitRepo {
 		if patches.is_empty() {
 			return Ok(output);
 		}
-		let root = owned_fs::open_root(self.root())?;
-		let mut diagnostics = Vec::new();
-		for patch in &patches {
-			let (source, target, source_mode, target_mode) = patch_sides(patch, options.reverse);
-			let paths = [source, target.filter(|target| Some(*target) != source)];
-			let mut attempted = [None, None];
-			let attempt = (|| -> Result<()> {
-				let mut destinations = [None, None];
-				let mut already_done = true;
-				for (position, path) in paths.into_iter().enumerate() {
-					let Some(path) = path else { continue };
-					let destination = owned_fs::PinnedPath::open(&root, Path::new(path))?;
-					let observed = destination.observe()?;
-					let actual = observed.as_ref().map(|(version, _)| version);
-					let is_target = Some(path) == target;
-					let is_after = actual == expected[path].after_version.as_ref()
-						&& owned_fs::mode_matches(
-							observed.as_ref().map(|(_, mode)| *mode),
-							is_target,
-							target_mode.or(source_mode),
-						);
-					if !is_after && actual != expected[path].before_version.as_ref() {
-						return Err(Error::backend(
-							"git owned patch",
-							format!("preimage changed: {path}"),
-						));
-					}
-					already_done &= is_after;
-					destinations[position] = Some((path, destination));
-				}
+		// Discovery may intentionally retain the caller's spelling of a
+		// checkout root reached through a symlink. Resolve just that root;
+		// pinned traversal still rejects links inside the worktree.
+		let root = owned_fs::open_root(&fs::canonicalize(self.root())?)?;
+		// Preview computes every postimage against the unmodified worktree.
+		// Prepare against that same view before a patch can change attributes
+		// used by a later entry. Per-entry preparation failures remain partial.
+		// Keep only offsets and modes in memory between preparation and writes.
+		let mut spool = None;
+		let prepared: Vec<_> = patches
+			.iter()
+			.map(|patch| -> Result<Option<_>> {
+				let (source, target, source_mode, target_mode) = patch_sides(patch, options.reverse);
+				let paths = [source, target.filter(|target| Some(*target) != source)];
+				let (_, already_done) = owned_patch_destinations(
+					&root,
+					paths,
+					target,
+					target_mode.or(source_mode),
+					&expected,
+				)?;
 				if already_done {
-					return Ok(());
+					return Ok(None);
 				}
 				let one = std::slice::from_ref(patch);
 				let mut state = patch_worktree_map(self, &repo, &mut filter, one, options.reverse)?;
@@ -535,27 +562,68 @@ impl GitRepo {
 							format!("confirmed postimage does not match patch: {path}"),
 						));
 					}
-					postimages[position] = bytes.zip(entry.map(|entry| entry.mode));
+					if let Some((bytes, entry)) = bytes.zip(entry) {
+						let file = match &mut spool {
+							Some(file) => file,
+							empty => {
+								let tempfile = gix::tempfile::new(
+									std::env::temp_dir(),
+									gix::tempfile::ContainingDirectory::Exists,
+									gix::tempfile::AutoRemove::Tempfile,
+								)?;
+								let file = tempfile.take().ok_or_else(|| {
+									io::Error::other("temporary owned patch spool disappeared")
+								})?;
+								empty.insert(file.into_file())
+							},
+						};
+						let offset = file.stream_position()?;
+						file.write_all(&bytes)?;
+						postimages[position] = Some((offset, bytes.len(), entry.mode));
+					}
 				}
+				Ok(Some(postimages))
+			})
+			// The clean preimage and patched blob are only needed for this entry.
+			.inspect(|_| drop(repo.objects.reset_object_memory()))
+			.collect();
+		drop(filter);
+		drop(repo);
+
+		let mut diagnostics = Vec::new();
+		let mut bytes = Vec::new();
+		for (patch, postimages) in patches.iter().zip(prepared) {
+			let (source, target, source_mode, target_mode) = patch_sides(patch, options.reverse);
+			let paths = [source, target.filter(|target| Some(*target) != source)];
+			let mut attempted = [None, None];
+			let attempt = (|| -> Result<()> {
+				let Some(postimages) = postimages? else {
+					return Ok(());
+				};
+				let (mut destinations, _) = owned_patch_destinations(
+					&root,
+					paths,
+					target,
+					target_mode.or(source_mode),
+					&expected,
+				)?;
 				reject_owned_rename_alias(self, source, target)?;
 				// Materialize a rename target before deleting its source. A
 				// partial rename can then resume from the retained source and
 				// already-matching target without overwriting either blindly.
-				for (position, item) in destinations.iter_mut().enumerate().rev() {
-					let Some((path, destination)) = item else {
+				for position in (0..paths.len()).rev() {
+					let (Some(path), Some(destination)) = (paths[position], &mut destinations[position])
+					else {
 						continue;
 					};
-					let path = *path;
+					let postimage = postimages[position];
+					let mode = postimage.map(|(_, _, mode)| mode);
 					let observed = destination.observe()?;
 					let actual = observed.as_ref().map(|(version, _)| version);
 					let actual_mode = observed.as_ref().map(|(_, mode)| *mode);
-					let entry = state.get(path);
 					if actual == expected[path].after_version.as_ref()
-						&& owned_fs::mode_matches(
-							actual_mode,
-							entry.is_some(),
-							entry.map(|entry| entry.mode),
-						) {
+						&& owned_fs::mode_matches(actual_mode, mode.is_some(), mode)
+					{
 						continue;
 					}
 					if actual != expected[path].before_version.as_ref() {
@@ -564,19 +632,21 @@ impl GitRepo {
 							format!("preimage changed before write: {path}"),
 						));
 					}
+					if let Some((offset, len, _)) = postimage {
+						let file = spool.as_mut().expect("prepared postimages have a spool");
+						file.seek(io::SeekFrom::Start(offset))?;
+						bytes.resize(len, 0);
+						file.read_exact(&mut bytes)?;
+					}
 					attempted[position] = Some(path);
-					if let Some((bytes, mode)) = &postimages[position] {
-						destination.replace(bytes, *mode)?;
+					if let Some(mode) = mode {
+						destination.replace(&bytes, mode)?;
 					} else {
 						destination.remove()?;
 					}
 					if owned_raw_version(self, path)? != expected[path].after_version
-						|| !owned_mode_matches(
-							self,
-							path,
-							entry.is_some(),
-							entry.map(|entry| entry.mode),
-						)? {
+						|| !owned_mode_matches(self, path, mode.is_some(), mode)?
+					{
 						return Err(Error::backend(
 							"git owned patch",
 							format!("postimage changed after write: {path}"),
@@ -2898,6 +2968,97 @@ mod tests {
 	fn reset(path: &Path) {
 		git(path, &["reset", "--hard", "-q", "HEAD"]);
 		git(path, &["clean", "-fdq"]);
+	}
+
+	#[test]
+	fn owned_filter_policy_preserves_commands_and_requires_every_section() {
+		let temp = init(&[("file.txt", b"one\n")]);
+		let config = temp.path().join(".git/config");
+		let mut content = fs::read_to_string(&config).expect("read config");
+		content.push_str(
+			"[filter \"duplicate\"]\n\tsmudge = cat\n[filter \"duplicate\"]\n\trequired = false\n",
+		);
+		fs::write(&config, &content).expect("write config");
+		let git = repo(temp.path());
+		let owned = owned_repository(&git).expect("configure owned filters");
+		let options = gix::filter::Pipeline::options(&owned).expect("filter options");
+		let drivers: Vec<_> = options
+			.drivers
+			.iter()
+			.filter(|driver| driver.name.as_slice() == b"duplicate")
+			.collect();
+		assert_eq!(drivers.len(), 2);
+		assert!(drivers.iter().all(|driver| driver.required));
+		assert_eq!(
+			drivers[0].smudge.as_ref().map(|command| command.as_slice()),
+			Some(b"cat".as_slice())
+		);
+		assert_eq!(fs::read_to_string(config).expect("read config"), content);
+	}
+
+	#[test]
+	fn owned_patch_materializes_the_prepared_bytes_after_an_attribute_change() {
+		let temp = init(&[("a/.gitattributes", b"*.txt text eol=lf\n"), ("z/file.txt", b"one\n")]);
+		let patch = concat!(
+			"diff --git a/a/.gitattributes b/a/.gitattributes\n",
+			"--- a/a/.gitattributes\n+++ b/a/.gitattributes\n",
+			"@@ -1 +1 @@\n-*.txt text eol=lf\n+*.txt text eol=crlf\n",
+			"diff --git a/z/file.txt b/a/new.txt\n",
+			"similarity index 100%\nrename from z/file.txt\nrename to a/new.txt\n",
+		);
+		let git = repo(temp.path());
+		let preview = git
+			.preview_owned_patch(patch, &OwnedPatchPreviewOptions { reverse: false })
+			.expect("prepare patch");
+		let expected = raw_sha256(b"one\n").expect("hash preview bytes");
+		assert_eq!(
+			preview
+				.expected
+				.iter()
+				.find(|item| item.path == "a/new.txt")
+				.and_then(|item| item.after_version.as_ref()),
+			Some(&expected),
+		);
+		let result = git
+			.apply_owned_patch(patch, &OwnedPatchOptions {
+				reverse:  false,
+				expected: preview.expected,
+			})
+			.expect("apply patch");
+		assert!(result.complete, "{result:?}");
+		assert!(!temp.path().join("z/file.txt").exists());
+		assert_eq!(fs::read(temp.path().join("a/new.txt")).expect("read renamed file"), b"one\n");
+		assert_eq!(
+			fs::read(temp.path().join("a/.gitattributes")).expect("read attributes"),
+			b"*.txt text eol=crlf\n",
+		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn owned_patch_applies_through_a_symlink_to_the_checkout_root() {
+		let checkout = init(&[("file.txt", b"one\n")]);
+		let outer = tempfile::tempdir().expect("tempdir");
+		let link = outer.path().join("checkout");
+		std::os::unix::fs::symlink(checkout.path(), &link).expect("link checkout");
+		let git = repo(&link);
+		assert_eq!(git.root(), link.as_path());
+		let patch = concat!(
+			"diff --git a/file.txt b/file.txt\n",
+			"--- a/file.txt\n+++ b/file.txt\n",
+			"@@ -1 +1 @@\n-one\n+two\n",
+		);
+		let preview = git
+			.preview_owned_patch(patch, &OwnedPatchPreviewOptions { reverse: false })
+			.expect("prepare patch");
+		let result = git
+			.apply_owned_patch(patch, &OwnedPatchOptions {
+				reverse:  false,
+				expected: preview.expected,
+			})
+			.expect("apply through checkout link");
+		assert!(result.complete, "{result:?}");
+		assert_eq!(fs::read(checkout.path().join("file.txt")).expect("read file"), b"two\n");
 	}
 
 	#[test]

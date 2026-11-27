@@ -2116,7 +2116,8 @@ pub fn set_rayon_global_pool_available(available: bool) {
 /// Whether native helpers and utility builtins may enter Rayon's global pool.
 ///
 /// On non-Windows hosts, initialize it only when parallel work is requested,
-/// never while loading the addon. `build_global` returns thread-spawn failures
+/// never while loading the addon. The process can lower the capped thread
+/// count with `RAYON_NUM_THREADS`. `build_global` returns thread-spawn failures
 /// (including Linux EAGAIN) instead of panicking like the first `par_iter`
 /// would. Cache failure as well as success: Rayon's global initializer is
 /// one-shot even when spawning fails, so every caller must stay sequential
@@ -2135,6 +2136,15 @@ pub fn rayon_global_pool_available() -> bool {
 			let threads = std::thread::available_parallelism()
 				.map_or(1, |threads| threads.get())
 				.clamp(1, 8);
+			// Match Rayon's environment precedence before applying our budget.
+			// Zero selects the default, not the deprecated variable.
+			let requested = std::env::var("RAYON_NUM_THREADS")
+				.ok()
+				.and_then(|n| n.parse::<usize>().ok())
+				.or_else(|| {
+					std::env::var("RAYON_RS_NUM_CPUS").ok().and_then(|n| n.parse::<usize>().ok())
+				});
+			let threads = requested.filter(|&n| n > 0).map_or(threads, |n| n.min(threads));
 			rayon::ThreadPoolBuilder::new()
 				.num_threads(threads)
 				.build_global()
@@ -3354,6 +3364,28 @@ mod testing {
 		pub(crate) fn cancel_flag_for_test(&self) -> Arc<AtomicBool> {
 			Arc::clone(&self.cancel)
 		}
+	}
+
+	#[cfg(not(any(target_os = "windows", target_os = "wasi")))]
+	#[test]
+	fn rayon_global_pool_honors_thread_downshift() {
+		const CHILD: &str = "OMP_TEST_RAYON_GLOBAL_POOL";
+		if std::env::var_os(CHILD).is_some() {
+			assert!(super::rayon_global_pool_available());
+			assert_eq!(rayon::current_num_threads(), 1);
+			return;
+		}
+
+		// The pool and its environment must belong to a fresh process.
+		let output = std::process::Command::new(std::env::current_exe().unwrap())
+			.args(["--exact", "host::testing::rayon_global_pool_honors_thread_downshift"])
+			.env(CHILD, "1")
+			.env("RAYON_NUM_THREADS", "1")
+			.env("RAYON_RS_NUM_CPUS", "8")
+			.output()
+			.unwrap();
+		let stdout = String::from_utf8_lossy(&output.stdout);
+		assert!(output.status.success() && stdout.contains("1 passed"), "{stdout}");
 	}
 
 	/// `poll` never reports the null device readable on macOS and the BSDs, so

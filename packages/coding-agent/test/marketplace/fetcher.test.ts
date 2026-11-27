@@ -6,6 +6,7 @@ import {
 	classifySource,
 	fetchMarketplace,
 	parseMarketplaceCatalog,
+	promoteCloneToCache,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
@@ -313,5 +314,23 @@ describe("fetchMarketplace", () => {
 		} finally {
 			cloneSpy.mockRestore();
 		}
+	});
+
+	it("does not overwrite an unrelated Git checkout when migrating caches", async () => {
+		const destination = path.join(tmpDir, "test-marketplace");
+		const clonePath = path.join(tmpDir, "new-checkout");
+		const cached = JSON.stringify({ name: "test-marketplace", owner: { name: "Different" }, plugins: [] }, null, 2);
+		const original = JSON.stringify({ name: "test-marketplace", owner: { name: "Test" }, plugins: [] });
+		fs.mkdirSync(path.join(destination, ".git"), { recursive: true });
+		fs.mkdirSync(path.join(destination, ".omp-plugin"));
+		fs.mkdirSync(clonePath);
+		const catalogPath = path.join(destination, "marketplace.json");
+		fs.writeFileSync(catalogPath, `${cached}\n`);
+		fs.writeFileSync(path.join(destination, ".omp-plugin", "marketplace.json"), original);
+
+		await expect(promoteCloneToCache(clonePath, tmpDir, "test-marketplace", false)).rejects.toThrow(
+			/cache destination already exists/,
+		);
+		expect(fs.readFileSync(catalogPath, "utf8")).toBe(`${cached}\n`);
 	});
 });

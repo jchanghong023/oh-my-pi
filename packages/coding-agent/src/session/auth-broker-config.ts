@@ -134,9 +134,9 @@ export function resolveAuthBrokerConfig(): Promise<AuthBrokerClientConfig | null
 }
 
 /**
- * Where `provider`'s (credential-store id) logins are stored, for the "Credentials saved to …" /
- * "Credential removed from …" lines after login and logout: the auth broker, or this machine's
- * agent.db without a broker or for a provider the broker would not serve (see `HybridAuthCredentialStore`).
+ * Where `provider`'s (credential-store id) logins are stored, for the "Credentials saved to …"
+ * line after login: the auth broker, or this machine's agent.db without a broker or for a
+ * provider the broker would not serve (see `HybridAuthCredentialStore`).
  */
 export async function credentialStoreLabel(provider: string): Promise<string> {
 	const broker = await resolveAuthBrokerConfig();

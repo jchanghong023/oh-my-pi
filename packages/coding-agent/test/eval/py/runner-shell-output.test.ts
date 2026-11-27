@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { $which } from "@oh-my-pi/pi-utils";
+import { requireTestPython } from "./run-prelude";
 
 interface RunnerFrame {
 	type?: string;
@@ -9,10 +9,14 @@ interface RunnerFrame {
 	status?: string;
 }
 
-const pythonPath = Bun.env.PYTHON ?? (process.platform !== "win32" && $which("python3") ? "python3" : "python");
 const runnerPath = path.resolve(import.meta.dir, "../../../src/eval/py/runner.py");
 const repoRoot = path.resolve(import.meta.dir, "../../../../..");
+const pythonPath = await requireTestPython(repoRoot);
 const encoder = new TextEncoder();
+
+function bashQuote(value: string): string {
+	return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
 
 function shellQuote(value: string): string {
 	// `!cmd` runs through cmd.exe on Windows (shell=True) and a POSIX shell
@@ -20,8 +24,11 @@ function shellQuote(value: string): string {
 	if (process.platform === "win32") {
 		return `"${value.replaceAll('"', '""')}"`;
 	}
-	return `'${value.replaceAll("'", `'"'"'`)}'`;
+	return bashQuote(value);
 }
+
+const shellPython = shellQuote(pythonPath);
+const bashPython = bashQuote(process.platform === "win32" ? pythonPath.replaceAll("\\", "/") : pythonPath);
 
 async function runCell(code: string): Promise<RunnerFrame[]> {
 	const [frames] = await runCells([code]);
@@ -111,7 +118,7 @@ describe("Python runner shell output streaming", () => {
 		].join(";");
 		const frames = await runCell(
 			[
-				`result = !${pythonPath} -c ${shellQuote(child)}`,
+				`result = !${shellPython} -c ${shellQuote(child)}`,
 				"print('return=' + str(result.returncode) + ' lines=' + repr(list(result)))",
 			].join("\n"),
 		);
@@ -126,7 +133,7 @@ describe("Python runner shell output streaming", () => {
 		const child = ["import sys", "sys.stdout.write(('x' + chr(10)) * 3100)", "sys.stdout.flush()"].join(";");
 		const frames = await runCell(
 			[
-				`result = !${pythonPath} -c ${shellQuote(child)}`,
+				`result = !${shellPython} -c ${shellQuote(child)}`,
 				"print('captured=' + str(len(result)) + ' return=' + str(result.returncode))",
 			].join("\n"),
 		);
@@ -144,7 +151,7 @@ describe("Python runner shell output streaming", () => {
 		const child = ["import sys", "sys.stdout.write('z' * (1024 * 1024 + 17))", "sys.stdout.flush()"].join(";");
 		const frames = await runCell(
 			[
-				`result = !${pythonPath} -c ${shellQuote(child)}`,
+				`result = !${shellPython} -c ${shellQuote(child)}`,
 				"print('capturedChars=' + str(len(result.n)) + ' return=' + str(result.returncode))",
 			].join("\n"),
 		);
@@ -165,7 +172,7 @@ describe("Python runner shell output streaming", () => {
 		const child = ["import sys", "data = sys.stdin.read()", "print('read=' + repr(data))"].join(";");
 		const frames = await runCell(
 			[
-				`result = !${pythonPath} -c ${shellQuote(child)}`,
+				`result = !${shellPython} -c ${shellQuote(child)}`,
 				"print('return=' + str(result.returncode) + ' lines=' + repr(list(result)))",
 			].join("\n"),
 		);
@@ -210,7 +217,7 @@ describe("Python runner shell output streaming", () => {
 			"sys.stdout.write('second')",
 			"sys.stdout.flush()",
 		].join(";");
-		const frames = await runCell(`%%bash\n${pythonPath} -c ${shellQuote(child)}`);
+		const frames = await runCell(`%%bash\n${bashPython} -c ${bashQuote(child)}`);
 		const stdout = frames.filter(frame => frame.type === "stdout").map(frame => frame.data);
 
 		expect(stdout[0]).toBe("first");

@@ -223,68 +223,94 @@ export function sessionDirForCwd(cwd: string, sessionsRoot: string = getSessions
 	return path.join(sessionsRoot, getDefaultSessionDirName(cwd).encodedDirName);
 }
 
-/** Session buckets for both backends, including removed worktrees whose sessions can be resumed. */
+/** Candidate worktree session buckets and their recorded-cwd membership checks. */
 export async function worktreeSessionDirs(
 	cwd: string,
 	sessionDir: string,
 	options: { settings?: Settings; stranded?: boolean } = {},
-): Promise<string[]> {
+): Promise<Map<string, (recordedCwd: string) => boolean>> {
+	const dirs = new Map<string, (recordedCwd: string) => boolean>();
 	const sessionsRoot = resolveManagedSessionRoot(sessionDir, cwd);
-	if (!sessionsRoot) return [];
+	if (!sessionsRoot) return dirs;
 	try {
 		const family = await worktreeFamily(cwd, options.settings);
-		if (!family) return [];
+		if (!family) return dirs;
 		const { primary, prefix, locations } = family;
-		const dirs = new Set(managedWorktreeSessionDirs(primary, prefix, sessionsRoot));
+		addManagedWorktreeSessionDirs(primary, prefix, sessionsRoot, dirs);
 		for (const location of locations) {
-			const dir = sessionDirForCwd(path.resolve(location.root, prefix), sessionsRoot);
-			if (options.stranded && location.offline) dirs.delete(dir);
-			else dirs.add(dir);
+			const expectedCwd = path.resolve(location.root, prefix);
+			const dir = path.resolve(sessionDirForCwd(expectedCwd, sessionsRoot));
+			if (options.stranded && location.offline) {
+				dirs.delete(dir);
+			} else {
+				const matches = dirs.get(dir);
+				dirs.set(
+					dir,
+					recordedCwd =>
+						// Only an enumerated checkout supplies evidence for legacy headers with no cwd.
+						!recordedCwd ||
+						(path.isAbsolute(recordedCwd) &&
+							(path.relative(expectedCwd, recordedCwd) === "" ||
+								matches?.(recordedCwd) === true ||
+								path.relative(resolveEquivalentPath(expectedCwd), resolveEquivalentPath(recordedCwd)) === "")),
+				);
+			}
 		}
 		dirs.delete(path.resolve(sessionDir));
-		return [...dirs];
+		return dirs;
 	} catch (error) {
 		logger.debug("Worktree session directory lookup failed", { cwd, error: String(error) });
-		return [];
+		return new Map();
 	}
 }
 
 /**
- * Session directories for the `prefix` folder of agent-managed worktrees of
- * the repository at `primaryRoot`, matched by directory name. Those worktrees
- * use `<slug>-<hashPath(primaryRoot)>[-<n>]` names. `/wt` can create them beside
- * any current cwd, not just the primary checkout; task/PR worktrees use the
- * managed base. The encoded name retains the repo hash after either is removed.
+ * Find candidate buckets for managed worktrees, even after Git prunes them.
+ * The bucket encoding flattens path separators, so only the cwd in a session
+ * header can distinguish a worktree named `topic-<hash>-2` from `topic-<hash>/2`.
  */
-function managedWorktreeSessionDirs(primaryRoot: string, prefix: string, sessionsRoot: string): string[] {
-	const suffix = encodeRelativeSessionDirName("", prefix.replace(/[/\\]+$/, ""));
+function addManagedWorktreeSessionDirs(
+	primaryRoot: string,
+	prefix: string,
+	sessionsRoot: string,
+	dirs: Map<string, (recordedCwd: string) => boolean>,
+): void {
+	const prefixParts = prefix ? path.normalize(prefix).split(path.sep).filter(Boolean) : [];
+	const relativeCwd = prefixParts.join(path.sep);
+	const suffix = encodeRelativeSessionDirName("", relativeCwd);
 	const suffixes = [suffix, `${suffix}--`];
 	// The name hashes the root as spelled when the worktree was made; a symlinked
 	// spelling (macOS `/tmp` vs `/private/tmp`) hashes differently, so accept both.
 	const hashes = new Set([hashPath(primaryRoot), hashPath(resolveEquivalentPath(primaryRoot))]);
-	const name = new RegExp(`(?:^|-)[\\w.-]+-(?:${[...hashes].join("|")})(?:-\\d+)?$`);
+	// resolveAvailableWorktreePath allocates the unsuffixed name or -2 through -100.
+	const worktreeName = `[\\w.-]+-(?:${[...hashes].join("|")})(?:-(?:[2-9]|[1-9]\\d|100))?$`;
+	const encodedName = new RegExp(`(?:^|-)${worktreeName}`);
+	const name = new RegExp(`^${worktreeName}`);
+	const matchesCwd = (recordedCwd: string): boolean => {
+		if (!path.isAbsolute(recordedCwd)) return false;
+		let root = path.resolve(recordedCwd);
+		for (let i = 0; i < prefixParts.length; i++) root = path.dirname(root);
+		return name.test(path.basename(root)) && path.relative(path.join(root, relativeCwd), recordedCwd) === "";
+	};
 	let entries: string[];
 	try {
 		entries = fs.readdirSync(sessionsRoot);
 	} catch {
-		return [];
+		return;
 	}
-	const dirs: string[] = [];
 	for (const entry of entries) {
-		// Match the exact subfolder suffix, including legacy absolute buckets'
-		// closing "--". The encoded parent can be anywhere; no session files are read.
+		// Match the encoded suffix, including legacy absolute buckets' closing "--".
 		if (!entry.startsWith("-")) continue;
 		for (const tail of suffixes) {
 			if (tail !== suffix && !entry.startsWith("--")) continue;
 			if (!entry.endsWith(tail)) continue;
 			const worktreePath = tail ? entry.slice(0, -tail.length) : entry;
-			if (name.test(worktreePath)) {
-				dirs.push(path.join(sessionsRoot, entry));
+			if (encodedName.test(worktreePath)) {
+				dirs.set(path.resolve(sessionsRoot, entry), matchesCwd);
 				break;
 			}
 		}
 	}
-	return dirs;
 }
 
 /**

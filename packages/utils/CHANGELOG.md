@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- File logging resumes after a temporary disk failure, and diagnostics can read logs from both configured and fallback directories.
+- Offline model caches use the selected performance directory without moving fallback executables to the implicit shared-memory cache.
 - SQLite salvage preserves healthy rows after corrupt pages.
 - Log fallback avoids replaying complete records and applies retention only to directories used for logging.
 

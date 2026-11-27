@@ -116,6 +116,7 @@ test.each([false, true])("shows the failed Bash tail and truthful artifact label
 		durationMs: 3200,
 		wallTimeMs: 3200,
 		wallTimeNoticeEmitted: true,
+		exitCode: 2,
 		errorText,
 		meta,
 	} as const;

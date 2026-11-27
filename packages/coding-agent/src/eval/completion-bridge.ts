@@ -43,6 +43,8 @@ import { ToolError } from "../tools/tool-errors";
 import {
 	findRetryFallbackCandidates,
 	getRetryFallbackChains,
+	isRetryFallbackWildcardKey,
+	parseRetryFallbackSelector,
 	type RetryFallbackResolutionContext,
 	resolveRetryFallbackChainKey,
 } from "../session/retry-fallback-chains";
@@ -232,19 +234,22 @@ function completionModelLookup(session: ToolSession, registry: ModelRegistry): M
  */
 function appendFallbackCandidates(
 	deps: FallbackExpansion,
-	selector: string,
+	defaultSelector: string,
 	model: Model<Api>,
 	parent: Pick<CompletionCandidate, "reasoning" | "disableReasoning"> | undefined,
 	roleHint: string | undefined,
 	seen: Set<string>,
 	expanded: Set<string>,
 	out: CompletionCandidate[],
+	exactSelector?: string,
 ): void {
+	const selector = exactSelector ?? defaultSelector;
 	// Nested calls fold in each candidate's inherited effort.
 	const visit = parent ? `${selector}|${parent.disableReasoning ? "off" : (parent.reasoning ?? "inherit")}` : selector;
 	if (expanded.has(visit)) return;
 	expanded.add(visit);
-	const chainKey = resolveRetryFallbackChainKey(deps.context, selector, model, roleHint);
+	// A literal key outranks the resolver's catalog-identity match, which can drop `:inherit` or a wire alias.
+	const chainKey = exactSelector ?? resolveRetryFallbackChainKey(deps.context, selector, model, roleHint);
 	if (!chainKey) return;
 	for (const entry of findRetryFallbackCandidates(deps.context, chainKey, selector, model, {
 		allowMissingPrimary: true,
@@ -288,30 +293,22 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 	const resolve = (
 		pattern: string | undefined,
 	):
-		| { model: Model<Api>; selector: string; chainSelector: string; configuredEffort?: ConfiguredThinkingLevel }
+		| {
+				model: Model<Api>;
+				selector: string;
+				matchedPatternIndex?: number;
+				configuredEffort?: ConfiguredThinkingLevel;
+		  }
 		| undefined => {
 		if (!pattern) return undefined;
 		const resolved = resolveModelRoleValue(pattern, available, { settings: session.settings, matchPreferences });
 		if (!resolved.model) return undefined;
-		const configuredEffort = concreteThinkingLevel(resolved.thinkingLevel);
-		const matchedPattern = resolveConfiguredModelPatterns(pattern, session.settings)[
-			resolved.matchedPatternIndex ?? 0
-		];
-		const requestedEffort = extractExplicitThinkingSelector(matchedPattern, session.settings, {
-			isLiteralModelId: (provider, id) =>
-				available.some(
-					model =>
-						(provider === undefined || model.provider.toLowerCase() === provider.toLowerCase()) &&
-						model.id.toLowerCase() === id.toLowerCase(),
-				),
-		});
-		// Match chains with the requested effort, before provider normalization.
-		// Keep routing pinned and the tier's provider-option semantics separate.
-		const chainSelector = formatModelSelectorValue(
-			formatModelStringWithRouting(resolved.model),
-			tier === "slow" ? (requestedEffort ?? configuredEffort) : undefined,
-		);
-		return { model: resolved.model, selector: pattern, chainSelector, configuredEffort };
+		return {
+			model: resolved.model,
+			selector: pattern,
+			matchedPatternIndex: resolved.matchedPatternIndex,
+			configuredEffort: concreteThinkingLevel(resolved.thinkingLevel),
+		};
 	};
 	const primary =
 		tier === "default"
@@ -332,10 +329,41 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 		tier === "slow" && primary.configuredEffort !== AUTO_THINKING ? primary.configuredEffort : undefined;
 	const inheritPrimary = shouldDisableReasoning(primaryLevel) || toReasoningEffort(primaryLevel) !== undefined;
 
+	const chains = getRetryFallbackChains(session.settings);
+	const matchedPattern = resolveConfiguredModelPatterns(primary.selector, session.settings)[
+		primary.matchedPatternIndex ?? 0
+	];
+	const routedSelector = formatModelStringWithRouting(primary.model);
+	const exact =
+		matchedPattern && Array.isArray(chains[matchedPattern]) && !isRetryFallbackWildcardKey(matchedPattern)
+			? parseRetryFallbackSelector(matchedPattern, modelRegistry)
+			: undefined;
+	// The matched pattern can also be fuzzy or a wildcard. Use the concrete
+	// identity in those cases and preserve the tier's existing effort policy.
+	const exactSelector =
+		exact &&
+		(tier === "slow" || exact.thinkingLevel === undefined) &&
+		(`${exact.provider}/${exact.id}` === routedSelector ||
+			(exact.provider === primary.model.provider &&
+				modelRegistry.find(exact.provider, exact.id)?.id === primary.model.id))
+			? exact.raw
+			: undefined;
+	const requestedEffort =
+		tier === "slow" && exactSelector === undefined
+			? (extractExplicitThinkingSelector(matchedPattern, session.settings, {
+					isLiteralModelId: (provider, id) =>
+						available.some(
+							model =>
+								(provider === undefined || model.provider.toLowerCase() === provider.toLowerCase()) &&
+								model.id.toLowerCase() === id.toLowerCase(),
+						),
+				}) ?? primary.configuredEffort)
+			: undefined;
+
 	appendFallbackCandidates(
 		{
 			context: {
-				chains: getRetryFallbackChains(session.settings),
+				chains,
 				getModelRole: (role: string) => session.settings.getModelRole(role),
 				modelLookup: modelRegistry,
 			},
@@ -346,13 +374,14 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 			// Offline, the primary resolved from the active provider's models.
 			offlineProvider: cfgOffline.get(session.settings) ? primary.model.provider : undefined,
 		},
-		primary.chainSelector,
+		formatModelSelectorValue(routedSelector, requestedEffort),
 		primary.model,
 		inheritPrimary ? candidates[0] : undefined,
 		tier,
 		new Set([candidateIdentity(primary.model, candidates[0])]),
 		new Set(),
 		candidates,
+		exactSelector,
 	);
 	return candidates;
 }

@@ -22,7 +22,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { postmortem, prompt } from "@oh-my-pi/pi-utils";
+import { postmortem, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import isolationErrorTemplate from "../prompts/tools/isolation-error.md" with { type: "text" };
 import isolationSummaryTemplate from "../prompts/tools/isolation-summary.md" with { type: "text" };
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
@@ -366,6 +366,8 @@ async function trackChanges(workspace: IsolationWorkspace, repoRoot: string): Pr
  * sidecar BEFORE the move so it travels atomically — a crash between rename
  * and a later write would leave a mounted workspace with a dead owner and
  * no metadata, and cleanup would traverse the live mount.
+ * An observer holding the configured cwd instead gets a unique slot at open
+ * and retains it in place, so its cleanup retry still reads the same path.
  */
 export interface RetainedWorkspace {
 	/** Workspace path to report (unique sibling on success, original dir when the move fails). */
@@ -382,6 +384,7 @@ export interface RetainedWorkspace {
 export async function retainIsolationWorkspace(
 	isolationDir: string,
 	backend?: natives.IsoBackendKind,
+	keepPath = false,
 ): Promise<RetainedWorkspace> {
 	const baseDir = path.dirname(isolationDir);
 	const needsSidecar = backend !== undefined && needsNativeTeardown(backend);
@@ -394,6 +397,7 @@ export async function retainIsolationWorkspace(
 			sidecarOk = false;
 		}
 	}
+	if (keepPath) return { dir: isolationDir, sidecarOk };
 	const retainedBase = await vacateIsolationSlot(baseDir);
 	return { dir: retainedBase ? path.join(retainedBase, path.basename(isolationDir)) : isolationDir, sidecarOk };
 }
@@ -453,16 +457,20 @@ export interface IsolationWorkspace {
 export type OpenWorkspace = (repoRoot: string, agentId: string) => Promise<IsolationWorkspace>;
 
 /** Workspaces materialised by the natives PAL, `backend` a hint (`undefined` ⇒ the resolver picks). */
-export function nativeWorkspace(backend: IsoBackendKind | undefined): OpenWorkspace {
+export function nativeWorkspace(backend: IsoBackendKind | undefined, preservePath = false): OpenWorkspace {
 	return async (repoRoot, agentId) => {
-		const handle = await ensureIsolation(repoRoot, agentId, backend);
+		const handle = await ensureIsolation(
+			repoRoot,
+			preservePath ? `${agentId}-${Snowflake.next()}` : agentId,
+			backend,
+		);
 		let dir = handle.mergedDir;
 		return {
 			get dir() {
 				return dir;
 			},
 			async retain() {
-				const retained = await retainIsolationWorkspace(dir, handle.backend);
+				const retained = await retainIsolationWorkspace(dir, handle.backend, preservePath);
 				dir = retained.dir;
 				return retained;
 			},
@@ -511,8 +519,8 @@ function renderIsolationError(context: IsolationErrorContext): string {
  * Kept-alive runs retain the isolation handle through idle/parked lifecycle
  * transitions, then capture final changes and clean up on release. One-shot
  * and failed startup paths clean up in `finally`. Capture and observation
- * failures retain the workspace under a unique `.retained-*` sibling for
- * recovery; a strict release retry resumes only unfinished stages.
+ * failures retain the workspace for recovery; a strict release retry resumes
+ * unfinished stages without invalidating an observer's configured cwd.
  */
 export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<SingleResult> {
 	let changes: RunChanges | undefined;

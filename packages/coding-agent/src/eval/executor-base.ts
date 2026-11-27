@@ -448,6 +448,8 @@ export interface SessionOwners {
 export interface DisposeByOwnerOptions {
 	/** Sessions with this (language-namespaced) session id keep their kernel and owner registration. */
 	keepSessionId?: string;
+	/** Report unconfirmed retained-kernel shutdowns after all shutdown attempts settle. */
+	strict?: boolean;
 }
 
 // ---------------------------------------------------------------------------

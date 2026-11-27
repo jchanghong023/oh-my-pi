@@ -33,12 +33,16 @@ import type {
 	TranscriptPresenter as PresenterFn,
 } from "../../extensibility/extensions/render-types";
 import type { AgentViewSession } from "../../session/agent-session-handle";
-import type { BashExecutionMessage, PythonExecutionMessage } from "../../session/transcript/messages";
+import {
+	type BashExecutionMessage,
+	type PythonExecutionMessage,
+	SKILL_PROMPT_MESSAGE_TYPE,
+} from "../../session/transcript/messages";
 import { isReplyWrite, replyDisplayMessage } from "../../session/transcript/reply-write";
 import { messageBlock, readTranscriptPresentation } from "../../session/transcript/transcript-presentation";
 import { capturePage } from "../../tools/browser/page-shot";
 import { type SpotlightDetails, spotlightDetails } from "../../tools/details/spotlight";
-import { isWaitingPollDetails } from "../../tools/details/wait";
+import { type CoordinationDetails, isWaitingPollDetails } from "../../tools/details/wait";
 import { presentShellInspector } from "../../ui/apps/shell-visualizer";
 import "../../ui/tools";
 // The terminal looks of what the presenter mounts (tool presenters register their own).
@@ -139,6 +143,13 @@ interface PendingRun {
 	readonly message: Signal<BashExecutionMessage | PythonExecutionMessage>;
 }
 
+interface SettledJobCard {
+	readonly type: "bash" | "eval";
+	readonly id: string;
+	readonly status: string;
+	readonly call: ToolCall;
+}
+
 /** See the module docs. */
 export class TranscriptPresenter {
 	readonly #host: PresenterHost;
@@ -161,11 +172,12 @@ export class TranscriptPresenter {
 		this.#host = host;
 	}
 
-	*#settledJobs(): Iterable<{ type: string; id: string; status: string }> {
+	*#settledJobs(visibleOnly = true): Iterable<SettledJobCard> {
 		for (const block of this.#host.shell.transcript.blocks()) {
 			const entry = (block as EntryTagged)[kEntry];
 			const call = entry?.kind === "tool" ? entry.tool.call : undefined;
-			if (!call || (call.name !== "bash" && call.name !== "eval") || call.facts.presentation() !== "full") continue;
+			if (!call || (call.name !== "bash" && call.name !== "eval")) continue;
+			if (visibleOnly && call.facts.presentation() !== "full") continue;
 			const result = call.facts.result();
 			const details = result?.details;
 			const job = isRecord(details) && isRecord(details.async) ? details.async : undefined;
@@ -178,7 +190,7 @@ export class TranscriptPresenter {
 				!result?.content.some(part => part.type === "text" && part.text?.trim())
 			)
 				continue;
-			yield { type: call.name, id: job.jobId, status: job.state };
+			yield { type: call.name, id: job.jobId, status: job.state, call };
 		}
 	}
 
@@ -426,6 +438,10 @@ export class TranscriptPresenter {
 		const packed = signal(false);
 		const factory = presented
 			? () => {
+					// Advisor notes and user-invoked skills stay visible when drawn in full;
+					// a presenter's compact row should follow the same visibility.
+					const alwaysVisible =
+						presented.customType === "advisor" || presented.customType === SKILL_PROMPT_MESSAGE_TYPE;
 					const fold = cardExpansion(display.toolOutputExpanded);
 					const presentation = computed(() => this.presentationOf(messageBlock(presented)));
 					this.#watchPresentation(() => block, presentation);
@@ -435,7 +451,7 @@ export class TranscriptPresenter {
 							presentation={presentation}
 							expanded={fold.expanded}
 							onToggle={fold.toggle}
-							activityVisible={() => !display.hideToolActivity()}
+							activityVisible={() => alwaysVisible || env.activityVisible()}
 							packed={packed}
 						>
 							{face.face({ expanded: fold.expanded, onToggle: expanded => fold.toggle(!expanded) })}
@@ -488,6 +504,7 @@ export class TranscriptPresenter {
 		const editMode = toolEditMode(spec.name, spec.tool);
 		if (editMode) call.setRenderContext({ editMode });
 		const presentedId = signal(spec.id);
+		const waitSources = builtIn && spec.name === "wait" ? signal<SettledJobCard[]>([]) : undefined;
 		const factory = () => {
 			effect(() => {
 				const value = display.toolOutputExpanded();
@@ -518,6 +535,25 @@ export class TranscriptPresenter {
 				untrack(() => call.setPresentation(presentation));
 			});
 			this.#watchPresentation(() => block, answer);
+			if (waitSources) {
+				const settledBashJobs = computed(() => {
+					let jobs: Map<string, string> | undefined;
+					for (const source of waitSources()) {
+						if (source.call.facts.presentation() === "full") (jobs ??= new Map()).set(source.id, source.status);
+					}
+					return jobs;
+				});
+				call.setRenderContext({
+					get settledBashJobs() {
+						return settledBashJobs();
+					},
+				});
+				// A source card can change without the Wait card's own presenter changing.
+				this.#watchPresentation(
+					() => block,
+					() => [...(settledBashJobs() ?? [])],
+				);
+			}
 			// The Spotlight notice of a shaped result rides after its card (native only: the terminal draws nothing).
 			const notice = (): JSXNode => {
 				const result = call.facts.result();
@@ -540,14 +576,25 @@ export class TranscriptPresenter {
 			updateArgs: args => call.updateArgs(args),
 			updateStreamPreview: preview => call.updateStreamPreview(preview),
 			updateResult: (result, partial) => {
-				if (builtIn && spec.name === "wait") {
-					const settledBashJobs = new Map<string, string>();
-					for (const job of this.#settledJobs()) {
-						if (job.type === "bash") settledBashJobs.set(job.id, job.status);
+				batch(() => {
+					if (waitSources) {
+						const sources: SettledJobCard[] = [];
+						const jobs = (result.details as CoordinationDetails | undefined)?.jobs;
+						if (Array.isArray(jobs) && jobs.some(job => job.type === "bash" && job.status !== "running")) {
+							// Keep the sources even when hidden; their live presentation decides deduplication.
+							for (const source of this.#settledJobs(false)) {
+								if (
+									source.type === "bash" &&
+									jobs.some(job => job.type === "bash" && job.id === source.id && job.status === source.status)
+								) {
+									sources.push(source);
+								}
+							}
+						}
+						waitSources.set(sources);
 					}
-					call.setRenderContext({ settledBashJobs });
-				}
-				batch(() => call.updateResult(result, partial));
+					call.updateResult(result, partial);
+				});
 				settleIfFinal(result, partial);
 			},
 			setArgsComplete: () => call.setArgsComplete(),

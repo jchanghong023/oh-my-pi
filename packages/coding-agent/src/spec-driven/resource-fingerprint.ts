@@ -42,6 +42,7 @@ export async function specDrivenSourceFingerprint(
 		"src/spec-driven/resource-fingerprint.ts",
 		"src/spec-driven/resource-inventory.ts",
 		"src/spec-driven/resource-archive.ts",
+		"src/spec-driven/resource-path.ts",
 		"src/spec-driven/resources.ts",
 	]) {
 		await visit(entry);

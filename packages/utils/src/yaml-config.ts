@@ -32,12 +32,13 @@ export function setYamlConfigValue(source: string, keys: readonly string[], valu
 		const pair = isMap(parent)
 			? parent.items.find(item => isScalar(item.key) && String(item.key.value) === key)
 			: undefined;
+		// A valueless YAML pair exists even though getIn returns undefined for it.
+		if (value === undefined && !pair) return source;
 		resolvedKeys.push(pair ? pair.key : key);
 		const node = doc.getIn(resolvedKeys, true);
 		if (isAlias(node)) doc.setIn(resolvedKeys, expandAlias(node));
 	}
 	const existing = doc.getIn(resolvedKeys, true);
-	if (value === undefined && existing === undefined) return source;
 	const changedNodes = new Set<Node>();
 	for (let length = 0; length < keys.length; length++) {
 		const ancestor = doc.getIn(resolvedKeys.slice(0, length), true);

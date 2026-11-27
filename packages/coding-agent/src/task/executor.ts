@@ -13,6 +13,7 @@ import { AgentBusyError, extractIntent, recordHandoff, resolveTelemetry } from "
 import type { Api, AssistantMessageEvent, Model, ServiceTierByFamily, ToolCall, Usage } from "@oh-my-pi/pi-ai";
 import { SERVICE_TIER_FAMILIES } from "@oh-my-pi/pi-ai/types";
 import { isCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import {
 	isRecord,
 	logger,
@@ -40,6 +41,7 @@ import { replaceTabs } from "../utils/text-width";
 import { diffStats, type EditMode, getEditInputPaths } from "../tools/details/edit";
 import {
 	formatModelStringWithRouting,
+	getModelMatchPreferences,
 	resolveAgentAdvisorRolePattern,
 	resolveAgentAdvisorSelection,
 	resolveAgentPrewalkPattern,
@@ -48,6 +50,8 @@ import {
 	resolveExplicitModelRole,
 	resolveModelOverride,
 	resolveModelOverrideWithAuthFallback,
+	resolveModelPatternCandidates,
+	resolveModelRoleValue,
 } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import {
@@ -357,14 +361,24 @@ function resolveSubagentRetryFallbackCandidates(
 	settings: Settings,
 	allowedProvider: string | null | undefined,
 ): SubagentRetryFallbackCandidate[] {
+	const patterns = resolveModelPatternCandidates(modelPatterns, settings);
+	if (patterns.length === 0) return [];
 	const candidates: SubagentRetryFallbackCandidate[] = [];
 	const seen = new Set<string>();
 	const disabledProviders = new Set(cfgDisabledProviders.get(settings));
-	for (const pattern of modelPatterns) {
-		const resolved = resolveModelOverride([pattern], modelRegistry, settings);
+	const availableModels = modelRegistry.getAvailable();
+	const enabledModels =
+		disabledProviders.size === 0 && allowedProvider === undefined
+			? availableModels
+			: availableModels.filter(
+					model =>
+						!disabledProviders.has(model.provider) &&
+						(allowedProvider === undefined || model.provider === allowedProvider),
+				);
+	const matchPreferences = getModelMatchPreferences(settings);
+	for (const { pattern, automatic } of patterns) {
+		const resolved = resolveModelRoleValue(pattern, enabledModels, { settings, matchPreferences, automatic });
 		if (!resolved.model) continue;
-		const { provider } = resolved.model;
-		if (disabledProviders.has(provider) || (allowedProvider !== undefined && provider !== allowedProvider)) continue;
 		const selector = resolved.explicitThinkingLevel
 			? formatModelSelectorValue(formatModelStringWithRouting(resolved.model), resolved.thinkingLevel)
 			: formatModelStringWithRouting(resolved.model);
@@ -421,10 +435,7 @@ function installSubagentRetryFallbackChain(args: {
 	const { settings, id, candidates, inheritedFallbackChain, model, authFallbackUsed } = args;
 	if (!model || authFallbackUsed || candidates.length === 0) return undefined;
 
-	const modelIdentity = formatModelStringWithRouting(model);
-	const selectedIndex = candidates.findIndex(
-		candidate => formatModelStringWithRouting(candidate.model) === modelIdentity,
-	);
+	const selectedIndex = candidates.findIndex(candidate => routedModelsAreEqual(candidate.model, model));
 	if (selectedIndex < 0) return undefined;
 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
 	// A single configured model may reuse its role's (or the default) configured chain, but never an implicit parent fallback.
@@ -4078,18 +4089,32 @@ export async function finalizeSubagentLifecycle(args: {
 	};
 
 	if (!args.keepAlive && args.retainRecord && ref?.sessionFile && ownsRef) {
-		try {
-			await AgentLifecycleManager.global().release(args.id, ref, {
+		const cleanupSignal = AbortSignal.timeout(Math.max(0, cleanupDeadlineAt - Date.now()));
+		const retention = AgentLifecycleManager.global()
+			.release(args.id, ref, {
 				retainRecord: true,
 				dispose: args.abortKind === "shutdown" ? { reason: postmortem.Reason.EXIT } : undefined,
+			})
+			.then(released => {
+				if (!released) throw new Error("the subagent session is no longer owned");
+				return releaseOwnedResources();
 			});
-		} catch (error) {
+		const retentionFailure = (error: unknown): string => {
 			const message = error instanceof Error ? error.message : String(error);
 			logger.warn("Failed to retain subagent execution record", { id: args.id, error: message });
 			return `Failed to retain subagent execution record: ${message}`;
+		};
+		// A deadline only hands cleanup off; an actual rejection is still
+		// reported, even if retention finishes after the run result is returned.
+		try {
+			return await untilAborted(
+				cleanupSignal,
+				retention.then(() => undefined, retentionFailure),
+			);
+		} catch {
+			args.onCleanupDeferred?.(retention);
+			return;
 		}
-		await releaseOwnedResources();
-		return;
 	}
 
 	// An aborted run leaves a consistent session with its transcript on disk, so
@@ -4726,22 +4751,34 @@ export async function replayRevivedAgentStart(session: AgentSession): Promise<vo
  */
 function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 	return async expectedAgentRef => {
+		const { hooks, request } = capture.spec;
 		// Warm revival must consult live authority again, never replay its old capability grant.
-		if (capture.spec.hooks && capture.spec.request) {
-			await capture.spec.hooks.beforeSpawn(capture.spec.request);
-		}
+		if (hooks && request) await hooks.beforeSpawn(request);
+		let session: AgentSession;
 		try {
-			return await reviveAdmittedSubagent(capture, expectedAgentRef);
+			session = await reviveAdmittedSubagent(capture, expectedAgentRef);
 		} catch (error) {
-			if (capture.spec.request) {
+			if (request) {
 				try {
-					await capture.spec.hooks?.onSpawnFailed?.(capture.spec.request, error);
+					await hooks?.onSpawnFailed?.(request, error);
 				} catch {
 					// Keep the real revival failure even if admission cleanup fails.
 				}
 			}
 			throw error;
 		}
+		if (request) {
+			try {
+				// Admission is complete, but revival itself produced no task result.
+				await hooks?.onSettled?.(request, undefined);
+			} catch (error) {
+				logger.warn("Subagent revival settlement observer failed", {
+					id: expectedAgentRef.id,
+					error: String(error),
+				});
+			}
+		}
+		return session;
 	};
 }
 
@@ -6030,13 +6067,20 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			aborted = outcome.aborted;
 			abortReasonText = outcome.abortReasonText;
 		} catch (err) {
-			// Configuration and other pre-SDK setup can fail after opening the
-			// transcript; close our writer before the caller removes its lease.
-			await unclaimedSessionManager
-				?.then(manager => manager.close())
-				.catch(cleanupError => {
-					logger.warn("Subagent session manager cleanup failed", { id, error: String(cleanupError) });
-				});
+			if (unclaimedSessionManager) {
+				// The open may outlive cancellation. Keep its writer owned until it
+				// can be closed, but don't wait for unabortable I/O on the abort path.
+				const cleanup = unclaimedSessionManager
+					.then(manager => manager.close())
+					.catch(cleanupError => {
+						logger.warn("Subagent session manager cleanup failed", { id, error: String(cleanupError) });
+					});
+				try {
+					await awaitAbortable(cleanup);
+				} catch {
+					abandonedSession = cleanup;
+				}
+			}
 			exitCode = 1;
 			if (!abortSignal.aborted) {
 				error = err instanceof Error ? err.stack || err.message : String(err);

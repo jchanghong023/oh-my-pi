@@ -126,10 +126,7 @@ pub trait SessionCommandHandler: Send + Sync {
 ///
 /// Cheap to clone; clones share the names and the handler.
 #[derive(Clone)]
-pub struct SessionCommands(Arc<CommandState>);
-
-#[derive(Clone)]
-struct CommandState {
+pub struct SessionCommands {
 	/// Sorted, without duplicates: a session command's [`NativeRef`] is
 	/// [`FIRST_REF`] plus its index.
 	names:   Arc<[BString]>,
@@ -141,7 +138,7 @@ struct CommandState {
 impl fmt::Debug for SessionCommands {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("SessionCommands")
-			.field("names", &self.0.names)
+			.field("names", &self.names)
 			.finish_non_exhaustive()
 	}
 }
@@ -155,13 +152,12 @@ impl SessionCommands {
 		let mut names: Vec<BString> = names.into_iter().map(BString::from).collect();
 		names.sort_unstable();
 		names.dedup();
-		Self(Arc::new(CommandState { names: names.into(), handler, ended: CancellationToken::new() }))
+		Self { names: names.into(), handler, ended: CancellationToken::new() }
 	}
 
 	/// The [`NativeRef`] of the command `name`, if it is one of these.
 	pub(crate) fn lookup(&self, name: &BStr) -> Option<NativeRef> {
 		let index = self
-			.0
 			.names
 			.binary_search_by(|probe| probe.as_bstr().cmp(name))
 			.ok()?;
@@ -184,7 +180,7 @@ impl SessionCommands {
 		inv: Invocation<'_>,
 	) -> io::Result<CommandTask> {
 		let name = command_index(cmd)
-			.and_then(|index| self.0.names.get(index))
+			.and_then(|index| self.names.get(index))
 			.ok_or(io::ErrorKind::NotFound)?
 			.to_str_lossy()
 			.into_owned();
@@ -210,8 +206,8 @@ impl SessionCommands {
 			stdin,
 			stdout,
 			stderr,
-			handler: Arc::clone(&self.0.handler),
-			ended: self.0.ended.clone(),
+			handler: Arc::clone(&self.handler),
+			ended: self.ended.clone(),
 			cancel: cancel.clone(),
 		};
 		Ok(CommandTask { done: extras::spawn_status(runtime, call.run()), cancel })
@@ -279,14 +275,10 @@ fn command_index(cmd: NativeRef) -> Option<usize> {
 pub(crate) struct RunLease(SessionCommands);
 
 impl RunLease {
-	/// A lease on `commands` for one run.
-	pub(crate) fn new(mut commands: SessionCommands) -> Self {
-		// A freshly built catalog already owns its token. Split only when the
-		// caller retained a clone, so simultaneous runs cannot cancel each other.
-		if Arc::get_mut(&mut commands.0).is_none() {
-			Arc::make_mut(&mut commands.0).ended = CancellationToken::new();
-		}
-		Self(commands)
+	/// A lease on `commands` for one run. Already-started calls can still
+	/// hold the catalog's old token, even when the catalog itself was moved.
+	pub(crate) fn new(commands: SessionCommands) -> Self {
+		Self(SessionCommands { ended: CancellationToken::new(), ..commands })
 	}
 
 	/// The commands, for the session runs of this run.
@@ -297,7 +289,7 @@ impl RunLease {
 
 impl Drop for RunLease {
 	fn drop(&mut self) {
-		self.0.0.ended.cancel();
+		self.0.ended.cancel();
 	}
 }
 

@@ -32,7 +32,7 @@ import {
 	readArchiveEntries,
 	writeArchive,
 } from "@oh-my-pi/pi-utils/ar";
-import { withWritethroughMutationLocks } from "../lsp/writethrough";
+import { withEditorWriteMutationLock, withWritethroughMutationLocks } from "../lsp/writethrough";
 import { detectLineEnding, normalizeToLF, restoreLineEndings } from "../edit/normalize";
 
 import { InternalUrlRouter, sessionResolveContext, sessionWriteContext } from "../internal-urls";
@@ -107,7 +107,10 @@ function writeReceipt(
 	const details: WriteToolDetails = { resolvedPath };
 	if (diagnostics) details.diagnostics = diagnostics;
 	details.madeExecutable = madeExecutable || undefined;
-	if (diagnostics) details.meta = outputMeta().diagnostics(diagnostics.summary, diagnostics.messages ?? []).get();
+	if (diagnostics)
+		details.meta = outputMeta()
+			.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
+			.get();
 	return { content: [{ type: "text", text }], details };
 }
 
@@ -1107,24 +1110,19 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			emitWriteProgress(onUpdate, writeBytes, displayPath, absolutePath);
 
-			return withWritethroughMutationLocks(
-				[absolutePath],
-				batchRequest?.flush ? batchRequest.id : undefined,
-				async (): Promise<AgentToolResult<WriteToolDetails>> => {
-					signal?.throwIfAborted();
-					const before = this.session.recordFileChange ? await readSnapshot(absolutePath) : undefined;
-					const journal = (after: string) => {
-						if (!before) return;
-						this.session.recordFileChange?.({
-							path: absolutePath,
-							tool: "write",
-							before: before.text,
-							after,
-						});
-					};
+			const beginJournal = async () => {
+				const before = this.session.recordFileChange ? await readSnapshot(absolutePath) : undefined;
+				return (after: string) => {
+					if (!before) return;
+					this.session.recordFileChange?.({ path: absolutePath, tool: "write", before: before.text, after });
+				};
+			};
 
-					// Try ACP bridge first for editor-visible filesystem paths. Internal
-					// artifacts such as local:// plans are owned by OMP, not the editor.
+			// Only the editor-owned transport can proceed without local path traversal.
+			if (editorOwnsFile) {
+				const result = await withEditorWriteMutationLock(absolutePath, async () => {
+					signal?.throwIfAborted();
+					const journal = await beginJournal();
 					const bridgeWrite = await routeWriteThroughBridge(
 						this.session,
 						path,
@@ -1132,17 +1130,22 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						cleanContent,
 						signal,
 					);
-					if (bridgeWrite) {
-						journal(bridgeWrite.text);
-						// `write` always replaces the whole file, so (unlike hashline's
-						// hunk-scoped diff) there's no size cost to keying the header/
-						// executable-bit check on the verified post-write content —
-						// use it so a drifted write (e.g. client format-on-save) still
-						// hands back a tag that matches what's actually on disk.
-						const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, bridgeWrite.text);
-						const header = maybeWriteSnapshotHeader(this.session, absolutePath, bridgeWrite.text, displayPath);
-						return writeReceipt(absolutePath, displayPath, cleanBytes, header, stripped, madeExecutable);
-					}
+					if (!bridgeWrite) return undefined;
+					journal(bridgeWrite.text);
+					// Base the header and executable bit on verified content, including format-on-save.
+					const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, bridgeWrite.text);
+					const header = maybeWriteSnapshotHeader(this.session, absolutePath, bridgeWrite.text, displayPath);
+					return writeReceipt(absolutePath, displayPath, cleanBytes, header, stripped, madeExecutable);
+				});
+				if (result) return result;
+			}
+
+			return withWritethroughMutationLocks(
+				[absolutePath],
+				batchRequest?.flush ? batchRequest.id : undefined,
+				async (): Promise<AgentToolResult<WriteToolDetails>> => {
+					signal?.throwIfAborted();
+					const journal = await beginJournal();
 
 					const { writethrough, deferred } = this.#lspWritethrough();
 					// Linters read a shebang's execute bits (Ruff's EXE001), so they are set once the final

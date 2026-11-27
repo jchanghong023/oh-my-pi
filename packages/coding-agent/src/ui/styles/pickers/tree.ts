@@ -19,7 +19,7 @@ import {
 	scrollWindow,
 	sheetHit,
 } from "@oh-my-pi/pi-tui/term/painters/picker";
-import { padTo, truncate, wrap } from "@oh-my-pi/pi-tui/text/width";
+import { padTo, replaceTabs, truncate, wrapChars } from "@oh-my-pi/pi-tui/text/width";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
 import { caretField } from "./common";
@@ -170,9 +170,10 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 			hits.push({ row: head.length + 2 + body.length, col: 2, width: inner, height: 1, node, item: row.id });
 			body.push(bar ? `${padTo(line, rowWidth)}${bar[i - start]}` : line);
 			if (selected && term.details) {
-				const detailRows = wrap(term.details, Math.max(1, rowWidth - 2));
+				const indent = rowWidth >= 4 ? "  " : "";
+				const detailRows = wrapChars(replaceTabs(term.details), Math.max(1, rowWidth - indent.length));
 				const offset = term.clampDetailScroll(Math.max(0, detailRows.length - detailHeight));
-				for (const detail of detailRows.slice(offset, offset + detailHeight)) body.push(`  ${detail}`);
+				for (const detail of detailRows.slice(offset, offset + detailHeight)) body.push(`${indent}${detail}`);
 			}
 		}
 	}

@@ -25,8 +25,9 @@
 //!    and `SIGTTOU`;
 //! 2. `vfork`s a child that unblocks every signal and execs `PATH` with `ARGV`,
 //!    reporting a failed exec on a close-on-exec pipe;
-//! 3. writes the exec's errno (0: the program runs) as a native `i32`, and
-//!    closes every fd below `FD`, so the pipes the program holds end with it;
+//! 3. writes the exec's errno (0: the program runs) and operand PID as two
+//!    native `i32`s, and closes every fd below `FD`, so the pipes the program
+//!    holds end with it;
 //! 4. waits for the program and writes its `struct rusage`;
 //! 5. exits with the program's status, or dies of the signal that killed it
 //!    (core dumps off: the program dumped already).
@@ -34,10 +35,11 @@
 //! The helper leads or joins the group the program would have and the
 //! program shares it, so signals to the group reach the program itself; the
 //! helper holds them blocked and reports once the program is gone. The
-//! terminal stops it with the program, as they stop GNU time. Spawns that
-//! signal the pid alone ([`super::Place::Inherit`]), ignore `SIGCHLD` (the
-//! helper could not wait) or apply redirections in the child skip the
-//! helper.
+//! terminal stops it with the program, as they stop GNU time. Foreground
+//! timeout waves use the reported PID to pin and signal just the operand.
+//! Spawns that signal the pid alone ([`super::Place::Inherit`]), ignore
+//! `SIGCHLD` (the helper could not wait) or apply redirections in the child
+//! skip the helper.
 
 use std::{
 	fs::File,
@@ -72,9 +74,9 @@ std::arch::global_asm!(
 	".globl __omp_time_helper",
 	".hidden __omp_time_helper",
 	"__omp_time_helper:",
-	// Frame (rbx): exec errno +0, signal set +8, wait status +16, rusage
-	// +24, zeroed sigaction (SIG_DFL) +168, zeroed rlimit and empty signal
-	// set +200, exec pipe +216.
+	// Frame (rbx): exec errno +0, operand PID +4, signal set +8, wait
+	// status +16, rusage +24, zeroed sigaction (SIG_DFL) +168, zeroed
+	// rlimit and empty signal set +200, exec pipe +216.
 	"mov r12, rsp",
 	"and rsp, -16",
 	"sub rsp, 224",
@@ -125,6 +127,7 @@ std::arch::global_asm!(
 	"jz .Lomp_child",
 	"js .Lomp_forkfail",
 	"mov r14, rax",
+	"mov dword ptr [rbx + 4], eax",
 	// close(write end); read(read end, errno, 4): end of file once the
 	// program runs (an emulated vfork may not wait for the exec)
 	"mov eax, 3",
@@ -135,11 +138,11 @@ std::arch::global_asm!(
 	"mov rsi, rbx",
 	"mov edx, 4",
 	"syscall",
-	// write(FD, errno, 4)
+	// write(FD, {errno, operand PID}, 8)
 	"mov eax, 1",
 	"mov rdi, r13",
 	"mov rsi, rbx",
-	"mov edx, 4",
+	"mov edx, 8",
 	"syscall",
 	// close every fd below FD
 	"xor r15d, r15d",
@@ -223,7 +226,7 @@ std::arch::global_asm!(
 	"mov eax, 1",
 	"mov rdi, r13",
 	"mov rsi, rbx",
-	"mov edx, 4",
+	"mov edx, 8",
 	"syscall",
 	".Lomp_fail:",
 	"mov edi, 127",
@@ -330,6 +333,7 @@ std::arch::global_asm!(
 	"cbz x0, .Lomp_child",
 	"tbnz x0, #63, .Lomp_forkfail",
 	"mov x22, x0",
+	"str w0, [x20, #4]",
 	// close(write end); read(read end, errno, 4): end of file once the
 	// program runs (an emulated vfork may not wait for the exec)
 	"ldr w0, [x20, #220]",
@@ -340,10 +344,10 @@ std::arch::global_asm!(
 	"mov x2, #4",
 	"mov x8, #63",
 	"svc #0",
-	// write(FD, errno, 4)
+	// write(FD, {errno, operand PID}, 8)
 	"mov x0, x21",
 	"mov x1, x20",
-	"mov x2, #4",
+	"mov x2, #8",
 	"mov x8, #64",
 	"svc #0",
 	// close every fd below FD
@@ -425,7 +429,7 @@ std::arch::global_asm!(
 	"str w0, [x20]",
 	"mov x0, x21",
 	"mov x1, x20",
-	"mov x2, #4",
+	"mov x2, #8",
 	"mov x8, #64",
 	"svc #0",
 	".Lomp_fail:",
@@ -604,6 +608,14 @@ pub(super) struct Report {
 	target: i32,
 }
 
+/// The helper's operand PID and final usage pipe.
+pub(super) struct Started {
+	reader:                  File,
+	pub(super) operand:      i32,
+	/// A foreground wave narrowed later abandonment to this operand.
+	pub(super) operand_only: bool,
+}
+
 impl Report {
 	/// Add the write end of the helper's pipe to `fds` (last, above every
 	/// target), unless the helper is unavailable.
@@ -630,11 +642,11 @@ impl Report {
 	}
 
 	/// Spawn `prog` under the helper with `fds` (the write end last, taken
-	/// out once the helper runs); the pid and placement of the helper and
-	/// the pipe to read its `rusage` from after the exit. When the helper
-	/// cannot be exec'd, `direct` spawns the program with its own fds
-	/// instead, without a pipe. A program the helper failed to exec fails
-	/// the spawn with the exec's error, as a direct spawn would.
+	/// out once the helper runs); the helper's pid and placement, and the
+	/// operand PID and usage pipe. When the helper cannot be exec'd,
+	/// `direct` spawns the program with its own fds instead, without a pipe.
+	/// A program the helper failed to exec fails the spawn with the exec's
+	/// error, as a direct spawn would.
 	pub(super) fn launch(
 		self,
 		state: &State,
@@ -642,7 +654,7 @@ impl Report {
 		fds: &mut Vec<(i32, Source)>,
 		place: Place,
 		direct: impl FnOnce(&[(i32, Source)]) -> io::Result<(i32, Place)>,
-	) -> (io::Result<(i32, Place)>, Option<File>) {
+	) -> (io::Result<(i32, Place)>, Option<Started>) {
 		let Some(helper) = HELPER.as_ref() else {
 			fds.pop();
 			return (direct(fds), None);
@@ -661,24 +673,29 @@ impl Report {
 		let Ok((pid, place)) = launched else {
 			return (direct(fds), None);
 		};
-		let mut errno = [0; 4];
+		let mut reader = self.reader;
+		let mut header = [0; 8];
 		// End of file: the helper died before the exec; its status tells.
-		if (&self.reader).read_exact(&mut errno).is_ok() {
-			let errno = i32::from_ne_bytes(errno);
+		let operand = if reader.read_exact(&mut header).is_ok() {
+			let [e0, e1, e2, e3, p0, p1, p2, p3] = header;
+			let errno = i32::from_ne_bytes([e0, e1, e2, e3]);
 			if errno != 0 {
 				reap(pid);
 				return (Err(io::Error::from_raw_os_error(errno)), None);
 			}
-		}
-		(Ok((pid, place)), Some(self.reader))
+			i32::from_ne_bytes([p0, p1, p2, p3])
+		} else {
+			0
+		};
+		(Ok((pid, place)), Some(Started { reader, operand, operand_only: false }))
 	}
 }
 
 /// The program's `rusage` the helper reported through `reader` before it
 /// exited; `None` when it ended before the program did.
-pub(super) fn usage(mut reader: File) -> Option<libc::rusage> {
+pub(super) fn usage(mut report: Started) -> Option<libc::rusage> {
 	let mut raw = [0u8; size_of::<libc::rusage>()];
-	reader.read_exact(raw.get_mut(..RUSAGE)?).ok()?;
+	report.reader.read_exact(raw.get_mut(..RUSAGE)?).ok()?;
 	// SAFETY: `raw` starts with the kernel's `struct rusage`, the prefix
 	// libc's type shares; any tail (musl's reserved fields) stays zero. Plain
 	// data.

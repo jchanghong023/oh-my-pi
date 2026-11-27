@@ -14,6 +14,7 @@ import {
 	openSqliteDatabaseSync,
 	VERSION,
 } from "@oh-my-pi/pi-utils";
+import { prepareModelCacheDirectory } from "@oh-my-pi/pi-utils/dirs";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import RULES from "./compat/rules.json" with { type: "json" };
 import type { Api, Model } from "./types";
@@ -457,6 +458,7 @@ function runModelCacheDb<T>(resolvedPath: string, shared: boolean, useDb: (db: D
 		}
 	}
 
+	prepareModelCacheDirectory(resolvedPath);
 	return openSqliteDatabaseSync(
 		resolvedPath,
 		db => {

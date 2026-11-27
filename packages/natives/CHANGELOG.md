@@ -13,11 +13,19 @@
 
 ### Fixed
 
+- Git mutations return the result of writes already started, preserve the real index during scoped commits, and record commits in the current worktree's HEAD reflog.
+- Windows rsync keeps file lists relative to the chosen source and preserves symbolic link destination paths.
+- The native loader can use an external addon when the private cache cannot be created.
 - Preserved model tables and meaningful button labels while removing unrelated news and footer content from URL reads.
 - Kept sign-in instructions next to login prompts and omitted empty whitespace-only Markdown paragraphs.
 - Preserved source-code indentation and linked content cards in URL reads.
 
 - The linux-gnu native addon no longer links against `libm.so.6` for the Perl `POSIX` builtin's `acosh` and `asinh` ([#20522](https://github.com/can1357/oh-my-pi/pull/20522) by [@pedropaulovc](https://github.com/pedropaulovc))
+
+### Release Notes Errata
+
+- **18.22.0 — Added:** `VcsGitRepo.remoteDefaultBranch()` queries a Git remote for its current default branch. The original entry sits before the first category heading and was omitted from aggregated notes.
+- **18.12.1 — Fixed:** Repeated parsing with a downloaded WASM grammar such as C# no longer grows native memory without bound ([#16067](https://github.com/can1357/oh-my-pi/issues/16067)). This fix belongs to 18.12.1, not the uncategorized duplicate 18.11.3 section.
 
 ## [19.2.1] - 2026-11-25
 

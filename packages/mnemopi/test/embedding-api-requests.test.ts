@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 import { initBeam } from "@oh-my-pi/pi-mnemopi/core/beam";
-import { embed, resetEmbeddingProviderForTests } from "@oh-my-pi/pi-mnemopi/core/embeddings";
+import { embed, embedConfiguredApi, resetEmbeddingProviderForTests } from "@oh-my-pi/pi-mnemopi/core/embeddings";
 import { Mnemopi } from "@oh-my-pi/pi-mnemopi/core/memory";
 import { withMnemopiRuntimeOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
 
@@ -23,6 +23,7 @@ interface FakeServer {
 function startServer(handler?: (call: number) => Response | undefined): FakeServer {
 	const sizes: number[] = [];
 	const server = Bun.serve({
+		hostname: "127.0.0.1",
 		port: 0,
 		async fetch(req) {
 			const body = (await req.json()) as { input: string[] };
@@ -72,6 +73,34 @@ describe("embed() against an API with a per-request input cap", () => {
 		const matrix = await run(server.url, () => embed(texts));
 		expect(matrix).toBeNull();
 		expect(server.sizes).toHaveLength(2);
+	});
+
+	it("returns no partial matrix when otherwise valid API batches disagree on dimensions in strict mode", async () => {
+		const model = "text-embedding-v4";
+		server = startServer(call =>
+			call === 2
+				? Response.json({
+						model,
+						data: Array.from({ length: LIMIT }, (_, index) => ({ index, embedding: [1, 2] })),
+					})
+				: undefined,
+		);
+		const texts = Array.from({ length: 25 }, (_, i) => String(i));
+		const matrix = await withMnemopiRuntimeOptions(
+			{
+				embeddings: {
+					disabled: false,
+					model,
+					apiUrl: server.url,
+					apiKey: "test-key",
+					batchSize: LIMIT,
+					strictApi: true,
+				},
+			},
+			() => embedConfiguredApi(texts),
+		);
+		expect(matrix).toBeNull();
+		expect(server.sizes).toEqual([10, 10]);
 	});
 
 	it("returns null when the API returns fewer vectors than texts", async () => {

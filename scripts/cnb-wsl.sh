@@ -64,7 +64,7 @@ else
   started=$SECONDS
   # Bun marks workspace bin entrypoints executable while linking dependencies.
   cli_mode=$(stat -c '%a' packages/coding-agent/src/cli.ts)
-  bun install --frozen-lockfile
+  OMP_SKIP_OPENWIKI_POSTINSTALL=1 bun install --frozen-lockfile
   chmod "$cli_mode" packages/coding-agent/src/cli.ts
   echo "Linux dependencies elapsed: $((SECONDS - started))s"
   started=$SECONDS

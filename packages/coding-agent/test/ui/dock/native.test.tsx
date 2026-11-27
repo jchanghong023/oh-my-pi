@@ -6,7 +6,7 @@
  * the HUDs whose describers were private to the interactive mode (todo,
  * pills), written out here.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createRoot, type JSXNode, resolveChildren, type UiNode } from "@oh-my-pi/pi-tui";
 import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
 import { describeTree, firstDiff } from "@oh-my-pi/pi-tui/testing/corpus";
@@ -34,6 +34,7 @@ import {
 	WorkingRow,
 	type WorkingSpec,
 } from "../../../src/ui/dock";
+import { setKeyHintPlatform } from "../../../src/ui/keys/format";
 import fixtures from "./native-fixtures.json";
 
 const NOW = 1_700_000_000_000;
@@ -151,6 +152,9 @@ describe("working row", () => {
 });
 
 describe("queued messages", () => {
+	beforeEach(() => setKeyHintPlatform("darwin"));
+	afterEach(() => setKeyHintPlatform(undefined));
+
 	test("two groups", () => {
 		const model = new QueueModel();
 		model.groups.set([

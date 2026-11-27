@@ -2220,7 +2220,12 @@ impl Shell {
 	/// A finished script or an outgoing callout, if any.
 	fn report(&mut self) -> Option<Step> {
 		if let Some((run, status)) = self.k.done.pop_front() {
-			self.k.reported_signal = self.k.run_signals.remove(&run).map(|signal| (run, signal));
+			let signal = self.k.run_signals.remove(&run).filter(|signal| {
+				// A trap can replace the tail command's status after its own
+				// frame has been popped (zsh function traps).
+				!matches!(signal, RunSignal::TailExternal(n) if status != 128 + *n)
+			});
+			self.k.reported_signal = signal.map(|signal| (run, signal));
 			self.k.reported_usage = self.k.run_usage.remove(&run).map(|usage| (run, usage));
 			return Some(Step::Done { run, status });
 		}

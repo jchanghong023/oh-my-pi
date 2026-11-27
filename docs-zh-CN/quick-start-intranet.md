@@ -33,7 +33,7 @@ omp
 ### 环境变量与数据
 
 - `OMP_CONFIG_ROOT`：持久数据目录，存放配置、凭据和会话。
-- `OMP_CACHE_DIR`：可选性能目录，使用当前用户可访问的绝对路径；红区 Linux 默认使用 `/dev/shm/omp-<UID>`。缓存、统计、日志和运行依赖可避开网络磁盘。
+- `OMP_CACHE_DIR`：可选性能目录，使用当前用户可访问的绝对路径；红区 Linux 默认使用 `/dev/shm/omp-<UID>`。模型目录缓存 `agent/models.db` 随性能目录切换，不迁移旧缓存；统计和日志也可避开网络磁盘。JS eval 的 `bun` 占位脚本不使用默认的 `/dev/shm`；显式指定性能目录时，请确保该目录允许执行。
 - `OMP_SKILLS_DIR`：可选团队共享技能目录；用 `/extensions` 查看或启停共享技能，不改共享文件。
 
 红区模式会暂时关闭 Web Search 和 Browser（含 `/crawl`）。可以让 Agent 用 `read` 读取可达的内网 HTTP(S) 地址，`fetch.enabled` 默认开启，并遵循你的显式设置。
@@ -69,7 +69,7 @@ omp
 ### 多代理与无人值守
 
 - **Team**：在 TUI 输入 `/team <需求>`，或从命令行运行 `omp -p '/team <需求>'`，发起只读调查和交叉评审，不改代码。命令行调用把问题写在命令里，不另附 stdin 或 `@文件`。
-- **Goal Autopilot**：用 `/goal-autopilot <目标>` 运行无人值守长任务。表单静默等待 60 秒；超时时，只有存在有效推荐且当前填写有效才返回表单内容，否则报告未答复并继续任务。首次请求结题时先复核。
+- **Goal Autopilot**：用 `/goal-autopilot <目标>` 运行无人值守长任务。`ask` 表单静默等待 60 秒；超时时，只有推荐值未被同名字段覆盖且当前答案有效才返回表单内容，否则报告未答复并继续任务。普通 `ask` 超时只返回有效的当前表单值和已保存的选项备注（含图片）；计划模式不设超时。首次请求结题时先复核。
 - **按清单执行**：用 `/todoloop tasks.md --check` 只预检，用 `/todoloop tasks.md` 按组执行 Markdown 待办。
 - **按需编排**：`/orchestrate` 拆解并分派任务，`/workflowz` 组织批量工作，`/ultrathink` 深入分析。
 - **同目录实例通信**：默认允许同目录的其他 OMP 实例读取子代理输出并向其发消息；不需要时运行 `omp config set task.crossInstance false`。
@@ -79,10 +79,10 @@ omp
 - **需求与设计**：`/skill:jch-grill-me` 澄清需求，`/skill:jch-grill-todo` 生成任务清单，`/skill:jch-codebase-design` 设计模块与接口。
 - **大仓审查**：`/skill:big-review-scan` 把仓库或 Fork 改动拆分初审，`/skill:big-review-verify` 对照源码复核发现。
 - **独立使用档案**：用 `omp -P work` 启动，隔离配置和会话。
-- **画布**：用 `/sketch` 手绘或贴图标注。附件加入草稿前可按 Esc 取消；PNG 成功加入后，由你手动发送。
+- **画布**：用 `/sketch` 手绘或贴图标注。压缩期间排队的带图命令也只在本地打开画布，不会把图片发给模型。附件加入草稿前可按 Esc 取消；PNG 成功加入后，由你手动发送。
 - **控制改动**：`/minimal` 要求最小充分改动和验证；`/workspace` 提醒 Agent 限定写入范围，不是沙箱。
-- **切换工作树**：`/wt <分支>` 切换会话工作树，不搬动或清理未提交的改动。
-- **网页转 Markdown**：`/crawl <URL>` 不调用模型，直接爬取并保存网页；`OMP_OFFLINE` 下不可用。读取单个内网链接可用 `omp read <URL>`；旧 `providers.fetch` 值 `native`、`trafilatura`、`lynx` 改用 `local`。
+- **切换工作树**：`/wt <分支>` 优先复用已有工作树；即使从子目录运行，新工作树也建在当前工作树根目录的同级，不搬动或清理未提交的改动。若主工作树使用独立 Git 目录且因缺少 `core.worktree` 无法定位，请从主工作树启动 OMP。
+- **网页转 Markdown**：`/crawl <URL>` 不调用模型，直接爬取并保存网页；`OMP_OFFLINE` 下不可用。读取单个内网链接可用 `omp read <URL>`；普通模式下可用 `browser.enabled: false` 禁止 URL 读取回退到浏览器。旧 `providers.fetch` 值 `native`、`trafilatura`、`lynx` 改用 `local`。
 - **循环与输入法**：`/loopn "检查" "复核"` 轮换提示词（`Esc` 停止）；`/jchime` 排查 Linux IBus/X11 中文输入问题。
 
 ## 7. 上游常用快捷键和内置命令

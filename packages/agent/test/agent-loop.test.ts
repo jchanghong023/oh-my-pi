@@ -1336,6 +1336,7 @@ describe("agentLoop with AgentMessage", () => {
 		expect(messages.map(m => m.role)).toEqual(["user", "assistant", "toolResult"]);
 		const toolResult = messages[2] as ToolResultMessage;
 		expect(toolResult.isError).toBe(true);
+		expect(toolResult.cancelled).toBeUndefined();
 
 		const text = toolResult.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -1370,6 +1371,7 @@ describe("agentLoop with AgentMessage", () => {
 		);
 		expect(endEvent).toBeDefined();
 		expect(endEvent?.isError).toBe(true);
+		expect(endEvent?.cancelled).toBeUndefined();
 		// The event's result carries the same discriminator so the UI can
 		// render "provider transport failed, tool not executed" instead of a
 		// generic "Edit tool failed" panel.
@@ -2768,6 +2770,50 @@ describe("agentLoop with AgentMessage", () => {
 		if (assistantEnd?.message.role !== "assistant") return;
 		expect(assistantEnd.message.stopReason).toBe("aborted");
 		expect(assistantEnd.message.content.some(block => block.type === "toolCall")).toBe(false);
+	});
+
+	it("marks a completed call as cancelled when the provider stream is aborted before dispatch", async () => {
+		const executed: string[] = [];
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [makeEchoTool(executed)] };
+		const abortController = new AbortController();
+		const toolCall = { type: "toolCall" as const, id: "tool-1", name: "echo", arguments: { value: "ready" } };
+		const partial = createAssistantMessage([toolCall], "toolUse");
+		const providerStream = new AssistantMessageEventStream();
+		providerStream.push({ type: "start", partial });
+		providerStream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+			onAssistantMessageEvent: (_message, event) => {
+				if (event.type === "toolcall_end") abortController.abort();
+			},
+		};
+
+		const stream = agentLoop(
+			[createUserMessage("run echo")],
+			context,
+			config,
+			abortController.signal,
+			() => providerStream,
+		);
+		const toolEnds: Array<Extract<AgentEvent, { type: "tool_execution_end" }>> = [];
+		for await (const event of stream) {
+			if (event.type === "tool_execution_end") toolEnds.push(event);
+		}
+		providerStream.end(partial);
+
+		expect(executed).toEqual([]);
+		expect(toolEnds).toMatchObject([{ toolCallId: toolCall.id, isError: true, cancelled: true }]);
+		expect((await stream.result()).slice(1)).toMatchObject([
+			{ role: "assistant", stopReason: "aborted", content: [toolCall] },
+			{
+				role: "toolResult",
+				toolCallId: toolCall.id,
+				isError: true,
+				cancelled: true,
+				details: { __synthetic: true, source: "assistant_stop_aborted", executed: false },
+			},
+		]);
 	});
 
 	it("drops incomplete tool calls on labeled user interrupts", async () => {

@@ -13,12 +13,13 @@
  * in the background when stale; a refresh error shows in the head.
  */
 import type { Model } from "@oh-my-pi/pi-ai";
-import { getUpstreamPin } from "@oh-my-pi/pi-catalog/models";
+import { getUpstreamPin, routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { batch, computed, effect, type JSXNode, type KeyEvent, signal } from "@oh-my-pi/pi-tui";
 import { keyCaps } from "@oh-my-pi/pi-tui/term/painters/picker";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import type { TspPickerLevel, TspPickerScope } from "@oh-my-pi/pi-wire";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
+import { formatModelStringWithRouting } from "../../../config/model-resolver";
 import type { ScopedModelItem } from "../../../modes/view-model/overlays/model-hub";
 import {
 	buildSessionModelScope,
@@ -57,6 +58,8 @@ export interface ModelPickerProps {
 	readonly registry: ModelPickerRegistry;
 	/** The `--models` scope (empty: every available chat model). */
 	readonly scopedModels: ReadonlyArray<ScopedModelItem>;
+	/** The active session model, when available, distinguishes a pin from a literal `@` ID. */
+	readonly currentModel?: Model;
 	readonly callbacks: ModelPickerCallbacks;
 	readonly options?: ModelPickerOptions;
 	/** Terminal height; the sheet takes 40% of it (default 40 rows). */
@@ -112,7 +115,7 @@ function pickerBrowser(
 	return browser;
 }
 
-/** Session rows address scoped upstream pins individually; an unpinned row keeps its base id. */
+/** Key pinned rows by identity, not by their potentially ambiguous configuration selector. */
 const routedPickerScopes = new WeakMap<ModelBrowserItem[], ModelBrowserItem[]>();
 function routedPickerItems(items: ModelBrowserItem[]): ModelBrowserItem[] {
 	const cached = routedPickerScopes.get(items);
@@ -123,7 +126,9 @@ function routedPickerItems(items: ModelBrowserItem[]): ModelBrowserItem[] {
 		const pin = getUpstreamPin(item.model);
 		if (!pin) continue;
 		if (routed === items) routed = items.slice();
-		routed[i] = { ...item, selector: `${item.selector}@${pin}`, perfSelector: item.selector };
+		// Every bare row key contains a slash; this namespace has none.
+		const selector = `pin:${encodeURIComponent(JSON.stringify([item.provider, item.id, pin]))}`;
+		routed[i] = { ...item, selector, perfSelector: item.selector };
 	}
 	routedPickerScopes.set(items, routed);
 	return routed;
@@ -213,6 +218,8 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 	const scope = signal(ALL_SCOPE);
 	const configError = signal<string | undefined>(undefined);
 	const modelItems = signal<ModelBrowserItem[]>([]);
+	const sessionRowKey = signal(options.currentSelector);
+	const taskRowKey = signal<string | undefined>(undefined);
 	let scopedModels = props.scopedModels;
 
 	const quickRoles = new Map<string, ResolvedRoleModel>();
@@ -247,7 +254,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 	const mode = (): Mode => (taskMode() ? "task" : roleMode() ? "role" : "session");
 
 	const current = (): string | undefined =>
-		roleMode() ? currentQuickRole : taskMode() ? options.taskSelector : options.currentSelector;
+		roleMode() ? currentQuickRole : taskMode() ? taskRowKey() : sessionRowKey();
 
 	/** The highlighted model's slider; session mode only. */
 	const slider = (): ThinkingSlider | undefined => {
@@ -322,10 +329,34 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		);
 		batch(() => {
 			configError.set(scoped.error);
-			modelItems.set(selectOnly ? scoped.items : routedPickerItems(scoped.items));
+			const items = selectOnly ? scoped.items : routedPickerItems(scoped.items);
+			modelItems.set(items);
 			if (!selectOnly) {
+				const selector = options.currentSelector;
+				const sessionItem = props.currentModel
+					? items.find(item => routedModelsAreEqual(item.model, props.currentModel))
+					: (items.find(item => (item.perfSelector ?? item.selector) === selector) ??
+						items.find(item => formatModelStringWithRouting(item.model) === selector));
+				sessionRowKey.set(sessionItem?.selector);
+				if (taskKeys.size > 0 && options.taskSelector) {
+					const taskModel = source.resolveRoleValue(
+						options.taskSelector,
+						scoped.availableItems.map(item => item.model),
+					).model;
+					taskRowKey.set(items.find(item => routedModelsAreEqual(item.model, taskModel))?.selector);
+				} else {
+					taskRowKey.set(sessionItem?.selector);
+				}
 				browser.setRoles(scoped.roles);
-				browser.setMruOrder(scoped.mruOrder);
+				if (items !== scoped.items && scoped.mruOrder.length > 0) {
+					const recent = new Map(scoped.mruOrder.map(selector => [selector, [selector]]));
+					for (const item of items) {
+						if (item.perfSelector) recent.get(formatModelStringWithRouting(item.model))?.push(item.selector);
+					}
+					browser.setMruOrder([...recent.values()].flat());
+				} else {
+					browser.setMruOrder(scoped.mruOrder);
+				}
 				browser.setPerfStats(source.modelPerf);
 			}
 			syncItems(browser.query, true);
@@ -383,14 +414,14 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 			return;
 		}
 		if (taskMode.peek()) {
-			callbacks.onPickTask?.(item.model, item.selector);
+			callbacks.onPickTask?.(item.model, formatModelStringWithRouting(item.model));
 			return;
 		}
 		const overContext = browser.isOverContext(item);
 		const thinkingLevel = pendingThinking(item.model);
 		callbacks.onPick(
 			item.model,
-			item.selector,
+			selectOnly ? item.selector : formatModelStringWithRouting(item.model),
 			thinkingLevel === undefined ? { overContext } : { overContext, thinkingLevel },
 		);
 	};

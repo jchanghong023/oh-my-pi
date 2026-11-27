@@ -921,20 +921,31 @@ function createOpenAICompletionsStreamError(chunk: unknown, provider: string): E
 
 	const parsed = AIError.OpenAIHttpError.parseEnvelope(chunk, undefined);
 	const detail = parsed.detail ?? "Provider returned an in-band OpenAI completions stream error";
-	if (!structuredError) {
-		return new AIError.ProviderResponseError(detail, { provider, kind: "runtime" });
-	}
-
-	const typeValue = Reflect.get(error, "type");
-	const codeValue = Reflect.get(error, "code");
+	const typeValue = structuredError ? Reflect.get(error, "type") : undefined;
+	const codeValue = structuredError ? Reflect.get(error, "code") : undefined;
 	const type = typeof typeValue === "string" ? typeValue.trim() : undefined;
 	const status =
 		parseOpenAICompletionsErrorStatus(codeValue) ??
 		(type ? OPENAI_COMPLETIONS_ERROR_STATUS_BY_TYPE[type.toUpperCase()] : undefined);
-	if (status === undefined) {
-		return new AIError.ProviderResponseError(detail, { provider, kind: "runtime" });
+	const streamError =
+		status === undefined
+			? new AIError.ProviderResponseError(detail, { provider, kind: "runtime" })
+			: new AIError.ProviderHttpError(`${status} ${detail}`, status, { code: parsed.code });
+	if (provider === "codeagent") {
+		const evidenceStatus =
+			(structuredError ? parseOpenAICompletionsErrorStatus(Reflect.get(error, "status")) : undefined) ??
+			parseOpenAICompletionsErrorStatus(Reflect.get(chunk, "status")) ??
+			AIError.status(streamError);
+		if (
+			(evidenceStatus === undefined || evidenceStatus === 400 || evidenceStatus === 413) &&
+			(parsed.code === "context_length_exceeded" ||
+				parsed.code === "model_context_window_exceeded" ||
+				AIError.hasTokenContextOverflowEvidence(detail))
+		) {
+			AIError.attach(streamError, AIError.create(AIError.Flag.ContextOverflow));
+		}
 	}
-	return new AIError.ProviderHttpError(`${status} ${detail}`, status, { code: parsed.code });
+	return streamError;
 }
 
 export const streamOpenAICompletionsOnce = (
@@ -2026,10 +2037,17 @@ export const streamOpenAICompletionsOnce = (
 				);
 			}
 			if (output.stopReason === "error") {
-				throw new AIError.ProviderResponseError(output.errorMessage || "Provider returned an error stop reason", {
-					provider: model.provider,
-					kind: "runtime",
-				});
+				const failure = new AIError.ProviderResponseError(
+					output.errorMessage || "Provider returned an error stop reason",
+					{ provider: model.provider, kind: "runtime" },
+				);
+				if (
+					model.provider === "codeagent" &&
+					output.errorMessage?.toLowerCase() === "provider finish_reason: model_context_window_exceeded"
+				) {
+					AIError.attach(failure, AIError.create(AIError.Flag.ContextOverflow));
+				}
+				throw failure;
 			}
 
 			output.errorMessage = undefined;
@@ -2056,16 +2074,26 @@ export const streamOpenAICompletionsOnce = (
 				) {
 					safeError = new AIError.StreamTimeoutError("CodeAgent request timed out");
 				} else {
-					const failure = new AIError.ProviderHttpError("CodeAgent request failed", AIError.status(error) ?? 502);
-					// Inspect only genuine HTTP rejections here. Keep the flag, never the body or headers.
-					if (
-						error instanceof OpenAIHttpError &&
-						(error.status === 400 || error.status === 413) &&
-						(error.code === "context_length_exceeded" || AIError.hasTokenContextOverflowEvidence(error.message))
-					) {
-						AIError.attach(failure, AIError.create(AIError.Flag.ContextOverflow));
-					}
-					safeError = failure;
+					const status = AIError.status(error);
+					const windowRejectionStatus = status === 400 || status === 413;
+					const contextOverflow =
+						error instanceof OpenAIHttpError
+							? windowRejectionStatus &&
+								(error.code === "context_length_exceeded" ||
+									AIError.hasTokenContextOverflowEvidence(error.message))
+							: error instanceof Error &&
+								"errorId" in error &&
+								typeof error.errorId === "number" &&
+								AIError.is(error.errorId, AIError.Flag.ContextOverflow);
+					// Preserve the overflow signal, never the raw diagnostic. A synthetic 502 would
+					// add a transient flag; real byte-budget 413s still take the HTTP error path.
+					const failure =
+						contextOverflow && !(error instanceof AIError.ProviderHttpError && windowRejectionStatus)
+							? new AIError.ProviderResponseError("CodeAgent request failed", { provider: model.provider })
+							: new AIError.ProviderHttpError("CodeAgent request failed", status ?? 502);
+					safeError = contextOverflow
+						? AIError.attach(failure, AIError.create(AIError.Flag.ContextOverflow))
+						: failure;
 				}
 			}
 			const result = await AIError.finalize(safeError, {

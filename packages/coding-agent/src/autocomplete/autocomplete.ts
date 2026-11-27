@@ -888,17 +888,17 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const atTtl = isAtPrefix ? this.#atScanCacheTtlMs : undefined;
 		if (atTtl === 0) return fs.promises.readdir(searchDir, { withFileTypes: true });
 		const cache = (isAtPrefix ? this.#atDirCache : undefined) ?? this.#dirCache;
-		const cacheKey = atTtl === undefined ? searchDir : path.resolve(searchDir);
+		// A lexical resolve can erase a symlink traversal before `..`, unlike readdir.
 		const now = Date.now();
-		const cached = cache.get(cacheKey);
+		const cached = cache.get(searchDir);
 
 		if (cached && now - cached.timestamp < (atTtl ?? this.#DIR_CACHE_TTL)) {
 			return cached.entries;
 		}
 
 		const entries = await fs.promises.readdir(searchDir, { withFileTypes: true });
-		cache.delete(cacheKey);
-		cache.set(cacheKey, { entries, timestamp: now });
+		cache.delete(searchDir);
+		cache.set(searchDir, { entries, timestamp: now });
 		evictOldest(cache, DIR_CACHE_MAX, DIR_CACHE_EVICT);
 
 		return entries;
@@ -907,7 +907,17 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 	invalidateDirCache(dir?: string): void {
 		if (dir) {
 			this.#dirCache.delete(dir);
-			this.#atDirCache?.delete(path.resolve(dir));
+			const atCache = this.#atDirCache;
+			if (atCache) {
+				// Invalidation also covers the spelling used by a trailing-slash prefix.
+				// Do not fold `..` or other path segments.
+				const withoutTrailingSlash = (value: string) =>
+					(path.sep === "\\" ? value.replace(/\\/gu, "/") : value).replace(/\/+$/u, "");
+				const key = withoutTrailingSlash(dir);
+				for (const cachedDir of atCache.keys()) {
+					if (withoutTrailingSlash(cachedDir) === key) atCache.delete(cachedDir);
+				}
+			}
 			this.#scopedBaseCache.delete(dir);
 		} else {
 			this.#dirCache.clear();

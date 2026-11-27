@@ -38,7 +38,7 @@ type CoworkTlsOptions = {
 };
 
 type CoworkRequestInit = RequestInit & {
-	proxy?: string;
+	proxy?: string | false;
 	tls?: CoworkTlsOptions;
 };
 
@@ -346,7 +346,7 @@ export const coworkFetch: FetchImpl = async (input, init) => {
 		logger.debug("cowork transport bypassed", { url: `${url.host}${url.pathname}`, reason: "not-https" });
 		return fallbackFetch(input, init);
 	}
-	const proxy = getInstalledWindowsProxyForUrl(url);
+	const proxy = "proxy" in init && init.proxy === false ? undefined : getInstalledWindowsProxyForUrl(url);
 	if (proxy) {
 		// The direct Cowork transport returns redirects without following them.
 		const proxiedInit: CoworkRequestInit = { ...init, proxy, redirect: init.redirect ?? "manual" };

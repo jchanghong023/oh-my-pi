@@ -322,13 +322,35 @@ function readWindowsSystemProxy(): WindowsSystemProxy | undefined {
 	return proxy;
 }
 
+/** Bare host:port and HTTP(S) proxies are usable by Bun HTTP fetch, SOCKS is not. */
+function isHttpProxy(value: string | undefined): value is string {
+	return !!value && value !== '""' && value !== "''" && !/^(?!https?:\/\/)[a-z][a-z\d+.-]*:\/\//i.test(value);
+}
+
 /** Env proxies outrank the static system proxy; only the static tier observes the fork intranet list. */
-function systemProxyForUrl(url: URL, systemProxy: WindowsSystemProxy, includeEnvProxy = false): string | undefined {
-	if (shouldBypassProxy(url)) return undefined;
-	const envProxy = standardProxyForProtocol(url.protocol);
-	if (envProxy) return includeEnvProxy ? envProxy : undefined;
-	if (matchesForkSystemProxyBypass(url.hostname)) return undefined;
-	return url.protocol === "https:" || url.protocol === "wss:" ? systemProxy.https : systemProxy.http;
+function systemProxyForUrl(
+	url: URL,
+	systemProxy: WindowsSystemProxy,
+	includeEnvProxy = false,
+): string | false | undefined {
+	const https = url.protocol === "https:" || url.protocol === "wss:";
+	const { http_proxy, HTTP_PROXY, https_proxy, HTTPS_PROXY, all_proxy, ALL_PROXY } = Bun.env;
+	const protocolProxy = https ? https_proxy || HTTPS_PROXY : http_proxy || HTTP_PROXY;
+	const unsupportedProtocolProxy =
+		!!protocolProxy && protocolProxy !== '""' && protocolProxy !== "''" && !isHttpProxy(protocolProxy);
+	const allProxy = all_proxy || ALL_PROXY;
+	const envProxy = isHttpProxy(protocolProxy) ? protocolProxy : isHttpProxy(allProxy) ? allProxy : undefined;
+	// Yield to Bun's native env routing (including its NO_PROXY syntax). An
+	// unusable scheme-specific value must be replaced explicitly to reach ALL_PROXY.
+	if (envProxy && !includeEnvProxy && !unsupportedProtocolProxy) return undefined;
+	if (shouldBypassProxy(url)) return !includeEnvProxy && unsupportedProtocolProxy ? false : undefined;
+	if (envProxy) return envProxy;
+	const fallback = matchesForkSystemProxyBypass(url.hostname)
+		? undefined
+		: https
+			? systemProxy.https
+			: systemProxy.http;
+	return fallback ?? (unsupportedProtocolProxy ? false : undefined);
 }
 
 let installedWindowsSystemProxy: WindowsSystemProxy | undefined;
@@ -336,20 +358,101 @@ let installedWindowsSystemProxy: WindowsSystemProxy | undefined;
 /** Resolve the installed Windows proxy policy for transports that cannot apply env proxies themselves. */
 export function getInstalledWindowsProxyForUrl(url: URL): string | undefined {
 	const systemProxy = installedWindowsSystemProxy;
-	return systemProxy && systemProxyForUrl(url, systemProxy, true);
+	return (systemProxy && systemProxyForUrl(url, systemProxy, true)) || undefined;
 }
 
-/** Wraps `fetchImpl` so requests without an explicit proxy or env proxy tunnel through the Windows system proxy. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 20;
+const CROSS_ORIGIN_HEADERS = ["authorization", "proxy-authorization", "cookie", "host"];
+const BODY_HEADERS = ["content-encoding", "content-language", "content-location", "content-type", "content-length"];
+type SystemProxyRequestInit = RequestInit & { proxy?: string | false };
+
+/** Follow redirects one hop at a time: a native fetch with an injected proxy would reuse it for every URL. */
+async function fetchWithSystemProxyRedirects(
+	fetchImpl: FetchImpl,
+	systemProxy: WindowsSystemProxy,
+	input: string | URL | Request,
+	init: RequestInit | undefined,
+	url: URL,
+): Promise<Response> {
+	const request = input instanceof Request ? input : undefined;
+	let method = init?.method ?? request?.method ?? "GET";
+	let body = init?.body;
+	let options: RequestInit = { ...init, redirect: "manual" };
+	for (let hop = 0; ; hop++) {
+		const proxy = systemProxyForUrl(url, systemProxy);
+		const hopOptions: SystemProxyRequestInit = proxy === undefined ? options : { ...options, proxy };
+		const response = await fetchImpl(hop === 0 ? input : url, hopOptions);
+		const location = REDIRECT_STATUSES.has(response.status) ? response.headers.get("location") : null;
+		if (!location) {
+			if (hop > 0) Object.defineProperty(response, "redirected", { value: true, configurable: true });
+			return response;
+		}
+		void response.body?.cancel().catch(() => {});
+		if (hop >= MAX_REDIRECTS) throw new TypeError("Too many fetch redirects");
+		const target = new URL(location, url);
+		if (target.protocol !== "http:" && target.protocol !== "https:") {
+			throw new TypeError("Fetch redirect target must be HTTP or HTTPS");
+		}
+		// Request.body does not expose its original source. Do not tee it just
+		// in case of a redirect: the idle branch could buffer the entire upload.
+		if (
+			response.status !== 303 &&
+			(body instanceof ReadableStream ||
+				typeof body === "function" ||
+				(body != null && typeof body === "object" && Symbol.asyncIterator in body) ||
+				(body === undefined && (request?.bodyUsed || request?.body != null)))
+		) {
+			throw new TypeError("Cannot follow a redirect with a non-reusable request body");
+		}
+		const verb = method.toUpperCase();
+		const dropBody =
+			((response.status === 301 || response.status === 302) && verb === "POST") ||
+			(response.status === 303 && verb !== "GET" && verb !== "HEAD");
+		const crossOrigin = url.origin !== target.origin;
+		if (crossOrigin && (target.username || target.password)) {
+			throw new TypeError("Cross-origin fetch redirect target must not include credentials");
+		}
+		let headers = options.headers ?? request?.headers;
+		if (headers && (crossOrigin || dropBody)) {
+			const updated = new Headers(headers);
+			if (crossOrigin) for (const name of CROSS_ORIGIN_HEADERS) updated.delete(name);
+			if (dropBody) for (const name of BODY_HEADERS) updated.delete(name);
+			headers = updated;
+		}
+		if (dropBody) {
+			method = "GET";
+			body = null;
+		}
+		options = {
+			...options,
+			method,
+			body,
+			headers,
+			signal: init?.signal === undefined ? request?.signal : init.signal,
+		};
+		url = target;
+	}
+}
+
+/** Fallback for HTTP fetches with no per-request route; recompute the route for each followed redirect. */
 function wrapFetchWithSystemProxy(fetchImpl: FetchImpl, systemProxy: WindowsSystemProxy): FetchImpl {
 	const wrapped = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-		const urlStr = input instanceof Request ? input.url : input.toString();
-		let proxyUrl: string | undefined;
-		try {
-			proxyUrl = systemProxyForUrl(new URL(urlStr), systemProxy);
-		} catch {
-			// Unparseable targets pass through untouched.
+		if (init && (("unix" in init && init.unix) || ("proxy" in init && (init.proxy === false || init.proxy)))) {
+			return fetchImpl(input, init);
 		}
-		return proxyUrl ? fetchImpl(input, withProxyInit(input, init, proxyUrl)) : fetchImpl(input, init);
+		let url: URL;
+		try {
+			url = input instanceof URL ? input : new URL(input instanceof Request ? input.url : input);
+		} catch {
+			return fetchImpl(input, init);
+		}
+		if (url.protocol !== "http:" && url.protocol !== "https:") return fetchImpl(input, init);
+		const redirect = init?.redirect ?? (input instanceof Request ? input.redirect : "follow");
+		if (redirect === "follow") return fetchWithSystemProxyRedirects(fetchImpl, systemProxy, input, init, url);
+		const proxy = systemProxyForUrl(url, systemProxy);
+		const options: SystemProxyRequestInit | undefined = proxy === undefined ? init : { ...init, proxy };
+		return fetchImpl(input, options);
 	};
 	if (fetchImpl.preconnect) wrapped.preconnect = fetchImpl.preconnect;
 	return wrapped;
@@ -455,15 +558,14 @@ export function applyForkNetworkDefaults(): void {
  * (Settings → Network & Internet → Proxy), so a machine whose only proxy is
  * configured there sends every request direct. On Windows with no `PI_PROXY`,
  * the enabled static system proxy (WinInet Internet Settings) therefore becomes
- * the lowest explicit tier: explicit env proxies still win per URL — Bun
- * applies them natively and the system wrapper yields — matching the
- * installer's env-first, system-proxy-second resolution.
+ * the lowest explicit tier: usable HTTP(S) env proxies still win per URL.
+ * The system wrapper re-evaluates the route at every followed redirect.
  *
- * A per-request `proxy` (including `PI_PROXY_<PROVIDER>` injected by
- * {@link wrapFetchForProxy}) still wins, and loopback / private-range /
- * `NO_PROXY` targets plus the fork intranet bypass list
- * ({@link matchesForkSystemProxyBypass}) bypass, so local model servers, MCP
- * hosts, and company intranet endpoints stay direct. Idempotent; a no-op when
+ * A per-request `proxy` (including `false` and a `PI_PROXY_<PROVIDER>`
+ * value injected by {@link wrapFetchForProxy}) still wins. The static tier
+ * honors loopback, private-range, `NO_PROXY`, and the fork intranet bypass list
+ * ({@link matchesForkSystemProxyBypass}).
+ * Idempotent; a no-op when
  * `PI_PROXY` is unset and no usable system proxy is enabled.
  */
 export function installGlobalProxyFetch(): void {

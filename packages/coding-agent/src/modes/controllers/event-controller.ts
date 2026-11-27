@@ -1054,12 +1054,12 @@ export class EventController {
 		if (this.ctx.session.isAborting) return;
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
-		if (!this.ctx.hideToolActivity) this.ctx.setWorkingMessage(trimmed, false);
+		if (!this.ctx.hideToolActivity) this.ctx.setWorkingMessage(trimmed, false, "tool-intent");
 	}
 
 	refreshWorkingIntent(): void {
 		if (this.#showingAsyncWait || !this.ctx.viewSession.isStreaming) return;
-		this.ctx.setWorkingMessage(this.ctx.hideToolActivity ? undefined : this.#lastIntent, false);
+		this.ctx.setWorkingMessage(this.ctx.hideToolActivity ? undefined : this.#lastIntent, false, "intent-refresh");
 	}
 
 	subscribeToAgent(): void {

@@ -230,7 +230,7 @@ export class EvalRunner {
 			logger.warn("Detaching retained eval-kernel ownership during dispose while eval execution is still active");
 		}
 		const results = await Promise.allSettled([
-			disposeKernelSessionsByOwner(this.#kernelOwnerId),
+			disposeKernelSessionsByOwner(this.#kernelOwnerId, { strict: options?.strict }),
 			disposeVmContextsByOwner(this.#kernelOwnerId),
 		]);
 		const errors: unknown[] = [];

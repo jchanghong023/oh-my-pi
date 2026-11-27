@@ -77,9 +77,7 @@ export async function buildReleaseNative(): Promise<string> {
 			key.startsWith("CARGO_PROFILE_") ||
 			/^CARGO_TARGET_.*_(?:RUSTFLAGS|LINKER|RUNNER)$/.test(key) ||
 			/^(?:(?:HOST_|TARGET_)?(?:CC|CXX|AR|RANLIB|CFLAGS|CXXFLAGS|CPPFLAGS|CXXSTDLIB))(?:_|$)/.test(key) ||
-			/^(?:CMAKE_TOOLCHAIN_FILE|TARGET_CMAKE_TOOLCHAIN_FILE|CMAKE_ARGS|CMAKE_C_FLAGS|CMAKE_CXX_FLAGS)(?:_|$)/.test(
-				key,
-			) ||
+			/^(?:(?:HOST_|TARGET_)?CMAKE_TOOLCHAIN_FILE|CMAKE_ARGS|CMAKE_C_FLAGS|CMAKE_CXX_FLAGS)(?:_|$)/i.test(key) ||
 			/^(?:(?:HOST_|TARGET_)?PKG_CONFIG)(?:_|$)/.test(key) ||
 			/^NK_(?:TARGET_|MARCH_NATIVE)/.test(key)
 		)

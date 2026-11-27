@@ -512,6 +512,10 @@
 			"types": "./src/tools/index.ts",
 			"import": "./src/tools/index.ts"
 		},
+		"./tools/hashline-header-path": {
+			"types": "./src/tools/hashline-format.ts",
+			"import": "./src/tools/hashline-format.ts"
+		},
 		"./tools/jfind": {
 			"types": "./src/tools/jfind/index.ts",
 			"import": "./src/tools/jfind/index.ts"

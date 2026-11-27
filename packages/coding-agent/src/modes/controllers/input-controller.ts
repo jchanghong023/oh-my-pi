@@ -812,6 +812,8 @@ export class InputController {
 			const viewSession = this.ctx.viewSession;
 			let aborted = false;
 			if (viewSession.isCompacting || this.ctx.session.isBackgroundCompacting) {
+				// LoopN must stop before compaction settles and advances to the next prompt.
+				if (this.ctx.loopNActive) this.ctx.pauseLoop();
 				safeAbort("compaction", () => viewSession.abortCompaction());
 				aborted = true;
 			}
@@ -2284,6 +2286,8 @@ export class InputController {
 		// A join may have installed the guest session while /leave waited for input hooks.
 		if (!continuesConversation(this.ctx.sessionManager, origin) && !(leave && this.ctx.collabGuest)) {
 			restoreDetachedDraft(this.ctx.composer, text, images, imageLinks);
+			const label = commandName ? `/${commandName}` : "the follow-up";
+			this.ctx.showWarning(`Conversation changed before ${label} ran; returned it to the editor`);
 			return;
 		}
 
@@ -2303,17 +2307,13 @@ export class InputController {
 		this.releaseStaleYieldCompaction();
 		const direct = commandName === "collab2" || leave;
 		if (!direct && (this.ctx.session.isCompacting || this.ctx.yieldCompaction)) {
-			if (
-				text &&
-				!this.#matchesBuiltinSlashCommand(text) &&
-				(await this.#runSideFileCommand(text, restoreSideDraft))
-			) {
-				return;
-			}
+			const builtin = this.#matchesBuiltinSlashCommand(text);
+			if (text.startsWith("/") && !builtin && (await this.#runSideFileCommand(text, restoreSideDraft))) return;
 			this.ctx.queueCompactionMessage(text, "followUp", images, {
 				preserveDraft: true,
 				imageLinks,
 				draftDetached: true,
+				...(builtin ? { followUp: origin } : {}),
 			});
 			return;
 		}
@@ -2321,6 +2321,11 @@ export class InputController {
 		let loopNEntry = false;
 		if (text) {
 			try {
+				// /compact waits for a session transition before claiming foreground maintenance.
+				// Keep that wait inside admission, not the compaction itself.
+				if (commandName === "compact" && this.ctx.session.isSessionTransitioning) {
+					await this.ctx.session.waitForSessionTransition();
+				}
 				const input =
 					(images?.length ?? 0) > 0 || (imageLinks?.length ?? 0) > 0 ? { images, imageLinks } : undefined;
 				const dispatch = executeBuiltinSlashCommand(text, {
@@ -2332,6 +2337,9 @@ export class InputController {
 				// Collab2 claims the operation before its first await. A later stop
 				// or leave must reach that owner while the operation is pending.
 				if (commandName === "collab2") admitted();
+				// Foreground /compact now owns admission; later submissions belong in its
+				// visible, retractable queue rather than waiting for it to finish here.
+				if (commandName === "compact" && this.ctx.session.isCompacting) admitted();
 				const slashResult = await dispatch;
 				if (slashResult === true) {
 					if (!shouldSkipHistory(text)) this.ctx.composer.addToHistory(text);
@@ -2429,6 +2437,7 @@ export class InputController {
 		this.ctx.compactionQueuedMessages = [];
 		const yieldCompaction = this.ctx.yieldCompaction;
 		this.ctx.yieldCompaction = undefined;
+		this.ctx.compactionQueueOrigin = undefined;
 		const allQueued = [
 			...steering,
 			...compactionQueued.filter(e => e.mode === "steer").map(e => ({ text: e.text, images: e.images })),
@@ -3372,6 +3381,10 @@ export class InputController {
 		// An explicit display gesture: rebuild terminal history so the change also applies to rows
 		// already retired from the viewport (#10177).
 		this.ctx.shell.host?.replayHistory();
+		if (cfgDisplayMode.get(this.ctx.settings) === "clean") {
+			this.ctx.showStatus("Thinking blocks: hidden in clean mode — use /display detailed to view them");
+			return;
+		}
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
 	}
 

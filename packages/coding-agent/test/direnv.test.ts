@@ -127,7 +127,7 @@ describe("loadDirenvEnv (embedded Bash, upstream trust format)", () => {
 		const diff = await loadDirenvEnv(root);
 
 		expect(diff?.set.DIRENV_FEATURE_TEST).toBe("loaded");
-		expect(diff?.set.PATH).toContain(path.join(root, "bin"));
+		expect(diff?.set.PATH?.replaceAll("\\", "/")).toContain(path.join(root, "bin").replaceAll("\\", "/"));
 	});
 
 	it("uses embedded direnv even with utilities disabled and no binary on PATH", async () => {

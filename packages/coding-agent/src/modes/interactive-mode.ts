@@ -276,6 +276,7 @@ import type {
 	ToolCallSpec,
 	TranscriptEntry,
 	WorkingKind,
+	CompactionQueueOptions,
 	CompactionQueuedMessage,
 	ComposerOwner,
 	GoalCommandOptions,
@@ -451,7 +452,8 @@ import { SessionStatusLine } from "./interactive/status-line";
 import type { MessageFaceEnv } from "./interactive/messages";
 import { type DisplayFlags, TranscriptPresenter } from "./interactive/transcript";
 import { TranscriptReplica } from "./interactive/transcript-replica";
-import { WorkingRows } from "./interactive/working";
+import { type WorkingMessageSource, WorkingRows } from "./interactive/working";
+import { rememberStartupComposerDisplayMode } from "./startup-composer";
 import { resolveComposerHint } from "./view-model/prompt/composer-hints";
 import { WordCompletionProvider } from "./view-model/prompt/word-completion";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
@@ -3790,15 +3792,19 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Field comparisons skip effects the keybinding toggles already applied. The blocks read
 		// these flags reactively; rows already in scrollback change only with a replay.
-		const hideToolActivity = cfgDisplayMode.get(this.settings) !== "detailed";
-		if (any("display.mode") && hideToolActivity !== this.hideToolActivity) {
-			this.hideToolActivity = hideToolActivity;
-			this.#syncHideThinking();
-			this.#eventController.refreshWorkingIntent();
-			if (!hideToolActivity) this.toolOutputExpanded = false;
-			resetDisplay = true;
+		if (any("display.mode")) {
+			const displayMode = cfgDisplayMode.get(this.settings);
+			rememberStartupComposerDisplayMode(displayMode);
+			const hideToolActivity = displayMode !== "detailed";
+			if (hideToolActivity !== this.hideToolActivity) {
+				this.hideToolActivity = hideToolActivity;
+				this.#syncHideThinking();
+				this.#eventController.refreshWorkingIntent();
+				if (!hideToolActivity) this.toolOutputExpanded = false;
+				resetDisplay = true;
+			}
+			this.#syncCompactMode();
 		}
-		if (any("display.mode")) this.#syncCompactMode();
 		if (any("hideThinkingBlock", "proseOnlyThinking", "motion")) this.#refreshCompact();
 		if (any("terminal.showImages", "display.shellVisualization")) this.#syncTranscriptDisplaySettings();
 		if (any("tui.autoGraph")) {
@@ -4231,6 +4237,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		const live = new Set<TranscriptBlock>();
 		for (const block of transcript.blocks()) {
 			if (isLiveTodoLoopCard(block)) live.add(block);
+			if (this.bashRun || this.pythonRun) {
+				const entry = this.#presenter.transcriptEntry(block);
+				if (
+					entry?.kind === "exec" &&
+					(entry.run === this.bashRun || entry.run === this.pythonRun) &&
+					entry.run.status() === "running"
+				) {
+					live.add(block);
+				}
+			}
 		}
 		const livePendingTools = new Map<string, PendingTool>();
 		if (this.viewSession?.isStreaming) {
@@ -5154,6 +5170,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		resume?: boolean;
 		silent?: boolean;
 		autoOrchestrate?: boolean;
+		streamingBehavior?: GoalCommandOptions["streamingBehavior"];
 	}): Promise<void> {
 		using _hold = this.#holdModeChanges();
 		if (this.goalModeEnabled) {
@@ -5203,7 +5220,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.goalModeEnabled = true;
 		this.#resetGoalContinuationSuppression();
 		this.#updateGoalModeStatus();
-		if (this.session.isStreaming) {
+		// An Autopilot follow-up carries its notice with the objective at delivery.
+		// A separate hidden message would run ahead of the objective.
+		if (this.session.isStreaming && !(options.autoOrchestrate && options.streamingBehavior === "followUp")) {
 			await this.session.sendGoalModeContext({ deliverAs: "steer" });
 		}
 		if (!options.silent) {
@@ -6571,7 +6590,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 		options?: GoalCommandOptions,
 	): Promise<boolean> {
-		await this.#enterGoalMode({ objective, silent: true, autoOrchestrate: options?.autoOrchestrate });
+		await this.#enterGoalMode({
+			objective,
+			silent: true,
+			autoOrchestrate: options?.autoOrchestrate,
+			streamingBehavior: options?.streamingBehavior,
+		});
 		if (!this.goalModeEnabled) return false;
 		this.#resetGoalContinuationSuppression();
 		const state = this.session.getLocalGoalModeState();
@@ -6592,7 +6616,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.goalModePaused = false;
 		this.#resetGoalContinuationSuppression();
 		this.#updateGoalModeStatus();
-		if (this.session.isStreaming) await this.session.sendGoalModeContext({ deliverAs: "steer" });
+		if (this.session.isStreaming && !(options?.autoOrchestrate && options.streamingBehavior === "followUp")) {
+			await this.session.sendGoalModeContext({ deliverAs: "steer" });
+		}
 		return this.#submitGoalObjective(objective, state, input, options);
 	}
 
@@ -8007,8 +8033,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * Set the working row's label; no argument restores the default. A function
 	 * label is live — re-read on every frame — and kept to one row.
 	 */
-	setWorkingMessage(message?: string | (() => string), showInCompact = true): void {
-		this.#working.setMessage(message, showInCompact);
+	setWorkingMessage(message?: string | (() => string), showInCompact = true, source?: WorkingMessageSource): void {
+		this.#working.setMessage(message, showInCompact, source);
 	}
 
 	applyPendingWorkingMessage(): void {
@@ -8062,7 +8088,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		text: string,
 		mode: "steer" | "followUp",
 		images?: ImageContent[],
-		options?: { preserveDraft?: boolean; imageLinks?: (string | undefined)[]; draftDetached?: boolean },
+		options?: CompactionQueueOptions,
 	): void {
 		this.#uiHelpers.queueCompactionMessage(text, mode, images, options);
 	}

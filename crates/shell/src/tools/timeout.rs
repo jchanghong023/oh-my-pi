@@ -328,7 +328,7 @@ impl Timeout {
 		self.phase = match std::mem::replace(&mut self.phase, Phase::Exit(0)) {
 			Phase::Start(opts) => {
 				if opts.foreground && opts.limit.is_some() {
-					self.child.measurement = Measurement::Direct;
+					self.child.measurement = Measurement::foreground();
 				}
 				self
 					.child

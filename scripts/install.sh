@@ -73,6 +73,25 @@ install_log_name_valid() {
     case "$log_pid" in ""|*[!0-9]*) return 1 ;; esac
 }
 
+# Match the application's lexical path normalization without resolving symlinks.
+normalize_absolute_path() (
+    rest="${1#/}"
+    normalized=""
+    while [ -n "$rest" ]; do
+        component="${rest%%/*}"
+        case "$component" in
+            ""|.) ;;
+            ..) normalized="${normalized%/*}" ;;
+            *) normalized="$normalized/$component" ;;
+        esac
+        case "$rest" in
+            */*) rest="${rest#*/}" ;;
+            *) break ;;
+        esac
+    done
+    printf '%s' "${normalized:-/}"
+)
+
 install_log_init() {
     log_root="$HOME/${PI_CONFIG_DIR:-.omp}"
     explicit_root=false
@@ -80,6 +99,7 @@ install_log_init() {
     case "$expanded_root" in
         "~") expanded_root="$HOME" ;;
         "~/"*) expanded_root="$HOME/${expanded_root#??}" ;;
+        "~\\"*) expanded_root="$HOME${expanded_root#?}" ;;
     esac
     case "$expanded_root" in /*) log_root="$expanded_root"; explicit_root=true ;; esac
     log_profile="$(printf '%s' "${OMP_PROFILE-${PI_PROFILE:-}}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -93,8 +113,10 @@ install_log_init() {
     case "$profile_base" in con|prn|aux|nul|com[0-9]|lpt[0-9]) log_profile="" ;; esac
     profile_suffix=""
     [ -z "$log_profile" ] || profile_suffix="/profiles/$log_profile"
-    if [ "$explicit_root" = false ] && [ -n "${XDG_STATE_HOME:-}" ] && [ -d "${XDG_STATE_HOME}/omp${profile_suffix}" ]; then
-        log_root="${XDG_STATE_HOME}/omp"
+    if [ "$explicit_root" = false ] && [ -n "${XDG_STATE_HOME:-}" ]; then
+        xdg_root="${XDG_STATE_HOME}/omp"
+        case "$xdg_root" in /*) xdg_root="$(normalize_absolute_path "$xdg_root")" ;; esac
+        if [ -d "$xdg_root$profile_suffix" ]; then log_root="$xdg_root"; fi
     fi
     cache_root="$(printf '%s' "${OMP_CACHE_DIR:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     case "$cache_root" in
@@ -124,6 +146,7 @@ install_log_init() {
         set -- "$log_root$profile_suffix/logs" "$HOME/.local/state/omp$profile_suffix/logs"
     fi
     for log_dir; do
+        case "$log_dir" in /*) log_dir="$(normalize_absolute_path "$log_dir")" ;; esac
         if { mkdir -p "$log_dir" && (umask 077; : >> "$log_dir/$log_name"); } 2>/dev/null; then
             INSTALL_LOG="$log_dir/$log_name"
             break
@@ -571,8 +594,12 @@ install_binary() {
         echo "Missing, invalid, or ambiguous SHA-256 digest for ${BINARY} in GitHub release metadata." >&2
         exit 1
     fi
-    if ! command -v sha256sum >/dev/null 2>&1; then
-        echo "sha256sum is required to verify the downloaded omp binary." >&2
+    if command -v sha256sum >/dev/null 2>&1; then
+        set -- sha256sum
+    elif command -v shasum >/dev/null 2>&1; then
+        set -- shasum -a 256
+    else
+        echo "sha256sum or shasum is required to verify the downloaded omp binary." >&2
         exit 1
     fi
 
@@ -628,7 +655,7 @@ install_binary() {
     fi
     INSTALL_STAGE=verify_candidate
     INSTALL_STAGE_MS="$(install_now_ms)"
-    if ! CHECKSUM="$(sha256sum < "$TMP_BINARY")" || [ "${CHECKSUM%% *}" != "$EXPECTED_DIGEST" ]; then
+    if ! CHECKSUM="$("$@" < "$TMP_BINARY")" || [ "${CHECKSUM%% *}" != "$EXPECTED_DIGEST" ]; then
         install_log ERROR candidate_digest_failed 'result=failed'
         echo "SHA-256 verification failed for ${BINARY}; the existing installation was not changed." >&2
         exit 1
@@ -636,7 +663,7 @@ install_binary() {
     install_log INFO candidate_digest_verified 'result=matches'
     INSTALL_STAGE=prepare_executable
     INSTALL_STAGE_MS="$(install_now_ms)"
-    chmod +x "$TMP_BINARY"
+    chmod +rx "$TMP_BINARY"
     warn_running_omp
     install_log INFO executable_prepared 'result=success process_detection=completed'
     INSTALL_STAGE=candidate_startup

@@ -15,14 +15,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { $which } from "@oh-my-pi/pi-utils";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { $which, setAgentDir } from "@oh-my-pi/pi-utils";
 import { chipLabel } from "../src/ui/composer/attachments";
 import { Composer } from "../src/ui/composer/composer";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 // A clipboard with no image on it — the deterministic default for the
 // not-found assertions so a real screenshot on the dev's clipboard cannot
@@ -39,7 +42,7 @@ const ONE_PX_PNG = Buffer.from(
 );
 const hasFfmpeg = Boolean($which("ffmpeg") && $which("ffprobe"));
 
-function createContext() {
+function createContext(cwd: string) {
 	const composer = new Composer();
 	const pasteText = vi.spyOn(composer, "insertText");
 	const insertAtom = vi.spyOn(composer, "insertAtom");
@@ -47,43 +50,35 @@ function createContext() {
 	const ctx = {
 		composer,
 		shell: { focused: () => composer.field },
-		sessionManager: {
-			getCwd: () => process.cwd(),
-			putBlob: async () => ({ hash: "h", path: "/tmp/h.png", displayPath: "/tmp/h.png" }),
-		} as unknown as InteractiveModeContext["sessionManager"],
+		settings: Settings.isolated({ "images.autoResize": false }),
+		sessionManager: SessionManager.create(cwd, path.join(cwd, "sessions")),
 		showStatus,
 	} as unknown as InteractiveModeContext;
 	return { ctx, spies: { pasteText, insertAtom, showStatus } };
 }
 
 describe("InputController.handleImagePathPaste (issue #2375)", () => {
-	const originalSshConnection = process.env.SSH_CONNECTION;
-	const originalSshTty = process.env.SSH_TTY;
-	const originalSshClient = process.env.SSH_CLIENT;
+	let tmpDir: string;
+	let settingsState: SettingsTestState | undefined;
 
 	beforeEach(async () => {
+		settingsState = beginSettingsTest();
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "issue-2375-"));
+		setAgentDir(tmpDir);
 		delete process.env.SSH_CONNECTION;
 		delete process.env.SSH_TTY;
 		delete process.env.SSH_CLIENT;
-		resetSettingsForTest();
-		await Settings.init({ inMemory: true, overrides: { "images.autoResize": false } });
 	});
 
-	afterEach(() => {
-		if (originalSshConnection === undefined) delete process.env.SSH_CONNECTION;
-		else process.env.SSH_CONNECTION = originalSshConnection;
-		if (originalSshTty === undefined) delete process.env.SSH_TTY;
-		else process.env.SSH_TTY = originalSshTty;
-		if (originalSshClient === undefined) delete process.env.SSH_CLIENT;
-		else process.env.SSH_CLIENT = originalSshClient;
-		resetSettingsForTest();
-		vi.restoreAllMocks();
+	afterEach(async () => {
+		restoreSettingsTestState(settingsState);
+		await fs.rm(tmpDir, { recursive: true, force: true });
 	});
 
 	it("over SSH: never pastes the unreachable path as text and surfaces an SSH-aware status", async () => {
 		process.env.SSH_CONNECTION = "10.0.0.2 50000 10.0.0.1 22";
-		const { ctx, spies } = createContext();
-		const controller = new InputController(ctx);
+		const { ctx, spies } = createContext(tmpDir);
+		const controller = new InputController(ctx, { ...EMPTY_CLIPBOARD, isTerminalLocal: () => false });
 		const missing = "/Users/someone/Pictures/local-only.png";
 
 		await controller.handleImagePathPaste(missing);
@@ -97,9 +92,9 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 	});
 
 	it("locally: still avoids the misleading path-as-text fallback when the file is unreachable", async () => {
-		const { ctx, spies } = createContext();
+		const { ctx, spies } = createContext(tmpDir);
 		const controller = new InputController(ctx, EMPTY_CLIPBOARD);
-		const missing = "/tmp/definitely-does-not-exist-omp-2375.png";
+		const missing = path.join(tmpDir, "missing.png");
 
 		await controller.handleImagePathPaste(missing);
 
@@ -110,20 +105,18 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 	});
 
 	it("sanitizes untrusted pasted-path characters and bounds length before splicing into status", async () => {
-		const { ctx, spies } = createContext();
+		const { ctx, spies } = createContext(tmpDir);
 		const controller = new InputController(ctx, EMPTY_CLIPBOARD);
-		// Path carrying ANSI, control chars, a CR/LF, and a tab — all of which
-		// would corrupt the TUI status line if interpolated verbatim. Long
-		// enough to exceed the status-line truncation budget (TRUNCATE_LENGTHS
-		// .CONTENT = 80) without tripping ENAMETOOLONG so the ENOENT branch
-		// keeps firing.
-		const hostile = `/tmp/\x1b[31mevil\x1b[0m\r\nname\twith-${"x".repeat(100)}.png`;
+		// Keep ANSI and control characters in the pasted input while resolving to
+		// a valid but missing filename, including on hosts that reject those characters.
+		const hostile = `./\x1b[31mevil\x1b[0m\r\nname\twith-${"x".repeat(100)}/../missing.png`;
 
 		await controller.handleImagePathPaste(hostile);
 
 		expect(spies.pasteText).not.toHaveBeenCalled();
 		expect(spies.showStatus).toHaveBeenCalledTimes(1);
 		const status = String(spies.showStatus.mock.calls[0]?.[0] ?? "");
+		expect(status).toMatch(/^Image not found at .*evil/);
 		// No ANSI escape, no raw control bytes, no embedded newlines/tabs.
 		expect(status).not.toMatch(/\x1b/);
 		expect(status).not.toMatch(/[\x00-\x08\x0B-\x1F\x7F]/);
@@ -140,13 +133,12 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 		// already gone by the time omp reads it. The bytes are still on the
 		// clipboard, so the paste must succeed from there instead of dead-ending
 		// on "Image not found".
-		const { ctx, spies } = createContext();
+		const { ctx, spies } = createContext(tmpDir);
 		const controller = new InputController(ctx, {
 			readImage: async () => ({ data: ONE_PX_PNG, mimeType: "image/png" }),
 			readText: async () => "",
 		});
-		const stale =
-			"C:\\Users\\u\\AppData\\Local\\Packages\\MicrosoftWindows.Client.Core_cw5n1h2txyewy\\TempState\\gone.png";
+		const stale = path.join(tmpDir, "MicrosoftWindows.Client.Core_cw5n1h2txyewy", "TempState", "gone.png");
 
 		await controller.handleImagePathPaste(stale);
 
@@ -161,13 +153,12 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 		// decodable image (zero-byte/locked transient snip), which surfaces as a
 		// null load result rather than ENOENT. The clipboard bytes must still win
 		// over a degraded text paste.
-		const { ctx, spies } = createContext();
+		const { ctx, spies } = createContext(tmpDir);
 		const controller = new InputController(ctx, {
 			readImage: async () => ({ data: ONE_PX_PNG, mimeType: "image/png" }),
 			readText: async () => "",
 		});
-		// This test file itself: resolvable, readable, but not an image.
-		const nonImage = path.join(os.tmpdir(), `issue-2375-not-png-${Math.random().toString(36).slice(2)}.png`);
+		const nonImage = path.join(tmpDir, "not-an-image.png");
 		await Bun.write(nonImage, "not really a png");
 		try {
 			await controller.handleImagePathPaste(nonImage);
@@ -181,9 +172,9 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 	});
 
 	it.skipIf(!hasFfmpeg)("locally: attaches a pasted video as a preview image", async () => {
-		const { ctx, spies } = createContext();
+		const { ctx, spies } = createContext(tmpDir);
 		const controller = new InputController(ctx, EMPTY_CLIPBOARD);
-		const video = path.join(os.tmpdir(), `issue-2375-video-${Math.random().toString(36).slice(2)}.mp4`);
+		const video = path.join(tmpDir, "preview.mp4");
 		const process = Bun.spawn([
 			"ffmpeg",
 			"-hide_banner",

@@ -57,34 +57,36 @@ function Initialize-InstallLog {
     try {
         $homeDir = [Environment]::GetFolderPath("UserProfile")
         $configDir = if ($env:PI_CONFIG_DIR) { $env:PI_CONFIG_DIR } else { ".omp" }
-        $root = Join-Path $homeDir $configDir
+        $root = "$homeDir\$configDir"
         $explicitRoot = $env:OMP_CONFIG_ROOT
         if ($explicitRoot) { $explicitRoot = $explicitRoot.Trim() }
         if ($explicitRoot -eq "~") { $explicitRoot = $homeDir }
-        elseif ($explicitRoot -match '^~[/\\]') { $explicitRoot = Join-Path $homeDir $explicitRoot.Substring(2) }
+        elseif ($explicitRoot -match '^~[/\\]') { $explicitRoot = $homeDir + $explicitRoot.Substring(1) }
         # IsPathRooted alone accepts drive-relative C:foo and root-relative \foo.
         if ($explicitRoot -match '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)') { $root = $explicitRoot }
         $profile = if (Test-Path Env:OMP_PROFILE) { $env:OMP_PROFILE } else { $env:PI_PROFILE }
         if ($profile) { $profile = $profile.Trim() }
         if ($profile -and $profile -ne "default" -and $profile -cmatch '^[a-z0-9][a-z0-9._-]{0,63}$' -and
             $profile -notmatch '\.$|^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)') {
-            $root = Join-Path (Join-Path $root "profiles") $profile
             $profileSuffix = "profiles\$profile\logs"
         } else { $profileSuffix = "logs" }
-        $fallbackRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "omp" } else { Join-Path $homeDir ".omp" }
+        $fallbackRoot = if ($env:LOCALAPPDATA) { "$env:LOCALAPPDATA\omp" } else { "$homeDir\.omp" }
         $cacheRoot = $env:OMP_CACHE_DIR
         if ($cacheRoot) { $cacheRoot = $cacheRoot.Trim() }
         if ($cacheRoot -eq "~") { $cacheRoot = $homeDir }
-        elseif ($cacheRoot -match '^~[/\\]') { $cacheRoot = Join-Path $homeDir $cacheRoot.Substring(2) }
+        elseif ($cacheRoot -match '^~[/\\]') { $cacheRoot = $homeDir + $cacheRoot.Substring(1) }
         if ($cacheRoot -notmatch '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)') { $cacheRoot = $null }
         $name = "omp.install.{0}.{1}.{2}.log" -f $script:InstallStarted.ToString("yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture), $script:InstallStarted.ToUnixTimeMilliseconds(), $PID
         $fallback = $false
-        $directories = @((Join-Path $root "logs"), (Join-Path $fallbackRoot $profileSuffix))
-        if ($cacheRoot) { $directories = @((Join-Path $cacheRoot $profileSuffix)) + $directories }
+        # Compose candidates without consulting the PowerShell drive table.
+        # An unavailable drive must fail only inside its own fallback attempt.
+        $directories = @("$root\$profileSuffix", "$fallbackRoot\$profileSuffix")
+        if ($cacheRoot) { $directories = @("$cacheRoot\$profileSuffix") + $directories }
         foreach ($directory in $directories) {
             try {
+                $directory = [IO.Path]::GetFullPath($directory)
                 [IO.Directory]::CreateDirectory($directory) | Out-Null
-                $logPath = Join-Path $directory $name
+                $logPath = [IO.Path]::Combine($directory, $name)
                 [IO.File]::AppendAllText($logPath, "", (New-Object Text.UTF8Encoding($false)))
                 $script:InstallLogPath = $logPath
                 break
@@ -203,11 +205,36 @@ function Invoke-InstallWebRequest {
     # The child inherits OS settings, but not the host's process-local proxy.
     $callerProxy = [Net.WebRequest]::DefaultWebProxy
     $proxyAddress = ""
+    $proxyCredentials = @{}
+    $useDefaultProxyCredentials = $false
     if ($callerProxy -and -not $callerProxy.IsBypassed($Uri)) {
-        $proxyAddress = $callerProxy.GetProxy($Uri).AbsoluteUri
+        $proxyUri = $callerProxy.GetProxy($Uri)
+        $proxyAddress = $proxyUri.AbsoluteUri
+        $credentials = $callerProxy.Credentials
+        if ($credentials) {
+            $useDefaultProxyCredentials = [object]::ReferenceEquals($credentials, [Net.CredentialCache]::DefaultNetworkCredentials)
+            if (-not $useDefaultProxyCredentials) {
+                # Snapshot only credentials selected for this proxy and each
+                # registered auth scheme. Keep passwords as SecureStrings
+                # across the job boundary; never stringify or log them.
+                foreach ($module in [Net.AuthenticationManager]::RegisteredModules) {
+                    $scheme = $module.AuthenticationType
+                    $credential = $credentials.GetCredential($proxyUri, $scheme)
+                    if ($credential) {
+                        $proxyCredentials[$scheme] = @{
+                            UseDefault = [object]::ReferenceEquals($credential, [Net.CredentialCache]::DefaultNetworkCredentials)
+                            UserName = $credential.UserName
+                            Password = $credential.SecurePassword
+                            Domain = $credential.Domain
+                        }
+                    }
+                }
+            }
+        }
     }
-    $job = Start-Job -ArgumentList @($Uri.AbsoluteUri, $TimeoutSec, $OutFile, $proxyAddress, ($null -eq $callerProxy)) -ScriptBlock {
-        param([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile, [string]$ProxyAddress, [bool]$ProxyDisabled)
+    $job = Start-Job -ArgumentList @($Uri.AbsoluteUri, $TimeoutSec, $OutFile, $proxyAddress, ($null -eq $callerProxy), $useDefaultProxyCredentials, $proxyCredentials) -ScriptBlock {
+        param([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile, [string]$ProxyAddress, [bool]$ProxyDisabled,
+            [bool]$UseDefaultProxyCredentials, [hashtable]$ProxyCredentials)
         $ErrorActionPreference = "Stop"
         $ProgressPreference = "SilentlyContinue"
         try {
@@ -217,7 +244,21 @@ function Invoke-InstallWebRequest {
                 # already selects the same endpoint for this request.
                 if (-not $childProxy -or $childProxy.IsBypassed($Uri) -or
                     $childProxy.GetProxy($Uri).AbsoluteUri -ne $ProxyAddress) {
-                    [Net.WebRequest]::DefaultWebProxy = [Net.WebProxy]::new([Uri]$ProxyAddress)
+                    $childProxy = [Net.WebProxy]::new([Uri]$ProxyAddress)
+                    [Net.WebRequest]::DefaultWebProxy = $childProxy
+                }
+                if ($UseDefaultProxyCredentials) {
+                    $childProxy.Credentials = [Net.CredentialCache]::DefaultNetworkCredentials
+                } elseif ($ProxyCredentials.Count) {
+                    $cache = [Net.CredentialCache]::new()
+                    foreach ($scheme in $ProxyCredentials.Keys) {
+                        $entry = $ProxyCredentials[$scheme]
+                        $credential = if ($entry.UseDefault) { [Net.CredentialCache]::DefaultNetworkCredentials } else {
+                            [Net.NetworkCredential]::new($entry.UserName, $entry.Password, $entry.Domain)
+                        }
+                        $cache.Add([Uri]$ProxyAddress, $scheme, $credential)
+                    }
+                    $childProxy.Credentials = $cache
                 }
             } elseif ($ProxyDisabled -or ($childProxy -and -not $childProxy.IsBypassed($Uri))) {
                 [Net.WebRequest]::DefaultWebProxy = $null
@@ -363,22 +404,6 @@ function Save-InstallBinary {
     }
 }
 
-function Get-InstallFileSha256 {
-    param([string]$Path)
-
-    $stream = [IO.File]::OpenRead($Path)
-    try {
-        $sha256 = [Security.Cryptography.SHA256]::Create()
-        try {
-            return [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace("-", "")
-        } finally {
-            $sha256.Dispose()
-        }
-    } finally {
-        $stream.Dispose()
-    }
-}
-
 # PATH configuration shared by the install and repair paths.
 function Set-InstallEnvironment {
     Set-InstallStage "environment"
@@ -477,6 +502,22 @@ function Stop-RunningOmp {
     Write-InstallLog INFO kill_fallback_completed @{ result = "stopped"; matched_count = $matching.Count }
 }
 
+function Get-InstallFileSha256 {
+    param([string]$Path)
+
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        try {
+            return [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace("-", "")
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 # True when the binary at the install target already matches a release tag.
 # `omp --version` starts with `omp/<version>` and release tags start with `v`.
 function Test-InstalledBinaryVersion {
@@ -527,6 +568,7 @@ function Install-Binary {
     $swapFailure = $null
     try {
     Set-InstallStage "install_target"
+    $InstallDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallDir)
     $OutPath = Join-Path $InstallDir "omp.exe"
     if (Test-Path -LiteralPath $OutPath -PathType Container) {
         throw "Refusing to replace a directory at $OutPath"
@@ -627,9 +669,13 @@ function Install-Binary {
         $verified = $true
 
         $OldPath = Join-Path $InstallDir (".omp.old.{0}.exe" -f [System.Guid]::NewGuid().ToString("N"))
+        $rollbackGuard = "$OldPath.rollback"
         Set-InstallStage "old_binary_rename"
         $hadExisting = Test-Path -LiteralPath $OutPath
         if ($hadExisting) {
+            # The aside is not stale until the candidate is committed. Create
+            # its guard before the rename so other installs cannot sweep it.
+            [IO.File]::WriteAllText($rollbackGuard, "")
             try {
                 Write-InstallLog INFO old_binary_rename_started @{ target = "installed"; result = "started" }
                 Move-Item -LiteralPath $OutPath -Destination $OldPath
@@ -661,6 +707,7 @@ function Install-Binary {
                     Set-InstallStage "rollback"
                     Write-InstallLog WARN rollback_started @{ target = "installed"; source = "old_image" }
                     Move-Item -LiteralPath $OldPath -Destination $OutPath
+                    $renamedAside = $false
                     Write-InstallLog INFO rollback_completed @{ result = "restored" }
                 } catch {
                     Write-InstallLog ERROR rollback_failed (Get-InstallFailureFields $_)
@@ -678,11 +725,14 @@ function Install-Binary {
         # Best-effort cleanup of the renamed-aside binary and stale asides from
         # earlier installs. A still-running omp keeps its image locked, so its
         # aside simply survives until the next install.
-        Clear-InstallAsides
+        Clear-InstallAsides -CommittedGuard $(if ($renamedAside) { $rollbackGuard })
     } catch {
         if (-not $failedStage) { $failedStage = $script:InstallStage }
         throw
     } finally {
+        if ($hadExisting -and -not $renamedAside) {
+            Remove-Item -LiteralPath $rollbackGuard -Force -ErrorAction SilentlyContinue
+        }
         # Keep a verified download after any failed replacement, including a
         # successful rollback, so the error report can offer a usable binary.
         if (-not ($verified -and (Test-Path -LiteralPath $TmpPath -PathType Leaf))) {
@@ -751,7 +801,8 @@ function Install-Binary {
                     $oldLiteral = "'" + $OldPath.Replace("'", "''") + "'"
                     Write-Host "Previous binary retained: $OldPath"
                     Write-Host "To restore it only if the install target is still missing:"
-                    Write-Host "if (-not (Test-Path -LiteralPath $targetLiteral)) { Move-Item -LiteralPath $oldLiteral -Destination $targetLiteral }"
+                    $guardLiteral = "'" + $rollbackGuard.Replace("'", "''") + "'"
+                    Write-Host "if (-not (Test-Path -LiteralPath $targetLiteral)) { Move-Item -LiteralPath $oldLiteral -Destination $targetLiteral -ErrorAction Stop; Remove-Item -LiteralPath $guardLiteral -Force }"
                 } elseif (-not $installed -and $verified -and (Test-Path -LiteralPath $OutPath -PathType Leaf)) {
                     Write-Host "The previous installed binary is still available at $OutPath"
                 }
@@ -769,14 +820,28 @@ function Install-Binary {
 }
 
 function Clear-InstallAsides {
+    param([string]$CommittedGuard)
+
     Set-InstallStage "aside_cleanup"
     Write-InstallLog INFO aside_cleanup_started @{ target = "old_images" }
     $cleanupErrors = @()
+    if ($CommittedGuard) {
+        Remove-Item -LiteralPath $CommittedGuard -Force -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors
+        if ($cleanupErrors.Count) {
+            $guardLiteral = "'" + $CommittedGuard.Replace("'", "''") + "'"
+            Write-Host "After resolving the error, make this committed old image eligible for cleanup:"
+            Write-Host "Remove-Item -LiteralPath $guardLiteral -Force"
+        }
+    }
     $oldImageName = '^\.omp\.old\.[0-9a-f]{32}\.exe\z'
     Get-ChildItem -LiteralPath $InstallDir -Filter ".omp.old.*.exe" -File -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors |
         Where-Object Name -CMatch $oldImageName |
         ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors
+            try {
+                if (-not (Test-Path -LiteralPath "$($_.FullName).rollback" -ErrorAction Stop)) {
+                    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors
+                }
+            } catch { $cleanupErrors += $_ }
         }
     if ($cleanupErrors.Count) {
         Write-InstallLog WARN aside_cleanup_completed @{ result = "partial"; error_count = $cleanupErrors.Count; locked_images_may_remain = $true }
@@ -784,7 +849,7 @@ function Clear-InstallAsides {
         foreach ($cleanupError in $cleanupErrors) { Write-Host $cleanupError.Exception.Message }
         $installLiteral = "'" + $InstallDir.Replace("'", "''") + "'"
         Write-Host "Files still used by running sessions can stay until those sessions exit. Then retry cleanup without stopping processes:"
-        Write-Host "Get-ChildItem -LiteralPath $installLiteral -Filter '.omp.old.*.exe' -File | Where-Object Name -CMatch '$oldImageName' | ForEach-Object { Remove-Item -LiteralPath `$_.FullName -Force -ErrorAction Continue }"
+        Write-Host "Get-ChildItem -LiteralPath $installLiteral -Filter '.omp.old.*.exe' -File | Where-Object Name -CMatch '$oldImageName' | ForEach-Object { if (-not (Test-Path -LiteralPath (`$_.FullName + '.rollback') -ErrorAction Stop)) { Remove-Item -LiteralPath `$_.FullName -Force -ErrorAction Continue } }"
     } else {
         Write-InstallLog INFO aside_cleanup_completed @{ result = "success" }
     }

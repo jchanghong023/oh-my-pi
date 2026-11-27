@@ -103,7 +103,12 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
 				});
 			}
 			try {
-				const companyError = await initializeCompanyModelLane(offline);
+				const cwd = getProjectDir();
+				const lanePromise = initializeCompanyModelLane(offline);
+				// Begin independent settings I/O now, but report its failure at the settings stage.
+				const settingsPromise = Settings.init({ cwd });
+				void settingsPromise.catch(() => {});
+				const companyError = await lanePromise;
 				if (offline) {
 					if (companyError) {
 						logger.warn("offline_model_refresh.degraded", {
@@ -116,10 +121,9 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
 						process.stderr.write(`${companyError}\n`);
 					}
 				}
-				const cwd = getProjectDir();
 				stage = "settings_init";
 				// Runtime defaults belong to this view, never the host singleton or later runtimes.
-				const settings = (await Settings.init({ cwd })).overlay();
+				const settings = (await settingsPromise).overlay();
 				if (offline && !companyError && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)) {
 					settings.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
 				}

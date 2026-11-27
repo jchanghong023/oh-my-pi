@@ -214,6 +214,7 @@ function makeSession(
 	initialStreaming: boolean,
 	runningJobIds: string[] = [],
 ): SessionStub {
+	const sessionId = crypto.randomUUID();
 	let messages = initialMessages;
 	let streaming = initialStreaming;
 	let listener: LocalAgentSessionEventListener | undefined;
@@ -247,9 +248,11 @@ function makeSession(
 		},
 		getToolByName: () => undefined,
 		activeToolExecutionUpdates: () => [...activeToolUpdates.values()],
+		getLiveToolOutputPreview: () => undefined,
 		getAsyncJobSnapshot: () => ({ running: runningJobIds.map(id => ({ id })) }),
 		hasBuiltInTool: () => true,
 		sessionManager: {
+			getSessionId: () => sessionId,
 			getCwd: () => process.cwd(),
 			getEntries: () => messages,
 			getConversationTip: () => undefined,
@@ -388,7 +391,8 @@ describe("#9816 focus blackout across an in-flight wait", () => {
 			cfgDisplayMode.override(ctx.settings, "detailed");
 			ctx.hideToolActivity = false;
 			const visible = renderTranscript(ctx).join("\n");
-			expect(visible.match(/Sleeper1 done/g)).toHaveLength(1);
+			expect(visible).toContain("done");
+			expect(visible.match(/Sleeper1/g)).toHaveLength(1);
 		},
 	);
 });

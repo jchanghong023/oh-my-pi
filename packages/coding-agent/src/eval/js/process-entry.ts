@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { serialize } from "bun:jsc";
 import { type RejectionInterceptor, WorkerCore } from "./worker-core";
 import {
 	JS_EVAL_OUTBOX_ENV,
@@ -16,24 +17,32 @@ export function startJsEvalProcess(
 	},
 	interceptUnhandledRejections: RejectionInterceptor,
 ): void {
-	const outbox = process.env[JS_EVAL_OUTBOX_ENV];
-	if (!outbox) throw new Error("JS eval process output directory is missing");
+	let outbox = process.env[JS_EVAL_OUTBOX_ENV];
 	delete process.env[JS_EVAL_OUTBOX_ENV];
 	let sequence = 0;
 	new WorkerCore(
 		{
 			send: (message: WorkerOutbound) => {
-				if (message.type !== "text" && message.type !== "display") {
+				if (!outbox || (message.type !== "text" && message.type !== "display")) {
 					transport.send(message);
 					return;
 				}
-				// A killed process can lose its pending process.send queue. Publish
-				// complete output synchronously, then use IPC only as a notification.
-				const id = ++sequence;
-				const filename = path.join(outbox, `${id}.json`);
+				// A killed process can lose its IPC queue. Publish each complete record
+				// first, without consulting the eval realm's JSON hooks.
+				const id = sequence + 1;
+				const filename = path.join(outbox, `${id}.bin`);
 				const pending = `${filename}.tmp`;
-				fs.writeFileSync(pending, JSON.stringify(message));
-				fs.renameSync(pending, filename);
+				try {
+					fs.writeFileSync(pending, serialize(message, { binaryType: "nodebuffer" }));
+					fs.renameSync(pending, filename);
+				} catch {
+					// Keep the published prefix recoverable. Send this and all later
+					// output over IPC so it can't fail the cell or leave sequence gaps.
+					outbox = undefined;
+					transport.send(message);
+					return;
+				}
+				sequence = id;
 				transport.send({ type: "output-ready", sequence: id });
 			},
 			onMessage: handler => transport.onMessage(handler),
