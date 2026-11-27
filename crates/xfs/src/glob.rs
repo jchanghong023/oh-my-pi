@@ -174,7 +174,7 @@ pub struct GlobOptions {
 	pub sort_by_mtime:        bool,
 	/// Descend into `node_modules`; `None` does so when the pattern names it.
 	pub include_node_modules: Option<bool>,
-	/// Fail on any directory below the root that cannot be opened or listed.
+	/// Fail on any directory that cannot be opened or fully listed.
 	pub strict_errors:        bool,
 	/// Traversal: `hidden`, `gitignore`, `follow_links`, `cache`, `workers`
 	/// are honoured; `.git` is pruned unless a pattern segment is `.git`, and
@@ -204,7 +204,7 @@ pub enum GlobError {
 	Pattern(PatternError),
 	/// The walk failed.
 	Walk(WalkError),
-	/// A descendant directory could not be opened or listed.
+	/// A directory could not be opened or fully listed during a strict walk.
 	Directory(walk::DirError),
 }
 
@@ -224,7 +224,8 @@ impl std::error::Error for GlobError {}
 /// checkout its daemon answers when it can mirror `opts`.
 ///
 /// # Errors
-/// A malformed pattern or an unreadable root.
+/// A malformed pattern, an unreadable root, or a directory failure under
+/// [`GlobOptions::strict_errors`].
 pub async fn glob(fs: &Fs, root: &Path, opts: &GlobOptions) -> Result<Vec<GlobMatch>, GlobError> {
 	let pattern = match opts.pattern.trim() {
 		"" => "*",

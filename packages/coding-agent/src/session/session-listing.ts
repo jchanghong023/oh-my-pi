@@ -774,10 +774,9 @@ export interface PickerListing extends SessionListing<SessionInfo> {
 }
 
 /**
- * Resume-picker listing of `sessionDir` plus `siblingDirs` (the folder's
- * session directories in other worktrees). `sessions` holds the rows whose
- * title history.db indexes. The current bucket's indexed rows need no content
- * read; sibling rows must first prove ownership from their recorded cwd.
+ * Resume-picker listing of `sessionDir` plus the same folder in other worktrees.
+ * `sessions` holds the rows whose title history.db indexes. Only buckets with a
+ * cwd matcher (shared current buckets and siblings) need a header read.
  * `complete` settles with the full scan, newest first, untitled empties dropped
  * unless pinned. With nothing indexed, `sessions` waits for the full scan.
  */
@@ -785,16 +784,18 @@ export async function listSessionsForPicker(
 	sessionDir: string,
 	storage: SessionStorage,
 	pinnedIds: ReadonlySet<string>,
-	siblingDirs?: ReadonlyMap<string, (recordedCwd: string) => boolean>,
+	bucketMatchers?: ReadonlyMap<string, (recordedCwd: string) => boolean>,
 ): Promise<PickerListing> {
 	let files: string[];
+	const currentDir = path.resolve(sessionDir);
 	try {
-		files = await listSessionDirFiles(sessionDir, storage, siblingDirs?.keys());
+		const siblingDirs = bucketMatchers && [...bucketMatchers.keys()].filter(dir => dir !== currentDir);
+		files = await listSessionDirFiles(sessionDir, storage, siblingDirs);
 	} catch {
 		return settledListing([]);
 	}
-	const siblingMatcher = siblingDirs?.size
-		? (file: string) => siblingDirs.get(path.resolve(path.dirname(file)))
+	const cwdMatcherForFile = bucketMatchers?.size
+		? (file: string) => bucketMatchers.get(path.resolve(path.dirname(file)))
 		: undefined;
 	return pickerListing(
 		files,
@@ -802,11 +803,11 @@ export async function listSessionsForPicker(
 		pinnedIds,
 		async () => {
 			const sessions = await collectSessionsFromFiles(files, storage, true);
-			return siblingMatcher
-				? sessions.filter(session => siblingMatcher(session.path)?.(session.cwd) ?? true)
+			return cwdMatcherForFile
+				? sessions.filter(session => cwdMatcherForFile(session.path)?.(session.cwd) ?? true)
 				: sessions;
 		},
-		siblingMatcher,
+		cwdMatcherForFile,
 	);
 }
 
@@ -849,13 +850,13 @@ async function pickerListing(
 	storage: SessionStorage,
 	pinnedIds: ReadonlySet<string>,
 	scan: () => Promise<SessionInfo[]>,
-	siblingMatcher?: (file: string) => ((recordedCwd: string) => boolean) | undefined,
+	cwdMatcherForFile?: (file: string) => ((recordedCwd: string) => boolean) | undefined,
 ): Promise<PickerListing> {
 	// The index is keyed by real session ids; in-memory test storages must not
 	// touch the process-wide history.db.
 	const useIndex = storage instanceof FileSessionStorage;
 	const titles = useIndex ? listSessionTitles() : new Map<string, string>();
-	const sessions = await indexedSessions(files, titles, storage, siblingMatcher);
+	const sessions = await indexedSessions(files, titles, storage, cwdMatcherForFile);
 	// Start the scan only now: its reads would otherwise queue ahead of the stats above.
 	const complete = scan().then(scanned => {
 		if (useIndex) indexScannedTitles(scanned, titles);
@@ -867,14 +868,14 @@ async function pickerListing(
 /**
  * Preliminary picker rows for the `files` whose session id has an indexed
  * title, from the file name, `stat`, and the title. The cwd is only read when
- * needed to verify sibling bucket ownership. A titled session is never
+ * needed to verify bucket ownership. A titled session is never
  * {@link isEmptySession} and each id gets one row.
  */
 async function indexedSessions(
 	files: readonly string[],
 	titles: ReadonlyMap<string, string>,
 	storage: SessionStorage,
-	siblingMatcher?: (file: string) => ((recordedCwd: string) => boolean) | undefined,
+	cwdMatcherForFile?: (file: string) => ((recordedCwd: string) => boolean) | undefined,
 ): Promise<SessionInfo[]> {
 	if (titles.size === 0) return [];
 	const titled = new Map<string, { file: string; title: string }>();
@@ -890,7 +891,7 @@ async function indexedSessions(
 			let cwd = "";
 			try {
 				stat = await fs.promises.stat(file);
-				const matchesCwd = siblingMatcher?.(file);
+				const matchesCwd = cwdMatcherForFile?.(file);
 				if (matchesCwd) {
 					const [content] = await storage.readTextSlices(file, SESSION_LIST_PREFIX_BYTES, 0);
 					const header = parseSessionListHeader(content, parseJsonlLenient<Record<string, unknown>>(content));

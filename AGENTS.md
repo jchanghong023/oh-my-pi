@@ -261,6 +261,8 @@ For the bash tool specifically:
 ## Commands
 
 - MUST run requested project commands with their existing defaults. NEVER append flags or positional arguments unless the user explicitly requests those arguments.
+- Unless the user explicitly requests WSL for the current task, agents and subagents MUST run tests natively on the current host and NEVER invoke WSL or a WSL-backed runner.
+- Run only affected existing tests unless the user requests broader coverage. NEVER add tests for a bug fix unless the user explicitly requests them. On Windows, skip only tests with a documented platform restriction.
 - Prefer explicit, scoped tests, such as `bun test ./packages/<package>/test/<file>.test.ts`. For broader local validation, use `bun run check` (static checks), `bun run test:ts` (TypeScript suites), `bun run test` (TypeScript and the upstream Rust task), or the applicable `bun run ci:test:*` entrypoint. Run broad suites only when explicitly authorized for this task; see [verification requirements](openspec/specs/fork-verification-gates/spec.md).
 - NEVER commit unless asked.
 - Never use `tsc`/`npx tsc` for monorepo typechecking; use `bun run check:ts` or the package's `check:types` script.

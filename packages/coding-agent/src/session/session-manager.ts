@@ -2618,9 +2618,8 @@ export class SessionManager {
 	}
 
 	/**
-	 * Whether a switch targets a different session. If only the actual load
-	 * can determine identity, prepare that snapshot for the caller to adopt
-	 * after any work that must still see the outgoing session.
+	 * Whether a switch targets a different session. Resolve ambiguous storage
+	 * keys here, but read the selected transcript only when applying the switch.
 	 */
 	prepareSessionSwitch(sessionFile: string): boolean | Promise<{ different: boolean; apply(): Promise<void> }> {
 		const current = this.#sessionFile;
@@ -2635,24 +2634,36 @@ export class SessionManager {
 		sessionFile: string,
 		current: string,
 	): Promise<{ different: boolean; apply(): Promise<void> }> {
-		// Only an opaque key whose legacy fallback is the current key needs the
-		// actual load to decide identity. Adopt the same read, without reprobes.
-		const target = await this.#loadSessionSwitchTarget(sessionFile, current);
+		// The exact key wins. Only a missing exact key can alias the current key.
+		const target =
+			(await this.#probeSessionSwitchKey(sessionFile)) || !(await this.#probeSessionSwitchKey(current))
+				? sessionFile
+				: current;
 		return {
-			different: target.file !== current,
-			apply: () => this.#setSessionFile(target.file, target.loaded),
+			different: target !== current,
+			apply: () => this.#setSessionFile(target, undefined, { exactKey: true }),
 		};
 	}
 
-	async #loadSessionSwitchTarget(
-		sessionFile: string,
-		legacyAbsolute?: string,
-	): Promise<{ file: string; loaded: SessionLoadResult }> {
+	async #probeSessionSwitchKey(file: string): Promise<boolean> {
+		try {
+			// Indexed existence checks are cached. Probe the backend without loading the
+			// transcript. Redis returns an empty range for both missing and empty keys.
+			const [, tail] = await this.#storage.readTextSlices(file, 0, 1);
+			if (!tail) await this.#storage.readText(file);
+			return true;
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			return false;
+		}
+	}
+
+	async #loadSessionSwitchTarget(sessionFile: string): Promise<{ file: string; loaded: SessionLoadResult }> {
 		const loaded = await loadSessionFile(sessionFile, this.#storage);
 		// Indexed backends keep opaque keys, but older callers could resume an
 		// absolute key by its relative path. Only fall back when the exact key is absent.
 		if (loaded.sourceSize === null && !path.isAbsolute(sessionFile)) {
-			const absoluteFile = legacyAbsolute ?? path.resolve(sessionFile);
+			const absoluteFile = path.resolve(sessionFile);
 			const absolute = await loadSessionFile(absoluteFile, this.#storage);
 			if (absolute.sourceSize !== null) return { file: absoluteFile, loaded: absolute };
 		}
@@ -2662,14 +2673,15 @@ export class SessionManager {
 	async #setSessionFile(
 		sessionFile: string,
 		loadedSession?: SessionLoadResult,
-		options?: { throwIfMissing?: boolean; newSession?: NewSessionOptions },
+		options?: { throwIfMissing?: boolean; newSession?: NewSessionOptions; exactKey?: boolean },
 	): Promise<void> {
 		await this.#drainAndCloseWriter();
 
 		let resolvedSessionFile = this.#storage instanceof FileSessionStorage ? path.resolve(sessionFile) : sessionFile;
 		let loaded = loadedSession;
 		if (!loaded) {
-			({ file: resolvedSessionFile, loaded } = await this.#loadSessionSwitchTarget(resolvedSessionFile));
+			if (options?.exactKey) loaded = await loadSessionFile(resolvedSessionFile, this.#storage);
+			else ({ file: resolvedSessionFile, loaded } = await this.#loadSessionSwitchTarget(resolvedSessionFile));
 		}
 		const sourceSize =
 			loaded.sourceSize !== undefined
@@ -4860,9 +4872,10 @@ export class SessionManager {
 		if (!session.cwd || !(await directoryIsMissing(session.cwd))) return false;
 		const dir = path.resolve(sessionDir ?? SessionManager.getDefaultSessionDir(cwd));
 		const home = path.resolve(path.dirname(session.path));
-		if (home === dir) return resolveManagedSessionRoot(dir, cwd) !== undefined;
-		const siblings = await worktreeSessionDirs(cwd, dir, { settings, stranded: true });
-		return siblings.get(home)?.(session.cwd) ?? false;
+		const currentBucket = home === dir;
+		if (currentBucket && !resolveManagedSessionRoot(dir, cwd)) return false;
+		const buckets = await worktreeSessionDirs(cwd, dir, { settings, stranded: true, currentOnly: currentBucket });
+		return buckets.get(home)?.(session.cwd) ?? currentBucket;
 	}
 
 	/**
@@ -5166,7 +5179,7 @@ export class SessionManager {
 	 * scan in `complete` (see {@link listSessionsForPicker}).
 	 * By default includes the same folder in the repository's Git and ovnfs worktrees,
 	 * so a session `/wt` moved stays reachable from the checkout it left.
-	 * The directory scope limits the picker to its own session bucket.
+	 * The directory scope limits the picker to its own working directory.
 	 */
 	static async listForPicker(
 		cwd: string,
@@ -5176,11 +5189,11 @@ export class SessionManager {
 		settings?: Settings,
 	): Promise<PickerListing> {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
-		const [pinned, siblingDirs] = await Promise.all([
+		const [pinned, buckets] = await Promise.all([
 			loadPinnedSessionIds(),
-			worktreeScope === "repo" ? worktreeSessionDirs(cwd, dir, { settings }) : undefined,
+			worktreeSessionDirs(cwd, dir, { settings, currentOnly: worktreeScope === "directory" }),
 		]);
-		return listSessionsForPicker(dir, storage, pinned, siblingDirs);
+		return listSessionsForPicker(dir, storage, pinned, buckets);
 	}
 
 	/** Picker-facing cross-project listing, same rules and passes as {@link listForPicker}. */

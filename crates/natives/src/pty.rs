@@ -1245,11 +1245,8 @@ fn drive_pty(
 		let _ = reader_tx.send(ReaderEvent::Done);
 	});
 
-	// Pin the kill targets before the waiter thread can reap the child: after
-	// the reap its pid may be recycled, and a pid-only signal (a lookup at
-	// cancellation time, or portable-pty's `clone_killer`) would hit whatever
-	// process took it (#4605). The child is only ever signalled through
-	// `pinned_child`.
+	// Capture the targets while the child is still owned, before the waiter
+	// can reap it and let its PID be recycled (#4605).
 	let mut targets = ps::TerminationTargets::new();
 	#[cfg(unix)]
 	if let Some(pgid) = master.process_group_leader().filter(|pgid| *pgid > 0) {
@@ -1258,6 +1255,13 @@ fn drive_pty(
 	let pinned_child = child_pid.and_then(omp_shell::proctree::Process::from_pid);
 	if let Some(process) = &pinned_child {
 		targets.add_process(process.clone());
+	}
+	#[cfg(target_os = "linux")]
+	if pinned_child.is_none()
+		&& matches!(&master, PtyMaster::Portable(_))
+		&& let Some(pid) = child_pid
+	{
+		targets.add_owned_group_leader(pid);
 	}
 	// Exit, cancellation and JS failure all arrive as control messages, so the
 	// loop below parks in `recv` instead of polling `try_wait`/`heartbeat` on a

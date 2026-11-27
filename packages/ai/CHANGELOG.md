@@ -14,9 +14,10 @@
 
 ### Fixed
 
-- Explicit request credentials take precedence over provider defaults and are redacted from rejection diagnostics.
+- Explicit request credentials disable ambient API key lookup and are redacted from rejection diagnostics.
+- Redact the effective Alibaba Token Plan token from rejected-request diagnostics.
 - Embedded Responses replays do not duplicate assistant text already delivered by the gateway.
-- Windows HTTP requests preserve explicit direct connections and select the proxy separately for each redirect target.
+- Windows HTTP requests preserve explicit direct connections, select the proxy for each redirect target, and follow POST redirects that switch to GET without replaying the body.
 - Devin sessions now switch to another stored login when the current one's weekly quota is spent and it has no on-demand balance, instead of failing every request on it ([#20524](https://github.com/can1357/oh-my-pi/pull/20524) by [@will-bogusz](https://github.com/will-bogusz))
 - The thinking-loop guard no longer aborts healthy reasoning written in Chinese, Japanese, Thai, or other unspaced scripts when the same English tool or metric names recur, and now also catches loops in that text ([#20096](https://github.com/can1357/oh-my-pi/issues/20096))
 - Pi-native stream requests now use a configured `Authorization` header regardless of its casing and fall back to the API key when the header is empty or absent ([#20472](https://github.com/can1357/oh-my-pi/pull/20472) by [@enieuwy](https://github.com/enieuwy))

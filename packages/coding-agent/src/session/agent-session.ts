@@ -9760,13 +9760,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const state = this.#goalModeState;
 		if (
 			signal?.aborted ||
+			this.#isDisposed ||
 			this.#agentKind !== "main" ||
 			!state?.autoOrchestrate ||
 			!state.enabled ||
 			(state.goal.status !== "active" && state.goal.status !== "budget-limited")
 		)
 			return;
-		const goalId = state.goal.id;
+		const { id: goalId, status } = state.goal;
 		const generation = this.#promptGeneration;
 		const sessionGeneration = this.#sessionGeneration;
 		if (this.#autopilotRun?.goalId !== goalId || this.#autopilotRun.sessionGeneration !== sessionGeneration) {
@@ -9784,14 +9785,28 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		if (state.goal.status === "budget-limited" && !run.review) return;
 		const admission = this.#autopilotAdmission;
 		if (admission?.run === run && admission.promptGeneration === generation) admission.awaitingResponse = true;
-		const isCurrent = () =>
-			!signal?.aborted &&
-			this.#autopilotRun === run &&
-			this.#sessionGeneration === sessionGeneration &&
-			this.#promptGeneration === generation;
-		return state.goal.status === "budget-limited"
-			? new GoalAutopilotCompletionRequest(run, isCurrent)
-			: new GoalAutopilotRequest(run, isCurrent, () => this.#goalRuntime.flushUsage("allowed"));
+		const isCurrent = (): boolean => {
+			const currentState = this.#goalModeState;
+			return (
+				!signal?.aborted &&
+				!this.#isDisposed &&
+				this.agent.state.isStreaming &&
+				this.#autopilotRun === run &&
+				run.currentRequest === request &&
+				this.#sessionGeneration === sessionGeneration &&
+				this.#promptGeneration === generation &&
+				currentState?.autoOrchestrate === true &&
+				currentState.enabled &&
+				currentState.goal.id === goalId &&
+				currentState.goal.status === status
+			);
+		};
+		const request =
+			status === "budget-limited"
+				? new GoalAutopilotCompletionRequest(run, isCurrent)
+				: new GoalAutopilotRequest(run, isCurrent, () => this.#goalRuntime.flushUsage("allowed"));
+		run.currentRequest = request;
+		return request;
 	}
 
 	#buildGoalAutoOrchestrateContext(compactionEntryId?: string, initialGoalId?: string): CustomMessage | undefined {

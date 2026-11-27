@@ -394,10 +394,14 @@ async function fetchWithSystemProxyRedirects(
 		if (target.protocol !== "http:" && target.protocol !== "https:") {
 			throw new TypeError("Fetch redirect target must be HTTP or HTTPS");
 		}
+		const verb = method.toUpperCase();
+		const dropBody =
+			((response.status === 301 || response.status === 302) && verb === "POST") ||
+			(response.status === 303 && verb !== "GET" && verb !== "HEAD");
 		// Request.body does not expose its original source. Do not tee it just
 		// in case of a redirect: the idle branch could buffer the entire upload.
 		if (
-			response.status !== 303 &&
+			!dropBody &&
 			(body instanceof ReadableStream ||
 				typeof body === "function" ||
 				(body != null && typeof body === "object" && Symbol.asyncIterator in body) ||
@@ -405,10 +409,6 @@ async function fetchWithSystemProxyRedirects(
 		) {
 			throw new TypeError("Cannot follow a redirect with a non-reusable request body");
 		}
-		const verb = method.toUpperCase();
-		const dropBody =
-			((response.status === 301 || response.status === 302) && verb === "POST") ||
-			(response.status === 303 && verb !== "GET" && verb !== "HEAD");
 		const crossOrigin = url.origin !== target.origin;
 		if (crossOrigin && (target.username || target.password)) {
 			throw new TypeError("Cross-origin fetch redirect target must not include credentials");

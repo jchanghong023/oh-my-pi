@@ -3,7 +3,7 @@ import goalBudgetLimitPrompt from "../prompts/goals/goal-budget-limit.md" with {
 import goalContinuationPrompt from "../prompts/goals/goal-continuation.md" with { type: "text" };
 import goalModeActivePrompt from "../prompts/goals/goal-mode-active.md" with { type: "text" };
 import type { Goal } from "../tools/details/goal";
-import type { GoalAutopilotRequest } from "./request-context";
+import { type GoalAutopilotRequest, hasEarlierGoalAutopilotReview } from "./request-context";
 import type { GoalBudgetSteering, LocalGoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "./state";
 
 /** A budget-limited response can finish a review but has no Autopilot approval scope. */
@@ -470,8 +470,7 @@ export class GoalRuntime {
 			flippedToBudgetLimited &&
 			state.autoOrchestrate === true &&
 			completionRequest?.run.goalId === state.goal.id &&
-			completionRequest.run.review &&
-			completionRequest.run.review !== completionRequest &&
+			hasEarlierGoalAutopilotReview(completionRequest) &&
 			completionRequest.isCurrent()
 				? await this.#finishGoal(state)
 				: undefined;
@@ -688,6 +687,9 @@ export class GoalRuntime {
 
 	async completeGoalFromTool(request?: GoalAutopilotRequest | GoalAutopilotCompletionRequest): Promise<Goal> {
 		return await this.#withAccounting(async () => {
+			if (request && (!request.isCurrent() || request.run.goalId !== this.#host.getState()?.goal.id)) {
+				throw new Error("Goal Autopilot run is no longer active.");
+			}
 			const completed = await this.#flushUsageLocked(
 				"suppressed",
 				undefined,
@@ -713,14 +715,14 @@ export class GoalRuntime {
 					throw new Error("Goal completion requires a current Autopilot request.");
 				}
 				if (state.goal.status === "budget-limited") {
-					if (!request.run.review || request.run.review === request) {
+					if (!hasEarlierGoalAutopilotReview(request)) {
 						throw new Error("Goal completion requires an earlier Autopilot review.");
 					}
 				} else {
 					if (state.goal.status !== "active" || request instanceof GoalAutopilotCompletionRequest) {
 						throw new Error("Goal completion requires a current Autopilot request.");
 					}
-					if (!request.run.review || request.run.review === request) {
+					if (!hasEarlierGoalAutopilotReview(request)) {
 						request.run.review = request;
 						return state.goal;
 					}

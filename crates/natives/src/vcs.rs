@@ -1465,7 +1465,7 @@ impl VcsGitRepo {
 		signal: Option<Unknown>,
 	) -> Promise<String> {
 		let options = options.into();
-		blocking("vcs.commitCreate", self.inner.clone(), signal, move |r| {
+		blocking_mutation("vcs.commitCreate", self.inner.clone(), signal, move |r| {
 			r.commit_create(&message, &options)
 		})
 	}
@@ -1497,7 +1497,7 @@ impl VcsGitRepo {
 		signal: Option<Unknown>,
 	) -> Promise<VcsReconciledCommit> {
 		let options = options.into();
-		blocking("vcs.commitReconciled", self.inner.clone(), signal, move |r| {
+		blocking_mutation("vcs.commitReconciled", self.inner.clone(), signal, move |r| {
 			let (sha, index_notes) = r.commit_reconciled(&message, &options, &selection)?;
 			Ok(VcsReconciledCommit { sha, index_notes })
 		})

@@ -23,7 +23,7 @@ import {
 	normalizeProfileName,
 	prepareLinuxPrivateCacheDirectory,
 	preparePrivateCacheDirectory,
-	resolveAbsoluteDir,
+	resolveAbsoluteDir as resolveFullyQualifiedDir,
 	resolveCacheRoot,
 	resolveLinuxPrivateCacheRoot,
 	resolveNativesDirOverride,
@@ -391,7 +391,7 @@ class DirResolver {
 		// An explicit OMP root owns data, cache, and runtime paths even when XDG is set.
 		const xdgPlatform =
 			(process.platform === "linux" || process.platform === "darwin") &&
-			!resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT);
+			!resolveFullyQualifiedDir(process.env.OMP_CONFIG_ROOT);
 		if (xdgPlatform && isDefault) {
 			const resolveIf = (envVar: string) => resolveXdgRoot(process.env[envVar], profile);
 			xdgData = resolveIf("XDG_DATA_HOME");
@@ -422,7 +422,7 @@ class DirResolver {
 		};
 		// The implicit Linux cache lives on /dev/shm, which may be mounted noexec.
 		this.executableCacheRoot =
-			(this.cacheRoot && resolveAbsoluteDir(process.env.OMP_CACHE_DIR) ? this.cacheRoot : xdgCache) ??
+			(this.cacheRoot && resolveFullyQualifiedDir(process.env.OMP_CACHE_DIR) ? this.cacheRoot : xdgCache) ??
 			this.configRoot;
 		// XDG flattens the agent/ prefix: ~/.omp/agent/sessions → $XDG_DATA_HOME/omp/sessions
 		this.#agentDirs = {
@@ -763,8 +763,18 @@ export function getRemoteDir(): string {
 	return dirs.rootSubdir("remote", "data");
 }
 
-/** Expand a leading `~` and allow an absolute path, including a Windows current-drive root. */
-function resolveWorktreesDir(value: string | undefined): string | undefined {
+/**
+ * Expand a leading `~` and require an absolute result. Returns `undefined` for
+ * empty/whitespace input or a path that is still relative after expansion.
+ *
+ * Worktree bases and the natives directory are process-global: a worktree base
+ * is consumed by both creation (PR checkout, task isolation) and cleanup
+ * (`omp worktree`), and every launch extracts or loads the native addon from
+ * the same natives directory. A relative value would resolve against whatever
+ * cwd happened to launch `omp`, so those readers could disagree — we refuse it
+ * rather than silently bind it to cwd.
+ */
+function resolveAbsoluteDir(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	if (!trimmed) return undefined;
 	let p = trimmed;
@@ -781,13 +791,13 @@ let worktreesDirOverride: string | undefined;
  * `worktree.base` setting in coding-agent; pass `undefined`/empty to clear and
  * fall back to `OMP_WORKTREE_DIR` or the `~/.omp/wt` default.
  *
- * `~` is expanded and a relative path is rejected.
+ * `~` is expanded and a relative path is rejected (see {@link resolveAbsoluteDir}).
  * Returns the absolute path that took effect, or `undefined` if the input was
  * cleared or rejected — callers can warn on a non-empty input that returns
  * `undefined`.
  */
 export function setWorktreesDir(dir: string | undefined): string | undefined {
-	worktreesDirOverride = resolveWorktreesDir(dir);
+	worktreesDirOverride = resolveAbsoluteDir(dir);
 	return worktreesDirOverride;
 }
 
@@ -799,7 +809,7 @@ export function setWorktreesDir(dir: string | undefined): string | undefined {
  * ignored and resolution falls through.
  */
 export function getWorktreesDir(): string {
-	return resolveWorktreesDir(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
+	return resolveAbsoluteDir(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
 }
 
 /** Get the SSH control socket directory (~/.omp/ssh-control). */
@@ -845,7 +855,7 @@ export function getPuppeteerDir(): string {
 export function getWebKitHostPath(platform: NodeJS.Platform = process.platform): string {
 	const root =
 		dirs.cacheRoot ||
-		(resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT) ? dirs.configRoot : path.join(os.homedir(), ".o2"));
+		(resolveFullyQualifiedDir(process.env.OMP_CONFIG_ROOT) ? dirs.configRoot : path.join(os.homedir(), ".o2"));
 	return path.join(root, "lib", "abkit", platform === "win32" ? "ABHost.exe" : "ABHost");
 }
 

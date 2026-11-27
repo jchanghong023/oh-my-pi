@@ -1602,8 +1602,10 @@ fn reap(pid: i32) -> libc::rusage {
 	ru
 }
 
-/// The usage `wait4` reported for a reaped child, plus macOS-specific counters.
-fn proc_usage(ru: &libc::rusage, [instructions, cycles, peak_footprint]: [u64; 3]) -> ProcUsage {
+/// The usage `wait4` reported for a reaped child. Instructions, cycles and the
+/// peak footprint stay 0: only macOS reports them, and
+/// [`ExtProc::usage`] fills them in from [`apple_usage`] there.
+fn proc_usage(ru: &libc::rusage) -> ProcUsage {
 	let ns = |tv: libc::timeval| {
 		(tv.tv_sec.max(0) as u64) * 1_000_000_000 + (tv.tv_usec.max(0) as u64) * 1_000
 	};
@@ -1611,39 +1613,35 @@ fn proc_usage(ru: &libc::rusage, [instructions, cycles, peak_footprint]: [u64; 3
 	// Linux and the BSDs count kilobytes; macOS bytes.
 	let rss_unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
 	ProcUsage {
-		user_ns: ns(ru.ru_utime),
-		sys_ns: ns(ru.ru_stime),
-		max_rss: count(ru.ru_maxrss) * rss_unit,
-		minor_faults: count(ru.ru_minflt),
-		major_faults: count(ru.ru_majflt),
-		swaps: count(ru.ru_nswap),
-		block_in: count(ru.ru_inblock),
-		block_out: count(ru.ru_oublock),
-		msgs_sent: count(ru.ru_msgsnd),
-		msgs_received: count(ru.ru_msgrcv),
-		signals: count(ru.ru_nsignals),
-		voluntary_switches: count(ru.ru_nvcsw),
+		user_ns:              ns(ru.ru_utime),
+		sys_ns:               ns(ru.ru_stime),
+		max_rss:              count(ru.ru_maxrss) * rss_unit,
+		minor_faults:         count(ru.ru_minflt),
+		major_faults:         count(ru.ru_majflt),
+		swaps:                count(ru.ru_nswap),
+		block_in:             count(ru.ru_inblock),
+		block_out:            count(ru.ru_oublock),
+		msgs_sent:            count(ru.ru_msgsnd),
+		msgs_received:        count(ru.ru_msgrcv),
+		signals:              count(ru.ru_nsignals),
+		voluntary_switches:   count(ru.ru_nvcsw),
 		involuntary_switches: count(ru.ru_nivcsw),
-		instructions,
-		cycles,
-		peak_footprint,
+		instructions:         0,
+		cycles:               0,
+		peak_footprint:       0,
 	}
 }
 
 /// What macOS keeps of the unreaped child `pid`'s usage beyond `rusage`
 /// (`wait4` reports no instructions, cycles or footprint).
 #[cfg(target_os = "macos")]
-fn apple_usage(pid: i32) -> [u64; 3] {
+fn apple_usage(pid: i32) -> Option<libc::rusage_info_v4> {
 	// SAFETY: rusage_info_v4 is plain data, valid zeroed.
 	let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
 	// SAFETY: `info` is a writable rusage_info_v4, the struct the V4 flavor
 	// fills; the zombie stays queryable until it is reaped.
 	let rc = unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V4, (&raw mut info).cast()) };
-	if rc == 0 {
-		[info.ri_instructions, info.ri_cycles, info.ri_lifetime_max_phys_footprint]
-	} else {
-		[0; 3]
-	}
+	(rc == 0).then_some(info)
 }
 
 /// A spawned external. Its process is reaped only once the engine is done
@@ -1978,13 +1976,22 @@ impl ExtProc for UnixProc {
 		// The zombie is only queryable until it is reaped.
 		#[cfg(target_os = "macos")]
 		let apple = apple_usage(self.pid);
-		#[cfg(not(target_os = "macos"))]
-		let apple = [0; 3];
 		let ru = self.shared.state.reap(self.pid);
 		self.reaped = true;
 		#[cfg(target_os = "linux")]
 		let ru = self.report.take().and_then(measure::usage).unwrap_or(ru);
-		Some(proc_usage(&ru, apple))
+		let usage = proc_usage(&ru);
+		#[cfg(target_os = "macos")]
+		let usage = match apple {
+			Some(ri) => ProcUsage {
+				instructions: ri.ri_instructions,
+				cycles: ri.ri_cycles,
+				peak_footprint: ri.ri_lifetime_max_phys_footprint,
+				..usage
+			},
+			None => usage,
+		};
+		Some(usage)
 	}
 }
 

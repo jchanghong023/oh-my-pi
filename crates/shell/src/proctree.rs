@@ -1038,7 +1038,7 @@ impl Process {
 		// Refresh while keeping known descendants that TERM may have
 		// orphaned. They can also anchor a group whose leader has exited.
 		let mut current = self.signalable_descendants(&protected);
-		if group && !descendants.is_empty() {
+		if !descendants.is_empty() {
 			let seen: HashSet<_> = current.iter().map(Self::pid).collect();
 			current.extend(descendants.into_iter().filter(|process| {
 				!seen.contains(&process.pid()) && process.status() == ProcessStatus::Running
@@ -1250,6 +1250,21 @@ impl TerminationTargets {
 	pub fn add_pgid(&mut self, pgid: i32) {
 		if pgid > 0 && !self.pgids.contains(&pgid) {
 			self.pgids.push(pgid);
+		}
+	}
+
+	/// Seed a group and its family from a spawned leader when its pidfd is
+	/// unavailable. Call before the child can be reaped.
+	#[cfg(target_os = "linux")]
+	pub fn add_owned_group_leader(&mut self, pid: i32) {
+		if pid > 0
+			&& !is_self_process_group(pid)
+			&& let Some(leader) = crate::sys::proc::info(pid)
+			&& leader.ppid == std::process::id() as i32
+			&& leader.pgid == pid
+		{
+			self.add_pgid(pid);
+			self.family.push(leader);
 		}
 	}
 

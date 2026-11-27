@@ -264,7 +264,7 @@ pub enum Action {
 	Stop,
 }
 
-/// A directory below the root that could not be opened or listed.
+/// A directory that could not be opened or fully listed.
 #[derive(Debug)]
 pub struct DirError {
 	/// Absolute path in the walked filesystem's spelling.
@@ -276,7 +276,7 @@ pub struct DirError {
 /// Why a walk ended without a result.
 #[derive(Debug)]
 pub enum WalkError {
-	/// The root could not be opened as a directory.
+	/// Opening the root failed, or its listing yielded no usable result.
 	Root {
 		/// The root as given.
 		path:  PathBuf,
@@ -347,11 +347,13 @@ const BATCHES_PER_WORKER: usize = 4;
 /// polling pauses the walk, and dropping the [`Walk`] cancels it. A
 /// directory's [`Action::SkipDir`] prunes it, [`Action::Stop`] ends the walk;
 /// `Skip` and `Continue` are the same here. Open and listing failures below
-/// the root are reported by [`Walk::into_errors`]; readable entries from an
-/// incomplete listing are still visited.
+/// the root are reported by [`Walk::into_errors`], as is an incomplete root
+/// listing with readable entries. Readable entries from incomplete listings
+/// are still visited.
 ///
 /// # Errors
-/// [`WalkError::Root`] when `root` cannot be opened as a directory.
+/// [`WalkError::Root`] when opening `root` fails or its listing fails without
+/// a usable partial result.
 pub async fn walk<T, V>(
 	fs: &Fs,
 	root: &Path,
@@ -373,7 +375,7 @@ where
 /// for [`walk`].
 ///
 /// # Errors
-/// [`WalkError::Root`] when `root` cannot be opened as a directory.
+/// As for [`walk`].
 pub(crate) async fn walk_sink<K: Sink>(
 	fs: &Fs,
 	root: &Path,
@@ -406,7 +408,7 @@ impl<T> Stream for Walk<T> {
 }
 
 impl<T> Walk<T> {
-	/// Directories below the root that could not be read; complete once the
+	/// Directory failures, including incomplete listings; complete once the
 	/// stream has ended.
 	pub fn into_errors(self) -> Vec<DirError> {
 		self.halt.0.take_errors()
@@ -452,7 +454,7 @@ impl Collection {
 		(0..self.len()).map(|index| self.get(index))
 	}
 
-	/// Directories below the root that could not be read.
+	/// Directory failures, including incomplete listings.
 	pub fn errors(&self) -> &[DirError] {
 		&self.errors
 	}
@@ -540,8 +542,7 @@ impl Ordered {
 		self.0.wait().await;
 	}
 
-	/// Directories below the root that could not be read, once the walk has
-	/// ended.
+	/// Directory errors, including incomplete listings, once the walk ends.
 	pub async fn into_errors(self) -> Vec<DirError> {
 		self.0.into_errors().await
 	}

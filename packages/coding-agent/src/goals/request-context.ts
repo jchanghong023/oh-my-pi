@@ -4,6 +4,7 @@ import { MAGIC_KEYWORDS, renderOrchestrateNotice } from "../modes/magic-keywords
 import goalAutoOrchestratePrompt from "../prompts/goals/goal-auto-orchestrate.md" with { type: "text" };
 import type { CustomMessage } from "../session/messages";
 import { type ApprovalRecordSink, recordToolApprovalResolved } from "../session/tool-approval-records";
+import type { GoalAutopilotCompletionRequest } from "./runtime";
 import type { LocalGoalModeState } from "./state";
 
 export const GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE = "goal-auto-orchestrate";
@@ -42,7 +43,12 @@ export function buildGoalAutoOrchestrateMessage(
 
 export class GoalAutopilotRequest {
 	constructor(
-		readonly run: { goalId: string; sessionGeneration: number; review?: GoalAutopilotRequest },
+		readonly run: {
+			goalId: string;
+			sessionGeneration: number;
+			review?: GoalAutopilotRequest;
+			currentRequest?: GoalAutopilotRequest | GoalAutopilotCompletionRequest;
+		},
 		readonly isCurrent: () => boolean,
 		readonly flushUsage: () => Promise<void>,
 	) {}
@@ -53,12 +59,26 @@ export class GoalAutopilotRequest {
 		return this.isCurrent();
 	}
 
-	async approve(sink: ApprovalRecordSink | undefined, toolCallId: string, toolName: string, signal?: AbortSignal) {
-		if (!(await this.currentAfterUsage()) || signal?.aborted)
-			throw new Error("Goal Autopilot run is no longer active.");
+	async approve(
+		sink: ApprovalRecordSink | undefined,
+		toolCallId: string,
+		toolName: string,
+		signal?: AbortSignal,
+		completingGoal = false,
+	) {
+		// Only the real completion tool can account for this response and finish atomically.
+		// A separate flush here could exhaust the budget and revoke its request first.
+		const current =
+			!signal?.aborted &&
+			(completingGoal && hasEarlierGoalAutopilotReview(this) ? this.isCurrent() : await this.currentAfterUsage());
+		if (!current || signal?.aborted) throw new Error("Goal Autopilot run is no longer active.");
 		if (sink)
 			await recordToolApprovalResolved(sink, { toolCallId, toolName, approved: true, reason: "goal-autopilot" });
 	}
+}
+
+export function hasEarlierGoalAutopilotReview(request: GoalAutopilotRequest | GoalAutopilotCompletionRequest): boolean {
+	return request.run.review !== undefined && request.run.review !== request;
 }
 
 export function goalAutopilotRequest(context?: AgentToolContext): GoalAutopilotRequest | undefined {

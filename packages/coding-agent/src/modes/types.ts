@@ -115,16 +115,15 @@ export type CompactionQueueOptions = Pick<CompactionQueuedMessage, "imageLinks" 
 /**
  * `/compact` sent with the follow-up key during a run: it runs once the run settles, while the
  * session's branch still continues from the position it was queued at. A switch or tree
- * navigation hands it back to the editor instead.
+ * navigation hands the submitted draft (including attachments) back to the editor instead.
  */
-export type YieldCompaction = ConversationPosition & {
-	/** The submitted command, restored to the editor when the request is dequeued. */
-	text: string;
-	instructions?: string;
-	mode?: CompactMode;
-	/** Earlier input from the same compaction queue has not finished dispatching yet. */
-	afterDispatch?: Promise<void>;
-};
+export type YieldCompaction = ConversationPosition &
+	Pick<CompactionQueuedMessage, "text" | "images" | "imageLinks"> & {
+		instructions?: string;
+		mode?: CompactMode;
+		/** Earlier input from the same compaction queue has not finished dispatching yet. */
+		afterDispatch?: Promise<void>;
+	};
 
 export type SubmittedUserInput = {
 	text: string;

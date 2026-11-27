@@ -116,6 +116,7 @@ async function handleCompactTui(command: ParsedSlashCommand, runtime: TuiSlashCo
 		queueYieldCompaction(ctx, {
 			...origin,
 			text: command.text,
+			...runtime.input,
 			instructions: parsed.instructions,
 			mode: parsed.mode,
 		});

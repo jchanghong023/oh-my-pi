@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { parseAlibabaTokenPlanCredential } from "@oh-my-pi/pi-catalog/wire/alibaba-token-plan";
 import { parseOtariCredential } from "@oh-my-pi/pi-catalog/wire/otari";
 import { getLogsDir, isBunTestRuntime, isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error/flags";
@@ -299,9 +300,12 @@ function redactDeclaredCredentials<T>(value: T, dump: RawHttpRequestDump): T {
 	};
 	if (auth.apiKey) {
 		addCredential(auth.apiKey);
-		// Otari can declare a token and its region as JSON but sends only the token.
+		// These providers can declare a JSON credential but send only its token.
 		if (dump.provider === "otari") {
 			const token = parseOtariCredential(auth.apiKey)?.token;
+			if (token) addCredential(token);
+		} else if (dump.provider === "alibaba-token-plan") {
+			const token = parseAlibabaTokenPlanCredential(auth.apiKey)?.token;
 			if (token) addCredential(token);
 		}
 	}

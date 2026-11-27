@@ -1294,7 +1294,14 @@ export class UiHelpers {
 				end = i;
 				afterDispatch = Promise.withResolvers<void>();
 				const position = message.followUp ?? origin ?? conversationPosition(this.ctx.sessionManager);
-				nextCompaction = { ...position, ...parsed, text: message.text, afterDispatch: afterDispatch.promise };
+				nextCompaction = {
+					...position,
+					...parsed,
+					text: message.text,
+					images: message.images,
+					imageLinks: message.imageLinks,
+					afterDispatch: afterDispatch.promise,
+				};
 				break;
 			}
 		}

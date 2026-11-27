@@ -40,6 +40,10 @@
 
 ### Fixed
 
+- Resuming a session reads its latest history after the old session settles, and worktree pickers disambiguate session directories that share a storage bucket.
+- Withdrawing a queued `/compact` restores its draft attachments as well as its text.
+- Failed browser recording finalization leaves no partial recording at the original destination.
+- An already reviewed Goal Autopilot request can complete through local approval even when the final response exhausts the budget.
 - Team configuration writes report the effective member list and apply the same validation to temporary and saved values.
 - Goal Autopilot preserves the first notification across a stopped queue, respects follow-up timing, and restores only the active goal after compaction.
 - Queued `/sketch` attachments stay local during compaction. Queued input can be withdrawn, and a second `/compact` waits for earlier prompts.

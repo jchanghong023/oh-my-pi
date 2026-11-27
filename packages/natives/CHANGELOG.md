@@ -14,6 +14,8 @@
 ### Fixed
 
 - Git mutations return the result of writes already started, preserve the real index during scoped commits, and record commits in the current worktree's HEAD reflog.
+- Linux PTY cancellation still stops the owned process group when pidfd handles are unavailable, and process termination keeps track of descendants after their parent exits.
+- Non-strict glob preserves partial results when some directory entries cannot be inspected.
 - Windows rsync keeps file lists relative to the chosen source and preserves symbolic link destination paths.
 - The native loader can use an external addon when the private cache cannot be created.
 - Preserved model tables and meaningful button labels while removing unrelated news and footer content from URL reads.

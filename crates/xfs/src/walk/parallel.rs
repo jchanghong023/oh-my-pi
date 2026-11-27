@@ -14,9 +14,9 @@
 //! that listed it, before they are sent ([`Sink::settle`]): a search reads
 //! and scans the directory's files there, with the worker's own session and
 //! state, so no second pool or hand-off sits between walking and searching.
-//! The root is listed before the walk starts (its errors fail the start) but
-//! settled by a worker, so a large root never holds the start up and the
-//! start never waits on the output channel.
+//! The root is listed before the walk starts, but settled by a worker, so a
+//! large root never holds the start up and the start never waits on the output
+//! channel.
 //!
 //! Dropping the consumer ends the walk: workers are aborted and check the
 //! halt flag before each directory and each entry.
@@ -236,7 +236,7 @@ pub(super) struct Shared {
 }
 
 impl Shared {
-	/// Directories that could not be read, in no particular order.
+	/// Directory errors, including incomplete listings, in arbitrary order.
 	pub(super) fn take_errors(&self) -> Vec<DirError> {
 		std::mem::take(&mut *self.errors.lock())
 	}
@@ -568,7 +568,8 @@ pub(super) struct Outcome {
 /// path; `tx` receives a streaming walk's output.
 ///
 /// # Errors
-/// [`WalkError::Root`] when the root cannot be opened or listed.
+/// [`WalkError::Root`] when opening the root fails or its listing fails
+/// without a usable partial result.
 pub(super) async fn start<K: Sink>(
 	fs: &Fs,
 	root: &Path,
@@ -801,7 +802,7 @@ impl<K: Sink> Ctx<K> {
 		}
 	}
 
-	/// Records a directory below the root that could not be read.
+	/// Records a failed open or an incomplete or failed listing.
 	fn report(&self, rel: Bytes, error: io::Error) {
 		// SAFETY: job paths live in scratch arenas, which the context keeps
 		// until the walk is finished.
@@ -947,7 +948,7 @@ impl<K: Sink> Ctx<K> {
 			.await
 		{
 			Ok(()) => freshness,
-			Err(error) if depth > 0 && IncompleteListing::is(&error) => {
+			Err(error) if IncompleteListing::is(&error) && (depth > 0 || !listing.is_empty()) => {
 				self.report(rel_bytes, error);
 				// Incomplete listings must not hide the error on a cache hit.
 				None
@@ -1227,8 +1228,7 @@ impl<K: Sink> InOrder<K> {
 		}
 	}
 
-	/// Directories below the root that could not be read, once the walk has
-	/// ended.
+	/// Directory errors, including incomplete listings, once the walk ends.
 	pub(super) async fn into_errors(self) -> Vec<DirError> {
 		self.started.finished().await;
 		self.started.ctx.shared.check_panic();

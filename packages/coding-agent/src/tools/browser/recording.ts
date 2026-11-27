@@ -2,13 +2,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { ToolError } from "../tool-errors";
-import { untilAborted } from "@oh-my-pi/pi-utils/abortable";
+import { AbortError, untilAborted } from "@oh-my-pi/pi-utils/abortable";
 import type { HTMLElement } from "@oh-my-pi/pi-utils/dom";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries, TempDir } from "@oh-my-pi/pi-utils/temp";
 import type { Protocol } from "devtools-protocol";
 import type { CDPSession, Page } from "puppeteer-core";
-import { resizeImage } from "../../utils/image-resize";
+import { type ResizedImage, resizeImage } from "../../utils/image-resize";
 import { buildChangedFrameContactSheetPng, requireMediaBinary, runFfmpeg } from "../../utils/video";
 import { resolveToCwd } from "../path-utils";
 import { readPageViewport } from "./launch";
@@ -398,7 +398,12 @@ function concatPath(filePath: string): string {
 	return filePath.replaceAll("'", "'\\''");
 }
 
-async function encodeRecording(active: ActiveRecording, durationMs: number, signal?: AbortSignal): Promise<void> {
+async function encodeRecording(
+	active: ActiveRecording,
+	outputPath: string,
+	durationMs: number,
+	signal?: AbortSignal,
+): Promise<void> {
 	const frames = active.frames;
 	const firstTimestamp = frames[0]!.timestampMs;
 	const framePeriodMs = 1_000 / active.options.fps;
@@ -423,7 +428,6 @@ async function encodeRecording(active: ActiveRecording, durationMs: number, sign
 	const concatFile = active.spool.join("frames.concat");
 	await Bun.write(concatFile, `${concatLines.join("\n")}\n`);
 	const absoluteConcatFile = path.resolve(concatFile);
-	await fs.mkdir(path.dirname(active.path), { recursive: true });
 	const quality = active.options.quality;
 	const fpsFilter = `fps=${active.options.fps}`;
 	const extension = path.extname(active.path).toLowerCase();
@@ -447,7 +451,7 @@ async function encodeRecording(active: ActiveRecording, durationMs: number, sign
 				"yuv420p",
 				"-movflags",
 				"+faststart",
-				active.path,
+				outputPath,
 			],
 			signal,
 		);
@@ -468,7 +472,7 @@ async function encodeRecording(active: ActiveRecording, durationMs: number, sign
 				"realtime",
 				"-cpu-used",
 				"5",
-				active.path,
+				outputPath,
 			],
 			signal,
 		);
@@ -483,7 +487,7 @@ async function encodeRecording(active: ActiveRecording, durationMs: number, sign
 				String(Math.round(((100 - quality) * 63) / 100)),
 				"-b:v",
 				"1M",
-				active.path,
+				outputPath,
 			],
 			signal,
 		);
@@ -582,8 +586,6 @@ export class RecordingController {
 			throw new BrowserRecordingError("tab.recordStop() is already finalizing the active recording");
 		active.finalizing = true;
 		const durationMs = Math.max(0, Date.now() - active.startedAt);
-		const contactPath = `${active.path}.contact.png`;
-		let finalized = false;
 		try {
 			await untilAborted(context.signal, () => active.source.stop());
 			await Promise.all(active.pendingWrites);
@@ -595,9 +597,7 @@ export class RecordingController {
 				await Bun.write(fallback, bytes);
 				active.frames.push({ path: fallback, timestampMs: 0 });
 			}
-			const result = await this.#saveOutput(active, durationMs, context);
-			finalized = true;
-			return result;
+			return await this.#saveOutput(active, durationMs, context);
 		} catch (error) {
 			throw recordingError(error, "tab.recordStop()");
 		} finally {
@@ -606,10 +606,6 @@ export class RecordingController {
 			if (active.options.cursor) await active.source.removeCursor();
 			await active.spool.remove().catch(() => undefined);
 			if (this.#active === active) this.#active = undefined;
-			if (!finalized) {
-				await fs.rm(active.path, { force: true }).catch(() => undefined);
-				await fs.rm(contactPath, { force: true }).catch(() => undefined);
-			}
 		}
 	}
 
@@ -667,36 +663,51 @@ export class RecordingController {
 		durationMs: number,
 		context: RecordingStopContext,
 	): Promise<RecordingStopResult> {
-		await encodeRecording(active, durationMs, context.signal);
-		let contactSheet: string | undefined;
-		if (active.options.contactSheet) {
-			const sheet = await buildChangedFrameContactSheetPng(
-				active.path,
-				{
-					outputPath: `${active.path}.contact.png`,
-					fps: active.options.fps,
-					threshold: active.options.contactSheetThreshold,
-					maxTiles: MAX_CONTACT_SHEET_TILES,
-				},
-				context.signal,
-			);
-			if (context.output) {
-				const resized = await resizeImage(
-					{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
-					{ excludeWebP: context.excludeWebP },
+		const dir = path.dirname(active.path);
+		await fs.mkdir(dir, { recursive: true });
+		const temporary = path.join(dir, `.omp-recording-${crypto.randomUUID()}`);
+		const videoPath = `${temporary}${path.extname(active.path)}`;
+		const contact = active.options.contactSheet
+			? { path: `${active.path}.contact.png`, temporary: `${temporary}.contact.png` }
+			: undefined;
+		try {
+			await encodeRecording(active, videoPath, durationMs, context.signal);
+			let image: ResizedImage | undefined;
+			if (contact) {
+				const sheet = await buildChangedFrameContactSheetPng(
+					videoPath,
+					{
+						outputPath: contact.temporary,
+						fps: active.options.fps,
+						threshold: active.options.contactSheetThreshold,
+						maxTiles: MAX_CONTACT_SHEET_TILES,
+					},
+					context.signal,
 				);
-				context.output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+				if (context.output) {
+					image = await resizeImage(
+						{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
+						{ excludeWebP: context.excludeWebP },
+					);
+				}
 			}
-			contactSheet = sheet.path;
+			const { size: bytes } = await fs.stat(videoPath);
+			if (context.signal?.aborted) throw new AbortError(context.signal);
+			// Publish the video last so a contact-sheet publication failure leaves it untouched.
+			if (contact) await fs.rename(contact.temporary, contact.path);
+			await fs.rename(videoPath, active.path);
+			if (image) context.output?.push({ type: "image", data: image.data, mimeType: image.mimeType });
+			return {
+				path: active.path,
+				durationMs,
+				frames: active.frames.length,
+				bytes,
+				...(contact ? { contactSheet: contact.path } : {}),
+			};
+		} finally {
+			await removeWithRetries(videoPath).catch(() => undefined);
+			if (contact) await removeWithRetries(contact.temporary).catch(() => undefined);
 		}
-		const stat = await fs.stat(active.path);
-		return {
-			path: active.path,
-			durationMs,
-			frames: active.frames.length,
-			bytes: stat.size,
-			...(contactSheet ? { contactSheet } : {}),
-		};
 	}
 
 	/** Finalize an active recording, then immediately begin another. */

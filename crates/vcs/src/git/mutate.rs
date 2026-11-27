@@ -166,17 +166,22 @@ fn append_scoped_head_reflog(
 	committer: gix::actor::SignatureRef<'_>,
 	message: &'static str,
 ) -> io::Result<()> {
-	if repo.refs.write_reflog == gix::refs::store::WriteReflog::Disable {
-		return Ok(());
-	}
-	// Match gitoxide's Normal/Always HEAD auto-creation policy. HEAD is private
-	// to this checkout, unlike its referenced branch in a linked worktree.
+	// HEAD is private to this checkout, unlike its referenced branch in a
+	// linked worktree. Disabling automatic creation still logs to existing HEAD.
+	let create = repo.refs.write_reflog != gix::refs::store::WriteReflog::Disable;
 	let logs = repo.git_dir().join("logs");
-	fs::create_dir_all(&logs)?;
-	let mut log = fs::OpenOptions::new()
-		.create(true)
+	if create {
+		fs::create_dir_all(&logs)?;
+	}
+	let mut log = match fs::OpenOptions::new()
+		.create(create)
 		.append(true)
-		.open(logs.join("HEAD"))?;
+		.open(logs.join("HEAD"))
+	{
+		Ok(log) => log,
+		Err(err) if !create && err.kind() == io::ErrorKind::NotFound => return Ok(()),
+		Err(err) => return Err(err),
+	};
 	write!(log, "{parent} {id} ")?;
 	committer.trim().write_to(&mut log)?;
 	writeln!(log, "\t{message}")

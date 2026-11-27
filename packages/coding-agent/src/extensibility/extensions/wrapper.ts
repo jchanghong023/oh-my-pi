@@ -10,9 +10,10 @@ import {
 	type ToolLoadMode,
 } from "@oh-my-pi/pi-agent-core";
 import type { ComputerSafetyCheck, ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
-import { prompt, sanitizeText, untilAborted, toError } from "@oh-my-pi/pi-utils";
+import { isRecord, prompt, sanitizeText, untilAborted, toError } from "@oh-my-pi/pi-utils";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
 import { goalAutopilotRequest } from "../../goals/request-context";
+import { GoalTool } from "../../goals/tools/goal-tool";
 import { extensionTheme } from "../../ui/extensions/render-output";
 import nativeDelegationTemplate from "../../prompts/tools/native-delegation.md" with { type: "text" };
 import {
@@ -425,7 +426,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					`Tool "${this.tool.name}" requires provider safety approval: ${safetyCheckLines(pendingSafetyChecks).join("; ")}`,
 				);
 			}
-			await autopilot.approve(this.runner.approvalRecords, toolCallId, this.tool.name, signal);
+			const scheduledCall = context?.toolCall?.toolCalls[context.toolCall.index];
+			const completingGoal =
+				this.tool instanceof GoalTool &&
+				scheduledCall?.id === toolCallId &&
+				scheduledCall.name === this.tool.name &&
+				isRecord(effectiveParams) &&
+				effectiveParams.op === "complete";
+			await autopilot.approve(this.runner.approvalRecords, toolCallId, this.tool.name, signal, completingGoal);
 		} else if (approvalCheck.required) {
 			const scheduledCall = context?.toolCall?.toolCalls[context.toolCall.index];
 			if (

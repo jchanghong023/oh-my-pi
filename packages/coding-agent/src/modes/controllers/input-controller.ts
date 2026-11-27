@@ -20,7 +20,7 @@ import { parseFileSlashInvocation, renderFileSlashCommand } from "../../extensib
 import { InternalUrlRouter, resolveLocalRoot } from "../../internal-urls";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
-import type { DequeuedMessage, RestoredQueuedMessage } from "../../session/agent-session-types";
+import type { DequeuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { cfgHideThinkingBlock } from "../../session/settings";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
@@ -134,6 +134,8 @@ interface ImagePasteSink {
 	/** Main editor only; without it a video path lands as text. */
 	attachVideo?(path: string): Promise<void>;
 }
+
+type QueuedDraft = Pick<SubmittedUserInput, "text" | "images" | "imageLinks">;
 
 /** One paste into an image-accepting prompt; `finish` delivers what it collected, in order. */
 interface PromptImagePaste {
@@ -1964,7 +1966,7 @@ export class InputController {
 	 * Only the main session owns the separate compaction queue; focused views
 	 * must not restore its messages into a subagent's composer.
 	 */
-	#popLastQueuedMessage(): DequeuedMessage | undefined {
+	#popLastQueuedMessage(): (QueuedDraft & Pick<DequeuedMessage, "queue">) | undefined {
 		const yieldCompaction = this.ctx.focusedAgentId ? undefined : this.ctx.yieldCompaction;
 		// Steering pops first, as in `AgentSession.popLastQueuedMessage`. Behind a yield compaction,
 		// the session's follow-ups are older than it: the follow-ups it holds go next, then the request.
@@ -1978,11 +1980,21 @@ export class InputController {
 		if (compaction.length > 0) {
 			const last = compaction[compaction.length - 1];
 			this.ctx.compactionQueuedMessages = compaction.slice(0, -1);
-			return { text: last.text, images: last.images, queue: last.mode === "steer" ? "steering" : "followUp" };
+			return {
+				text: last.text,
+				images: last.images,
+				imageLinks: last.imageLinks,
+				queue: last.mode === "steer" ? "steering" : "followUp",
+			};
 		}
 		if (yieldCompaction) {
 			this.ctx.yieldCompaction = undefined;
-			return { text: yieldCompaction.text, queue: "followUp" };
+			return {
+				text: yieldCompaction.text,
+				images: yieldCompaction.images,
+				imageLinks: yieldCompaction.imageLinks,
+				queue: "followUp",
+			};
 		}
 		return undefined;
 	}
@@ -2227,9 +2239,9 @@ export class InputController {
 			return;
 		}
 
-		// Detach before the first await: another Ctrl+Enter cannot submit the
-		// same draft, and later typing belongs to the next submission.
-		this.#clearDraft();
+		// Detach before the first await, including the chip atoms: newer drafts can reuse
+		// their labels while the queued submission keeps its own attachments.
+		this.ctx.composer.clearDraft({ recall: false });
 		// The conversation this was sent in; a queued `/compact` must not land in another one.
 		const origin = conversationPosition(this.ctx.sessionManager);
 		// Until this submission reaches the session (`prompt()` admits it synchronously) or finishes
@@ -2440,10 +2452,10 @@ export class InputController {
 		this.ctx.compactionQueueOrigin = undefined;
 		const allQueued = [
 			...steering,
-			...compactionQueued.filter(e => e.mode === "steer").map(e => ({ text: e.text, images: e.images })),
+			...compactionQueued.filter(e => e.mode === "steer"),
 			...followUp,
-			...(yieldCompaction ? [{ text: yieldCompaction.text }] : []),
-			...compactionQueued.filter(e => e.mode === "followUp").map(e => ({ text: e.text, images: e.images })),
+			...(yieldCompaction ? [yieldCompaction] : []),
+			...compactionQueued.filter(e => e.mode === "followUp"),
 		];
 		const restored = this.#restoreEntriesToEditor(allQueued, { currentText: options?.currentText });
 		if (options?.abort) {
@@ -2464,10 +2476,7 @@ export class InputController {
 		if (!request && held.length === 0) return;
 		this.ctx.yieldCompaction = undefined;
 		this.ctx.compactionQueuedMessages = [];
-		this.#restoreEntriesToEditor([
-			...(request ? [{ text: request.text }] : []),
-			...held.map(e => ({ text: e.text, images: e.images })),
-		]);
+		this.#restoreEntriesToEditor(request ? [request, ...held] : held);
 		this.ctx.showStatus(status);
 	}
 
@@ -2518,10 +2527,7 @@ export class InputController {
 	 * draft, or as the first item of a draft already in that form; any other draft
 	 * keeps the plain merge. Returns the number of entries restored.
 	 */
-	#restoreEntriesToEditor(
-		entries: RestoredQueuedMessage[],
-		options?: { currentText?: string; queued?: boolean },
-	): number {
+	#restoreEntriesToEditor(entries: QueuedDraft[], options?: { currentText?: string; queued?: boolean }): number {
 		if (entries.length === 0) {
 			this.ctx.updatePendingMessagesDisplay();
 			return 0;
@@ -2536,34 +2542,24 @@ export class InputController {
 		// indices by the running offset keeps the merged text aligned with the merged
 		// `pendingImages` order; draft markers stay valid because draft images
 		// keep their original positions.
-		const queuedImages = entries.flatMap(e => e.images ?? []);
-		let queuedText: string;
-		if (queuedImages.length > 0) {
-			const parts: string[] = [];
-			let imageOffset = this.ctx.composer.pendingImages.length;
-			for (const entry of entries) {
-				parts.push(shiftImageMarkers(entry.text, imageOffset));
-				if (entry.images && entry.images.length > 0) imageOffset += entry.images.length;
-			}
-			queuedText = parts.join("\n\n");
-		} else {
-			queuedText = entries.map(e => e.text).join("\n\n");
+		const { composer } = this.ctx;
+		const hasQueuedImages = entries.some(entry => entry.images?.length);
+		const parts: string[] = [];
+		for (const entry of entries) {
+			parts.push(hasQueuedImages ? shiftImageMarkers(entry.text, composer.pendingImages.length) : entry.text);
+			if (!entry.images?.length) continue;
+			composer.pendingImages.push(...entry.images);
+			for (let i = 0; i < entry.images.length; i++) composer.pendingImageLinks.push(entry.imageLinks?.[i]);
 		}
-		const current = options?.currentText ?? this.ctx.composer.text();
+		const queuedText = parts.join("\n\n");
+		const current = options?.currentText ?? composer.text();
 		const queuedDraft = options?.queued ? (current.trim() ? parseQueueShorthand(current) : "") : undefined;
 		const combinedText =
 			queuedDraft === undefined
 				? [queuedText, current].filter(t => t.trim()).join("\n\n")
 				: formatQueueShorthand([queuedText, ...splitQueuedMessages(queuedDraft)]);
-		// Hand queued images back to the pending-image buffer first (links are
-		// re-materialized lazily), then set the text: setCollapsedText folds the
-		// renumbered `[Image #N, WxH]` references back into chip tokens, and the
-		// collapse only recognizes indices within the merged pendingImages range.
-		if (queuedImages.length > 0) {
-			this.ctx.composer.pendingImages.push(...queuedImages);
-			this.ctx.composer.pendingImageLinks.push(...queuedImages.map(() => undefined));
-		}
-		this.ctx.composer.setCollapsedText(combinedText);
+		// Collapse sees the merged image buffer, so the renumbered markers become chips.
+		composer.setCollapsedText(combinedText);
 		this.ctx.updatePendingMessagesDisplay();
 		return entries.length;
 	}
