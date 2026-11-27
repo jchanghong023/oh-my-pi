@@ -60,7 +60,8 @@ mod parser;
 mod regex;
 mod rx;
 mod sprintf;
-#[cfg(test)]
+// The differential corpus locks down the bytes produced by Linux /usr/bin/perl.
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 mod translit;
 mod value;

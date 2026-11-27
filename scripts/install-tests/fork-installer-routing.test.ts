@@ -169,9 +169,9 @@ async function installerLog(directory: string): Promise<string> {
 	return Bun.file(path.join(directory, names[0])).text();
 }
 
-// These fixtures require POSIX sh and a colon-separated PATH. The glibc route
-// cannot be simulated on Alpine, whose distro marker independently selects musl.
-describe.skipIf(process.platform === "win32")("fork installer routing", () => {
+// Run the POSIX installer routing fixtures on Linux. Alpine's distro marker
+// independently selects musl, so it cannot exercise the glibc route.
+describe.skipIf(process.platform !== "linux")("fork installer routing", () => {
 	const testGlibc = test.skipIf(hostIsAlpine);
 
 	testGlibc("routes named-profile logs to the user cache root", async () => {
@@ -285,39 +285,36 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		}
 	});
 
-	test.skipIf(process.platform !== "linux" || hostIsAlpine)(
-		"atomically replaces Linux targets without stopping running sessions",
-		async () => {
-			const fixture = await createFixture();
-			await fs.mkdir(fixture.installDir, { recursive: true });
-			const target = path.join(fixture.installDir, "omp");
-			const sleepBinary = Bun.which("sleep");
-			if (!sleepBinary) throw new Error("sleep executable is required for the Linux installer fixture");
-			await fs.copyFile(sleepBinary, target);
-			await fs.chmod(target, 0o755);
-			const running = Bun.spawn([target, "60"], { stdout: "ignore", stderr: "ignore" });
-			try {
-				const result = await runInstallerWithFixture([], fixture);
-				expect(result.exitCode, result.stdout).toBe(0);
-				expect(result.stdout).toContain("continue using the old inode and old version");
-				expect(result.stdout).toContain("Exit and restart those sessions");
-				expect(result.stdout).toContain(String(running.pid));
-				expect(result.stdout).toContain(target);
-				expect(running.exitCode).toBeNull();
+	test.skipIf(hostIsAlpine)("atomically replaces Linux targets without stopping running sessions", async () => {
+		const fixture = await createFixture();
+		await fs.mkdir(fixture.installDir, { recursive: true });
+		const target = path.join(fixture.installDir, "omp");
+		const sleepBinary = Bun.which("sleep");
+		if (!sleepBinary) throw new Error("sleep executable is required for the Linux installer fixture");
+		await fs.copyFile(sleepBinary, target);
+		await fs.chmod(target, 0o755);
+		const running = Bun.spawn([target, "60"], { stdout: "ignore", stderr: "ignore" });
+		try {
+			const result = await runInstallerWithFixture([], fixture);
+			expect(result.exitCode, result.stdout).toBe(0);
+			expect(result.stdout).toContain("continue using the old inode and old version");
+			expect(result.stdout).toContain("Exit and restart those sessions");
+			expect(result.stdout).toContain(String(running.pid));
+			expect(result.stdout).toContain(target);
+			expect(running.exitCode).toBeNull();
 
-				const installed = Bun.spawn([target, "--version"], { stdout: "pipe", stderr: "pipe" });
-				const [installedExit, installedOutput] = await Promise.all([
-					installed.exited,
-					new Response(installed.stdout).text(),
-				]);
-				expect(installedExit).toBe(0);
-				expect(installedOutput.trim()).toBe("omp/18.0.9+fork.125");
-			} finally {
-				running.kill();
-				await running.exited;
-			}
-		},
-	);
+			const installed = Bun.spawn([target, "--version"], { stdout: "pipe", stderr: "pipe" });
+			const [installedExit, installedOutput] = await Promise.all([
+				installed.exited,
+				new Response(installed.stdout).text(),
+			]);
+			expect(installedExit).toBe(0);
+			expect(installedOutput.trim()).toBe("omp/18.0.9+fork.125");
+		} finally {
+			running.kill();
+			await running.exited;
+		}
+	});
 
 	test("rejects a directory at the executable path without moving its contents", async () => {
 		const fixture = await createFixture();

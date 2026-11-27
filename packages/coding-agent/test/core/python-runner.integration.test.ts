@@ -15,7 +15,12 @@ import {
 	executePythonWithKernel,
 } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
 import { checkPythonKernelAvailability, PythonKernel } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
-import { filterEnv, resolvePythonRuntime } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
+import {
+	enumeratePythonRuntimes,
+	filterEnv,
+	resolveExplicitPythonRuntime,
+	resolvePythonRuntime,
+} from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import * as piUtils from "@oh-my-pi/pi-utils";
 
@@ -25,7 +30,7 @@ const MATPLOTLIB_TEST_CWD = process.cwd();
 async function hasModule(cwd: string, module: string): Promise<boolean> {
 	if (!SHOULD_RUN) return false;
 	try {
-		const { env } = (await Settings.init()).getShellConfig();
+		const { env } = Settings.isolated().getShellConfig();
 		const runtime = resolvePythonRuntime(cwd, filterEnv(env));
 		const spawnEnv: Record<string, string> = {};
 		for (const [key, value] of Object.entries(runtime.env)) {
@@ -49,7 +54,7 @@ const HAS_ENSUREPIP = await hasModule(MATPLOTLIB_TEST_CWD, "ensurepip");
 
 /** A venv like the ones `uv venv` makes: no pip installed. Returns its interpreter. */
 async function createPiplessVenv(dir: string): Promise<string> {
-	const { env } = (await Settings.init()).getShellConfig();
+	const { env } = Settings.isolated().getShellConfig();
 	const base = resolvePythonRuntime(dir, filterEnv(env)).pythonPath;
 	const venv = path.join(dir, "venv");
 	const created = Bun.spawnSync([base, "-m", "venv", "--without-pip", venv], { stdout: "ignore", stderr: "pipe" });
@@ -152,8 +157,18 @@ async function cancelInstall(kernel: PythonKernel, code: string): Promise<number
 }
 
 describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
+	let restoreSettings: () => void;
+	beforeEach(() => {
+		const settingsInit = vi.spyOn(Settings, "init").mockResolvedValue(Settings.isolated());
+		restoreSettings = () => settingsInit.mockRestore();
+	});
+
 	afterEach(async () => {
-		await disposeAllKernelSessions();
+		try {
+			await disposeAllKernelSessions();
+		} finally {
+			restoreSettings();
+		}
 	});
 
 	it("does not replay a crashed cell's file write and accepts the next cell in a fresh kernel", async () => {
@@ -212,7 +227,7 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		}
 	});
 
-	it.skipIf(process.platform === "win32")("runs in its own POSIX session", async () => {
+	it.skipIf(process.platform !== "linux")("runs in its own POSIX session", async () => {
 		using tempDir = TempDir.createSync("@python-runner-session-isolation-");
 		const kernel = await PythonKernel.start({ cwd: tempDir.path() });
 		try {
@@ -357,7 +372,7 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		}
 	});
 
-	it.skipIf(process.platform === "win32" || !HAS_ENSUREPIP)(
+	it.skipIf(process.platform !== "linux" || !HAS_ENSUREPIP)(
 		"%pip bootstraps pip with ensurepip when the venv has no pip",
 		async () => {
 			using tempDir = TempDir.createSync("@python-runner-pip-ensurepip-");
@@ -377,7 +392,7 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		120_000,
 	);
 
-	it.skipIf(process.platform === "win32")(
+	it.skipIf(process.platform !== "linux")(
 		"%pip has uv install pip into the kernel's interpreter when ensurepip fails, then runs pip with the cell's arguments",
 		async () => {
 			using tempDir = TempDir.createSync("@python-runner-pip-uv-");
@@ -417,7 +432,7 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		60_000,
 	);
 
-	it.skipIf(process.platform === "win32")(
+	it.skipIf(process.platform !== "linux")(
 		"%pip reports the bootstrap failure when ensurepip fails and uv is not on PATH",
 		async () => {
 			using tempDir = TempDir.createSync("@python-runner-pip-no-bootstrap-");
@@ -436,7 +451,7 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		30_000,
 	);
 
-	it.skipIf(process.platform === "win32")(
+	it.skipIf(process.platform !== "linux")(
 		"cancelling %pip during the ensurepip bootstrap stops ensurepip and the pip it spawned",
 		async () => {
 			using tempDir = TempDir.createSync("@python-runner-pip-cancel-ensurepip-");
@@ -655,7 +670,7 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		);
 	}
 
-	it.skipIf(process.platform === "win32")(
+	it.skipIf(process.platform !== "linux")(
 		"cancelling %pip while uv installs pip stops uv and what it spawned",
 		async () => {
 			using tempDir = TempDir.createSync("@python-runner-pip-cancel-uv-");
@@ -1253,10 +1268,37 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 	});
 });
 
-describe.skipIf(!SHOULD_RUN || process.platform !== "linux")("Linux offline Python selection", () => {
+function findOfflineFixturePython(): string | undefined {
+	const cwd = process.cwd();
+	const env = filterEnv(Settings.isolated().getShellConfig().env);
+	const command = Bun.env.PYTHON;
+	const versionedCommands = ["python3.11", "python3.12", "python3.13", "python3.14", "python3.15"];
+	const candidates = new Set([
+		...(command ? [resolveExplicitPythonRuntime(piUtils.$which(command) ?? command, cwd, env).pythonPath] : []),
+		...enumeratePythonRuntimes(cwd, env).map(runtime => runtime.pythonPath),
+		...versionedCommands.flatMap(command => piUtils.$whichAll(command)),
+	]);
+	for (const python of candidates) {
+		try {
+			const probe = Bun.spawnSync(
+				[python, "-I", "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"],
+				{
+					cwd,
+					stdio: ["ignore", "ignore", "ignore"],
+					timeout: 5_000,
+				},
+			);
+			if (probe.exitCode === 0) return python;
+		} catch {
+			// Broken interpreter or shim; keep looking.
+		}
+	}
+}
+
+const offlineFixturePython = SHOULD_RUN && process.platform === "linux" ? findOfflineFixturePython() : undefined;
+
+describe.skipIf(!offlineFixturePython)("Linux offline Python selection", () => {
 	const offlinePython = "/software/public/python/3.11.4/bin/python3.11";
-	const pythonCommands = ["python3", "python", "python3.11", "python3.12", "python3.13", "python3.14", "python3.15"];
-	let realPython: string | undefined;
 	let originalOffline: string | undefined;
 
 	beforeEach(() => {
@@ -1277,19 +1319,7 @@ describe.skipIf(!SHOULD_RUN || process.platform !== "linux")("Linux offline Pyth
 	// Route only the fixed path into a private fixture: no writes under /software
 	// and no dependency on the company's Python installation for this regression.
 	async function prepareInterpreters(temp: TempDir, fixed: "working" | "broken" | "old", polluted = false) {
-		realPython ??= [...new Set(pythonCommands.flatMap(command => piUtils.$whichAll(command)))].find(python => {
-			try {
-				return (
-					Bun.spawnSync([python, "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"], {
-						stdio: ["ignore", "ignore", "ignore"],
-						timeout: 5_000,
-					}).exitCode === 0
-				);
-			} catch {
-				return false;
-			}
-		});
-		if (!realPython) throw new Error("Linux offline Python integration requires a real Python 3.11+ interpreter");
+		const realPython = offlineFixturePython!;
 		const quotedPython = `'${realPython.replaceAll("'", "'\\''")}'`;
 		const activeDir = temp.join(".venv");
 		const activePython = path.join(activeDir, "bin", "python");
