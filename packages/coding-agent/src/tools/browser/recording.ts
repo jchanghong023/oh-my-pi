@@ -8,7 +8,7 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries, TempDir } from "@oh-my-pi/pi-utils/temp";
 import type { Protocol } from "devtools-protocol";
 import type { CDPSession, Page } from "puppeteer-core";
-import { type ResizedImage, resizeImage } from "../../utils/image-resize";
+import { resizeImage } from "../../utils/image-resize";
 import { buildChangedFrameContactSheetPng, requireMediaBinary, runFfmpeg } from "../../utils/video";
 import { resolveToCwd } from "../path-utils";
 import { readPageViewport } from "./launch";
@@ -665,49 +665,44 @@ export class RecordingController {
 	): Promise<RecordingStopResult> {
 		const dir = path.dirname(active.path);
 		await fs.mkdir(dir, { recursive: true });
-		const temporary = path.join(dir, `.omp-recording-${crypto.randomUUID()}`);
-		const videoPath = `${temporary}${path.extname(active.path)}`;
-		const contact = active.options.contactSheet
-			? { path: `${active.path}.contact.png`, temporary: `${temporary}.contact.png` }
-			: undefined;
+		const videoPath = path.join(dir, `.omp-recording-${crypto.randomUUID()}${path.extname(active.path)}`);
+		let bytes: number;
 		try {
 			await encodeRecording(active, videoPath, durationMs, context.signal);
-			let image: ResizedImage | undefined;
-			if (contact) {
-				const sheet = await buildChangedFrameContactSheetPng(
-					videoPath,
-					{
-						outputPath: contact.temporary,
-						fps: active.options.fps,
-						threshold: active.options.contactSheetThreshold,
-						maxTiles: MAX_CONTACT_SHEET_TILES,
-					},
-					context.signal,
-				);
-				if (context.output) {
-					image = await resizeImage(
-						{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
-						{ excludeWebP: context.excludeWebP },
-					);
-				}
-			}
-			const { size: bytes } = await fs.stat(videoPath);
+			bytes = (await fs.stat(videoPath)).size;
 			if (context.signal?.aborted) throw new AbortError(context.signal);
-			// Publish the video last so a contact-sheet publication failure leaves it untouched.
-			if (contact) await fs.rename(contact.temporary, contact.path);
 			await fs.rename(videoPath, active.path);
-			if (image) context.output?.push({ type: "image", data: image.data, mimeType: image.mimeType });
-			return {
-				path: active.path,
-				durationMs,
-				frames: active.frames.length,
-				bytes,
-				...(contact ? { contactSheet: contact.path } : {}),
-			};
 		} finally {
 			await removeWithRetries(videoPath).catch(() => undefined);
-			if (contact) await removeWithRetries(contact.temporary).catch(() => undefined);
 		}
+		let contactSheet: string | undefined;
+		if (active.options.contactSheet) {
+			const sheet = await buildChangedFrameContactSheetPng(
+				active.path,
+				{
+					outputPath: `${active.path}.contact.png`,
+					fps: active.options.fps,
+					threshold: active.options.contactSheetThreshold,
+					maxTiles: MAX_CONTACT_SHEET_TILES,
+				},
+				context.signal,
+			);
+			if (context.output) {
+				const resized = await resizeImage(
+					{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
+					{ excludeWebP: context.excludeWebP },
+				);
+				context.output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+			}
+			contactSheet = sheet.path;
+		}
+		return {
+			path: active.path,
+			durationMs,
+			frames: active.frames.length,
+			bytes,
+			...(contactSheet ? { contactSheet } : {}),
+		};
 	}
 
 	/** Finalize an active recording, then immediately begin another. */

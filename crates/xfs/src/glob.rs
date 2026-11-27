@@ -224,8 +224,8 @@ impl std::error::Error for GlobError {}
 /// checkout its daemon answers when it can mirror `opts`.
 ///
 /// # Errors
-/// A malformed pattern, an unreadable root, or a directory failure under
-/// [`GlobOptions::strict_errors`].
+/// A malformed pattern or an unreadable root.
+/// With [`GlobOptions::strict_errors`], directory errors also fail the glob.
 pub async fn glob(fs: &Fs, root: &Path, opts: &GlobOptions) -> Result<Vec<GlobMatch>, GlobError> {
 	let pattern = match opts.pattern.trim() {
 		"" => "*",

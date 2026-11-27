@@ -14,9 +14,9 @@
 //! that listed it, before they are sent ([`Sink::settle`]): a search reads
 //! and scans the directory's files there, with the worker's own session and
 //! state, so no second pool or hand-off sits between walking and searching.
-//! The root is listed before the walk starts, but settled by a worker, so a
-//! large root never holds the start up and the start never waits on the output
-//! channel.
+//! The root is listed before the walk starts but
+//! settled by a worker, so a large root never holds the start up and the
+//! start never waits on the output channel.
 //!
 //! Dropping the consumer ends the walk: workers are aborted and check the
 //! halt flag before each directory and each entry.
@@ -236,7 +236,7 @@ pub(super) struct Shared {
 }
 
 impl Shared {
-	/// Directory errors, including incomplete listings, in arbitrary order.
+	/// Directories that could not be read, in no particular order.
 	pub(super) fn take_errors(&self) -> Vec<DirError> {
 		std::mem::take(&mut *self.errors.lock())
 	}
@@ -568,8 +568,7 @@ pub(super) struct Outcome {
 /// path; `tx` receives a streaming walk's output.
 ///
 /// # Errors
-/// [`WalkError::Root`] when opening the root fails or its listing fails
-/// without a usable partial result.
+/// [`WalkError::Root`] when the root cannot be opened or listed.
 pub(super) async fn start<K: Sink>(
 	fs: &Fs,
 	root: &Path,
