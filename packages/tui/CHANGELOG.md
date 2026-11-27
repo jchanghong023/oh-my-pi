@@ -9,6 +9,22 @@
 - Removed the fork-only blocked todo state and blocker note from the TUI todo types.
 - Removed the fork-only `runInput()` `previewLines` option. Native command and code previews keep the upstream six-line limit.
 
+### Breaking Changes
+
+- `MarkdownLook.linkUrls` is now required. Callers of `setMarkdownLook` must provide this field.
+
+### Added
+
+- Added `MarkdownOptions.linkUrls` and `MarkdownLook.linkUrls` to hide the URL drawn after named links whose label is an OSC 8 hyperlink ([#13162](https://github.com/can1357/oh-my-pi/pull/13162) by [@pavel-kalmykov](https://github.com/pavel-kalmykov))
+### Added
+
+- `TextEdit.paste` marks an edit that types a bracketed paste ([#20681](https://github.com/can1357/oh-my-pi/issues/20681))
+- `Host.requestFrame()` schedules a terminal frame even when nothing on screen changed ([#20704](https://github.com/can1357/oh-my-pi/pull/20704) by [@JustasMasiulis](https://github.com/JustasMasiulis))
+- Added `tool.gl` symbol across unicode, nerd, and ascii presets for the GitLab tool ([#20396](https://github.com/can1357/oh-my-pi/pull/20396) by [@asuffield](https://github.com/asuffield))
+- Added `MarkdownOptions.linkUrls` and `MarkdownLook.linkUrls` to control whether URLs are displayed after named OSC 8 hyperlinks.
+- Added `TextEdit.paste` to identify edits produced by bracketed paste operations.
+- Added `tool.gl` symbols to the Unicode, Nerd Font, and ASCII presets for the GitLab tool.
+
 ### Fixed
 
 - Terminal resizing preserves visible completions, and clipped completion rows no longer prevent ordinary status rows from pushing stable output into scrollback.
@@ -17,6 +33,16 @@
 - Reduced idle CPU use on Windows after `/restart` ([#20518](https://github.com/can1357/oh-my-pi/pull/20518) by [@ethancawse](https://github.com/ethancawse)).
 - Reopened lost Tern surfaces on an `unknown surface` reply, stopped frames if the reopen was rejected, and kept recognizable broken TSP replies out of the editor ([#20550](https://github.com/can1357/oh-my-pi/issues/20550)).
 - Typing in a Tern composer keeps echoing while an agent streams, instead of stalling for seconds when Tern is slow to acknowledge frames. ([#20463](https://github.com/can1357/oh-my-pi/pull/20463) by [@Xytronix](https://github.com/Xytronix))
+- Improved performance when editing large documents and updating or closing views with many reactive values.
+- Fixed pane resizing in Herdr to avoid repeated redraw loops.
+- Fixed SIXEL and iTerm2 images overflowing rows, scrolling the terminal unexpectedly, or rendering incorrectly when they extend beyond the visible screen.
+- Fixed fast Vietnamese Telex input on Windows so characters are no longer dropped or duplicated.
+- Streaming code blocks now enter terminal scrollback as they move off screen, rather than waiting until the block is complete.
+- Reduced idle CPU usage on Windows after `/restart`.
+- Improved recovery from lost Tern surfaces and malformed TSP responses.
+- Typing in a Tern composer now remains responsive while an agent is streaming, even when Tern is slow to acknowledge frames.
+- Fixed inverse video styling leaking into padding and borders at wrapped line endings.
+- Fixed win32 input-mode key records being inserted as literal composer text in certain timing conditions.
 
 ### Release Notes Errata
 

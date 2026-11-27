@@ -22,6 +22,7 @@ import type { TurnToolDiff } from "@oh-my-pi/pi-coding-agent/session/latest-turn
 import { LiveToolOutputState } from "@oh-my-pi/pi-coding-agent/session/live-tool-output";
 import { toolOutputText } from "@oh-my-pi/pi-coding-agent/session/live-tool-output-text";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { formatBackgroundNotice } from "@oh-my-pi/pi-coding-agent/tools/details/bash";
 import { Reconciler } from "@oh-my-pi/pi-tui/native/reconcile";
 import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
 import { renderBlock } from "@oh-my-pi/pi-tui/term/render";
@@ -1506,7 +1507,10 @@ describe("compact latest live Output consumers", () => {
 				args: {},
 				partialResult: {
 					content: [
-						{ type: "text", text: "Error: failed at step 2\n\nBackgrounded as job bg_1; output will follow" },
+						{
+							type: "text",
+							text: `Error: failed at step 2\n\n${formatBackgroundNotice("bg_1", 300, "incoming message")}`,
+						},
 					],
 					details: { async: { name: "Build", jobId: "bg_1", state: "running" } },
 				},
@@ -1557,7 +1561,7 @@ describe("compact latest live Output consumers", () => {
 		h.register("LateBashFacts", live);
 		await h.focus.focusAgent("LateBashFacts");
 		output.observe({ type: "tool_execution_start", toolCallId: "job", toolName: "bash", args: {} }, 10_000);
-		const notice = "Backgrounded as job bg_1; output will follow";
+		const notice = formatBackgroundNotice("bg_1", undefined);
 		output.observe(
 			{
 				type: "tool_execution_update",

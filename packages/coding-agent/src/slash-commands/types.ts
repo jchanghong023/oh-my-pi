@@ -83,6 +83,11 @@ export interface SlashCommandRuntime {
 	ui?: Pick<ExtensionUIContext, "select" | "confirm"> & Partial<Pick<ExtensionUIContext, "input">>;
 	/** Emit text to the operator, optionally preserving a feedback severity. */
 	output: (text: string, level?: "info" | "warning" | "error") => Promise<void> | void;
+	/**
+	 * Show a titled read-only listing (TUI: `ctx.showCommandReport`, like `/mcp list`). Absent where the
+	 * host has no report surface (ACP, RPC, print); callers then emit the listing through `output`.
+	 */
+	report?: (title: string, text: string) => void;
 	/** Re-advertise the available command list (no-op outside ACP). */
 	refreshCommands: () => Promise<void> | void;
 	/**

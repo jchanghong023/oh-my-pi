@@ -7,22 +7,25 @@ import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
 import { loadThemeSync } from "@oh-my-pi/pi-tui/theme/loader";
 import { INTENT_FIELD, type TspPickerProps, type TspText } from "@oh-my-pi/pi-wire";
 import { getKeybindings, KeybindingsManager, setKeybindings } from "../../../../src/config/keybindings/keybindings";
+import type { SessionMessageEntry } from "../../../../src/session/session-entries";
 import { TreeSelector, type TreeSelectorNode } from "../../../../src/ui/overlays/pickers/tree-selector";
 import { findKind, mountOverlay } from "../../../helpers/overlay-terminal";
 import { pickerSuite } from "./harness";
 
+function userNode(id: string, parentId: string | null, text: string, timestamp: number): TreeSelectorNode {
+	const entry: SessionMessageEntry = {
+		type: "message",
+		id,
+		parentId,
+		timestamp: "2026-01-01T00:00:00Z",
+		message: { role: "user", content: text, timestamp },
+	};
+	return { entry, children: [] };
+}
+
 function build(): { roots: TreeSelectorNode[]; leaf: string } {
 	let n = 0;
-	const user = (text: string, parentId: string | null): TreeSelectorNode => ({
-		entry: {
-			type: "message",
-			id: `e${n++}`,
-			parentId,
-			timestamp: "2026-01-01T00:00:00Z",
-			message: { role: "user", content: text, timestamp: n },
-		} as unknown as TreeSelectorNode["entry"],
-		children: [],
-	});
+	const user = (text: string, parentId: string | null): TreeSelectorNode => userNode(`e${n++}`, parentId, text, n);
 	const asst = (text: string, parentId: string | null): TreeSelectorNode => ({
 		entry: {
 			type: "message",
@@ -82,6 +85,30 @@ test("Alt+Enter still navigates configured branches on non-tool rows", () => {
 		setKeybindings(previous);
 		term.dispose();
 	}
+});
+
+test("a session thousands of entries deep opens on its newest entry", () => {
+	// The rows were built recursively, one stack frame per entry: long sessions overflowed the stack.
+	const depth = 20_000;
+	const nodes = Array.from({ length: depth }, (_, i) => userNode(`e${i}`, i === 0 ? null : `e${i - 1}`, `prompt ${i}`, i));
+	for (let i = 1; i < depth; i++) nodes[i - 1]!.children.push(nodes[i]!);
+	createRoot(dispose => {
+		try {
+			const [node] = resolveChildren(
+				<TreeSelector
+					roots={[nodes[0]!]}
+					currentLeafId={`e${depth - 1}`}
+					terminalHeight={30}
+					onSelect={noop}
+					onCancel={noop}
+				/>,
+			)();
+			const rows = paintNode(staticEnvironment(loadThemeSync("dark")), node!, 120).rows.map(stripEscapes);
+			expect(rows.some(row => row.includes(`› • user: prompt ${depth - 1}`))).toBe(true);
+		} finally {
+			dispose();
+		}
+	});
 });
 
 pickerSuite({

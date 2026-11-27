@@ -7,7 +7,7 @@ import type { CoordinationDetails } from "../../../src/tools/details/wait";
 import { formatOutputNotice, type TruncationMeta } from "../../../src/tools/output-meta-format";
 import type { ToolResult, ToolViewState } from "../../../src/ui/tools/contract";
 import "../../../src/ui/styles/tools/wait";
-import { waitPresenter } from "../../../src/ui/tools/wait";
+import { waitFailurePreview, waitPresenter } from "../../../src/ui/tools/wait";
 import { bodyNodes, toolNode } from "./presenter-corpus";
 import { type ToolScreen, toolScreenSuite } from "./screens";
 
@@ -83,7 +83,12 @@ test("keeps Wait job tiles and diagnostics but does not repeat output already on
 	expect(present(result, false, new Map([["bg_1", "completed"]])).terminal).toContain("first error");
 });
 
-test.each([false, true])("shows the failed Bash tail and truthful artifact label in both views (capped=%s)", capped => {
+test.each([
+	{ capped: false, format: "current" },
+	{ capped: true, format: "current" },
+	{ capped: false, format: "legacy" },
+	{ capped: true, format: "legacy" },
+])("shows the failed Bash tail and truthful artifact label ($format, capped=$capped)", ({ capped, format }) => {
 	const truncation: TruncationMeta = {
 		direction: "tail",
 		truncatedBy: "bytes",
@@ -96,6 +101,8 @@ test.each([false, true])("shows the failed Bash tail and truthful artifact label
 		...(capped ? { artifactElidedBytes: 4096 } : {}),
 	};
 	const meta = { truncation };
+	const exitNotice = format === "legacy" ? "Command exited with code 2" : "[exit code 2]";
+	const wallNotice = format === "legacy" ? "Wall time: 3.20 seconds" : "[took 3.20s]";
 	const errorText =
 		[
 			'","truncated_json_fragment":true}',
@@ -104,9 +111,9 @@ test.each([false, true])("shows the failed Bash tail and truthful artifact label
 			"",
 			"details: check the input path",
 			"",
-			"Command exited with code 2",
+			exitNotice,
 			"",
-			"Wall time: 3.20 seconds",
+			wallNotice,
 		].join("\n") + formatOutputNotice(meta);
 	const job = {
 		id: "bg_failure",
@@ -130,8 +137,8 @@ test.each([false, true])("shows the failed Bash tail and truthful artifact label
 		expect(view.indexOf("diagnostic:")).toBeLessThan(view.indexOf("details:"));
 		expect(view).not.toContain("truncated_json_fragment");
 		expect(view).not.toContain("earlier output not in the preview");
-		expect(view).not.toContain("Command exited with code");
-		expect(view).not.toContain("Wall time:");
+		expect(view).not.toContain(exitNotice);
+		expect(view).not.toContain(wallNotice);
 		expect(view).toContain("local://123.log");
 		if (capped) {
 			expect(view).toMatch(/(?:sample|not saved|样本)/i);
@@ -139,4 +146,23 @@ test.each([false, true])("shows the failed Bash tail and truthful artifact label
 		}
 	}
 	expect(present(result, true).terminal).toContain("truncated_json_fragment");
+});
+
+test.each([
+	{ notice: "[timed out after 3s]", trailing: true },
+	{ notice: "[timed out after 3s; shell unresponsive, output may be incomplete]", trailing: false },
+	{ notice: "[Command timed out after 3 seconds]", trailing: false },
+])("keeps $notice separate from the Wait output body", ({ notice, trailing }) => {
+	const job = {
+		id: "bg_timeout",
+		type: "bash",
+		status: "failed",
+		label: "run checks",
+		timedOut: true,
+		errorText: trailing ? `first line\nlast line\n\n${notice}` : `${notice}\n\nfirst line\nlast line`,
+	} as const;
+	expect(waitFailurePreview(job, false, undefined)).toMatchObject({
+		lines: ["first line", "last line"],
+		reason: notice,
+	});
 });

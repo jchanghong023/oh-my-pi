@@ -1,13 +1,35 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { mkdir } from "node:fs/promises";
+import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgSttLanguage } from "@oh-my-pi/pi-coding-agent/stt/settings";
 import type { SttTransport, SttWorkerInbound, SttWorkerOutbound } from "@oh-my-pi/pi-coding-agent/stt/asr-protocol";
 import { startSttWorker } from "@oh-my-pi/pi-coding-agent/stt/asr-worker";
+import { cfgSttLanguage } from "@oh-my-pi/pi-coding-agent/stt/settings";
 import * as workerRuntime from "@oh-my-pi/pi-coding-agent/subprocess/worker-runtime";
+import { getTinyModelsCacheDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("local Whisper language contract", () => {
+	let state: SettingsTestState | undefined;
+	let temp: TempDir | undefined;
+
+	beforeAll(async () => {
+		state = beginSettingsTest();
+		temp = await TempDir.create("@omp-stt-whisper-");
+		setAgentDir(temp.path());
+		// A cold model load prefetches Silero; batch transcription never opens the VAD.
+		const vadDir = path.join(getTinyModelsCacheDir(), "istupakov", "silero-vad-onnx");
+		await mkdir(vadDir, { recursive: true });
+		await Bun.write(path.join(vadDir, "silero_vad.onnx"), "cached VAD fixture");
+	});
+
+	afterAll(async () => {
+		restoreSettingsTestState(state);
+		await temp?.remove();
+	});
+
 	it.each([
 		{ configured: undefined, modelKey: "whisper-base" },
 		{ configured: "zh-CN-u-nu-hanidec", modelKey: "whisper-small" },

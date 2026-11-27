@@ -24,8 +24,10 @@ type TransportFetch = FetchImpl & { [TRANSPORT_FETCH]?: true | (() => TransportF
  * per-provider proxy, and `PI_REQ_DEBUG` request/response recording — then
  * calls `fetchImpl` (or the model's default fetch) exactly once.
  *
- * `beforeDispatch` runs for every HTTP attempt, including retries, before
- * dispatch bookkeeping; a thrown refusal prevents that attempt.
+ * A request whose signal already aborted is refused with the signal's reason,
+ * as `fetch` refuses it, before `beforeDispatch` and without calling
+ * `fetchImpl`. `beforeDispatch` runs for every other HTTP attempt, including
+ * retries, before dispatch bookkeeping; a thrown refusal prevents that attempt.
  *
  * Idempotent: reuse a stamped fetch unless the request needs a non-recording variant.
  * `streamSimple` re-enters `stream`, and `streamSimpleRequest` re-enters itself
@@ -58,6 +60,10 @@ function buildTransportFetch(
 	suppressRawDebug: boolean,
 ): TransportFetch {
 	const fetch: TransportFetch = async (input, init) => {
+		// A wrapper above the transport (body compression) can still be preparing
+		// when the caller aborts; a fetch that ignores the signal would send anyway.
+		const signal = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
+		signal?.throwIfAborted();
 		beforeDispatch?.();
 		if ((init?.method ?? (input instanceof Request ? input.method : "GET")) === "POST") {
 			recordDispatchOrigin(model, input);

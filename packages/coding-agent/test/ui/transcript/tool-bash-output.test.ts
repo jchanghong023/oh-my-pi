@@ -40,7 +40,10 @@ test("the shell presentation carries the run's output verbatim", () => {
 	});
 });
 
-test("keeps raw artifact references and folds only the execution notices into the Bash footer", () => {
+test.each([
+	{ label: "current", wall: "[took 0.02s]", exit: "[exit code 23]" },
+	{ label: "legacy", wall: "Wall time: 0.02 seconds", exit: "Command exited with code 23" },
+])("keeps raw artifact references and folds $label execution notices into the Bash footer", ({ wall, exit }) => {
 	createRoot(dispose => {
 		try {
 			const call = new ToolCall({
@@ -51,8 +54,7 @@ test("keeps raw artifact references and folds only the execution notices into th
 			});
 			call.setArgsComplete();
 			call.setExecutionStarted();
-			const raw =
-				"diagnostic\n\n[raw output: local://195.log]\n\nWall time: 0.02 seconds\n\nCommand exited with code 23\n";
+			const raw = `diagnostic\n\n[raw output: local://195.log]\n\n${wall}\n\n${exit}\n`;
 			call.updateResult(
 				{
 					content: [{ type: "text", text: raw }],
@@ -69,8 +71,8 @@ test("keeps raw artifact references and folds only the execution notices into th
 				const terminal = Bun.stripANSI(paintNode(env, tree, 120).rows.join("\n"));
 				const footer = terminal.trimEnd().split("\n").at(-1);
 				expect(terminal).toContain("diagnostic");
-				expect(terminal).not.toContain("Command exited with code 23");
-				expect(terminal).not.toContain("Wall time: 0.02 seconds");
+				expect(terminal).not.toContain(exit);
+				expect(terminal).not.toContain(wall);
 				expect(footer).toContain("local://195.log");
 				expect(footer).toContain("20ms/5m");
 				expect(footer).toContain("23");

@@ -5,13 +5,13 @@
  * Apple's service replaced by a fake backend.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { pathToFileURL } from "node:url";
 import { createRoot, type KeyEvent } from "@oh-my-pi/pi-tui";
 import { createTestTerminal, type TestTerminal } from "@oh-my-pi/pi-tui/testing/terminal";
 import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { Settings } from "../../../src/config/settings";
 import { MacOSSpellingProvider, type SpellingBackend } from "../../../src/modes/view-model/prompt/macos-spelling";
 import { Composer, ComposerChips } from "../../../src/ui/composer";
+import { chipHref } from "../../../src/ui/composer/composer";
 import { enabledMagicKeywords, magicKeywordDecorator } from "../../../src/ui/composer/magic-keywords";
 import { skillAtomizer } from "../../../src/ui/composer/skill-chips";
 import { attachSpelling } from "../../../src/ui/composer/spelling";
@@ -164,8 +164,9 @@ describe("chip links", () => {
 				capabilities: { hyperlinks: true },
 			});
 			term.focus(composer.field);
-			const target = pathToFileURL("/tmp/shot.png").href;
-			const links = term.rows().filter(row => row.includes(`\x1b]8;;${target}`));
+			// The file URI as this platform spells it (a drive-qualified path on Windows).
+			const href = chipHref("/tmp/shot.png");
+			const links = term.rows().filter(row => row.includes(`\x1b]8;;${href}`));
 			// The card's title and the chip in the draft.
 			expect(links.length).toBe(2);
 			term.dispose();
@@ -193,9 +194,8 @@ describe("skill chip link", () => {
 			});
 			term.focus(composer.field);
 			const row = term.rows().find(line => line.includes("now")) ?? "";
-			const target = `\x1b]8;;${pathToFileURL("/tmp/skills/review/SKILL.md").href}`;
-			expect(row).toContain(target);
-			expect(row.slice(row.indexOf(target) + target.length)).toMatch(/^\x1b\\(?:\x1b\[[\d;]*m)*✦ review/);
+			const href = RegExp.escape(chipHref("/tmp/skills/review/SKILL.md")!);
+			expect(row).toMatch(new RegExp(`\\x1b\\]8;;${href}[^\\x1b]*\\x1b\\\\(?:\\x1b\\[[\\d;]*m)*✦ review`));
 			term.dispose();
 			dispose();
 		});

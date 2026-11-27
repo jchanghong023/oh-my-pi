@@ -345,6 +345,7 @@ import {
 	cfgTuiAutoGraph,
 	cfgTuiMouse,
 	cfgTuiColorfulMarkdown,
+	cfgTuiShowLinkUrl,
 	cfgTuiRenderMermaid,
 	cfgTuiRenderEmbeds,
 	cfgTuiRenderSvg,
@@ -382,6 +383,7 @@ import { goalContinuationActivity, goalFromModeData } from "../goals/state";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
+import { meterValue, voiceEnergy } from "../ui/apps/live-visualizer";
 import { combine, type SettingValueOf } from "../config/registry";
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
 import { cfgExtensionAssistantTextRenderers, cfgExtensionTranscriptPresenters } from "../extensibility/settings";
@@ -505,6 +507,7 @@ const cfgLiveUiSettings = combine({
 	"display.showTokenUsage": cfgDisplayShowTokenUsage,
 	"display.showTurnTime": cfgDisplayShowTurnTime,
 	"tui.colorfulMarkdown": cfgTuiColorfulMarkdown,
+	"tui.showLinkUrl": cfgTuiShowLinkUrl,
 	"tui.renderMermaid": cfgTuiRenderMermaid,
 	"tui.renderSvg": cfgTuiRenderSvg,
 	"tui.renderEmbeds": cfgTuiRenderEmbeds,
@@ -1786,7 +1789,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				"status.usage": showUsage,
 				"status.cache": () => void this.handleSessionCommand(),
 				"status.path": () => openPath(this.sessionManager.getCwd()),
-				"status.tree": () => this.showTreeSelector(),
+				"status.tree": () => void this.showTreeSelector(),
 				"thinking.cycle": () => this.#inputController.cycleThinkingFromComposer(),
 				"thinking.set": value => this.#inputController.setThinkingFromComposer(value),
 				"dictation.toggle": () => void this.#toggleComposerDictation(),
@@ -3751,6 +3754,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		setMarkdownLook({
 			colorful: cfgTuiColorfulMarkdown.get(this.settings),
 			mermaid: cfgTuiRenderMermaid.get(this.settings),
+			linkUrls: cfgTuiShowLinkUrl.get(this.settings),
 		});
 	}
 
@@ -3843,7 +3847,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			rebuildChat = true;
 		}
-		if (any("tui.colorfulMarkdown", "tui.renderMermaid", "tui.renderSvg", "tui.renderEmbeds")) {
+		if (any("tui.colorfulMarkdown", "tui.showLinkUrl", "tui.renderMermaid", "tui.renderSvg", "tui.renderEmbeds")) {
 			this.#syncTranscriptDisplaySettings();
 			resetDisplay = true;
 		}
@@ -4289,17 +4293,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.transcriptBlocks = new WeakMap();
 		this.#frame.welcomeBlock = undefined;
-		transcript.retain(live);
-		this.#headerBlocks = [];
-		const anchor = transcript.blocks()[0];
-		transcript.setInsertionPoint(anchor);
-		try {
-			if (!cfgStartupQuiet.get(settings)) this.#frame.showWelcome();
-			this.#syncHeaderExtras();
-			this.renderSessionContext(context, { preservedLiveToolCallIds });
-		} finally {
-			transcript.setInsertionPoint(undefined);
-		}
+		// One update of the drawn regions for the removal and the whole replay, not one per block: in
+		// Tern each update walks the whole transcript.
+		batch(() => {
+			transcript.retain(live);
+			this.#headerBlocks = [];
+			const anchor = transcript.blocks()[0];
+			transcript.setInsertionPoint(anchor);
+			try {
+				if (!cfgStartupQuiet.get(settings)) this.#frame.showWelcome();
+				this.#syncHeaderExtras();
+				this.renderSessionContext(context, { preservedLiveToolCallIds });
+			} finally {
+				transcript.setInsertionPoint(undefined);
+			}
+		});
 		// `renderSessionContext` clears `pendingTools` at start and end so historical tool blocks
 		// don't leak into live tracking: restore the in-flight entries so the next streamed delta
 		// routes into the preserved block instead of stacking a duplicate below it.
@@ -7363,8 +7371,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	async restart(): Promise<void> {
 		if (this.#isShuttingDown) return;
 		try {
-			// Bun can return a cached process.cwd() after the directory is unlinked.
-			await fs.realpath(".");
+			// Bun can return a cached process.cwd() after the directory is unlinked. Linux fails
+			// `realpath(".")`; macOS still resolves the removed path, so stat what it names.
+			await fs.stat(await fs.realpath("."));
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
 			if (!this.#isShuttingDown) {
@@ -7437,15 +7446,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return sessionId && sessionFile && this.sessionManager.isSessionOnDisk() ? sessionId : undefined;
 	}
 
-	/**
-	 * Claim the one-shot `shutdown()`/`restart()` close and acknowledge it before
-	 * any await: worktree exit planning, live commands, and BTW history writes can
-	 * all stall, and the user must see a reason for the pause.
-	 */
+	/** Claim the one-shot `shutdown()`/`restart()` close before any await. */
 	#beginClose(): AbortSignal {
 		this.#isShuttingDown = true;
 		this.#closeAttempt = new AbortController();
-		this.showStatus("Closing session…");
 		return this.#closeAttempt.signal;
 	}
 
@@ -7492,8 +7496,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#abortLoopCondition();
 		this.#cancelLoopAutoSubmit();
 
-		// `#beginClose()` already acknowledged the close; escalate only once the
-		// teardown itself lingers, so time spent in exit prompts never counts.
+		// Report progress only once the teardown itself lingers, so a fast close
+		// stays silent and time spent in exit prompts never counts.
 		const stillClosingTimer = setTimeout(() => {
 			this.showStatus("Still closing… (flushing memory backend / network)");
 		}, STILL_CLOSING_DELAY_MS);
@@ -7598,7 +7602,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#presenter.presentAssistant(message, options);
 	}
 
-	createTranscriptReplica(entries: readonly TranscriptEntryLike[]): TranscriptReplica {
+	createTranscriptReplica(entries: readonly TranscriptEntryLike[], clipped: boolean): TranscriptReplica {
 		return new TranscriptReplica(
 			{
 				mode: this,
@@ -7608,6 +7612,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				replaySteps: (target, context) => this.#uiHelpers.replaySteps(target, context),
 			},
 			entries,
+			clipped,
 		);
 	}
 
@@ -8449,10 +8454,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		return {
 			showWarning: (msg: string) => this.showWarning(msg),
 			showStatus: (msg: string) => this.showStatus(msg),
+			clearStatus: () => this.#uiHelpers.clearStatus(),
+			onLevel: level => this.#frame.dictationLevel.set(meterValue(voiceEnergy(level))),
 			onStateChange: (state: SttState) => {
 				// Duck assistant speech while the user is talking (push-to-talk); restore after.
 				if (state === "recording") vocalizer.duck();
 				else vocalizer.unduck();
+				if (state !== "recording") this.#frame.dictationLevel.set(0);
 				if (this.#frame.dictation.peek() !== undefined) this.#frame.dictation.set(state);
 				if (state === "recording") {
 					this.#micCursor?.dispose();
@@ -8628,16 +8636,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#selectorController.showPluginSelector(mode);
 	}
 
-	showUserMessageSelector(startAt?: string): void {
-		this.#selectorController.showUserMessageSelector(startAt);
+	showUserMessageSelector(startAt?: string): Promise<void> {
+		return this.#selectorController.showUserMessageSelector(startAt);
 	}
 
-	showCopySelector(): void {
-		this.#selectorController.showCopySelector();
+	showCopySelector(): Promise<void> {
+		return this.#selectorController.showCopySelector();
 	}
 
-	showTreeSelector(): void {
-		this.#selectorController.showTreeSelector();
+	showTreeSelector(): Promise<void> {
+		return this.#selectorController.showTreeSelector();
 	}
 
 	showThinkingSelector(): void {

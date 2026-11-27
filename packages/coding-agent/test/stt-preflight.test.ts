@@ -6,10 +6,11 @@ import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as asrClient from "@oh-my-pi/pi-coding-agent/stt/asr-client";
 import { normalizeSttLanguage } from "@oh-my-pi/pi-coding-agent/stt/asr-worker";
 import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
+import { cfgSttLanguage } from "@oh-my-pi/pi-coding-agent/stt/settings";
 import { STTController, type STTControllerDependencies } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { getTinyModelsCacheDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 import { localSttModel } from "./helpers/local-stt-model";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 const WHISPER_BASE_REPO = "onnx-community/whisper-base";
 const NEMOTRON_REPO = "csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-int8-2026-04-25";
@@ -17,7 +18,8 @@ const DICTATION_MODELS = [
 	localSttModel("whisper-base"),
 	localSttModel("whisper-small"),
 	localSttModel("whisper-large-v3-turbo"),
-	localSttModel("parakeet-tdt-0.6b-v3"),
+	localSttModel("fluid-speech-pro"),
+	localSttModel("parakeet-tdt-0.6b-v2"),
 	localSttModel("nemotron-streaming-en-0.6b"),
 ];
 const registry: STTControllerDependencies["registry"] = {
@@ -99,6 +101,7 @@ describe("STTController preflight", () => {
 		return {
 			showWarning: vi.fn(),
 			showStatus: vi.fn(),
+			clearStatus: vi.fn(),
 			onStateChange: vi.fn(),
 		};
 	}
@@ -265,7 +268,11 @@ describe("STTController preflight", () => {
 		expect(isCached).toHaveBeenCalledTimes(2);
 	});
 
-	it("falls back to the built-in Chinese dictation model when the dictation chain is empty", async () => {
+	it.each([
+		{ language: undefined, model: "whisper-base" },
+		{ language: "en", model: "fluid-speech-pro" },
+	])("falls back to $model when the dictation chain is empty (language=$language)", async ({ language, model }) => {
+		if (language !== undefined) cfgSttLanguage.set(settings, language);
 		settings.setModelRole("dictation", "missing/model");
 		const emptyRegistry: STTControllerDependencies["registry"] = {
 			getError: () => undefined,
@@ -280,8 +287,8 @@ describe("STTController preflight", () => {
 		const options = makeOptions();
 		await controller.toggle(makeEditor(), options);
 
-		expect(isCached).toHaveBeenCalledWith("whisper-base");
-		expect(asrClient.sttClient.startStream).toHaveBeenCalledWith("whisper-base", expect.anything());
+		expect(isCached).toHaveBeenCalledWith(model);
+		expect(asrClient.sttClient.startStream).toHaveBeenCalledWith(model, expect.anything());
 		expect(options.showWarning).toHaveBeenCalledWith(
 			"Dictation model missing/model not found; using the built-in local model",
 		);

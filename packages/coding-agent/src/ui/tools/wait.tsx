@@ -17,7 +17,7 @@ import type { JSXNode } from "@oh-my-pi/pi-tui";
 import { replaceTabs } from "@oh-my-pi/pi-tui/text/width";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { jobDisplayLabel } from "../../async/job-label";
-import { formatExitCodeNotice, formatWallTimeNotice } from "../../tools/details/bash";
+import { stripBashExitCodeNotice, stripBashWallTimeNotice } from "../../tools/details/bash";
 import type { AgentActivitySnapshot, CoordinationDetails, JobSnapshot } from "../../tools/details/wait";
 import {
 	formatArtifactErrorNotice,
@@ -38,7 +38,7 @@ const TILES_SHOWN = 9;
 const STATUS_ORDER: Record<JobSnapshot["status"], number> = { running: 0, failed: 1, cancelled: 2, completed: 3 };
 
 const BASH_TIMEOUT_NOTICE =
-	/^(\[Command timed out(?: after \d+(?:\.\d+)? seconds(?:; the shell backend did not respond, so any output above may be incomplete)?)?\])(?:\r?\n|$)/u;
+	/^(\[(?:timed out(?: after \d+s)?(?:; shell unresponsive, output may be incomplete)?|Command timed out(?: after \d+(?:\.\d+)? seconds(?:; the shell backend did not respond, so any output above may be incomplete)?)?)\])(?:\r?\n|$)/u;
 
 /** What the terminal draws a wait from. */
 export type WaitTerm =
@@ -90,19 +90,12 @@ export function waitFailurePreview(
 					return trailingReason !== undefined;
 				})
 			: rawFooter.text;
-	const wallNotice =
-		job.wallTimeNoticeEmitted === true && job.wallTimeMs !== undefined
-			? formatWallTimeNotice(job.wallTimeMs)
-			: undefined;
-	const withoutWall = wallNotice === undefined ? withoutTimeout : stripTrailingNotice(withoutTimeout, wallNotice);
-	const exitNotice = job.exitCode !== undefined && job.exitCode !== 0 ? formatExitCodeNotice(job.exitCode) : undefined;
+	const wallTimeMs = job.wallTimeNoticeEmitted === true ? job.wallTimeMs : undefined;
+	const withoutWall = wallTimeMs === undefined ? withoutTimeout : stripBashWallTimeNotice(withoutTimeout, wallTimeMs);
+	const exitCode = job.exitCode;
 	const withoutExit =
-		exitNotice === undefined ? withoutWall : stripTrailingNotice(withoutWall, line => line === exitNotice);
-	const outputWithArtifact = stripRawOutputNotice(
-		wallNotice !== undefined && withoutWall === withoutTimeout && withoutExit !== withoutTimeout
-			? stripTrailingNotice(withoutExit, wallNotice)
-			: withoutExit,
-	);
+		exitCode === undefined || exitCode === 0 ? withoutWall : stripBashExitCodeNotice(withoutWall, exitCode, "trailing");
+	const outputWithArtifact = stripRawOutputNotice(withoutExit);
 	const output = outputWithArtifact.text;
 	const timeout = job.timedOut === true ? BASH_TIMEOUT_NOTICE.exec(output) : undefined;
 	const reason = timeout?.[1] ?? trailingReason;

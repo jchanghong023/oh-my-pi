@@ -17,6 +17,7 @@
  */
 import * as os from "node:os";
 import { getAppName, getInstallId, readSseJson } from "@oh-my-pi/pi-utils";
+import { WIRE_OPTION_KEYS } from "../auth-gateway/caller-options";
 import * as AIError from "../error";
 import type {
 	Api,
@@ -37,26 +38,6 @@ import {
 } from "../utils/idle-iterator";
 import { notifyProviderResponse } from "../utils/provider-response";
 
-/**
- * Fields that must not cross the wire — either non-serializable (functions,
- * `AbortSignal`, the provider-session `Map`) or server-controlled
- * (`apiKey`, which the gateway injects from its own credential store; the
- * client's `apiKey` is the gateway *bearer*, sent in the `Authorization`
- * header rather than the request body).
- */
-const NON_WIRE_KEYS = new Set<keyof SimpleStreamOptions>([
-	"signal",
-	"apiKey",
-	"requestAuth",
-	"fetch",
-	"onPayload",
-	"onResponse",
-	"onSseEvent",
-	"execHandlers",
-	"cursorExecHandlers",
-	"cursorOnToolResult",
-	"providerSessionState",
-]);
 const PI_NATIVE_STREAM_IDLE_TIMEOUT_ERROR = "pi-native stream stalled while waiting for the next event";
 const PI_NATIVE_STREAM_FIRST_EVENT_TIMEOUT_ERROR = "pi-native stream timed out while waiting for the first event";
 
@@ -65,12 +46,19 @@ function isPiNativeProgressEvent(event: unknown): boolean {
 	return event.type !== "start";
 }
 
+/**
+ * The options the gateway accepts ({@link WIRE_OPTION_KEYS}); it drops every
+ * other key, so sending server-tier values (callbacks, `providerOptions`, the
+ * fallback-credit replay body) only inflates the request. `apiKey` is server
+ * tier too: the client's is the gateway bearer, sent in `Authorization`.
+ */
 function buildWireOptions(options: SimpleStreamOptions | undefined): Record<string, unknown> {
 	if (!options) return {};
 	const wire: Record<string, unknown> = {};
-	for (const [k, v] of Object.entries(options)) {
+	for (const k in options) {
+		if (!WIRE_OPTION_KEYS.has(k)) continue;
+		const v: unknown = Reflect.get(options, k);
 		if (v === undefined) continue;
-		if (NON_WIRE_KEYS.has(k as keyof SimpleStreamOptions)) continue;
 		if (k === "headers" && options.requestAuth?.headers) {
 			// streamSimple merges request-local credentials into headers before dispatch.
 			// Those credentials must not become the gateway's upstream request options.

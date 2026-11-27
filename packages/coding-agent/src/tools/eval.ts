@@ -7,7 +7,7 @@ import type {
 	ToolSpeculationPolicy,
 } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, ToolExample } from "@oh-my-pi/pi-ai";
-import { formatBackgroundNotice } from "./details/bash";
+import { formatBackgroundNotice, formatExitCodeNotice, formatTimeoutClampNotice } from "./details/bash";
 import { replaceTabs, truncateToWidth } from "../utils/text-width";
 import { shortenEmbeddedPaths, TRUNCATE_LENGTHS } from "../utils/render-utils";
 import { parseConfiguredThinkingLevel } from "../thinking/levels";
@@ -473,7 +473,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const cellTimeoutMs = cellTimeoutSec * 1000;
 		const timeoutNotice =
 			params.timeout !== undefined && params.timeout !== cellTimeoutSec
-				? `Eval timeout clamped from ${params.timeout}s to ${cellTimeoutSec}s.`
+				? formatTimeoutClampNotice(params.timeout, cellTimeoutSec)
 				: undefined;
 		if (timeoutNotice) {
 			onUpdate?.({
@@ -645,7 +645,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			},
 		);
 
-		const backgroundStartResult = (extraNotice?: string) =>
+		const backgroundStartResult = (reason?: string) =>
 			this.#buildBackgroundStartResult(
 				jobId,
 				cells,
@@ -654,7 +654,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 				latestText,
 				latestDetails,
 				clampedCellTimeoutSec,
-				extraNotice,
+				reason,
 			);
 		if (startBackgrounded) {
 			return backgroundStartResult();
@@ -685,11 +685,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		autoBgManager.backgroundJob(jobId);
 		// "steer": a queued user/peer message arrived mid-wait — background the
 		// cell (it keeps running) so the message injects promptly.
-		const steerNotice =
-			waitResult.kind === "steer"
-				? "Backgrounded early to handle an incoming message; the cell keeps running."
-				: undefined;
-		return backgroundStartResult(steerNotice);
+		return backgroundStartResult(waitResult.kind === "steer" ? "incoming message" : undefined);
 	}
 
 	/**
@@ -706,7 +702,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		previewText: string,
 		latestDetails: EvalToolDetails | undefined,
 		timeoutSec: number | undefined,
-		extraNotice?: string,
+		reason?: string,
 	): AgentToolResult<EvalToolDetails> {
 		// latestDetails snapshots are per-update copies (buildUpdateDetails), so
 		// tagging the async marker on cannot leak into later job progress.
@@ -730,10 +726,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		if (trimmedPreview.length > 0) {
 			lines.push(trimmedPreview, "");
 		}
-		if (extraNotice) {
-			lines.push(extraNotice, "");
-		}
-		lines.push(formatBackgroundNotice(jobId, timeoutSec));
+		lines.push(formatBackgroundNotice(jobId, timeoutSec, reason));
 		return { content: [{ type: "text", text: lines.join("\n") }], details };
 	}
 
@@ -1016,12 +1009,13 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					cellResult.status = "error";
 					pushUpdate();
 					const combinedOutput = cellOutputs.join("\n\n");
-					const exitLine = `Command exited with code ${result.exitCode}`;
-					const outputText = result.cancelled
-						? combinedOutput || result.output || "Command aborted"
-						: combinedOutput
-							? `${combinedOutput}\n\n${exitLine}`
-							: exitLine;
+					const exitCode = result.exitCode;
+					const outputText =
+						result.cancelled || exitCode === undefined
+							? combinedOutput || result.output || "[aborted]"
+							: combinedOutput
+								? `${combinedOutput}\n\n${formatExitCodeNotice(exitCode)}`
+								: formatExitCodeNotice(exitCode);
 
 					const summaryForMeta = await summarizeFinal(combinedOutput, finalizeOutput);
 					const details: EvalToolDetails = {

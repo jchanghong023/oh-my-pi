@@ -2,6 +2,7 @@ import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "../autocomplete/autocomplete";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
 import { JCH_SLASH_COMMANDS } from "../jch-commands";
+import { reportTextView } from "../modes/controllers/command-views";
 import { visionMarkerRanges } from "../modes/view-model/prompt/composer-attachments";
 import { BUILTIN_COLLAB2_SLASH_COMMAND } from "./builtin-collab2";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
@@ -224,6 +225,9 @@ export async function executeBuiltinSlashCommand(
 			cwd: ctx.sessionManager.getCwd(),
 			output: (text: string) => {
 				ctx.showStatus(text);
+			},
+			report: (title: string, text: string) => {
+				ctx.showCommandReport({ title, body: () => reportTextView(text.trim()) });
 			},
 			refreshCommands: () => ctx.refreshSlashCommandState(),
 			reloadPlugins: () => reloadTuiPluginState(ctx),

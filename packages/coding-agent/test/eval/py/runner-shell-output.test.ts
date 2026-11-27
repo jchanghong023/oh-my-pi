@@ -142,7 +142,7 @@ describe("Python runner shell output streaming", () => {
 			.map(frame => frame.data)
 			.join("");
 
-		expect(stdout).toContain("[output truncated: shell helper exceeded");
+		expect(stdout).toContain("[shell output truncated:");
 		expect(stdout).toContain("captured=3000 return=0");
 		expect(stdout).not.toContain("captured=3100");
 	});
@@ -160,7 +160,7 @@ describe("Python runner shell output streaming", () => {
 			.map(frame => frame.data)
 			.join("");
 
-		expect(stdout).toContain("[output truncated: shell helper exceeded");
+		expect(stdout).toContain("[shell output truncated:");
 		expect(stdout).toContain("capturedChars=1048576 return=0");
 		expect(stdout).not.toContain("capturedChars=1048593");
 	});

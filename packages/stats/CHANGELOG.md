@@ -12,6 +12,14 @@
 - The default Linux offline cache keeps statistics private without modifying directory permissions during reads.
 - On Windows, stats uses the upstream port-holder lookup order while preserving the PowerShell filter needed to identify the process.
 
+### Added
+
+- Added queryable tracking of tool approval requests and outcomes across sessions in the stats database.
+
+### Fixed
+
+- Fixed live updates and synchronization in the `omp stats` dashboard when session directories are inaccessible or agents are continuously writing.
+
 ## [19.1.1] - 2026-11-23
 
 ### Added

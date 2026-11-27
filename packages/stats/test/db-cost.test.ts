@@ -331,10 +331,12 @@ describe("stats subscription cost correction", () => {
 	});
 
 	it("refreshes a historically zero-cost multi-agent row with orchestration usage on re-ingest", async () => {
-		// Fixed cards isolate tier selection and UPSERT repricing from catalog changes.
-		const model = {
+		// Pin the rate card rather than read the bundled one, whose prices follow
+		// upstream catalog refreshes: 2/6/0.2 per million tokens, and 4/12/0.4 for
+		// the whole request once prompt input reaches 200K tokens.
+		const tariff = {
 			...codexReferenceModel,
-			id: "multi-agent-card-model",
+			id: "grok-4.20-multi-agent-0309",
 			provider: "xai-oauth",
 			cost: {
 				input: 2,
@@ -351,7 +353,8 @@ describe("stats subscription cost correction", () => {
 				},
 			},
 		};
-		const lookup = spyOn(catalogModels, "getBundledModel").mockReturnValue(model);
+		// The isolated database holds only this request, so every lookup is for it.
+		const lookup = spyOn(catalogModels, "getBundledModel").mockReturnValue(tariff);
 		try {
 			await initDb();
 			closeDb();
@@ -373,8 +376,8 @@ describe("stats subscription cost correction", () => {
 					"/tmp/session.jsonl",
 					"multi-agent",
 					"/tmp/project",
-					model.id,
-					model.provider,
+					"grok-4.20-multi-agent-0309",
+					"xai-oauth",
 					"openai-responses",
 					Date.now(),
 					1000,
@@ -402,7 +405,7 @@ describe("stats subscription cost correction", () => {
 			insertMessageStats([
 				{
 					...createXaiOAuthStats("multi-agent"),
-					model: model.id,
+					model: "grok-4.20-multi-agent-0309",
 					usage: {
 						input: 1000,
 						output: 500,
@@ -415,8 +418,9 @@ describe("stats subscription cost correction", () => {
 				},
 			]);
 
-			// Orchestration pushes the prompt across the tier and bills with the
-			// conversation buckets at the fixture's 4/12/0.4 rates.
+			// Prompt input (1000 + 200 + 300000) crosses the inclusive 200K tier, so
+			// the whole request bills at 4/12/0.4; orchestration input/output are
+			// priced alongside the conversation buckets.
 			const request = getRecentRequests(1)[0];
 			expect(request?.usage.cost.input).toBeCloseTo((4 / 1e6) * 301_000, 8);
 			expect(request?.usage.cost.output).toBeCloseTo((12 / 1e6) * 1_500, 8);
