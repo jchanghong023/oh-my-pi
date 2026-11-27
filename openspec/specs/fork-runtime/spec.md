@@ -16,7 +16,7 @@ fork 运行、路径、诊断、分发、[审批](#requirement-授权模式与�
 
 ### Requirement: 运行诊断日志
 
-`operation_id` MUST 关联请求、任务、目标、会话和工具调用；异步继承，跨进程尽量透传，不改协议。
+同次请求的任务、目标、会话和工具调用 MUST 共享 `operation_id`；异步继承，跨进程尽量透传，不改协议。
 
 #### Scenario: 日志启停
 - **WHEN** 启停、重启或执行受观测操作
@@ -50,7 +50,7 @@ OMP MUST 按以下优先级解析运行配置；安装或更新失败时保留�
 | `--offline` | 启动和 `omp find` 仅覆盖本次 `models.offline`，与 `OMP_OFFLINE` 独立，可并用，不是防火墙。 |
 | 持久根 | 绝对 `OMP_CONFIG_ROOT`（展开 `~`，忽略相对值）> `PI_CONFIG_DIR` > 上游；保留 profile、项目 `.omp/` 及原数据布局。`-P` 等同 `--profile`。 |
 | native／grammar | 安装器和 loader 使用同一路径及 profile；`PI_NATIVES_DIR` 优先于[性能根](#requirement-可选性能数据根)。 |
-| daemon | Linux 单用户 daemon／worker 共享宿主 native、offline 分流和 profile；其他 detached daemon 用自己的 runtime `natives/`。单 client 退出不终止共享 daemon，末 client 退出释放；creator 仅清本次独占资源。验证实际加载、双 worker 冷并发和无残留暂存。 |
+| daemon | Linux 单用户 daemon／worker 共享宿主 native、offline 分流和 profile；其他 detached daemon 用自己的 runtime `natives/`。仅清本次独占资源。验证实际加载、双 worker 冷并发和无残留暂存。 |
 
 **offline 运行（仅进程内覆盖）**
 
@@ -59,29 +59,31 @@ OMP MUST 按以下优先级解析运行配置；安装或更新失败时保留�
 | 文件补全 | `@` 重扫间隔 30000ms，显式 `FS_SCAN_CACHE_TTL_MS`（含 0）优先。 |
 | Linux TUI | 后台 ≤10 FPS；回显和取消优先，保留终刷、反压和自适应。渐变 250ms，活动计时 1000ms，Git 状态 TTL 60s；HEAD、cwd 或显式失效照旧，不依赖写通知或修改 Git 配置。 |
 | 显示 | 流式 100ms，保留边界冲刷、逐增量语音、实时思考及输入调度。设 `tui.autoGraph=off`、`tui.titleState=false`、`title.refreshOnReplan=false`；保留首 scout 标题、手命名及其他显示和工具能力。 |
-| 工具与目录 | 设 `web_search.enabled=false`、`browser.enabled=false`（含 `/crawl`）；HTTP 读取仍按 `fetch.enabled` 和审批。保留 AST 编辑，缺包只用显式源、不退 GitHub；内网模型及本地工具照用。启动不读更新日志；offline 禁止手动和自动检查或更新 OMP。`/changelog`、目录及模型／OAuth 请求照旧。`omp openspec version --check` 只使用显式非默认 HTTPS npm 镜像。 |
+| 工具与目录 | CLI 和直接 SDK 均禁用外部搜索工具（`web_search.enabled=false`）及浏览器工具（`browser.enabled=false`，含 `/crawl`）。HTTP 读取仍按 `fetch.enabled` 和审批。保留 AST 编辑，缺包只用显式源、不退 GitHub；内网模型及本地工具照用。启动不读更新日志；offline 禁止手动和自动检查或更新 OMP。`/changelog` 照旧。`omp openspec version --check` 只使用显式非默认 HTTPS npm 镜像。 |
 | 模型 | `company/Qwen3.8-27B` 上下文 262144，其余 company 聊天 204800；KDL 专限和 `maxTokens` 不变。仅在 company 可用时为未配置角色补默认，显式配置（含 `null`）及 CLI 优先，不锁定手动选模或写回配置。 |
+
+offline 不得向公网刷新或交换凭据，含 OAuth 自动刷新和经认证代理触发的公网刷新；CLI、SDK 和内置集成都适用。已有有效凭据可用，无法在允许的边界内取得有效凭据时须报错，不回退到公网。
 
 角色默认：`default`／`plan`／`slow` 用 `company/GLM-5.3-public`；`smol`／`task`／`vision`／`advisor` 用 `company/Qwen3.8-27B`；`tiny`／`commit` 用 `company/Qwen3.6-35B-A3B`；`memory` 仍自动。保存或切换冲突只排除隐式默认。
 
-Python Eval：显式解释器不可用或不兼容即失败。Linux offline 依次试 `/software/public/python/3.11.4/bin/python3.11`、原候选、PATH 中 `python3.15` 至 `python3.11`、`python3`、`python`，去重并实测 ≥3.11；其余环境沿用候选和 ≥3.8。新增发现仅用于 Eval 子进程，不继承 venv／Conda／PYTHONPATH，不修改主 PATH 或业务 Python，不扫描或安装。
+Python Eval：显式解释器不可用或不兼容即失败。Linux offline 优先试固定路径 `/software/public/python/3.11.4/bin/python3.11`；不可用时依次试原候选、PATH 中 `python3.15` 至 `python3.11`、`python3`、`python`，去重并实测 ≥3.11。其余环境的候选和最低版本沿用上游。新增发现仅用于 Eval 子进程，不继承 venv／Conda／PYTHONPATH，不修改主 PATH 或业务 Python，不扫描或安装。
 
 **代理与 TLS**
 
-- Windows 主进程 HTTP(S) `fetch` 逐跳按显式 `proxy`（含 `false`、`PI_PROXY_<PROVIDER>`／`PI_PROXY`）、目标 `HTTPS_PROXY`／`HTTP_PROXY`、`ALL_PROXY`、用户系统代理、直连排序。环境代理仅支持 HTTP(S) 或裸 `host:port`，遵守 `NO_PROXY`。本地服务 worker 不装系统代理，Unix socket 不变。
+- Windows 主进程 HTTP(S) `fetch` 逐跳按显式 `proxy`（`false` 为直连）、`PI_PROXY_<PROVIDER>`／`PI_PROXY`、目标 `HTTPS_PROXY`／`HTTP_PROXY`、`ALL_PROXY`、用户系统代理、直连排序。环境代理仅支持 HTTP(S) 或裸 `host:port`，遵守 `NO_PROXY`。本地服务 worker 不装系统代理，Unix socket 不变。
 - 系统代理只读一次 HKCU Internet Settings 的启用状态和静态 HTTP(S) 代理，不用 SOCKS／PAC／WPAD；禁用或失败不接管。系统层独有公司清单及内网硬绕过，并遵守回环和 `NO_PROXY`；不限制显式或环境代理。公司清单包含主机、后缀、通配及 IP 前缀，匹配规则由清单维护。
-- 仅 `redirect: "follow"` 跟随；跨源跳转去掉 Authorization、Proxy-Authorization、Cookie 和 Host。运行时不区分普通或 offline，默认不校验证书；agent `.env` 优先。未设置时 Node 使用 `NODE_TLS_REJECT_UNAUTHORIZED=0`，Git 未配校验时默认 `GIT_SSL_NO_VERIFY=true`。设置 `NODE_TLS_REJECT_UNAUTHORIZED=1` 或 Git 严格配置可恢复校验，严格时不向 Git 传 `GIT_SSL_NO_VERIFY=false` 字符串。worker 不另设。
+- 仅 `redirect: "follow"` 跟随；跨源跳转去掉 Authorization、Proxy-Authorization、Cookie 和 Host。Node 默认 `NODE_TLS_REJECT_UNAUTHORIZED=0`，显式设置优先。OMP 管理的 Git 传输可在没有显式设置时用宽松默认；Git 自身的 `http.sslVerify` 优先，非托管 Git 沿用原规则。`GIT_SSL_NO_VERIFY=false` opt-in 恢复校验，不作为字符串传给 Git。worker 不另设。
 
 **构建、更新与安装**
 
 | 项目 | 规则 |
 |---|---|
-| Windows 本地构建 | `bun run local` 只编译和替换 `omp.exe`，占用时让位、不杀，失败恢复；不跑测试、冒烟、worker 或加载探测（`--skip-load-probe`）。CNB 发布版嵌入 fork 版本及 CNB 更新源，本地版只嵌入更新源。报告平台、构建阶段和适用签名，全部成功才报告产物实路径及耗时。 |
+| Windows 本地构建 | `bun run local` 只编译和替换 `omp.exe`，占用时让位、不杀，失败恢复；不跑测试、冒烟、worker 或加载探测（`--skip-load-probe`）。CNB 发布版嵌入 fork 版本及更新源，本地版只嵌入更新源。构建可报阶段进度，最终换入成功才报安装实路径及总耗时。 |
 | 更新源 | 安装和更新均只用 CNB，默认取 `jchanghong/bin` 的 `omp` 发布，不回退其他平台。认证按 CNB 规则，SHA-256 取发布资产元数据。版本先按 SemVer、再按同基线 `+fork.N` 排序（缺省 0）。 |
-| `omp update` | 仅非 offline 可手动执行；offline 明确拒绝，不请求更新源。仅原位替换独立二进制；包管理安装只提示 fork 安装器。TTY 才显示进度；目标和 PATH 实文件不同则预警并提示核对版本。canary 不支持，显式更新提示 stable。 |
+| `omp update` | 仅非 offline 可手动执行；offline 拒绝且不联网。原位替换独立二进制并验证 PATH，成功后由已验启动器同步已安装的 Browser Relay；同步失败记警告，不撤回二进制更新。包管理安装只提示 fork 安装器；TTY 才显示进度，不支持 canary。 |
 | 安装门禁 | 仅安装 CNB 发布的 Linux glibc x64／Windows x64 二进制；联网前拒 macOS、源码安装和目录目标。同版不下载，仍查 PATH。元数据严格 TLS；仅二进制下载可放宽。Windows 支持 PowerShell 5.1 x64，优先 `curl.exe`，失败或不可用时回退 `Invoke-WebRequest`；遵守代理边界。updater 不依赖 PowerShell。 |
-| 校验和换入 | 同目录唯一临时文件，先验同名资产 SHA-256、再实跑完整版本号；失败不执行未验产物、不替换旧版。Linux 原子换入，不[结束运行会话](#requirement-posix-安装器对运行中会话的检测)；Windows 先唯一改名让位，失败才[按身份回退](#requirement-windows-安装器强杀回退的身份校验)，换入失败则回滚并保留已验产物。 |
-| 恢复与回执 | 只在目标缺失时恢复旧版，重试锁定同一 CNB 发布和目标目录并核对目标和 PATH；下次尽力清旧映像。PATH 失败报部分完成，清理失败不推翻换入结果。只改 PATH，不写用户配置；Windows 失败给阶段、原错、目标、日志及正确引用路径的恢复命令。 |
+| 校验和换入 | 同目录唯一临时文件，先验同名资产 SHA-256，再实跑完整版本号；任一校验失败不换入。Linux 原子换入，不[结束运行会话](#requirement-posix-安装器对运行中会话的检测)；Windows 先唯一改名让位，失败才[按身份回退](#requirement-windows-安装器强杀回退的身份校验)。 |
+| 恢复与回执 | 换入失败保留已验产物并报路径；仅目标缺失时恢复旧版，不覆盖并发换入的文件。重试锁定原发布和目标目录并核对目标和 PATH；下次尽力清旧映像。PATH 失败报部分完成，清理失败不推翻换入结果。只改 PATH，不写用户配置；Windows 失败给阶段、原错、目标、日志和正确引用路径的恢复命令。 |
 
 ### Requirement: 宿主 Cargo 单变体发布构建
 
@@ -104,9 +106,9 @@ CNB 发布须明确授权。CNB MUST 验证 Export viewer 精确字节元数据�
 
 #### Scenario: Git 同步
 - **WHEN** 执行 `bun run cnb`
-- **THEN** Windows 与 Ubuntu-24.04 WSL2（`/root/oh-my-pi`）均须父仓和 OpenWiki 子模块干净，经 Git 快进并检出固定子模块；确认提交和 Bun 版本相同后再并行。WSL 只经 Git 远端同步，不覆盖或清用户文件。
-- **AND** 仅当提交、Bun、固定目标及全部发布输入一致，且同宿主已有完整成功的二进制与 SDK ZIP 时复用；否则重新构建和打包，失败或缺件不登记成功、不上传。SDK 使用同次宿主 addon，解包编译免 Rust；不含 CLI 二进制、已装依赖或个人设置。
-- **AND** 两端齐备后并行上传并逐一确认两二进制、`omp-sdk-win32-x64.zip` 和 `omp-sdk-linux-x64.zip`。默认既有 `jchanghong/bin` 的 `omp`，可指定 `--repo`／`--tag`；无交互或 `--overwrite`；只覆盖本次同名资产，不动他件、不另传或推源码。分宿主报告缓存命中及构建、打包和上传耗时；部分上传不算交付。
+- **THEN** 本次使用的 Windows／Ubuntu-24.04 WSL2（`/root/oh-my-pi`）工作区须父仓和 OpenWiki 子模块干净，经 Git 快进并检出固定子模块。若双端并行构建，先核对提交、Bun 版本及 revision 一致；WSL 只经 Git 远端同步，不覆盖或清用户文件。
+- **AND** 成品按宿主复用。仅在源码及固定子模块、目标、Bun 版本及 revision、实际构建工具链与产物相关设置、发布版本和更新源均匹配，且本次所需产物非空并有成功校验记录时命中。记录须能核对产物摘要及 Export viewer 精确字节元数据；命中不重生成 viewer，输入或记录不符才重建。失败或缺件不登记成功、不上传该产物。SDK 使用同次宿主 addon，解包编译免 Rust；不含 CLI 二进制、已装依赖或个人设置。
+- **AND** 默认向既有 `jchanghong/bin@omp` 发布 Windows／Linux 二进制及两份 SDK ZIP；用 `--asset` 选择附件，`--repo`／`--tag` 指定目标。只覆盖本次授权的同名附件并逐一确认，不传或推源码。同一 tag 的二进制版本须一致；单平台不同版本用独立版本 tag。分宿主报告缓存及构建、打包和上传耗时。
 
 ### Requirement: 默认设置
 
@@ -191,7 +193,7 @@ offline MUST 只允许手动更新市场。
 - **WHEN** 安装器运行（同 PID 不复用）
 - **THEN** `omp.install.<UTC 日期>.<epoch 毫秒>.<PID>.log`（`YYYY-MM-DD`）； `operation_id`, `stage`, `elapsed_ms`, `platform`, `target_version`、级别/事件/有界结果；版本 `v?` + 三段数字 + 可选 `+fork.<数字>`，否则 `redacted`。
 
-性能根 `logs/`（原回退）> 绝对 `OMP_CONFIG_ROOT` 含 profile 或用户根（`PI_CONFIG_DIR`/`.omp`）`logs/`。无显式根且已有 `<XDG_STATE_HOME>/omp` 则用，不可写→`~/.local/state/omp`；Windows 数据根→`%LOCALAPPDATA%\omp`。回退 WARN；仅清同类，留 20 次/5 天，跳活 PID；写败 stderr 一行、不改退出码。
+先选有效绝对根，再派生 profile 日志目录：性能根优先，其次显式配置根；Linux 无显式根且已有 `<XDG_STATE_HOME>/omp` 时用该根。不可写时回退 Linux `~/.local/state/omp` 或 Windows `%LOCALAPPDATA%\omp` 并记 WARN。仅清同类，留 20 次/5 天，跳活 PID；写败 stderr 一行，不改退出码。
 
 ### Requirement: POSIX 安装器对运行中会话的检测
 
@@ -211,11 +213,11 @@ POSIX MUST NOT 结束使用目标的会话。
 
 ### Requirement: Windows 内嵌 native 缓存的占用替换
 
-Windows 换入失败 MUST NOT 用缺当前 shell trace API 的旧 addon。
+Windows 内嵌 addon 换入或加载失败，MUST NOT 回退到缺当前 shell trace API 的旧 addon。同版不同内容可用各自的内容缓存。
 
 #### Scenario: 旧 DLL 占用
 - **WHEN** Windows 同版内嵌 addon 大小改变、旧 DLL 仍加载
-- **THEN** 原子换 > 同目录唯一让位；不杀旧、不改缓存路径名；旧用已载 addon，新用 `RunTrace`。失败恢复，回滚失败留新旧报路径；清旧失败非换入失败。
+- **THEN** 原子换 > 同目录唯一让位；不杀旧。旧进程继续用已载 addon，新进程须有 `RunTrace`，否则报错。换入失败恢复；回滚失败留新旧报路径；清旧失败非换入失败。
 
 验实际 DLL 占用回退、换后字节、新 shell trace、旧进程；普通 native/`local`/`cnb` 验证授权不变。
 
@@ -233,7 +235,7 @@ Windows 换入失败 MUST NOT 用缺当前 shell trace API 的旧 addon。
 
 #### Scenario: 中断
 - **WHEN** 中断跳过执行、取消授权等待或信号打断执行
-- **THEN** 持久化 `cancelled: true`（与 `isError` 并存），供会话/fork 复制/投影/上层区分；原内容/退出码，迟到不重标，未启的不可中断工具仍执行。
+- **THEN** 本地会话持久化 `cancelled: true`，与 `isError` 独立，保留原内容及退出码。迟到不重标，未启的不可中断工具仍执行。
 
 ### Requirement: 会话通信回执
 
@@ -329,7 +331,7 @@ Windows 内建 `rsync` MUST 支持 UNC 及 verbatim 路径。
 - **THEN** 取消回退仍非 KILL。
 
 ### Requirement: 进程树信号的快照式投递
-每波前 MUST 快照目标，禁同波组投递后重枚举、重投组已覆盖成员；仅组投递失败 MUST 按成员句柄回退。本波 TERM 处理器立即创建的清理子进程不收本波信号。
+每波前 MUST 快照目标；不漏投、不重投，不波及 TERM 处理器在本波新启动的清理子进程。
 范围仅限实际启动的外部成员及其进程组；禁向宿主 PID 或其子树发信号，误列宿主为后代须剪除整棵子树。
 
 #### Scenario: 取消作用域与宿主保护
@@ -342,11 +344,3 @@ Windows 内建 `rsync` MUST 支持 UNC 及 verbatim 路径。
 #### Scenario: 取消不缩短清理宽限
 - **WHEN** 管道成员成功启动后收到取消信号
 - **THEN** MUST 等至成员按 TERM 清理规则结束；轮询回收已停止成员，余者按取消语义等待；禁立即销毁进程句柄。
-
-### Requirement: 逐输入元数据边界
-
-Enqueue MUST support per-input metadata; never send as Provider options or widen restricted sessions' tool list or authorization.
-
-#### Scenario: Metadata
-- **WHEN** tool denylist, `sourceCommand.automationId` or attachments (refs/filename/MIME/bytes/etc.) accompany input
-- **THEN** runtime queue and journal retain them for turn tool availability and provenance.

@@ -8,6 +8,7 @@ export const cfgBrowserEnabled = register({
 	id: "browser.enabled",
 	type: "boolean",
 	default: true,
+	offlineDisabled: true,
 	ui: {
 		tab: "tools",
 		group: "Available Tools",

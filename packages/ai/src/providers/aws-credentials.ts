@@ -18,7 +18,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $env, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { $env, isEnoent, logger, offlineFromEnv } from "@oh-my-pi/pi-utils";
+import { assertOnlineCredentialExchange, credentialFetch } from "../auth/offline";
 import * as AIError from "../error";
 import type { FetchImpl } from "../types";
 import { raceWithSignal } from "../utils/abort";
@@ -95,7 +96,7 @@ export async function resolveAwsCredentials(opts: CredentialResolveOptions = {})
 	const cacheKey = credentialCacheKey(profile, region, loadSharedConfig);
 
 	const hit = cache.get(cacheKey);
-	if (hit && hit.expiresAt - REFRESH_SKEW_MS > Date.now()) return hit.creds;
+	if (hit && hit.expiresAt - (offlineFromEnv() ? 0 : REFRESH_SKEW_MS) > Date.now()) return hit.creds;
 
 	// Single-flight: N concurrent cold calls must not each spawn credential_process/SSO/IMDS fetches.
 	// The shared resolution is deliberately detached from any caller's signal — aborting one
@@ -104,7 +105,7 @@ export async function resolveAwsCredentials(opts: CredentialResolveOptions = {})
 	const existing = inflight.get(cacheKey);
 	if (existing) return raceWithSignal(existing, opts.signal);
 
-	const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchImpl);
+	const fetchImpl = credentialFetch("AWS", opts.fetch);
 	const promise = (async () => {
 		try {
 			const creds = await resolveFresh(
@@ -254,6 +255,7 @@ async function resolveProfileChain(
 	}
 
 	if (merged.credential_process) {
+		assertOnlineCredentialExchange("AWS credential_process");
 		return readCredentialProcess(profile, merged.credential_process, ctx.signal);
 	}
 
@@ -581,6 +583,7 @@ async function refreshSsoToken(
 			signal,
 		});
 	} catch (err) {
+		if (err instanceof AIError.OAuthOfflineError) throw err;
 		logger.debug("aws-credentials: SSO token refresh request failed", { err: String(err) });
 		return undefined;
 	}

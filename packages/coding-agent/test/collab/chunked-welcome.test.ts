@@ -19,7 +19,7 @@ import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
+import { installInMemoryRelay, stubGuestReplicaSwitch, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 // In-memory transport: shared FakeWebSocket + InMemoryRelay harness (see
 // ./helpers/in-memory-relay), mirroring the relay's forwarding contract.
@@ -142,8 +142,8 @@ function makeCancelledSwitchGuestContext(
 			getCwd: () => process.cwd(),
 		},
 		session: {
-			switchSession,
-			newSession: () => Promise.resolve(),
+			switchSession: async (...args: Parameters<typeof stubGuestReplicaSwitch>) =>
+				(await switchSession()) && stubGuestReplicaSwitch(...args),
 			resetReplicatedViewState: () => {},
 			messages: [],
 			agent: {
@@ -153,6 +153,7 @@ function makeCancelledSwitchGuestContext(
 				setDisableReasoning: () => events.push("host-reasoning"),
 			},
 		},
+		prepareSessionSwitch: async () => {},
 		clearTransientSessionUi: () => events.push("clear-transient-ui"),
 		clearWorking: () => false,
 		ensureWorkingRow: () => {},

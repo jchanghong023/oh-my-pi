@@ -1,5 +1,6 @@
 import { mkdir, open, rm } from "node:fs/promises";
 import { dirname } from "node:path";
+import { createRoot, effect, untrack } from "@oh-my-pi/pi-tui";
 import { isSsh } from "@oh-my-pi/pi-tui/driver/mux/detect";
 import { errorMessage, logger } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "../cli/args";
@@ -91,6 +92,7 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			let server: SketchServer | undefined;
 			let removeInput: (() => void) | undefined;
 			let removeSessionChange: (() => void) | undefined;
+			let removeOwnershipEffect: (() => void) | undefined;
 			const statusKey = `sketch:${crypto.randomUUID()}`;
 			const owned = {
 				cancel() {
@@ -116,6 +118,7 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const dispose = () => {
 				removeInput?.();
 				removeSessionChange?.();
+				removeOwnershipEffect?.();
 				ctx.setHookStatus(statusKey, undefined);
 				server?.close();
 				if (state.current === owned) state.current = undefined;
@@ -168,6 +171,12 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					}
 				});
 				removeSessionChange = session.registerSessionChangeCallback(owned.cancel);
+				removeOwnershipEffect = createRoot(dispose => {
+					effect(() => {
+						if (!isCurrent()) untrack(owned.cancel);
+					});
+					return dispose;
+				});
 				removeInput = ctx.shell.interceptInput(event => {
 					if (!isCurrent()) {
 						owned.cancel();

@@ -203,10 +203,15 @@ function companyLaneActive(): boolean {
 	return isMainThread ? offlineEnabled : getEnvironmentData(offlineKey) === true;
 }
 
+function snapshotForTransport(snapshot: CompanySnapshot): CompanySnapshot {
+	return snapshot.config ? { ...snapshot, config: { ...snapshot.config, token: snapshot.config.token } } : snapshot;
+}
+
 /** Enables or disables the company lane; await before starting dependent consumers or workers. */
 export async function setCompanyOfflineEnabled(enabled: boolean): Promise<void> {
 	if (!isMainThread) return;
 	const operationId = logger.getLogContext().operation_id ?? `company-lane-${randomUUID()}`;
+	const wasEnabled = offlineEnabled;
 	offlineEnabled = enabled;
 	setEnvironmentData(offlineKey, enabled);
 	logger.info("Company process lane configured", {
@@ -218,34 +223,33 @@ export async function setCompanyOfflineEnabled(enabled: boolean): Promise<void> 
 		snapshot_read_allowed: enabled,
 		operation_id: operationId,
 	});
-	if (enabled) {
-		if (!mainSnapshotPromise && !mainSnapshot) {
-			mainSnapshotPromise = logger.withLogContext({ operation_id: operationId }, async () => {
-				const snapshot = await readStartupConfig();
-				try {
-					setEnvironmentData(
-						snapshotKey,
-						snapshot.config
-							? { ...snapshot, config: { ...snapshot.config, token: snapshot.config.token } }
-							: snapshot,
-					);
-				} catch (error) {
-					logger.error("Company startup snapshot publication failed", {
-						component: "company-provider",
-						event: "company_snapshot_publication_failed",
-						stage: "worker_publish",
-						result: "failed",
-						operation_id: operationId,
-						...logger.diagnosticError(error),
-					});
-					throw error;
-				}
-				mainSnapshot = snapshot;
-				return snapshot;
-			});
-		}
-		await mainSnapshotPromise;
+	if (!enabled) {
+		setEnvironmentData(snapshotKey, undefined);
+		return;
 	}
+	if (mainSnapshot) {
+		if (!wasEnabled) setEnvironmentData(snapshotKey, snapshotForTransport(mainSnapshot));
+		return;
+	}
+	mainSnapshotPromise ??= logger.withLogContext({ operation_id: operationId }, async () => {
+		const snapshot = await readStartupConfig();
+		try {
+			if (offlineEnabled) setEnvironmentData(snapshotKey, snapshotForTransport(snapshot));
+		} catch (error) {
+			logger.error("Company startup snapshot publication failed", {
+				component: "company-provider",
+				event: "company_snapshot_publication_failed",
+				stage: "worker_publish",
+				result: "failed",
+				operation_id: operationId,
+				...logger.diagnosticError(error),
+			});
+			throw error;
+		}
+		mainSnapshot = snapshot;
+		return snapshot;
+	});
+	await mainSnapshotPromise;
 }
 
 /** Whether the company lane is active in this process (regardless of configuration validity). */
@@ -259,43 +263,4 @@ export function getCompanyConfig(): Readonly<CompanyConfig> | undefined {
 
 export function getCompanyConfigError(): string | undefined {
 	return companyLaneActive() ? ensureStartupSnapshot().error : undefined;
-}
-
-/** Private IPC payload for owned subprocesses; never log or persist this snapshot. */
-export interface CompanyProcessSnapshot {
-	enabled: boolean;
-	snapshot?: CompanySnapshot;
-}
-
-export function companySnapshotForSubprocess(): CompanyProcessSnapshot {
-	if (!companyLaneActive()) return { enabled: false };
-	const snapshot = ensureStartupSnapshot();
-	return {
-		enabled: true,
-		snapshot: snapshot.config
-			? { ...snapshot, config: { ...snapshot.config, token: snapshot.config.token } }
-			: snapshot,
-	};
-}
-
-/** Install the parent's cached startup state without rereading mutable credential files. */
-export async function inheritCompanyProcessSnapshot(state: CompanyProcessSnapshot): Promise<void> {
-	if (!isMainThread) throw new Error("Company subprocess snapshot requires a process main thread");
-	if (mainSnapshotPromise && !mainSnapshot) {
-		throw new Error("Cannot inherit a company subprocess snapshot while initialization is in progress");
-	}
-	if (state.enabled) {
-		if (!state.snapshot) throw new Error("Missing company subprocess snapshot");
-		const snapshot = state.snapshot;
-		if (snapshot.config) {
-			Object.defineProperty(snapshot.config, "token", { enumerable: false });
-			Object.freeze(snapshot.config);
-		}
-		mainSnapshot = snapshot;
-		setEnvironmentData(
-			snapshotKey,
-			snapshot.config ? { ...snapshot, config: { ...snapshot.config, token: snapshot.config.token } } : snapshot,
-		);
-	}
-	await setCompanyOfflineEnabled(state.enabled);
 }

@@ -127,9 +127,11 @@ export interface ResolveRuntimeCandidatesInput {
 	/** This build's hash-path candidates, probed first. */
 	embedded: string[];
 	staged: string | null;
+	/** Only allow this build's hash paths (compiled Windows binaries with a matching manifest). */
+	requireEmbedded?: boolean;
 }
 
-/** `loadNative`'s probe order; drops the shared `versionedDir/<filename>` paths when `hasEmbedded`. */
+/** `loadNative`'s probe order; drops shared version paths when embedded, or all external paths when required. */
 export function resolveRuntimeCandidates(input: ResolveRuntimeCandidatesInput): string[];
 
 export interface SelectCpuVariantInput {
@@ -157,6 +159,7 @@ export function validateLoadedBindings(
 	ctx: ValidateLoadedBindingsContext,
 	bindings: Record<string, unknown>,
 	candidate: string,
+	requireEmbedded?: boolean,
 ): void;
 
 /** Identity of the addon `loadNative()` returned, for missing-export diagnostics. */

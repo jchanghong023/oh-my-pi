@@ -44,6 +44,7 @@ export interface SessionProviderBoundaryHost {
 	imageDescriptions: ImageDescriptions | undefined;
 	transformContext(messages: AgentMessage[], signal?: AbortSignal): AgentMessage[] | Promise<AgentMessage[]>;
 	convertToLlm(messages: AgentMessage[], model: Model | undefined): Message[] | Promise<Message[]>;
+	activeGoalAutopilotId(): string | null;
 	onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
@@ -216,7 +217,7 @@ export class SessionProviderBoundary {
 		reader: Model,
 		options?: { withImageDescriptions: boolean },
 	): Message[] {
-		let converted = convertToLlm(messages, reader);
+		let converted = convertToLlm(messages, reader, this.#host.activeGoalAutopilotId());
 		const descriptions = this.#host.imageDescriptions;
 		if (options?.withImageDescriptions && descriptions) {
 			converted = converted.map(message => descriptions.withDescriptions(message));

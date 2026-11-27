@@ -315,7 +315,7 @@ afterEach(() => {
 describe("compact action dock", () => {
 	const plain = (rows: readonly string[]) => rows.map(row => Bun.stripANSI(row));
 
-	it("keeps the path legible and distinguishes a settled file action", async () => {
+	it("keeps the running path legible and preserves the dock spacing after it settles", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -342,15 +342,7 @@ describe("compact action dock", () => {
 			result: { content: [] },
 			isError: false,
 		});
-		const done = plain(h.dock.render(80));
-		expect(done[1]).toBe(" Agent: Last read OK  workspace/src/config.ts · Checking presets");
-		expect(h.dock.render(80)[1]).toContain(theme.fg("dim", "Agent: Last read OK"));
-		expect(h.dock.render(80)[1]).toContain(theme.fg("dim", "workspace/src/config.ts · Checking presets"));
-		for (const rows of [h.dock.render(80), h.nativeRows(80)]) {
-			expect(rows).toHaveLength(3);
-			expect(rows[2]).toBe("");
-			expect(Bun.stripANSI(rows[1]!)).toBe(done[1]!);
-		}
+		for (const rows of [h.dock.render(80), h.nativeRows(80)]) expect(plain(rows)).toEqual(["", "", ""]);
 	});
 
 	it("labels edits as writes and falls back to Calling for unknown tools", async () => {
@@ -359,8 +351,8 @@ describe("compact action dock", () => {
 		h.register("Worker", live);
 		await h.focus.focusAgent("Worker");
 		const cases = [
-			{ name: "edit", args: { path: "a.ts", input: "*** Begin Patch" }, running: "Writing", done: "write OK" },
-			{ name: "mystery_tool", args: { query: "target" }, running: "Calling", done: "call OK" },
+			{ name: "edit", args: { path: "a.ts", input: "*** Begin Patch" }, running: "Writing" },
+			{ name: "mystery_tool", args: { query: "target" }, running: "Calling" },
 		] as const;
 		for (const [index, c] of cases.entries()) {
 			const id = `cat-${index}`;
@@ -378,11 +370,11 @@ describe("compact action dock", () => {
 				result: { content: [] },
 				isError: false,
 			});
-			expect(plain(h.rows())[1]).toStartWith(` Agent: Last ${c.done}  `);
+			expect(plain(h.rows())[1]).toBe("");
 		}
 	});
 
-	it("shows failure from isError without rejudging results, and keeps the object in the detail", async () => {
+	it("keeps the object in running detail and clears the activity on failure", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -393,6 +385,7 @@ describe("compact action dock", () => {
 			toolName: "bash",
 			args: { command: "false" },
 		});
+		expect(plain(h.rows())[1]).toBe(" Agent: Running  false");
 		await live.emit({
 			type: "tool_execution_end",
 			toolCallId: "a",
@@ -400,12 +393,7 @@ describe("compact action dock", () => {
 			result: { content: [{ type: "text", text: "boom" }] },
 			isError: true,
 		});
-		const row = plain(h.rows())[1]!;
-		expect(row).toStartWith(" Agent: Last run failed  ");
-		expect(row).toContain("false");
-		expect(row).not.toContain("boom");
-		expect(h.rows()[1]).toContain(currentTheme().fg("error", "Agent: Last run failed"));
-		expect(h.nativeRendered()).toBe(h.rendered());
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)).toEqual(["", "", ""]);
 	});
 
 	it("separates request, thinking and reply from the tool row", async () => {
@@ -446,7 +434,7 @@ describe("compact action dock", () => {
 			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Reply", partial: reply },
 		});
 		expect(plain(h.rows())[0]).toContain("Model replying");
-		expect(plain(h.rows())[1]).toContain("Agent: Last run failed");
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)[1]).toBe("");
 		await live.emit({ type: "message_end", message: reply });
 		await live.emit({ type: "agent_end", messages: [] });
 		expect(plain(h.rows())[0]).toBe("");
@@ -564,7 +552,7 @@ describe("compact action dock", () => {
 		expect(h.rendered()).not.toContain("Model ");
 	});
 
-	it("keeps running tools animated as output changes, without animating completed tools", async () => {
+	it("keeps running tools animated as output changes and clears the Agent row after completion", async () => {
 		const h = focusFixture();
 		setSystemTime(10_000);
 		const live = liveSession(null, undefined, true);
@@ -598,10 +586,9 @@ describe("compact action dock", () => {
 		});
 		await live.emit({ type: "turn_start" });
 		expect(h.rendered()).toContain("Model waiting");
-		const settled = h.rows()[1];
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)[1]).toBe("");
 		setSystemTime(11_200);
-		expect(h.rows()[1]).toBe(settled);
-		expect(Bun.stripANSI(settled!)).toContain("Agent: Last run OK");
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)[1]).toBe("");
 	});
 
 	it("stops both live labels when the status spinner goes static", async () => {
@@ -797,7 +784,7 @@ describe("compact action dock", () => {
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
-	it("replaces old completed rows when new tools start and finish between paints", async () => {
+	it("leaves the Agent row empty when tools start and finish between paints", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -814,11 +801,10 @@ describe("compact action dock", () => {
 		};
 		await run("old-a.ts");
 		await run("old-b.ts");
-		expect(plain(h.rows())[1]).toContain("Last read OK  old-b.ts");
+		expect(plain(h.rows())[1]).toBe("");
 		await run("new-a.ts");
 		await run("new-b.ts");
-		expect(plain(h.rows())[1]).toContain("Last read OK  new-b.ts");
-		expect(h.nativeRendered()).toBe(h.rendered());
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)[1]).toBe("");
 	});
 
 	it("does not resurrect coalesced thinking when streamed reply and its end arrive together", async () => {
@@ -849,7 +835,7 @@ describe("compact action dock", () => {
 		expect(h.nativeRendered()).toBe(h.rendered());
 	});
 
-	it("retains static content across loop end and session switch without reviving animation", async () => {
+	it("does not revive a settled action after loop end and session switch", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -868,15 +854,11 @@ describe("compact action dock", () => {
 			isError: false,
 		});
 		await live.emit({ type: "agent_end", messages: [] });
-		const retained = h.rows();
-		expect(plain(retained)[1]).toBe(" Agent: Last read OK  keep.ts");
-		expect(h.nativeRendered()).toBe(h.rendered());
-		setSystemTime(Date.now() + 500);
-		expect(h.rows()).toEqual(retained);
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)).toEqual(["", "", ""]);
 		await h.focus.focusAgent(MAIN_AGENT_ID);
 		expect(h.rows()).toEqual(["", "", ""]);
 		await h.focus.focusAgent("Worker");
-		expect(plain(h.rows())[1]).toBe(" Agent: Last read OK  keep.ts");
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)).toEqual(["", "", ""]);
 	});
 
 	it.each(["display tier", "focused agent"])("does not revive thinking that ended outside the %s", async change => {
@@ -939,7 +921,7 @@ describe("compact action dock", () => {
 
 		const collapsed = renderTranscript(h.ctx).join("\n");
 		if (compact) {
-			expect(plain(h.rows())[1]).toContain(file);
+			expect(plain(h.rows())[1]).toBe("");
 			expect(collapsed).not.toContain("WRITE_SOURCE_");
 		} else {
 			expect(collapsed).toContain(firstLine);
@@ -1047,7 +1029,7 @@ describe("compact action dock", () => {
 				result,
 				isError: false,
 			});
-			expect(plain(h.rows())[1]).toContain(id === "patch" ? "Last write OK" : "Last call OK");
+			expect(plain(h.rows())[1]).toBe("");
 		}
 	});
 });

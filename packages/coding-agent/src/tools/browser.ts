@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { getWebKitHostPath, isRecord, logger, untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
+import { getWebKitHostPath, isRecord, logger, offlineFromEnv, untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
 import type { EvalPreludeContext, HostEvalPreludeDefinition } from "../eval/preludes";
 import type { ToolSession } from "../sdk";
 import { enforceInlineByteCap } from "./streaming-output";
@@ -482,6 +482,7 @@ async function invokeBrowser(
 	parameters: unknown,
 	context: EvalPreludeContext,
 ): Promise<AgentToolResult<unknown>> {
+	if (offlineFromEnv()) throw new ToolError("Browser is disabled in OMP_OFFLINE mode.");
 	const parsed = browserSchema(withStringApp(parameters));
 	if (parsed instanceof type.errors) {
 		throw new ToolError(`browser received invalid arguments: ${parsed.summary}`);

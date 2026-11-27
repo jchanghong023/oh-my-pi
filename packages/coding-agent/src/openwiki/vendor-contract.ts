@@ -95,5 +95,5 @@ export interface OpenWikiVendor {
 		skillsDir: string;
 		signal: AbortSignal;
 		onEvent(event: Event): void;
-	}): Promise<{ partialFailure?: boolean; sourceChanged?: boolean; skipped: boolean }>;
+	}): Promise<{ partialFailure?: boolean; skipped: boolean }>;
 }

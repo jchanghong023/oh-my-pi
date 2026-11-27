@@ -78,3 +78,14 @@ export class OAuthError extends Error {
 		);
 	}
 }
+
+/** A required exchange is outside the offline process's network boundary, not a revoked grant. */
+export class OAuthOfflineError extends OAuthError {
+	constructor(provider: string) {
+		super(
+			`Cannot obtain a usable credential for ${provider}: public or unverified credential exchange is disabled by OMP_OFFLINE`,
+			{ kind: "configuration", provider, definitive: false },
+		);
+		this.name = "OAuthOfflineError";
+	}
+}

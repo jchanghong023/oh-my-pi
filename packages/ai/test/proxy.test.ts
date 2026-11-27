@@ -9,7 +9,6 @@ import {
 	__resetProxyCache,
 	__resetWindowsSystemProxy,
 	__setWindowsSystemProxyReader,
-	applyForkNetworkDefaults,
 	connectProxiedSocket,
 	getProxyForProvider,
 	getProxyForUrl,
@@ -569,58 +568,43 @@ describe("installGlobalProxyFetch windows system proxy fallback", () => {
 });
 
 describe("applyForkNetworkDefaults", () => {
-	const forkDefaultKeys = ["NODE_TLS_REJECT_UNAUTHORIZED", "GIT_SSL_NO_VERIFY"] as const;
-	let forkDefaultsSaved: Record<string, string | undefined>;
+	const proxyModule = import.meta.resolve("@oh-my-pi/pi-ai/utils/proxy");
 
-	beforeEach(() => {
-		forkDefaultsSaved = {};
-		for (const key of forkDefaultKeys) {
-			forkDefaultsSaved[key] = Bun.env[key];
-			delete Bun.env[key];
-			delete process.env[key];
-		}
-	});
-
-	afterEach(() => {
-		for (const key of forkDefaultKeys) {
-			delete Bun.env[key];
-			delete process.env[key];
-			const value = forkDefaultsSaved[key];
-			if (value !== undefined) Bun.env[key] = value;
-		}
-	});
-
-	it("relaxes TLS and git SSL verification when nothing is set", () => {
-		applyForkNetworkDefaults();
-		expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe("0");
-		expect(Bun.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe("0");
-		expect(process.env.GIT_SSL_NO_VERIFY).toBe("true");
-		expect(Bun.env.GIT_SSL_NO_VERIFY).toBe("true");
-	});
-
-	it("keeps an explicit NODE_TLS_REJECT_UNAUTHORIZED as the strict-mode off switch", () => {
-		Bun.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
-		applyForkNetworkDefaults();
-		expect(Bun.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe("1");
-		expect(Bun.env.GIT_SSL_NO_VERIFY).toBe("true");
-	});
-
-	it("honors an explicit GIT_SSL_NO_VERIFY=false without changing the TLS default", () => {
-		// Run in a child so the remembered Git opt-in doesn't affect other tests.
-		const proxyModule = import.meta.resolve("@oh-my-pi/pi-ai/utils/proxy");
+	function checkDefaults(nodeTls: string, gitFallback: "1" | undefined, env?: Record<string, string>): void {
+		// The policy also updates the native environment; isolate it from other tests.
 		const script = `
 			import assert from "node:assert/strict";
 			import { fileURLToPath } from "node:url";
 			const { applyForkNetworkDefaults } = await import(fileURLToPath(${JSON.stringify(proxyModule)}));
 			applyForkNetworkDefaults();
+			assert.equal(Bun.env.NODE_TLS_REJECT_UNAUTHORIZED, ${JSON.stringify(nodeTls)});
+			assert.equal(process.env.NODE_TLS_REJECT_UNAUTHORIZED, ${JSON.stringify(nodeTls)});
 			assert.equal(Bun.env.GIT_SSL_NO_VERIFY, undefined);
-			assert.equal(Bun.env.NODE_TLS_REJECT_UNAUTHORIZED, "0");
+			assert.equal(process.env.OMP_MANAGED_GIT_SSL_FALLBACK, ${JSON.stringify(gitFallback)});
 		`;
 		const child = Bun.spawnSync([process.execPath, "--no-install", "--no-env-file", "--eval", script], {
-			env: { ...process.env, GIT_SSL_NO_VERIFY: "false" },
+			env: {
+				...process.env,
+				NODE_TLS_REJECT_UNAUTHORIZED: undefined,
+				GIT_SSL_NO_VERIFY: undefined,
+				OMP_MANAGED_GIT_SSL_FALLBACK: undefined,
+				...env,
+			},
 			stderr: "pipe",
 		});
 		if (child.exitCode !== 0) throw new Error(child.stderr.toString());
+	}
+
+	it("relaxes TLS and enables the managed Git fallback when nothing is set", () => {
+		checkDefaults("0", "1");
+	});
+
+	it("keeps an explicit NODE_TLS_REJECT_UNAUTHORIZED as the strict-mode off switch", () => {
+		checkDefaults("1", "1", { NODE_TLS_REJECT_UNAUTHORIZED: "1" });
+	});
+
+	it("honors an explicit GIT_SSL_NO_VERIFY=false without changing the TLS default", () => {
+		checkDefaults("0", undefined, { GIT_SSL_NO_VERIFY: "false", OMP_MANAGED_GIT_SSL_FALLBACK: "1" });
 	});
 });
 

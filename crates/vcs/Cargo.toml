@@ -16,6 +16,7 @@ gix.workspace = true
 gix-utils = { version = "0.3.6", default-features = false }
 jj-lib.workspace = true
 omp-iso.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -32,6 +33,3 @@ windows-sys = { workspace = true, features = [
 	"Wdk_Storage_FileSystem",
 	"Win32_System_SystemServices",
 ] }
-
-[dev-dependencies]
-tempfile = "3"

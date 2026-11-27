@@ -4084,7 +4084,9 @@ async function executeToolCalls(
 				: undefined;
 		const task = start.then(async () => {
 			try {
-				await runTool(record, index, earlierEffectsSettled);
+				await logger.withLogContext({ toolCallId: record.toolCall.id }, () =>
+					runTool(record, index, earlierEffectsSettled),
+				);
 			} finally {
 				refreshPauseState();
 			}

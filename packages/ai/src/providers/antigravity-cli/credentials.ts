@@ -6,7 +6,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { withFileLock } from "@oh-my-pi/pi-utils";
+import { offlineFromEnv, withFileLock } from "@oh-my-pi/pi-utils";
+import { assertOnlineCredentialExchange } from "../../auth/offline";
 import { REMOTE_REFRESH_SENTINEL } from "../../auth/types";
 import * as AIError from "../../error";
 import type { OAuthCredentials } from "../../registry/oauth/types";
@@ -170,7 +171,7 @@ export async function stageAgyCredentials(apiKey: string, geminiDir: string): Pr
 	const token = {
 		access_token: credentials.access,
 		token_type: "Bearer",
-		refresh_token: credentials.refresh === REMOTE_REFRESH_SENTINEL ? undefined : credentials.refresh,
+		refresh_token: offlineFromEnv() || credentials.refresh === REMOTE_REFRESH_SENTINEL ? undefined : credentials.refresh,
 		expiry: new Date(credentials.expires).toISOString(),
 	};
 	const file = path.join(geminiDir, TOKEN_FILE);
@@ -221,6 +222,7 @@ export async function refreshAgyCredentials(
 		throw invalid("Antigravity CLI refresh must be performed by the credential owner");
 	}
 	if (signal?.aborted) throw new AIError.LoginCancelledError("Antigravity CLI credential refresh cancelled");
+	assertOnlineCredentialExchange(PROVIDER);
 	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 	const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
 	let response: Response;

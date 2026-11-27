@@ -309,30 +309,40 @@ describe("issue 823: standalone-binary native loader path resolution", () => {
 		});
 	});
 
-	it("never probes the shared version-directory paths when the binary embeds its own addon", () => {
+	it("keeps same-version shared paths out of embedded addon probes", () => {
 		// A file there may come from any build of this version and passes the
 		// release-version check, so falling back to it after a failed
 		// extraction would load another build's addon.
 		const versionedDir = path.join(os.tmpdir(), ".omp", "natives", "18.20.2");
-		const shared = path.join(versionedDir, "pi_natives.linux-x64-modern.node");
-		const userData = path.join(os.tmpdir(), "bin", "pi_natives.linux-x64-modern.node");
-		const own = path.join(versionedDir, "embedded-aaaa", "pi_natives.linux-x64-modern.node");
-		const ownBaseline = path.join(versionedDir, "embedded-bbbb", "pi_natives.linux-x64-baseline.node");
+		const shared = path.join(versionedDir, "pi_natives.win32-x64-modern.node");
+		const userData = path.join(os.tmpdir(), "bin", "pi_natives.win32-x64-modern.node");
+		const own = path.join(versionedDir, "embedded-aaaa", "pi_natives.win32-x64-modern.node");
+		const ownBaseline = path.join(versionedDir, "embedded-bbbb", "pi_natives.win32-x64-baseline.node");
 		const candidates = [shared, userData];
 
-		expect(
-			resolveRuntimeCandidates({
-				candidates,
-				versionedDir,
-				hasEmbedded: true,
-				embedded: [own, ownBaseline],
-				staged: null,
-			}),
-		).toEqual([own, ownBaseline, userData]);
-		// Extraction failed: only non-cache locations remain.
-		expect(
-			resolveRuntimeCandidates({ candidates, versionedDir, hasEmbedded: true, embedded: [], staged: null }),
-		).toEqual([userData]);
+		for (const requireEmbedded of [false, true]) {
+			expect(
+				resolveRuntimeCandidates({
+					candidates,
+					versionedDir,
+					hasEmbedded: true,
+					embedded: [own, ownBaseline],
+					staged: null,
+					requireEmbedded,
+				}),
+			).toEqual(requireEmbedded ? [own, ownBaseline] : [own, ownBaseline, userData]);
+			// After extraction failure Windows must not probe an unverified external file.
+			expect(
+				resolveRuntimeCandidates({
+					candidates,
+					versionedDir,
+					hasEmbedded: true,
+					embedded: [],
+					staged: null,
+					requireEmbedded,
+				}),
+			).toEqual(requireEmbedded ? [] : [userData]);
+		}
 		// Without an embedded addon the version directory is still a valid source.
 		expect(
 			resolveRuntimeCandidates({ candidates, versionedDir, hasEmbedded: false, embedded: [], staged: null }),

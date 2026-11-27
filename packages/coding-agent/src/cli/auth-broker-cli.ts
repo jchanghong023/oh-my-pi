@@ -21,6 +21,7 @@ import {
 	type AuthCredential,
 	type AuthCredentialSnapshotEntry,
 	AuthStorage,
+	type AuthStorageOptions,
 	getEnvApiKey,
 	getOAuthProviders,
 	isSameOAuthAccount,
@@ -32,6 +33,7 @@ import {
 	SqliteAuthCredentialStore,
 } from "@oh-my-pi/pi-ai";
 import { AuthBrokerClient, DEFAULT_AUTH_BROKER_BIND, startAuthBroker } from "@oh-my-pi/pi-ai/auth-broker";
+import { assertOnlineCredentialExchange } from "@oh-my-pi/pi-ai/auth/offline";
 import { refreshOAuthToken } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { $which, APP_NAME, getAgentDbPath, getConfigRootDir, logger, postmortem, VERSION } from "@oh-my-pi/pi-utils";
@@ -132,9 +134,11 @@ export function refreshBrokerOAuthCredential(
 
 /** The `omp auth-broker serve` vault: tokens refresh in this process through {@link refreshBrokerOAuthCredential}. */
 export function createBrokerAuthStorage(store: SqliteAuthCredentialStore): AuthStorage {
+	const refresh: NonNullable<AuthStorageOptions["refreshOAuthCredential"]> = (provider, _id, credential, signal) =>
+		refreshBrokerOAuthCredential(provider, credential, signal);
 	return new AuthStorage(store, {
-		refreshOAuthCredential: (provider, _credentialId, credential, signal) =>
-			refreshBrokerOAuthCredential(provider, credential, signal),
+		refreshOAuthCredential: refresh,
+		refreshOAuthCredentialOffline: refresh,
 		refreshOAuthCredentialMints: true,
 	});
 }
@@ -249,6 +253,7 @@ async function runLocalLogin(rl: readline.Interface, provider: string): Promise<
 }
 
 async function runRemoteLogin(provider: string, via: string, dryRun: boolean): Promise<void> {
+	if (!dryRun) assertOnlineCredentialExchange("remote auth broker login");
 	const port = CALLBACK_PORTS[provider];
 	if (port === undefined) {
 		throw new Error(

@@ -151,6 +151,11 @@ import {
 import { resolveModelCompactionSettings } from "./model-compaction-threshold";
 import { cfgProvidersOpenaiCodexDaybreak, cfgProvidersThinkingProbe, cfgRetry } from "./settings";
 
+/** A visual archive must not bake in an authorization that can later be revoked. */
+function convertForSnapcompact(messages: AgentMessage[]): Message[] {
+	return convertToLlm(messages, undefined, null);
+}
+
 export type CompactionCheckResult = Readonly<{
 	continuationScheduled: boolean;
 	automaticContinuationBlocked?: boolean;
@@ -605,7 +610,7 @@ export interface SessionMaintenanceHost {
 	replaceMessagesFromSessionContext(messages: AgentMessage[]): void;
 	/** Render the full notice for a prospective rewrite, without appending it. */
 	previewGoalAutoOrchestrateContext(): CustomMessage | undefined;
-	/** Append the checked preview verbatim when supplied; otherwise render for this boundary. */
+	/** Append the notice captured at the synchronous commit boundary. */
 	restoreGoalAutoOrchestrateContext(
 		compactionEntryId: string,
 		preview?: { notice: CustomMessage | undefined },
@@ -1785,10 +1790,8 @@ export class SessionMaintenance {
 			// never past the window fit, issue #3247). A local blocker rejects
 			// this method, allowing the configured preference order to continue.
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
-			let goalRestorePreview: { notice: CustomMessage | undefined } | undefined;
 			if (snapcompactReady) {
 				const notice = this.#host.previewGoalAutoOrchestrateContext();
-				goalRestorePreview = { notice };
 				const noticeTokens = notice ? this.#countProjectedMessages([notice]) : 0;
 				const maxFrames = this.#computeSnapcompactMaxFrames(preparation, effectiveSettings, 0, noticeTokens);
 				if (maxFrames < 1) {
@@ -1804,7 +1807,7 @@ export class SessionMaintenance {
 					const rendered = await this.#renderSnapcompactArchive(
 						preparation,
 						{
-							convertToLlm,
+							convertToLlm: convertForSnapcompact,
 							model: this.#model,
 							shape,
 							maxFrames,
@@ -1985,7 +1988,6 @@ export class SessionMaintenance {
 						providerReplayThroughEntryId,
 						advisorResetReason: "compact",
 						detachExtensionEmit: activeMessages !== undefined,
-						goalRestorePreview,
 						onHistoryApplied: activeMessages
 							? () => {
 									this.#replaceActiveMessages(activeMessages);
@@ -3202,13 +3204,14 @@ export class SessionMaintenance {
 		providerReplayThroughEntryId?: string;
 		advisorResetReason: string;
 		detachExtensionEmit?: boolean;
-		goalRestorePreview?: { notice: CustomMessage | undefined };
 		projectedTokensAfter?: number;
 		onHistoryApplied?: () => void;
 		retryDropReason?: "overflow" | "threshold" | "idle" | "incomplete";
 		onCommitted?: () => void;
 	}): Promise<CompactionEntry | undefined> {
-		const goalRestorePreview = args.goalRestorePreview ?? { notice: this.#host.previewGoalAutoOrchestrateContext() };
+		// Rendering, summarizing, or waiting for a live boundary can outlast a
+		// Goal or tool change. Only this snapshot may be written to the journal.
+		const goalRestorePreview = { notice: this.#host.previewGoalAutoOrchestrateContext() };
 		const entryId = this.#host.sessionManager.appendCompaction(
 			args.summary,
 			args.shortSummary,
@@ -4997,7 +5000,7 @@ export class SessionMaintenance {
 	): snapcompact.ShapeScan {
 		return withLoopPhase("compaction.snapcompact", () => {
 			const text = snapcompact.serializeConversation(
-				convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
+				convertForSnapcompact(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
 				{ includeThinking },
 			);
 			const probeText = snapcompact.renderabilityProbeText(
@@ -5743,7 +5746,6 @@ export class SessionMaintenance {
 				fromExtension: false,
 				codexCompaction: undefined,
 				advisorResetReason: "compaction-rescue",
-				goalRestorePreview: { notice },
 				projectedTokensAfter,
 			});
 			this.#host.emitNotice(
@@ -5784,7 +5786,6 @@ export class SessionMaintenance {
 				fileOps,
 			},
 			{
-				convertToLlm,
 				model,
 				...(shapeSetting === "auto" ? {} : { shape }),
 				maxFrames,
@@ -6323,15 +6324,10 @@ export class SessionMaintenance {
 			const startEvent = { type: "auto_compaction_start" as const, reason, action };
 			await this.#emitLifecycleEvent(startEvent, false);
 			if (armedSpec) {
-				const preview = { notice: this.#host.previewGoalAutoOrchestrateContext() };
+				const notice = this.#host.previewGoalAutoOrchestrateContext();
 				if (
-					preview.notice &&
-					!this.#armedSpeculationValid(
-						armedSpec,
-						options.triggerContextTokens,
-						options.pendingContextTokens,
-						preview.notice,
-					)
+					notice &&
+					!this.#armedSpeculationValid(armedSpec, options.triggerContextTokens, options.pendingContextTokens, notice)
 				) {
 					retryWithoutSpeculation = !bridgeSpec;
 					throw new Error("Speculative compaction no longer has headroom for the Goal restoration");
@@ -6378,7 +6374,6 @@ export class SessionMaintenance {
 					fallbackFromShake,
 					detachPostCommit: options.detachPostCommit === true,
 					autoCompactionSignal,
-					goalRestorePreview: preview,
 					onRetryUnavailable: options.onRetryUnavailable,
 					onCommitted: () => {
 						compactionCommitted = true;
@@ -6695,7 +6690,6 @@ export class SessionMaintenance {
 			// `/compact snapcompact` remains local-only because its one-method override
 			// leaves no fallback.
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
-			let goalRestorePreview: { notice: CustomMessage | undefined } | undefined;
 			let snapcompactBlocker: string | undefined;
 			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
 				const snapcompactIncludeThinking = snapcompact.readerIncludesThinking(this.#model);
@@ -6715,7 +6709,6 @@ export class SessionMaintenance {
 				} else {
 					const pendingTokens = options.pendingContextTokens ?? 0;
 					const notice = this.#host.previewGoalAutoOrchestrateContext();
-					goalRestorePreview = { notice };
 					const noticeTokens = notice ? this.#countProjectedMessages([notice]) : 0;
 					const maxFrames = this.#computeSnapcompactMaxFrames(
 						preparation,
@@ -6747,7 +6740,7 @@ export class SessionMaintenance {
 						const rendered = await this.#renderSnapcompactArchive(
 							preparation,
 							{
-								convertToLlm,
+								convertToLlm: convertForSnapcompact,
 								model: this.#model,
 								shape,
 								maxFrames,
@@ -7211,7 +7204,7 @@ export class SessionMaintenance {
 			const branchTokensBefore = this.#projectCurrentBranchContextTokens(pathEntriesForCompaction);
 			const effectiveTokensBefore = Math.max(tokensBefore, liveTriggerTokensBefore ?? 0);
 			const candidateTokensBefore = Math.max(effectiveTokensBefore, branchTokensBefore);
-			goalRestorePreview ??= { notice: this.#host.previewGoalAutoOrchestrateContext() };
+			const goalRestoreNotice = this.#host.previewGoalAutoOrchestrateContext();
 			const projectedAfter = this.#projectCompactedContextTokens(
 				{
 					summary,
@@ -7223,7 +7216,7 @@ export class SessionMaintenance {
 					method: fromExtension ? undefined : method,
 					providerReplayThroughEntryId,
 				},
-				goalRestorePreview.notice,
+				goalRestoreNotice,
 			);
 			if (
 				compactionPrep.kind !== "fromHook" &&
@@ -7310,7 +7303,6 @@ export class SessionMaintenance {
 				fallbackFromShake,
 				detachPostCommit: options.detachPostCommit === true,
 				autoCompactionSignal,
-				goalRestorePreview,
 				onRetryUnavailable: options.onRetryUnavailable,
 				onCommitted: () => {
 					compactionCommitted = true;
@@ -7442,7 +7434,6 @@ export class SessionMaintenance {
 		fallbackFromShake: boolean;
 		detachPostCommit: boolean;
 		autoCompactionSignal: AbortSignal;
-		goalRestorePreview: { notice: CustomMessage | undefined };
 		onRetryUnavailable?: () => void;
 		onCommitted: () => void;
 	}): Promise<CompactionCheckResult> {
@@ -7477,7 +7468,6 @@ export class SessionMaintenance {
 			providerReplayThroughEntryId: args.providerReplayThroughEntryId,
 			advisorResetReason: "auto-compaction",
 			detachExtensionEmit: detachPostCommit,
-			goalRestorePreview: args.goalRestorePreview,
 			retryDropReason: willRetry ? reason : undefined,
 		});
 

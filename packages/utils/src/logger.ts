@@ -94,6 +94,11 @@ export function getLogContext(): Readonly<Record<string, unknown>> {
 	return logContextStorage.getStore()?.fields ?? EMPTY_LOG_CONTEXT;
 }
 
+/** Start an operation only at the outermost diagnostic boundary. */
+export function withOperation<T>(fn: () => T): T {
+	return getLogContext().operation_id === undefined ? withLogContext({ operation_id: crypto.randomUUID() }, fn) : fn();
+}
+
 /** Summarize an exception without copying messages, bodies, causes, or arbitrary properties. */
 export function diagnosticError(error: unknown): Record<string, unknown> {
 	const summary: Record<string, unknown> = { error_type: error === null ? "null" : typeof error };

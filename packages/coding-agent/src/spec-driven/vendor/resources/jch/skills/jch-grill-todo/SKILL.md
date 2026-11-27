@@ -26,7 +26,7 @@ Word each question so "yes" accepts your recommended answer.
 
 Each round the user answers reshapes the tree: settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.
 
-Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment (filesystem, tools, etc.), dispatch a sub-agent with a fresh context window to find it; don't ask the user for anything you could look up yourself. Don't block on it: a running exploration is an unsettled prerequisite, so only the questions downstream of it wait for the sub-agent to report; ask the rest of the frontier now. The _decisions_ are the user's: put each to them and wait.
+Finding _facts_ is your job. MAY dispatch a fresh read-only sub-agent to verify facts; NEVER delegate a checklist task. While it runs, ask unrelated frontier questions. The decisions are the user's.
 
 The interview phase is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding. After confirmation, ask whether to generate a `.todo.md` Markdown task file.
 
@@ -68,4 +68,4 @@ MUST use same-level `##` task groups and ordinary `- [ ]` tasks. First checkbox 
 
 MUST verify the file was written, follows the Markdown structure above and passes the checkbox and group completion walkthrough. File generation does not prove the tasks were implemented or their acceptance checks passed.
 
-MUST deliver the actual file path and checks performed, then stop. NEVER execute the tasks or launch another session automatically.
+MUST deliver the file path and checks, then stop. NEVER execute the checklist or start an execution session.

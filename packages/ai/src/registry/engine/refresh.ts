@@ -4,6 +4,7 @@
  * response omits are left for the caller to merge from the stored row.
  */
 import type { CompiledAuthProvider, CompiledRefresh } from "@oh-my-pi/pi-catalog/compat/types";
+import { credentialFetch } from "../../auth/offline";
 import * as AIError from "../../error";
 import { claudeCodeAxiosVersion } from "../../providers/claude-code-fingerprint";
 import type { OAuthRefreshReason } from "../../auth/types";
@@ -76,7 +77,7 @@ function createRequestRefresh(rule: RequestRefresh, policy: CompiledAuthProvider
 		throwIfCancelled(signal);
 		const client = await loginClient(policy, signal);
 		const hookHeaders = rule.headersHook ? (await loadHeadersHook(rule.headersHook))() : undefined;
-		const context = { provider, fetch, signal, headers: hookHeaders, deadGrant: rule.deadGrant };
+		const context = { provider, fetch: credentialFetch(provider), signal, headers: hookHeaders, deadGrant: rule.deadGrant };
 		const vars: TemplateVars = {
 			refresh_token: credentials.refresh,
 			client_id: client.clientId,
@@ -120,7 +121,7 @@ function createRequestRefresh(rule: RequestRefresh, policy: CompiledAuthProvider
 			provider,
 			phase: "refresh",
 			raw: body,
-			fetch,
+			fetch: context.fetch,
 			signal,
 			stored: credentials,
 		});

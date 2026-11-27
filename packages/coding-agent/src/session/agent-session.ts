@@ -169,7 +169,11 @@ import { EVAL_STATE_CONTEXT_TYPE, formatEvalStateContext, isEvalStateContext } f
 import { WorkPoolRegistry } from "../task/workpool";
 import { type BashResult, drainAbortedShells, releaseShellSessions } from "../exec/bash-executor";
 import type { TtsrManager } from "../export/ttsr";
-import { buildGoalAutoOrchestrateMessage, GoalAutopilotRequest } from "../goals/request-context";
+import {
+	activeGoalAutopilotContextId,
+	buildGoalAutoOrchestrateMessage,
+	GoalAutopilotRequest,
+} from "../goals/request-context";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { MCPLoadResult } from "../mcp";
@@ -586,6 +590,36 @@ import { extensionTheme } from "../ui/extensions/render-output";
 export * from "./agent-session-events";
 export * from "./agent-session-types";
 export type { AdvisorStats, AdvisorStatusOverviewEntry, PerAdvisorStat } from "./session-advisors";
+
+export type ResumeInMemorySession = (onCwdChange?: SessionCwdChange) => Promise<boolean>;
+
+type SessionCwdChange = (newCwd: string, previousCwd: string) => Promise<boolean>;
+
+interface SessionSwitchOptions {
+	onCwdChange?: SessionCwdChange;
+	/** Collab snapshot adoption keeps the guest's process cwd and marks the replica runtime-only. */
+	preserveLocalCwd?: boolean;
+	/** Use this model instead of the saved one and record it when it differs. */
+	model?: Model;
+	/** Keep the current model without restoring the target's (collab replicas mirror the host's model). */
+	keepModel?: boolean;
+	/** Receives the model fallback warning after commit instead of a notice event. */
+	onModelFallback?: (warning: string) => void;
+	/** Collab replicas are local files even when the current session is in memory. */
+	readLocalFile?: boolean;
+	/** Receives a resumable handle if this switch commits and the source had no file. */
+	onSuspendInMemory?: (resume: ResumeInMemorySession) => void;
+}
+
+interface SuspendedInMemorySession {
+	state: ReturnType<SessionManager["captureState"]>;
+	messages: AgentMessage[];
+	model: Model | undefined;
+	thinkingLevel: ThinkingLevel | undefined;
+	autoThinking: boolean;
+	autoResolvedLevel: Effort | undefined;
+	serviceTiers: ServiceTierByFamily;
+}
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
 const GOAL_AUTOPILOT_ADMISSION_ENTRY = "goal-autopilot-admission";
@@ -3045,6 +3079,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			transformContext: async (messages, signal) =>
 				this.#transformContext(await this.prepareWorkspaceModeContext(messages), signal),
 			convertToLlm: config.convertToLlm ?? convertToLlm,
+			activeGoalAutopilotId: () => activeGoalAutopilotContextId(this.#goalModeState),
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
 			onSseEvent: this.#onSseEvent,
@@ -4281,7 +4316,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	/** Run session work outside an agent run (prompt setup, manual maintenance) under the agent's log context. */
 	#inLogContext<T>(work: () => T): T {
-		return this.agent.logContext ? logger.withContext(this.agent.logContext, work) : work();
+		return logger.withOperation(() => (this.agent.logContext ? logger.withContext(this.agent.logContext, work) : work()));
 	}
 
 	async #admitSubmission<T>(work: () => Promise<T>): Promise<T> {
@@ -11622,7 +11657,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const baseCtx = this.#createCommandContext();
 			const ctx = {
 				...baseCtx,
-				signal: controller.signal,
 				hasQueuedMessages: baseCtx.hasPendingMessages,
 			} as unknown as CustomCommandContext;
 
@@ -15181,7 +15215,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 	}
 
-	async #setModelWithProviderSessionReset(model: Model): Promise<void> {
+	async #setModelWithProviderSessionReset(model: Model, rebuildContext = true): Promise<void> {
 		const currentModel = this.model;
 		const isChanging = !routedModelsAreEqual(currentModel, model);
 		if (currentModel) {
@@ -15211,7 +15245,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// A model that cannot replay the latest provider-native compaction reads
 		// the history behind it instead (see `BuildSessionContextOptions.model`):
 		// rebuild the context whenever the two models stand on different boundaries.
-		if (isChanging && this.#providerBoundary.readsOtherCompaction(currentModel, model)) {
+		if (rebuildContext && isChanging && this.#providerBoundary.readsOtherCompaction(currentModel, model)) {
 			this.agent.replaceMessages(this.buildDisplaySessionContext(model).messages);
 		}
 
@@ -16005,28 +16039,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * callers can detect this by comparing `getRecordedCwd()` with `getCwd()`.
 	 * @returns true if switch completed, false if cancelled by hook or cwd change
 	 */
-	async switchSession(
-		sessionPath: string,
-		options?: {
-			onCwdChange?: (newCwd: string, previousCwd: string) => Promise<boolean>;
-			/** Collab snapshot adoption keeps the guest's process cwd and marks the replica runtime-only. */
-			preserveLocalCwd?: boolean;
-			/**
-			 * Use this model instead of the target's saved one, like an explicit
-			 * `--model` at startup, and record it in the session when it differs.
-			 */
-			model?: Model;
-			/** Keep the current model without restoring the target's (collab replicas mirror the host's model). */
-			keepModel?: boolean;
-			/**
-			 * Receives the model fallback warning after the switch commits, instead of a
-			 * `notice` event; for hosts that re-render the transcript after switching.
-			 */
-			onModelFallback?: (warning: string) => void;
-		},
+	switchSession(sessionPath: string, options?: SessionSwitchOptions): Promise<boolean> {
+		return this.#switchSession(sessionPath, options);
+	}
+
+	async #switchSession(
+		targetSession: string | SuspendedInMemorySession,
+		options?: SessionSwitchOptions,
 	): Promise<boolean> {
-		const queued = this.#enterSessionTransition(() => this.switchSession(sessionPath, options));
+		const queued = this.#enterSessionTransition(() => this.#switchSession(targetSession, options));
 		if (queued) return queued;
+		const sessionPath = typeof targetSession === "string" ? targetSession : undefined;
+		const suspended = typeof targetSession === "string" ? undefined : targetSession;
 		const explicitModel = options?.model;
 		if (explicitModel && !this.#modelRegistry.hasConfiguredAuth(explicitModel)) {
 			throw new Error(`No API key for ${explicitModel.provider}/${explicitModel.id}`);
@@ -16115,7 +16139,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		let cwdChangeTarget: string | undefined;
 		using _sessionOwnership = this.sessionManager.retainRuntimeOwnership();
 		try {
-			const preparation = this.sessionManager.prepareSessionSwitch(sessionPath);
+			const preparation = sessionPath === undefined ? true : this.sessionManager.prepareSessionSwitch(sessionPath);
 			const target = typeof preparation === "boolean" ? preparation : await preparation;
 			const switchingToDifferentSession = typeof target === "boolean" ? target : target.different;
 			// Only reloads compare against the prior context to detect rollback
@@ -16130,15 +16154,24 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// Re-read the contract on the next model call, even after a same-file
 			// reload or if the switch rolls back via restoreState.
 			this.#sessionInit = undefined;
-			if (typeof target === "boolean") await this.sessionManager.setSessionFile(sessionPath);
-			else await target.apply();
+			if (typeof targetSession !== "string") {
+				const { state } = targetSession;
+				this.sessionManager.restoreState({ ...state, header: structuredClone(state.header) });
+			} else if (typeof target === "boolean") {
+				await this.sessionManager.setSessionFile(targetSession, options);
+			} else {
+				await target.apply();
+			}
 			this.#bash.markSessionTransition(bashTransition);
 			const newCwd = this.sessionManager.getCwd();
 			const recordedCwd = this.sessionManager.getRecordedCwd() ?? previousSessionState.cwd;
 			if (options?.preserveLocalCwd) {
 				this.sessionManager.setCwdWithoutRelocation(previousSessionState.cwd);
 			} else {
-				if (!options?.onCwdChange && path.resolve(recordedCwd) !== path.resolve(previousSessionState.cwd)) {
+				if (
+					!options?.onCwdChange &&
+					path.resolve(suspended ? newCwd : recordedCwd) !== path.resolve(previousSessionState.cwd)
+				) {
 					throw SESSION_CWD_CHANGE_REJECTED;
 				}
 				if (options?.onCwdChange) {
@@ -16156,19 +16189,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				this.#adoptInheritedProviderPromptCacheKey();
 				// The outgoing session's parent-derived family candidate is scoped
 				// to it; the resumed session's own header decides affinity from here.
-				this.sessionManager.clearTaskSiblingCandidate();
+				if (!suspended) this.sessionManager.clearTaskSiblingCandidate();
 			}
 			this.#syncAgentSessionId(undefined, false);
 			this.#memory.rekeyForCurrentSessionId();
 
-			let sessionContext = this.buildDisplaySessionContext();
+			let sessionContext = suspended ? undefined : this.buildDisplaySessionContext();
 			// Resolve the target's model before announcing the switch, so an
 			// unrestorable one rolls back before any hook sees the target session.
-			const targetModelStrings = getRestorableSessionModels(
-				sessionContext.models,
-				this.sessionManager.getLastModelChangeRole(),
-			);
-			let targetModel = explicitModel;
+			const targetModelStrings = sessionContext
+				? getRestorableSessionModels(sessionContext.models, this.sessionManager.getLastModelChangeRole())
+				: [];
+			let targetModel = suspended ? suspended.model : explicitModel;
 			let modelFallbackWarning: string | undefined;
 			if (!targetModel && !options?.keepModel && targetModelStrings.length > 0) {
 				targetModel = await this.#resolveSessionModel(targetModelStrings);
@@ -16188,6 +16220,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// model this session is about to adopt when that one sizes the archive
 			// differently or stands on another compaction boundary.
 			if (
+				sessionContext &&
 				targetModel &&
 				(frameDataBytesBudget(targetModel) !== frameDataBytesBudget(this.model) ||
 					this.#providerBoundary.readsOtherCompaction(targetModel, this.model))
@@ -16195,6 +16228,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				sessionContext = this.buildDisplaySessionContext(targetModel);
 			}
 			const didReloadConversationChange =
+				sessionContext !== undefined &&
 				previousSessionContext !== undefined &&
 				didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
 			this.#rehydrateCheckpointRewindState();
@@ -16216,7 +16250,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 
 			// Persisted once the switch can no longer roll back, below.
-			this.agent.replaceMessages(sessionContext.messages);
+			if (suspended) this.agent.replaceMessages(suspended.messages);
+			else if (sessionContext) this.agent.replaceMessages(sessionContext.messages);
 			this.#reseedTokenRate();
 			this.#advisors.resetSessionState({ preserveCost: true });
 			this.#todo.syncFromBranch();
@@ -16227,7 +16262,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				this.#closeAllProviderSessions("session reload");
 			}
 
-			if (targetModel) {
+			if (suspended) {
+				if (targetModel) {
+					await this.#setModelWithProviderSessionReset(targetModel, false);
+				} else if (this.model) {
+					this.agent.setModel(undefined);
+					this.#syncAppendOnlyContext(undefined);
+					this.#emit({ type: "model_changed" });
+				}
+			} else if (targetModel) {
 				const currentModel = this.model;
 				const shouldResetProviderState =
 					switchingToDifferentSession ||
@@ -16249,7 +16292,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 
 			const model = this.model;
-			if (model) {
+			if (model && sessionContext) {
 				const interruptedTurnAbort = createInterruptedTurnAbortMessage(this.sessionManager.getBranch(), {
 					api: model.api,
 					provider: model.provider,
@@ -16262,36 +16305,42 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				}
 			}
 
-			const hasThinkingEntry = this.sessionManager.getBranch().some(entry => entry.type === "thinking_level_change");
-			const hasServiceTierEntry = this.sessionManager
-				.getBranch()
-				.some(entry => entry.type === "service_tier_change");
-			const defaultThinkingLevel = parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(this.settings));
-			const configuredServiceTierByFamily = cfgTiers.get(this.settings);
-			// Restore the thinking selector. Each change persists the configured
-			// selector (`auto` or a concrete level), so prefer it: an `auto` session
-			// resumes in auto mode (reclassifying the next turn) instead of freezing at
-			// the last resolved level. Entries written before the `configured` field
-			// existed fall back to the concrete level (legacy pin-on-resume behavior).
-			// With no thinking entry, fall back to the global default so fresh sessions
-			// still classify their first turn.
-			const restoredConfigured = sessionContext.configuredThinkingLevel;
-			const restoredThinkingLevel: ConfiguredThinkingLevel | undefined =
-				hasThinkingEntry || (defaultThinkingLevel === AUTO_THINKING && sessionContext.thinkingLevel !== "off")
-					? restoredConfigured === AUTO_THINKING
-						? AUTO_THINKING
-						: (sessionContext.thinkingLevel as ThinkingLevel | undefined)
-					: defaultThinkingLevel;
-			this.#models.restoreThinkingLevel(restoredThinkingLevel);
-			this.#models.restoreServiceTiers(
-				hasServiceTierEntry ? (sessionContext.serviceTier ?? {}) : configuredServiceTierByFamily,
-			);
+			if (suspended) {
+				this.#models.restoreThinkingSnapshot(
+					suspended.thinkingLevel,
+					suspended.autoThinking,
+					suspended.autoResolvedLevel,
+				);
+				this.#models.restoreServiceTiers(suspended.serviceTiers);
+			} else if (sessionContext) {
+				const hasThinkingEntry = this.sessionManager
+					.getBranch()
+					.some(entry => entry.type === "thinking_level_change");
+				const hasServiceTierEntry = this.sessionManager
+					.getBranch()
+					.some(entry => entry.type === "service_tier_change");
+				const defaultThinkingLevel = parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(this.settings));
+				const configuredServiceTierByFamily = cfgTiers.get(this.settings);
+				// Prefer the persisted selector so an auto session reclassifies its next turn.
+				// Legacy entries without a selector resume at their concrete level.
+				const restoredConfigured = sessionContext.configuredThinkingLevel;
+				const restoredThinkingLevel: ConfiguredThinkingLevel | undefined =
+					hasThinkingEntry || (defaultThinkingLevel === AUTO_THINKING && sessionContext.thinkingLevel !== "off")
+						? restoredConfigured === AUTO_THINKING
+							? AUTO_THINKING
+							: (sessionContext.thinkingLevel as ThinkingLevel | undefined)
+						: defaultThinkingLevel;
+				this.#models.restoreThinkingLevel(restoredThinkingLevel);
+				this.#models.restoreServiceTiers(
+					hasServiceTierEntry ? (sessionContext.serviceTier ?? {}) : configuredServiceTierByFamily,
+				);
+			}
 
 			if (switchingToDifferentSession) {
 				await this.#memory.resetContextForNewTranscript();
 			}
 			// The switch has committed: a rolled-back one must not write the target's journal.
-			this.#persistRebuiltEvalStateContext(this.agent.state.messages);
+			if (!suspended) this.#persistRebuiltEvalStateContext(this.agent.state.messages);
 			if (switchingToDifferentSession || didReloadConversationChange) {
 				this.#clearSessionScopedToolState();
 				this.#prunedTerminalFailure = undefined;
@@ -16341,6 +16390,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				if (options?.onModelFallback) options.onModelFallback(modelFallbackWarning);
 				else this.emitNotice("warning", modelFallbackWarning);
 			}
+			if (options?.onSuspendInMemory && previousSessionFile === undefined) {
+				const source: SuspendedInMemorySession = {
+					state: previousSessionState,
+					messages: previousAgentMessages,
+					model: previousModel,
+					thinkingLevel: previousThinkingLevel,
+					autoThinking: previousAutoThinking,
+					autoResolvedLevel: previousAutoResolvedLevel,
+					serviceTiers: previousServiceTierByFamily,
+				};
+				options.onSuspendInMemory(onCwdChange => this.#switchSession(source, { onCwdChange }));
+			}
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
@@ -16385,12 +16446,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// here — before the target session's thinking level is unwound —
 			// would push a { previousModel, target-session-thinking } config that
 			// was never a real session state.
-			let modelRolledBack = false;
-			if (previousModel) {
-				const rolledBackModel = this.model;
-				this.agent.setModel(previousModel);
-				modelRolledBack = !routedModelsAreEqual(rolledBackModel, previousModel);
-			}
+			const rolledBackModel = this.model;
+			const modelRolledBack = rolledBackModel !== previousModel && !routedModelsAreEqual(rolledBackModel, previousModel);
+			if (rolledBackModel !== previousModel) this.agent.setModel(previousModel);
 			this.#advisors.setAdvisorEnabled(previousAdvisorEnabled);
 			this.#models.restoreThinkingSnapshot(previousThinkingLevel, previousAutoThinking, previousAutoResolvedLevel);
 			this.#models.restoreServiceTiers(previousServiceTierByFamily);

@@ -33,6 +33,7 @@ INSTALL_PLATFORM=unknown
 INSTALL_VERSION=unspecified
 INSTALL_LOG=""
 TMP_BINARY=""
+CANDIDATE_VERIFIED=false
 
 normalized_log_setting() (
     value="$1"
@@ -147,15 +148,35 @@ prepare_linux_cache_log_dir() (
 )
 
 install_log_init() {
-    log_root="$HOME/${PI_CONFIG_DIR:-.omp}"
-    explicit_root=false
-    expanded_root="$(printf '%s' "${OMP_CONFIG_ROOT:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    case "$expanded_root" in
-        "~") expanded_root="$HOME" ;;
-        "~/"*) expanded_root="$HOME/${expanded_root#??}" ;;
-        "~\\"*) expanded_root="$HOME${expanded_root#?}" ;;
+    log_root=""
+    platform_root=""
+    case "${HOME:-}" in
+        /*)
+            log_root="$HOME/${PI_CONFIG_DIR:-.omp}"
+            platform_root="$HOME/.local/state/omp"
+            ;;
     esac
-    case "$expanded_root" in /*) log_root="$expanded_root"; explicit_root=true ;; esac
+    expanded_root="$(printf '%s' "${OMP_CONFIG_ROOT:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "${HOME:-}" in
+        /*)
+            case "$expanded_root" in
+                "~") expanded_root="$HOME" ;;
+                "~/"*|"~\\"*) expanded_root="$HOME${expanded_root#?}" ;;
+            esac
+            ;;
+    esac
+    case "$expanded_root" in
+        /*) log_root="$expanded_root" ;;
+        *)
+            case "${XDG_STATE_HOME:-}" in
+                /*)
+                    xdg_root="$(normalize_absolute_path "$XDG_STATE_HOME/omp")"
+                    # XDG is opt-in via the app root, independent of the current profile.
+                    if [ -d "$xdg_root" ]; then log_root="$xdg_root"; fi
+                    ;;
+            esac
+            ;;
+    esac
     log_profile="$(printf '%s' "${OMP_PROFILE-${PI_PROFILE:-}}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     # Invalid profile input must not make a bootstrap install fail.
     case "$log_profile" in
@@ -167,16 +188,14 @@ install_log_init() {
     case "$profile_base" in con|prn|aux|nul|com[0-9]|lpt[0-9]) log_profile="" ;; esac
     profile_suffix=""
     [ -z "$log_profile" ] || profile_suffix="/profiles/$log_profile"
-    if [ "$explicit_root" = false ] && [ -n "${XDG_STATE_HOME:-}" ]; then
-        xdg_root="${XDG_STATE_HOME}/omp"
-        case "$xdg_root" in /*) xdg_root="$(normalize_absolute_path "$xdg_root")" ;; esac
-        if [ -d "$xdg_root$profile_suffix" ]; then log_root="$xdg_root"; fi
-    fi
     cache_root="$(printf '%s' "${OMP_CACHE_DIR:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    case "$cache_root" in
-        "~") cache_root="$HOME" ;;
-        "~/"*) cache_root="$HOME/${cache_root#??}" ;;
-        "~\\"*) cache_root="$HOME${cache_root#?}" ;;
+    case "${HOME:-}" in
+        /*)
+            case "$cache_root" in
+                "~") cache_root="$HOME" ;;
+                "~/"*|"~\\"*) cache_root="$HOME${cache_root#?}" ;;
+            esac
+            ;;
     esac
     case "$cache_root" in /*) ;; *) cache_root="" ;; esac
     cache_uid=""
@@ -197,12 +216,10 @@ install_log_init() {
     log_name="omp.install.$(date -u +%Y-%m-%d 2>/dev/null).${INSTALL_STARTED_MS}.$$.log"
     if [ -n "$cache_root" ]; then
         cache_log_dir="$(normalize_absolute_path "$cache_root$profile_suffix/logs")"
-        set -- "$cache_log_dir" "$log_root$profile_suffix/logs" "$HOME/.local/state/omp$profile_suffix/logs"
-    else
-        set -- "$log_root$profile_suffix/logs" "$HOME/.local/state/omp$profile_suffix/logs"
     fi
-    for log_dir; do
-        case "$log_dir" in /*) log_dir="$(normalize_absolute_path "$log_dir")" ;; esac
+    for root in "$cache_root" "$log_root" "$platform_root"; do
+        case "$root" in /*) ;; *) continue ;; esac
+        log_dir="$(normalize_absolute_path "$root$profile_suffix/logs")"
         log_path="$log_dir/$log_name"
         if {
             if [ -n "$cache_uid" ] && [ "$log_dir" = "$cache_log_dir" ]; then
@@ -247,7 +264,7 @@ install_log_init() {
 
 install_finish() {
     install_exit="$1"
-    if [ -n "$TMP_BINARY" ]; then
+    if [ -n "$TMP_BINARY" ] && [ "$CANDIDATE_VERIFIED" != true ]; then
         if rm -f "$TMP_BINARY"; then
             install_log INFO cleanup_completed 'target=candidate result=removed'
         else
@@ -793,13 +810,22 @@ install_binary() {
         echo "Expected: omp/$LATEST; existing install was not changed." >&2
         exit 1
     fi
+    CANDIDATE_VERIFIED=true
     install_log INFO binary_version_completed 'target=candidate result=matches'
     INSTALL_STAGE=atomic_replace
     INSTALL_STAGE_MS="$(install_now_ms)"
     install_log INFO atomic_replace_started 'target=installed strategy=rename result=started'
 
-    mv -f "$TMP_BINARY" "${INSTALL_DIR}/omp"
-    TMP_BINARY=""
+    # Treat omp as the exact destination, never as a directory to move into.
+    if mv -fT -- "$TMP_BINARY" "${INSTALL_DIR}/omp"; then
+        TMP_BINARY=""
+    else
+        replace_exit="$?"
+        install_log ERROR atomic_replace_failed "result=failed exit_code=$replace_exit"
+        install_log WARN recovery_files_retained 'result=retained candidate=true'
+        printf '%s\n' "Failed to replace ${INSTALL_DIR}/omp." "Verified download retained: $TMP_BINARY" >&2
+        exit "$replace_exit"
+    fi
     install_log INFO atomic_replace_completed 'target=installed result=success'
 
     echo ""

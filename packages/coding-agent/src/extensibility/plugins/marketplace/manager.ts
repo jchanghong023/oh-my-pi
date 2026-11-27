@@ -157,11 +157,6 @@ export class MarketplaceManager {
 			);
 		}
 
-		// Promote the temp clone to its final cache location now that we know it's not a duplicate.
-		if (clonePath) {
-			await promoteCloneToCache(clonePath, this.#opts.marketplacesCacheDir, catalog.name);
-		}
-
 		const sourceType = classifySource(source);
 		const normalizedSource = sourceType === "local" ? path.resolve(expandTilde(source)) : source;
 
@@ -169,8 +164,21 @@ export class MarketplaceManager {
 			expandTilde(path.join(this.#opts.marketplacesCacheDir, catalog.name, "marketplace.json")),
 		);
 
-		// Persist the fetched catalog so subsequent reads don't require re-fetching.
-		await Bun.write(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+		// Persist the generated catalog without following a repository-provided link.
+		const content = `${JSON.stringify(catalog, null, 2)}\n`;
+		if (clonePath) {
+			try {
+				const stagedCatalog = path.join(clonePath, "marketplace.json");
+				await fs.rm(stagedCatalog, { force: true });
+				await fs.writeFile(stagedCatalog, content, { flag: "wx" });
+				await promoteCloneToCache(clonePath, this.#opts.marketplacesCacheDir, catalog.name);
+			} catch (err) {
+				await fs.rm(clonePath, { recursive: true, force: true }).catch(() => {});
+				throw err;
+			}
+		} else {
+			await Bun.write(catalogPath, content);
+		}
 
 		const now = new Date().toISOString();
 		const entry: MarketplaceRegistryEntry = {
@@ -237,9 +245,9 @@ export class MarketplaceManager {
 				await fs.writeFile(stagedCatalog, content, { flag: "wx" });
 				// Only the registry, not files in a candidate checkout, authorizes replacement.
 				if (!relocating && (existing.sourceType === "git" || existing.sourceType === "github")) {
-					await removeRegisteredMarketplaceCache(existing, cacheDir, { repairMissingCatalog: true });
+					await removeRegisteredMarketplaceCache(existing, cacheDir);
 				}
-				await promoteCloneToCache(clonePath, path.dirname(destination), name, false);
+				await promoteCloneToCache(clonePath, path.dirname(destination), name);
 			} catch (err) {
 				await fs.rm(clonePath, { recursive: true, force: true }).catch(() => {});
 				throw err;
@@ -839,6 +847,7 @@ export class MarketplaceManager {
 	// ── Update / upgrade ─────────────────────────────────────────────────────
 
 	// Refresh marketplace catalogs that haven't been updated in more than 24 h.
+	// Per-marketplace failures are silently swallowed — offline is fine.
 	async refreshStaleMarketplaces(): Promise<void> {
 		await pruneAbandonedMarketplaceClones(this.#opts.marketplacesCacheDir);
 		const reg = await readMarketplacesRegistry(this.#opts.marketplacesRegistryPath);

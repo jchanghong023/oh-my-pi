@@ -8,7 +8,7 @@
  * every gateway client's 30-day sticky row resident.
  */
 import * as os from "node:os";
-import { getAppName, getInstallId, logger, postmortem } from "@oh-my-pi/pi-utils";
+import { getAppName, getInstallId, logger, offlineFromEnv, postmortem } from "@oh-my-pi/pi-utils";
 import type { AuthCredentialStore } from "../auth/store";
 import {
 	type AuthCredential,
@@ -541,7 +541,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 						await this.#consumeSnapshotStream(watchdog.signal);
 						backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
 					} catch (error) {
-						if (this.#closed || this.#backgroundAbort.signal.aborted) break;
+						if (
+							this.#closed ||
+							this.#backgroundAbort.signal.aborted ||
+							error instanceof AIError.OAuthOfflineError
+						) {
+							break;
+						}
 						if (watchdog.idled()) continue;
 						if (error instanceof AuthBrokerStreamUnsupportedError) {
 							this.#streamingUnsupported = true;
@@ -574,7 +580,13 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					if (result.status === 200) this.#applySnapshot(result.snapshot, result.generation);
 					backoffMs = BACKGROUND_BACKOFF_INITIAL_MS;
 				} catch (error) {
-					if (this.#closed || this.#backgroundAbort.signal.aborted) break;
+					if (
+						this.#closed ||
+						this.#backgroundAbort.signal.aborted ||
+						error instanceof AIError.OAuthOfflineError
+					) {
+						break;
+					}
 					if (watchdog.idled()) continue;
 					logger.debug("auth-broker background snapshot sync failed", { error: String(error) });
 					await this.#backoffWait(backoffMs);
@@ -985,6 +997,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 
 	async prepareForRequest(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<boolean> {
 		this.#noteActivity();
+		// Let background sync update broker rows, but don't hold an unexpired
+		// cached credential for an anticipated rotation in offline mode.
+		if (offlineFromEnv()) return false;
 		const entry = this.#snapshot.credentials.find(candidate => candidate.id === credentialId);
 		if (entry?.credential.type !== "oauth" || entry.rotatesInMs === null) return false;
 		const remainingMs = this.#snapshotReceivedAt + entry.rotatesInMs - Date.now();
@@ -993,6 +1008,9 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	async markCredentialSuspect(credentialId: number, opts: { signal?: AbortSignal } = {}): Promise<void> {
+		// Credential rotation can still select another cached account; it
+		// must not ask the broker to re-mint the rejected one.
+		if (offlineFromEnv()) return;
 		this.#noteActivity();
 		await this.#refreshThroughBroker(credentialId, opts.signal, "auth-recovery");
 		this.#maybeRefreshSnapshot("suspect credential refresh");
@@ -1577,6 +1595,8 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			cached = aggregate;
 		}
 		if (cached) return Promise.resolve(cached.reports);
+		// Unlike snapshots, a live usage probe may mint tokens at the broker.
+		if (offlineFromEnv()) return Promise.resolve(null);
 		const existing = this.#usageInflight.get(provider) ?? this.#usageInflight.get(undefined);
 		if (existing) return existing;
 		const epoch = this.#usageCacheEpoch;

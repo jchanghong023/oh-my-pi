@@ -56,7 +56,7 @@ MUST 沿用上游，保留已批准差异；不恢复下列本地特例。
 #### Scenario: 维护上游继承能力
 
 - **WHEN** 维护继承能力
-- **THEN** 仅保留 fork 差异，不复立已退役的本地入口或协议；RPC/RPC UI 不另立产品场景。
+- **THEN** 仅保留 fork 差异；RPC／RPC UI 及公开协议沿用上游。
   - `ask` 沿用上游 HTML 表单与宿主协议；仅活跃且绑定主代理请求的 [`/goal-autopilot`](../spec-driven-orchestration/spec.md#requirement-6-无人值守与权限边界) 可静默超时。普通默认值/取消、Plan 无超时均不变。
 
 ### Requirement: 按风险选择验证和报告证据

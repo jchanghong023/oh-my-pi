@@ -318,12 +318,6 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			// Root relative command/cwd at the plugin's config directory, not the
 			// session cwd (MCP stdio spawning resolves relative values there).
 			const rooted = resolvePluginStdioPaths({ command: cfg.command, cwd: cfg.cwd }, root.path);
-			const alwaysLoad = typeof cfg.alwaysLoad === "boolean" ? cfg.alwaysLoad : undefined;
-			if (alwaysLoad === undefined && cfg.alwaysLoad != null) {
-				logger.warn(
-					`[omp-plugins] MCP server "${serverName}" in ${mcpPath}: invalid alwaysLoad ${JSON.stringify(cfg.alwaysLoad)}, ignoring`,
-				);
-			}
 			// Report a dropped value, as the native and standalone loaders do: a
 			// typo would otherwise silently revert the id encoding or re-enable
 			// the server's instructions.
@@ -342,7 +336,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			items.push({
 				name: serverName,
 				...(cfg.enabled !== undefined && { enabled: cfg.enabled }),
-				...(alwaysLoad !== undefined && { alwaysLoad }),
+				...(typeof cfg.alwaysLoad === "boolean" && { alwaysLoad: cfg.alwaysLoad }),
 				...(cfg.timeout !== undefined && { timeout: cfg.timeout }),
 				...(requestIdFormat !== undefined && { requestIdFormat }),
 				...(instructions !== undefined && { instructions }),

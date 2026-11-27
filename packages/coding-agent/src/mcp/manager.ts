@@ -5,7 +5,7 @@
  * Handles tool loading and lifecycle.
  */
 import type { TSchema } from "@oh-my-pi/pi-ai";
-import { logger, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, offlineFromEnv, untilAborted } from "@oh-my-pi/pi-utils";
 import type { EffectiveExtensionRoots, SourceMeta } from "../capability/types";
 import { invalidateCommandConfig, isCommandConfigValue, resolveConfigValue } from "../config/resolve-config-value";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -2296,7 +2296,7 @@ export class MCPManager implements MCPManagerApi {
 					}
 				}
 			} catch (error) {
-				if (signal?.aborted) throw error;
+				if (signal?.aborted || offlineFromEnv()) throw error;
 				logger.warn("Failed to resolve OAuth credential", { credentialId, error });
 			}
 		}

@@ -1,9 +1,8 @@
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import * as path from "node:path";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { ResolvedThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
+import { isIntranetEndpoint } from "@oh-my-pi/pi-ai/auth/offline";
 import { ChatOpenAI } from "@langchain/openai";
 import { type AuthGatewayRouter, createAuthGatewayRouter } from "@oh-my-pi/pi-ai/auth-gateway";
 import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
@@ -121,25 +120,6 @@ const offlineHttpApis = new Set<Api>([
 	"openai-responses",
 	"openrouter",
 ]);
-
-function isIntranetAddress(address: string): boolean {
-	if (isIP(address) === 4) {
-		return /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(address);
-	}
-	return address === "::1" || /^(?:fc|fd)[0-9a-f]{2}:/i.test(address);
-}
-
-async function isIntranetEndpoint(url: URL): Promise<boolean> {
-	if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) return false;
-	const host = url.hostname.replace(/^\[|\]$/g, "");
-	if (isIP(host)) return isIntranetAddress(host);
-	try {
-		const addresses = await lookup(host, { all: true });
-		return addresses.length > 0 && addresses.every(({ address }) => isIntranetAddress(address));
-	} catch {
-		return false;
-	}
-}
 
 async function getOfflineModelOrigin(model: Model<Api>): Promise<string | undefined> {
 	if (!offlineHttpApis.has(model.api)) return undefined;

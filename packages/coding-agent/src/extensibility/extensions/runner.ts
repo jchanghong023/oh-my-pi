@@ -615,81 +615,6 @@ export const UNAVAILABLE_ANNOTATIONS: ExtensionAnnotationsAPI = Object.freeze({
 	open: () => Promise.reject(new Error("ctx.annotations is not available in this host.")),
 });
 
-function contextHistoryIdentity(message: AgentMessage): string {
-	return message.role === "toolResult"
-		? `${message.role}:${message.timestamp}:${message.toolCallId}`
-		: `${message.role}:${message.timestamp}`;
-}
-
-/**
- * Hooks that construct fresh objects lose the index preserved by object spread.
- * Recover it from a unique message identity, never from the output position:
- * a hook can insert, filter, or reorder messages in the same pass. Distinct
- * user messages may share a timestamp; compare their content in that case.
- */
-function restoreContextHistoryIndices(previousMessages: AgentMessage[], nextMessages: AgentMessage[]): void {
-	if (nextMessages.every(message => getContextHistoryIndex(message) !== undefined)) return;
-	const claimed = new Set<number>();
-	const replacements = new Map<string, AgentMessage[]>();
-	for (const message of nextMessages) {
-		if (!message) continue;
-		const index = getContextHistoryIndex(message);
-		if (index !== undefined) {
-			claimed.add(index);
-			continue;
-		}
-		const key = contextHistoryIdentity(message);
-		const group = replacements.get(key);
-		if (group) group.push(message);
-		else replacements.set(key, [message]);
-	}
-	if (replacements.size === 0) return;
-	const sources = new Map<string, AgentMessage[]>();
-	for (const message of previousMessages) {
-		if (!message) continue;
-		const key = contextHistoryIdentity(message);
-		if (!replacements.has(key)) continue;
-		const group = sources.get(key);
-		if (group) group.push(message);
-		else sources.set(key, [message]);
-	}
-	const assign = (target: AgentMessage, source: AgentMessage) => {
-		const index = getContextHistoryIndex(source);
-		if (index !== undefined && !claimed.has(index)) {
-			setContextHistoryIndex(target, index);
-			claimed.add(index);
-		}
-	};
-	for (const [key, group] of replacements) {
-		const matches = sources.get(key);
-		if (!matches) continue;
-		if (group.length === 1 && matches.length === 1) {
-			assign(group[0], matches[0]);
-			continue;
-		}
-		const targets = group.filter(message => message.role === "user");
-		if (targets.length === 0) continue;
-		const available = matches.filter(message => message.role === "user").filter(message => {
-			const index = getContextHistoryIndex(message);
-			return index === undefined || !claimed.has(index);
-		});
-		if (targets.length === 1 && available.length === 1) {
-			assign(targets[0], available[0]);
-			continue;
-		}
-		for (const [position, target] of targets.entries()) {
-			const match = available.findIndex(source => Bun.deepEquals(source.content, target.content));
-			if (
-				match !== -1 &&
-				available.findLastIndex(source => Bun.deepEquals(source.content, target.content)) === match &&
-				!targets.some((other, index) => index !== position && Bun.deepEquals(other.content, target.content))
-			) {
-				assign(target, available[match]);
-			}
-		}
-	}
-}
-
 /** Host UI seam for attributing widgets without changing the extension's `setWidget` API. */
 export interface ExtensionHostUIContext extends ExtensionUIContext {
 	/** Set an editor widget attributed to a resolved extension entry path. */
@@ -1626,9 +1551,8 @@ export class ExtensionRunner {
 			"ctrl+t",
 			"ctrl+g",
 			"alt+m",
+			// Composer shortcuts must not shadow the global thinking toggle.
 			"alt+p",
-			// Fork default chord for `app.thinking.cycle`.
-			"alt+e",
 			// Default chord for `app.message.followUp` (Windows Terminal can't deliver Ctrl+Enter; #1903).
 			"ctrl+q",
 			"shift+tab",
@@ -2769,8 +2693,6 @@ export class ExtensionRunner {
 		// the context object or cloning; this runs on every provider request.
 		if (!this.hasHandlers("context")) return messages;
 		const ctx = this.createContext();
-		// Capture turn identity before handlers can rewrite roles or timestamps.
-		const historyOrigins = messages.map(message => ({ role: message.role, timestamp: message.timestamp }));
 
 		let currentMessages: AgentMessage[];
 		try {
@@ -2791,9 +2713,7 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				// Keep the input positions available even if the handler edits its array in place.
-				const inputMessages = currentMessages.slice();
-				const event: ContextEvent = { type: "context", messages: inputMessages };
+				const event: ContextEvent = { type: "context", messages: currentMessages };
 				const handlerResult = await this.#runHandlerWithTimeout(
 					handler,
 					event,
@@ -2804,9 +2724,20 @@ export class ExtensionRunner {
 					signal,
 				);
 
-				const nextMessages = (handlerResult as ContextEventResult | undefined)?.messages ?? inputMessages;
-				restoreContextHistoryIndices(currentMessages, nextMessages);
-				currentMessages = nextMessages;
+				if (handlerResult && (handlerResult as ContextEventResult).messages) {
+					const nextMessages = (handlerResult as ContextEventResult).messages!;
+					for (let index = 0; index < nextMessages.length; index++) {
+						const message = nextMessages[index];
+						if (!message || getContextHistoryIndex(message) !== undefined) continue;
+						const previousMessage = currentMessages[index];
+						if (!previousMessage) continue;
+						const historyIndex = getContextHistoryIndex(previousMessage);
+						if (historyIndex === undefined) continue;
+						setContextHistoryIndex(message, historyIndex);
+						if (!Bun.deepEquals(message, previousMessage)) clearContextHistoryIndex(message);
+					}
+					currentMessages = nextMessages;
+				}
 			}
 		}
 
@@ -2821,12 +2752,16 @@ export class ExtensionRunner {
 				this.#contextProjections.set(historyMessage, null);
 				continue;
 			}
-			const origin = historyIndex === undefined ? undefined : historyOrigins[historyIndex];
+			// Codex computes turn boundaries from the original role and timestamp.
 			const changesTurnIdentity =
-				origin !== undefined && (message.role !== origin.role || message.timestamp !== origin.timestamp);
+				historyMessage !== undefined &&
+				(message.role !== historyMessage.role || message.timestamp !== historyMessage.timestamp);
 			const repeated = historyMessage !== undefined && this.#isRepeatedProjection(historyMessage, message);
 			if (!repeated || changesTurnIdentity) {
-				markPerCallContextMessage(message, historyMessage ? origin : undefined);
+				markPerCallContextMessage(
+					message,
+					historyMessage && { role: historyMessage.role, timestamp: historyMessage.timestamp },
+				);
 			}
 		}
 		for (const message of messages) clearContextHistoryIndex(message);

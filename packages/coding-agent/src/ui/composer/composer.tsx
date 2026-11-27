@@ -351,7 +351,7 @@ export class Composer {
 	readonly #text: Signal<string>;
 	readonly #cursor: Signal<number>;
 	#revision = 0;
-	#draftGeneration = 0;
+	readonly #draftGeneration = signal(0);
 
 	readonly #history = new UndoHistory();
 	#typingAt = -1;
@@ -500,7 +500,7 @@ export class Composer {
 
 	/** Changes when the draft is discarded, sent or replaced, not while it is edited. */
 	get draftGeneration(): number {
-		return this.#draftGeneration;
+		return this.#draftGeneration();
 	}
 
 	/** The Vim mode, or null without Vim. */
@@ -520,7 +520,7 @@ export class Composer {
 
 	/** Replace the draft (caret at its end; a new undo step). */
 	setText(text: string): void {
-		if (text !== this.#text()) this.#draftGeneration++;
+		if (text !== this.#text()) this.#draftGeneration.set(this.#draftGeneration.peek() + 1);
 		this.#recalledState = false;
 		this.#vimBrowse = null;
 		this.#vimEdits.clear();
@@ -1187,7 +1187,7 @@ export class Composer {
 	}
 
 	#resetDraft(): void {
-		this.#draftGeneration++;
+		this.#draftGeneration.set(this.#draftGeneration.peek() + 1);
 		this.#jump = undefined;
 		this.#history.clear();
 		this.#typingAt = -1;
@@ -1223,7 +1223,7 @@ export class Composer {
 			};
 		}
 		this.#historyIndex = index;
-		this.#draftGeneration++;
+		this.#draftGeneration.set(this.#draftGeneration.peek() + 1);
 		const draft = index === -1 ? this.#historyDraft : null;
 		const entry = draft ?? this.#entries[index] ?? { text: "" };
 		const text = entry.text;

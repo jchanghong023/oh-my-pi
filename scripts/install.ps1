@@ -62,35 +62,34 @@ function Write-InstallLog {
 function Initialize-InstallLog {
     try {
         $homeDir = [Environment]::GetFolderPath("UserProfile")
+        # IsPathRooted alone accepts drive-relative C:foo and root-relative \foo.
+        $absoluteRoot = '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)'
         $configDir = if ($env:PI_CONFIG_DIR) { $env:PI_CONFIG_DIR } else { ".omp" }
         $root = "$homeDir\$configDir"
         $explicitRoot = $env:OMP_CONFIG_ROOT
         if ($explicitRoot) { $explicitRoot = $explicitRoot.Trim() }
         if ($explicitRoot -eq "~") { $explicitRoot = $homeDir }
         elseif ($explicitRoot -match '^~[/\\]') { $explicitRoot = $homeDir + $explicitRoot.Substring(1) }
-        # IsPathRooted alone accepts drive-relative C:foo and root-relative \foo.
-        if ($explicitRoot -match '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)') { $root = $explicitRoot }
+        if ($explicitRoot -match $absoluteRoot) { $root = $explicitRoot }
         $profile = if (Test-Path Env:OMP_PROFILE) { $env:OMP_PROFILE } else { $env:PI_PROFILE }
         if ($profile) { $profile = $profile.Trim() }
         if ($profile -and $profile -ne "default" -and $profile -cmatch '^[a-z0-9][a-z0-9._-]{0,63}$' -and
             $profile -notmatch '\.$|^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)') {
             $profileSuffix = "profiles\$profile\logs"
         } else { $profileSuffix = "logs" }
-        $fallbackRoot = if ($env:LOCALAPPDATA) { "$env:LOCALAPPDATA\omp" } else { "$homeDir\.omp" }
+        $fallbackRoot = if ($env:LOCALAPPDATA -match $absoluteRoot) { "$env:LOCALAPPDATA\omp" } else { "$homeDir\.omp" }
         $cacheRoot = $env:OMP_CACHE_DIR
         if ($cacheRoot) { $cacheRoot = $cacheRoot.Trim() }
         if ($cacheRoot -eq "~") { $cacheRoot = $homeDir }
         elseif ($cacheRoot -match '^~[/\\]') { $cacheRoot = $homeDir + $cacheRoot.Substring(1) }
-        if ($cacheRoot -notmatch '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)') { $cacheRoot = $null }
         $name = "omp.install.{0}.{1}.{2}.log" -f $script:InstallStarted.ToString("yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture), $script:InstallStarted.ToUnixTimeMilliseconds(), $PID
         $fallback = $false
         # Compose candidates without consulting the PowerShell drive table.
         # An unavailable drive must fail only inside its own fallback attempt.
-        $directories = @("$root\$profileSuffix", "$fallbackRoot\$profileSuffix")
-        if ($cacheRoot) { $directories = @("$cacheRoot\$profileSuffix") + $directories }
-        foreach ($directory in $directories) {
+        foreach ($logRoot in @($cacheRoot, $root, $fallbackRoot)) {
+            if ($logRoot -notmatch $absoluteRoot) { continue }
             try {
-                $directory = [IO.Path]::GetFullPath($directory)
+                $directory = [IO.Path]::GetFullPath("$logRoot\$profileSuffix")
                 [IO.Directory]::CreateDirectory($directory) | Out-Null
                 $logPath = [IO.Path]::Combine($directory, $name)
                 [IO.File]::AppendAllText($logPath, "", (New-Object Text.UTF8Encoding($false)))
@@ -628,6 +627,14 @@ function Test-InstalledBinaryVersion {
     }
 }
 
+function Move-InstallFile {
+    param([string]$Source, [string]$Destination)
+
+    # Use an exact destination. Unlike Move-Item, this fails atomically if
+    # another entry is already there, including directories and symlinks.
+    [IO.File]::Move($Source, $Destination)
+}
+
 function Install-Binary {
     $downloaded = $false
     $verified = $false
@@ -785,14 +792,14 @@ function Install-Binary {
         $OldPath = Join-Path $InstallDir (".omp.old.{0}.exe" -f [System.Guid]::NewGuid().ToString("N"))
         $rollbackGuard = "$OldPath.rollback"
         Set-InstallStage "old_binary_rename"
-        $hadExisting = Test-Path -LiteralPath $OutPath
+        $hadExisting = Test-Path -LiteralPath $OutPath -PathType Leaf
         if ($hadExisting) {
             # The aside is not stale until the candidate is committed. Create
             # its guard before the rename so other installs cannot sweep it.
             [IO.File]::WriteAllText($rollbackGuard, "")
             try {
                 Write-InstallLog INFO old_binary_rename_started @{ target = "installed"; result = "started" }
-                Move-Item -LiteralPath $OutPath -Destination $OldPath
+                Move-InstallFile -Source $OutPath -Destination $OldPath
                 $renamedAside = $true
                 Write-InstallLog INFO old_binary_rename_completed @{ result = "success"; old_image = "retained_aside" }
             } catch {
@@ -801,7 +808,7 @@ function Install-Binary {
                 Stop-RunningOmp -TargetPath $OutPath
                 Set-InstallStage "fallback_rename"
                 Write-InstallLog WARN old_binary_rename_started @{ result = "started"; reason = "after_kill_fallback"; attempt = 2 }
-                Move-Item -LiteralPath $OutPath -Destination $OldPath
+                Move-InstallFile -Source $OutPath -Destination $OldPath
                 $renamedAside = $true
                 Write-InstallLog INFO old_binary_rename_completed @{ result = "success"; old_image = "retained_aside"; attempt = 2 }
             }
@@ -809,7 +816,7 @@ function Install-Binary {
         try {
             Set-InstallStage "atomic_replace"
             Write-InstallLog INFO atomic_replace_started @{ target = "installed"; strategy = "move_candidate" }
-            Move-Item -LiteralPath $TmpPath -Destination $OutPath
+            Move-InstallFile -Source $TmpPath -Destination $OutPath
             $installed = $true
             Write-InstallLog INFO atomic_replace_completed @{ result = "success" }
         } catch {
@@ -820,7 +827,7 @@ function Install-Binary {
                 try {
                     Set-InstallStage "rollback"
                     Write-InstallLog WARN rollback_started @{ target = "installed"; source = "old_image" }
-                    Move-Item -LiteralPath $OldPath -Destination $OutPath
+                    Move-InstallFile -Source $OldPath -Destination $OutPath
                     $renamedAside = $false
                     Write-InstallLog INFO rollback_completed @{ result = "restored" }
                 } catch {
@@ -915,7 +922,7 @@ function Install-Binary {
                     Write-Host "Previous binary retained: $OldPath"
                     Write-Host "To restore it only if the install target is still missing:"
                     $guardLiteral = "'" + $rollbackGuard.Replace("'", "''") + "'"
-                    Write-Host "if (-not (Test-Path -LiteralPath $targetLiteral)) { Move-Item -LiteralPath $oldLiteral -Destination $targetLiteral -ErrorAction Stop; Remove-Item -LiteralPath $guardLiteral -Force }"
+                    Write-Host "try { [IO.File]::Move($oldLiteral, $targetLiteral); Remove-Item -LiteralPath $guardLiteral -Force } catch { throw }"
                 } elseif (-not $installed -and $verified -and (Test-Path -LiteralPath $OutPath -PathType Leaf)) {
                     Write-Host "The previous installed binary is still available at $OutPath"
                 }

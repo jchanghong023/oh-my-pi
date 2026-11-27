@@ -10,7 +10,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import { type Api, type AssistantMessage, type AuthStorage, type Model, tokenUsage } from "@oh-my-pi/pi-ai";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
-import { formatAge, formatCount, prompt, truncate } from "@oh-my-pi/pi-utils";
+import { formatAge, formatCount, offlineFromEnv, prompt, truncate } from "@oh-my-pi/pi-utils";
 import { isCompanyLaneActive, setCompanyOfflineEnabled } from "../../config/company-provider";
 import { cfgOffline } from "../../config/auxiliary-model-policy";
 import { ModelRegistry } from "../../config/model-registry";
@@ -544,6 +544,15 @@ async function executeSearch(
 	};
 }
 
+function offlineSearchResult(): SearchToolResult | undefined {
+	if (!offlineFromEnv()) return undefined;
+	const message = "Web Search is disabled in OMP_OFFLINE mode.";
+	return {
+		content: [{ type: "text", text: `Error: ${message}` }],
+		details: { response: { provider: "none", sources: [] }, error: message },
+	};
+}
+
 /**
  * Execute a web search query for CLI/testing workflows.
  *
@@ -562,6 +571,8 @@ export async function runSearchQuery(
 		signal?: AbortSignal;
 	} = {},
 ): Promise<SearchToolResult> {
+	const offline = offlineSearchResult();
+	if (offline) return offline;
 	const createdAuthStorage = options.authStorage || options.modelRegistry ? undefined : await discoverAuthStorage();
 	const authStorage = options.authStorage ?? options.modelRegistry?.authStorage ?? createdAuthStorage;
 	if (!authStorage) {
@@ -626,6 +637,8 @@ export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRe
 		_onUpdate?: AgentToolUpdateCallback<SearchResultDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<SearchResultDetails>> {
+		const offline = offlineSearchResult();
+		if (offline) return offline;
 		const authStorage = this.#session.authStorage ?? (await discoverAuthStorage());
 		const sessionId = this.#session.getSessionId?.() ?? undefined;
 		return executeSearch(_toolCallId, params, {
@@ -655,6 +668,8 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchResul
 		ctx: CustomToolContext,
 		signal?: AbortSignal,
 	) {
+		const offline = offlineSearchResult();
+		if (offline) return offline;
 		const authStorage = ctx.modelRegistry?.authStorage ?? (await discoverAuthStorage());
 		const sessionId = ctx.sessionManager.getSessionId();
 		return executeSearch(toolCallId, params, {

@@ -11,7 +11,8 @@
  * - exchangeToken(): Exchange authorization code for tokens
  */
 import * as os from "node:os";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, offlineFromEnv } from "@oh-my-pi/pi-utils";
+import { assertOfflineCredentialEndpoint } from "../../auth/offline";
 import * as AIError from "../../error";
 import * as nativeSchemeCallback from "./native-scheme-callback";
 import type { NativeSchemeCallbackReceiver } from "./native-scheme-callback";
@@ -284,6 +285,7 @@ export abstract class OAuthCallbackFlow {
 			// Generate auth URL with the ACTUAL redirect URI (may differ from expected if port was busy)
 			const { url: authUrl, instructions } = await this.generateAuthUrl(state, redirectUri);
 			this.#throwIfCancelled();
+			if (offlineFromEnv()) await assertOfflineCredentialEndpoint("OAuth authorization", authUrl);
 
 			// Publish the auth URL to the `/launch` route BEFORE handing it to
 			// callers. `onAuth` immediately renders a UI that advertises the

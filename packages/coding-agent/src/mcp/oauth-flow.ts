@@ -5,6 +5,7 @@
  * by providing authorization URL, token URL, and client credentials.
  */
 
+import { credentialFetch } from "@oh-my-pi/pi-ai/auth/offline";
 import type { OAuthCallbackFlowOptions } from "@oh-my-pi/pi-ai/oauth/callback-server";
 import { OAuthCallbackFlow } from "@oh-my-pi/pi-ai/oauth/callback-server";
 import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
@@ -397,7 +398,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	) {
 		super(ctrl, resolveCallbackOptions(config));
 		this.#resolvedClientId = this.#resolveClientId(config);
-		this.#fetch = config.fetch ?? ctrl.fetch ?? fetch;
+		this.#fetch = credentialFetch("MCP OAuth", config.fetch ?? ctrl.fetch);
 		this.#resource = this.#filterResourceIndicator(
 			resolveResourceUri(config.resource ?? this.#resourceFromAuthorizationUrl(config.authorizationUrl)),
 		);
@@ -848,7 +849,7 @@ export async function refreshMCPOAuthToken(
 	// Only an object in the fifth position is the options; a positional
 	// `undefined` resource keeps the trailing options.
 	const optsFromTrailing = typeof resourceOrOpts === "object" ? resourceOrOpts : opts;
-	const fetchImpl: FetchImpl = optsFromTrailing?.fetch ?? fetch;
+	const fetchImpl = credentialFetch("MCP OAuth", optsFromTrailing?.fetch);
 	const resource = typeof resourceOrOpts === "string" ? resourceOrOpts : undefined;
 	// Filter against the authorization-server origin when known (RFC 8414
 	// permits authorize/token endpoints on separate origins). Fall back to

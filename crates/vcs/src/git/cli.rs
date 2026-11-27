@@ -20,8 +20,10 @@ use std::os::fd::AsRawFd as AsRawPipe;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle as AsRawPipe;
 use std::{
+	env,
 	ffi::OsStr,
-	path::Path,
+	io::Write,
+	path::{Path, PathBuf},
 	process::Stdio,
 	sync::{Arc, Mutex},
 	time::Duration,
@@ -241,6 +243,73 @@ fn apply_env(cmd: &mut impl EnvSink) {
 	cmd.set("SSH_ASKPASS", "false");
 }
 
+/// Insert the fallback before the real system config, never at command scope
+/// and never in the parent shell. All of Git's explicit settings still win.
+async fn git_tls_config(cwd: &Path) -> Option<tempfile::NamedTempFile> {
+	if env::var_os("OMP_MANAGED_GIT_SSL_FALLBACK").as_deref() != Some(OsStr::new("1"))
+		|| env::var_os("GIT_SSL_NO_VERIFY").is_some()
+	{
+		return None;
+	}
+	if let Some(no_system) = env::var_os("GIT_CONFIG_NOSYSTEM")
+		&& !no_system.to_str().is_some_and(|value| {
+			["", "0", "false", "no", "off"].iter().any(|off| value.eq_ignore_ascii_case(off))
+		})
+	{
+		return None;
+	}
+	if let Some(configured) = env::var_os("GIT_CONFIG_SYSTEM") {
+		if configured.is_empty() {
+			return None;
+		}
+		return write_git_tls_config(&cwd.join(configured));
+	}
+
+	static SYSTEM_CONFIG: tokio::sync::OnceCell<Option<PathBuf>> =
+		tokio::sync::OnceCell::const_new();
+	let system = SYSTEM_CONFIG.get_or_init(|| discover_git_system_config(cwd)).await.as_deref()?;
+	write_git_tls_config(system)
+}
+
+/// Ask Git for its compiled/relocated system path. An older Git or failed
+/// discovery keeps Git's native verification defaults.
+async fn discover_git_system_config(cwd: &Path) -> Option<PathBuf> {
+	let mut git = tokio::process::Command::new("git");
+	git.args(["var", "GIT_CONFIG_SYSTEM"])
+		.current_dir(cwd)
+		.stdin(Stdio::null())
+		.stderr(Stdio::null())
+		.kill_on_drop(true);
+	apply_env(&mut git);
+	let output = tokio::time::timeout(Duration::from_secs(2), git.output()).await.ok()?.ok()?;
+	if !output.status.success() {
+		return None;
+	}
+	let line = std::str::from_utf8(&output.stdout).ok()?.strip_suffix('\n')?;
+	Some(PathBuf::from(line.strip_suffix('\r').unwrap_or(line)))
+}
+
+fn write_git_tls_config(system: &Path) -> Option<tempfile::NamedTempFile> {
+	if !system.is_absolute() {
+		return None;
+	}
+	let system = system.to_str()?;
+	if system.chars().any(char::is_control) {
+		return None;
+	}
+	let mut config = tempfile::NamedTempFile::new_in(std::path::absolute(env::temp_dir()).ok()?).ok()?;
+	config.write_all(b"[http]\n\tsslVerify = false\n[include]\n\tpath = \"").ok()?;
+	let mut offset = 0;
+	for (index, _) in system.match_indices(['\\', '"']) {
+		config.write_all(&system.as_bytes()[offset..index]).ok()?;
+		config.write_all(b"\\").ok()?;
+		offset = index;
+	}
+	config.write_all(&system.as_bytes()[offset..]).ok()?;
+	config.write_all(b"\"\n").ok()?;
+	Some(config)
+}
+
 /// Loose match for a UTF-8 character locale (`en_US.UTF-8`, `C.utf8`, …).
 fn is_utf8_locale(value: &str) -> bool {
 	let lower = value.to_ascii_lowercase();
@@ -284,6 +353,17 @@ async fn run_raw(cwd: &Path, args: &[String], options: &RunOptions) -> Result<Ca
 		.stderr(Stdio::piped())
 		.kill_on_drop(true);
 	apply_env(&mut cmd);
+	let git_tls_config = if matches!(
+		args.first().map(String::as_str),
+		Some("clone" | "fetch" | "push" | "ls-remote")
+	) {
+		git_tls_config(cwd).await
+	} else {
+		None
+	};
+	if let Some(config) = &git_tls_config {
+		cmd.env("GIT_CONFIG_SYSTEM", config.path());
+	}
 	#[cfg(unix)]
 	detach_from_terminal(cmd.as_std_mut());
 	let mut child = cmd.spawn().map_err(|err| spawn_error(cwd, err))?;

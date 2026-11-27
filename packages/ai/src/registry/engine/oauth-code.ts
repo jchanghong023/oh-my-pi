@@ -4,6 +4,7 @@
  * exchange, credential projection, userinfo enrichment and after-exchange hook.
  */
 import type { CompiledAuthProvider, CompiledCallback, CompiledOAuthCodeLogin } from "@oh-my-pi/pi-catalog/compat/types";
+import { credentialFetch } from "../../auth/offline";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
 import { validateApiKeyAgainstModelsEndpoint } from "../api-key-validation";
@@ -106,7 +107,7 @@ export class DeclarativeOAuthCodeFlow extends OAuthCallbackFlow {
 		this.#rule = rule;
 		this.#provider = policy.id;
 		this.#label = policy.name;
-		this.#fetch = ctrl.fetch ?? fetch;
+		this.#fetch = credentialFetch(policy.id, ctrl.fetch);
 	}
 
 	override generateState(): string {

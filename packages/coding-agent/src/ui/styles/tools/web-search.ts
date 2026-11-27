@@ -2,9 +2,9 @@
  * The `web_search` look. A pending call is one line (`⏳ Web Search: query`).
  * A response is a card (`╭─── ⌕ Web Search: Anthropic 8 sources ───╮`) with
  * the query, the answer as markdown (clamped to `maxAnswerLines` while
- * collapsed), the sources as a branch list with excerpts when there is no answer,
- * and the provider metadata, on the status background. A plain-text result
- * is a `⚠ Response` tree of its lines (six while collapsed).
+ * collapsed), the sources as a branch list with excerpts in the expanded view
+ * or when there is no answer, and the provider metadata, on the status background.
+ * A plain-text result is a `⚠ Response` tree of its lines (six while collapsed).
  */
 import type { UiNode } from "@oh-my-pi/pi-tui";
 import type { Block, PaintContext } from "@oh-my-pi/pi-tui/term/paint";
@@ -15,7 +15,7 @@ import { pluralize } from "@oh-my-pi/pi-utils";
 import { PREVIEW_LIMITS } from "../../../utils/render-utils";
 import type { WebSearchTerm, WebSearchTermSource } from "../../tools/web-search";
 import { webLink } from "./file-common";
-import { expandHint, type FrameSection, frameInner, frameRows } from "./frame";
+import { expandHint, type FrameSection, frameInner, frameRows, hangingWrap } from "./frame";
 import { defineToolLook, toolProps } from "./look";
 
 /** Query characters a pending call shows. */
@@ -65,9 +65,16 @@ function sourceRows(
 		const indent = last
 			? " ".repeat(indentWidth)
 			: `${theme.fg("dim", vertical)}${" ".repeat(Math.max(1, indentWidth - visibleWidth(vertical)))}`;
-		const limit = expanded ? source.excerpt.length : 1;
-		const room = Math.max(0, inner - visibleWidth(indent));
-		for (let j = 0; j < limit; j++) rows.push(`${indent}${theme.fg("dim", truncate(source.excerpt[j]!, room))}`);
+		if (expanded) {
+			for (const line of source.excerpt.split("\n")) {
+				if (line) rows.push(...hangingWrap(indent, indent, theme.fg("dim", line), Math.max(1, inner)));
+				else rows.push(indent);
+			}
+		} else {
+			const [line] = source.excerpt.split("\n", 1);
+			const room = Math.max(0, inner - visibleWidth(indent));
+			rows.push(`${indent}${theme.fg("dim", truncate(line!, room))}`);
+		}
 	}
 	const hidden = sources.length - shown;
 	if (hidden > 0) rows.push(`${theme.fg("dim", end)} ${moreItems(theme, hidden, "source")}`);
@@ -81,8 +88,9 @@ function paintCall(cx: PaintContext, term: WebSearchTerm): Block {
 	return { rows: wrap(head, cx.width) };
 }
 
-function paintLines(cx: PaintContext, lines: readonly string[], expanded: boolean): Block {
+function paintLines(cx: PaintContext, text: string, expanded: boolean): Block {
 	const theme = cx.theme;
+	const lines = text ? text.split("\n") : [];
 	const hidden = expanded ? 0 : Math.max(0, lines.length - RESPONSE_LINES);
 	let head = `${theme.fg("warning", theme.symbols.symbol("status.warning"))} ${theme.fg("dim", "Response")}`;
 	if (hidden > 0) head += expandHint(theme);
@@ -93,10 +101,10 @@ function paintLines(cx: PaintContext, lines: readonly string[], expanded: boolea
 		return {
 			rows: [...rows, ...item(true, theme.fg("muted", "No response data"))],
 		};
-	const shown = lines.slice(0, lines.length - hidden);
-	shown.forEach((line, i) => {
-		rows.push(...item(hidden === 0 && i === shown.length - 1, theme.fg("dim", replaceTabs(line.trimEnd()))));
-	});
+	const shown = lines.length - hidden;
+	for (let i = 0; i < shown; i++) {
+		rows.push(...item(hidden === 0 && i === shown - 1, theme.fg("dim", lines[i]!.trimEnd())));
+	}
 	if (hidden > 0) rows.push(...item(true, theme.fg("muted", `${theme.symbols.ellipsis} ${hidden} more lines`)));
 	return { rows };
 }
@@ -107,7 +115,7 @@ function paintWebSearch(node: UiNode, cx: PaintContext): Block {
 	const theme = cx.theme;
 	const expanded = props.collapsed === false;
 	if (!term.result) return paintCall(cx, term);
-	if (term.lines) return paintLines(cx, term.lines, expanded);
+	if (term.responseText !== undefined) return paintLines(cx, term.responseText, expanded);
 	const tone = term.error !== undefined ? "error" : props.tone === "warning" ? "warning" : "success";
 	const glyph =
 		tone === "error"
@@ -133,9 +141,14 @@ function paintWebSearch(node: UiNode, cx: PaintContext): Block {
 			}
 			sections.push({ label: "Answer", lines: answer });
 		} else if (term.fallback) {
-			const shown = expanded ? term.fallback : term.fallback.slice(0, PREVIEW_LIMITS.OUTPUT_COLLAPSED);
-			const lines = shown.map(line => theme.fg("dim", truncate(line, inner)));
-			const hidden = term.fallback.length - shown.length;
+			const fallback = term.fallback.split("\n");
+			const shown = expanded ? fallback.length : Math.min(fallback.length, PREVIEW_LIMITS.OUTPUT_COLLAPSED);
+			const lines: string[] = [];
+			for (let i = 0; i < shown; i++) {
+				const line = fallback[i]!;
+				lines.push(theme.fg("dim", expanded ? line : truncate(line, inner)));
+			}
+			const hidden = fallback.length - shown;
 			if (hidden > 0) lines.push(moreItems(theme, hidden, "line"));
 			sections.push({ label: "Answer", lines });
 		}

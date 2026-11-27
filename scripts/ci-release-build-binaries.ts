@@ -165,11 +165,14 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 async function generateBundle(): Promise<void> {
 	if (isDryRun) {
 		console.log("DRY RUN bun run gen:stats");
-		console.log("DRY RUN bun --cwd=packages/collab-web run gen:export-viewer --check");
+		console.log("DRY RUN bun packages/collab-web/scripts/build-export-viewer.ts --check");
 		return;
 	}
-	await runCommand(["bun", "run", "gen:stats"], repoRoot);
-	await runCommand(["bun", "--cwd=packages/collab-web", "run", "gen:export-viewer", "--check"], repoRoot);
+	await runCommand([process.execPath, "run", "gen:stats"], repoRoot);
+	await runCommand(
+		[process.execPath, "packages/collab-web/scripts/build-export-viewer.ts", "--check"],
+		repoRoot,
+	);
 }
 
 async function resetArtifacts(): Promise<void> {
@@ -177,7 +180,7 @@ async function resetArtifacts(): Promise<void> {
 		console.log("DRY RUN bun run gen:stats:reset");
 		return;
 	}
-	await runCommand(["bun", "run", "gen:stats:reset"], repoRoot);
+	await runCommand([process.execPath, "run", "gen:stats:reset"], repoRoot);
 }
 
 async function main(): Promise<void> {

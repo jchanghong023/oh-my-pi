@@ -169,6 +169,10 @@ function standardProxyForProtocol(protocol: string): string | undefined {
 	return protocolProxy || Bun.env.ALL_PROXY || Bun.env.all_proxy || undefined;
 }
 
+function hasExplicitRequestRoute(init: RequestInit | undefined): boolean {
+	return !!init && (("unix" in init && !!init.unix) || ("proxy" in init && (init.proxy === false || !!init.proxy)));
+}
+
 /**
  * Return `init` with `proxy: proxyUrl` set when the request should tunnel.
  * A caller-supplied `init.proxy` always wins (the innermost, most specific
@@ -180,7 +184,7 @@ export function withProxyInit(
 	init: RequestInit | undefined,
 	proxyUrl: string,
 ): RequestInit | undefined {
-	if (init && (("unix" in init && init.unix) || ("proxy" in init && init.proxy))) return init;
+	if (hasExplicitRequestRoute(init)) return init;
 	const urlStr = input instanceof Request ? input.url : input.toString();
 	let urlObj: URL;
 	try {
@@ -443,7 +447,7 @@ async function fetchWithSystemProxyRedirects(
 /** Fallback for HTTP fetches with no per-request route; recompute the route for each followed redirect. */
 function wrapFetchWithSystemProxy(fetchImpl: FetchImpl, systemProxy: WindowsSystemProxy): FetchImpl {
 	const wrapped = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-		if (init && (("unix" in init && init.unix) || ("proxy" in init && (init.proxy === false || init.proxy)))) {
+		if (hasExplicitRequestRoute(init)) {
 			return fetchImpl(input, init);
 		}
 		let url: URL;
@@ -471,48 +475,60 @@ export function __resetGlobalProxyFetch(): void {
 	installedWindowsSystemProxy = undefined;
 }
 
-// Git checks only for the variable's presence, and native Git spawns inherit
-// the OS environment, not Bun's JavaScript environment map.
-function removeNativeGitSslNoVerify(): void {
+// Native Git spawns inherit the OS environment, not Bun's environment map.
+function setGitProcessEnv(key: string, value: string | undefined): void {
 	if (process.platform === "win32") {
 		const kernel32 = dlopen("kernel32.dll", {
 			GetEnvironmentVariableW: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32], returns: FFIType.u32 },
 			SetEnvironmentVariableW: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
 		});
 		try {
-			const name = Buffer.from("GIT_SSL_NO_VERIFY\0", "utf16le");
-			if (
-				kernel32.symbols.GetEnvironmentVariableW(ptr(name), null, 0) &&
-				!kernel32.symbols.SetEnvironmentVariableW(ptr(name), null)
-			) {
-				throw new Error("Failed to remove GIT_SSL_NO_VERIFY from the native environment");
+			const name = Buffer.from(`${key}\0`, "utf16le");
+			if (value !== undefined || kernel32.symbols.GetEnvironmentVariableW(ptr(name), null, 0)) {
+				const data = value === undefined ? null : Buffer.from(`${value}\0`, "utf16le");
+				if (!kernel32.symbols.SetEnvironmentVariableW(ptr(name), data === null ? null : ptr(data))) {
+					throw new Error(`Failed to update ${key} in the native environment`);
+				}
 			}
 		} finally {
 			kernel32.close();
 		}
-		return;
-	}
-
-	const openLibc = (soname: string) => dlopen(soname, { unsetenv: { args: [FFIType.ptr], returns: FFIType.i32 } });
-	let libc: ReturnType<typeof openLibc>;
-	try {
-		libc = openLibc(process.platform === "darwin" ? "libSystem.B.dylib" : "libc.so.6");
-	} catch (error) {
-		if (process.platform !== "linux") throw error;
-		libc = openLibc("libc.so");
-	}
-	try {
-		if (libc.symbols.unsetenv(ptr(Buffer.from("GIT_SSL_NO_VERIFY\0"))) !== 0) {
-			throw new Error("Failed to remove GIT_SSL_NO_VERIFY from the native environment");
+	} else {
+		const openLibc = (soname: string) =>
+			dlopen(soname, {
+				setenv: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+				unsetenv: { args: [FFIType.ptr], returns: FFIType.i32 },
+			});
+		let libc: ReturnType<typeof openLibc>;
+		try {
+			libc = openLibc(process.platform === "darwin" ? "libSystem.B.dylib" : "libc.so.6");
+		} catch (error) {
+			if (process.platform !== "linux") throw error;
+			libc = openLibc("libc.so");
 		}
-	} finally {
-		libc.close();
+		try {
+			const name = Buffer.from(`${key}\0`);
+			const result =
+				value === undefined
+					? libc.symbols.unsetenv(ptr(name))
+					: libc.symbols.setenv(ptr(name), ptr(Buffer.from(`${value}\0`)), 1);
+			if (result !== 0) throw new Error(`Failed to update ${key} in the native environment`);
+		} finally {
+			libc.close();
+		}
+	}
+	if (value === undefined) {
+		delete Bun.env[key];
+		delete process.env[key];
+	} else {
+		Bun.env[key] = process.env[key] = value;
 	}
 }
 
 // Remember the opt-in after removing the sentinel, so another initialization
 // does not mistake the normalized environment for an unconfigured launch.
 let strictGitSsl = false;
+const gitSslFallbackEnv = "OMP_MANAGED_GIT_SSL_FALLBACK";
 
 /** The current CLI consumed a strict Git TLS opt-in during network bootstrap. */
 export function isStrictGitSslEnabled(): boolean {
@@ -521,10 +537,8 @@ export function isStrictGitSslEnabled(): boolean {
 
 /**
  * Fork zero-config network defaults: relax TLS certificate verification for
- * every `fetch` (`NODE_TLS_REJECT_UNAUTHORIZED=0`, honored by Bun's fetch) and
- * git SSL checks for spawned `git` children (`GIT_SSL_NO_VERIFY=true`), so
- * interception proxies and private gateways with unknown root CAs work without
- * per-machine environment setup.
+ * Bun fetch and use a low-precedence TLS default for managed Git transfers.
+ * Git configuration still wins; unmanaged Git uses its own defaults.
  *
  * Explicit `NODE_TLS_REJECT_UNAUTHORIZED=1` and `GIT_SSL_NO_VERIFY=false`
  * opt into strict verification. The Git opt-in is removed rather than passed
@@ -537,12 +551,19 @@ export function applyForkNetworkDefaults(): void {
 	}
 	const gitSslNoVerify = Bun.env.GIT_SSL_NO_VERIFY ?? process.env.GIT_SSL_NO_VERIFY;
 	if (gitSslNoVerify === "false") {
-		removeNativeGitSslNoVerify();
-		delete Bun.env.GIT_SSL_NO_VERIFY;
-		delete process.env.GIT_SSL_NO_VERIFY;
+		setGitProcessEnv("GIT_SSL_NO_VERIFY", undefined);
 		strictGitSsl = true;
-	} else if (gitSslNoVerify === undefined && !strictGitSsl) {
-		Bun.env.GIT_SSL_NO_VERIFY = process.env.GIT_SSL_NO_VERIFY = "true";
+	} else if (gitSslNoVerify !== undefined) {
+		setGitProcessEnv("GIT_SSL_NO_VERIFY", gitSslNoVerify);
+	}
+	if (strictGitSsl || gitSslNoVerify !== undefined) {
+		if (Bun.env[gitSslFallbackEnv] !== undefined) setGitProcessEnv(gitSslFallbackEnv, undefined);
+	} else if (Bun.env[gitSslFallbackEnv] !== "1") {
+		try {
+			setGitProcessEnv(gitSslFallbackEnv, "1");
+		} catch (error) {
+			logger.debug("could not initialize the managed Git TLS fallback", { error: String(error) });
+		}
 	}
 }
 

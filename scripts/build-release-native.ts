@@ -52,18 +52,10 @@ async function inspectLinuxAbi(addon: string, env: NodeJS.ProcessEnv): Promise<v
 	console.log("Native ABI: GLIBC <= 2.17; no dynamic C++ runtime dependency");
 }
 
-export async function buildReleaseNative(): Promise<string> {
-	if (process.arch !== "x64" || (process.platform !== "linux" && process.platform !== "win32")) {
-		throw new Error("Release native build supports only linux-x64 and win32-x64 hosts");
-	}
+/** Effective environment shared with CNB's native toolchain fingerprint. */
+export function releaseNativeEnvironment(): NodeJS.ProcessEnv {
 	ensureWindowsBuildTools();
 	const linux = process.platform === "linux";
-	const target = linux ? "x86_64-unknown-linux-gnu" : "x86_64-pc-windows-msvc";
-	const variant = linux ? "baseline" : "modern";
-	const filename = `pi_natives.${process.platform}-x64-${variant}.node`;
-	const outputDir = path.resolve(
-		process.env.OMP_RELEASE_NATIVE_DIR?.trim() || path.join(repoRoot, "packages/natives/native"),
-	);
 	const targetDir = path.resolve(process.env.CARGO_TARGET_DIR?.trim() || path.join(repoRoot, "target"));
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	// Publishing settings are fixed, not inherited from a developer's host ISA,
@@ -105,6 +97,22 @@ export async function buildReleaseNative(): Promise<string> {
 		env.CFLAGS_x86_64_pc_windows_msvc = "-DLIBWASM_STATIC /utf-8 /arch:AVX2";
 		env.CXXFLAGS_x86_64_pc_windows_msvc = "/utf-8 /arch:AVX2";
 	}
+	return env;
+}
+
+export async function buildReleaseNative(): Promise<string> {
+	if (process.arch !== "x64" || (process.platform !== "linux" && process.platform !== "win32")) {
+		throw new Error("Release native build supports only linux-x64 and win32-x64 hosts");
+	}
+	const linux = process.platform === "linux";
+	const target = linux ? "x86_64-unknown-linux-gnu" : "x86_64-pc-windows-msvc";
+	const variant = linux ? "baseline" : "modern";
+	const filename = `pi_natives.${process.platform}-x64-${variant}.node`;
+	const outputDir = path.resolve(
+		process.env.OMP_RELEASE_NATIVE_DIR?.trim() || path.join(repoRoot, "packages/natives/native"),
+	);
+	const env = releaseNativeEnvironment();
+	const targetDir = env.CARGO_TARGET_DIR!;
 	const args = [
 		"cargo",
 		linux ? "zigbuild" : "build",

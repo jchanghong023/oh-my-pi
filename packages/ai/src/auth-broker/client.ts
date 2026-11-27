@@ -7,8 +7,11 @@
  */
 
 import { type } from "@oh-my-pi/omptype";
-import { isRecord, readSseEvents } from "@oh-my-pi/pi-utils";
+import { isRecord, offlineFromEnv, readSseEvents } from "@oh-my-pi/pi-utils";
 import type { AuthCredential, DisabledCredentialSummary, OAuthRefreshReason } from "../auth-storage";
+import { assertOnlineCredentialExchange, credentialFetch } from "../auth/offline";
+import { OAuthOfflineError } from "../error";
+import type { FetchImpl } from "../types";
 import type {
 	ClientUsageReportRequest,
 	ClientUsageReportResponse,
@@ -151,14 +154,14 @@ export class AuthBrokerClient {
 	readonly #token: string;
 	readonly #timeoutMs: number;
 	readonly #maxRetries: number;
-	readonly #fetch: typeof fetch;
+	readonly #fetch: FetchImpl;
 
 	constructor(opts: AuthBrokerClientOptions) {
 		this.#baseUrl = opts.url.replace(/\/+$/, "");
 		this.#token = opts.token;
 		this.#timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		this.#maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
-		this.#fetch = opts.fetchImpl ?? fetch;
+		this.#fetch = credentialFetch("auth broker", opts.fetchImpl);
 	}
 
 	healthz(signal?: AbortSignal): Promise<HealthzResponse> {
@@ -300,6 +303,8 @@ export class AuthBrokerClient {
 	fetchUsage(
 		options: { signal?: AbortSignal; maxAccountsPerProvider?: number; provider?: string } = {},
 	): Promise<UsageResponse> {
+		// A broker usage probe can refresh OAuth even though the API call is a GET.
+		if (offlineFromEnv()) return Promise.reject(new OAuthOfflineError("auth broker usage"));
 		const requestedAccountCount = options.maxAccountsPerProvider;
 		const accountCount =
 			typeof requestedAccountCount === "number" && Number.isFinite(requestedAccountCount)
@@ -362,6 +367,7 @@ export class AuthBrokerClient {
 		signal?: AbortSignal,
 		reason?: OAuthRefreshReason,
 	): Promise<CredentialRefreshResponse> {
+		assertOnlineCredentialExchange("auth broker");
 		const suffix = reason ? `?reason=${reason}` : "";
 		return this.#request<CredentialRefreshResponse>("POST", `/v1/credential/${id}/refresh${suffix}`, {
 			schema: "credentialRefreshResponseSchema",
@@ -535,6 +541,7 @@ export class AuthBrokerClient {
 				}
 				return response;
 			} catch (error) {
+				if (error instanceof OAuthOfflineError) throw error;
 				lastError = error;
 				// Caller-driven abort wins over retry — the caller said stop.
 				if (opts.signal?.aborted) {

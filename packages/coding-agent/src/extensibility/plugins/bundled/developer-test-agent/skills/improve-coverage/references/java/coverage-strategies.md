@@ -71,7 +71,7 @@
 
 ### 6.1 codecovcli 流程（首选）
 
-- Step 0：检查 `codecovcli --version`；未安装时配置华为 npm 仓库后 `npm install -g @baize/codecovcli@latest`
+- Step 0：检查 `codecovcli --version`；不可用时直接用 JaCoCo，NEVER 自动安装、升级或改 npm 配置。
 - Step 1：按 [Maven 配置提取](coverage-rules.md#maven-配置提取) 读取配置和处理回退。
 - Step 2：按 [codecovcli 覆盖率分析命令](coverage-rules.md#codecovcli-覆盖率分析命令) 构建命令，按 scenario 调整；incremental 场景必须加 `--targetbranch "{targetBranch}"`。
 - Step 3：`bash` 工具执行，timeout: 1200（20 分钟）

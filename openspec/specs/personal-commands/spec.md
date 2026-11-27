@@ -27,7 +27,7 @@ fork 命令、关键词、会话契约及 [TUI 显示差异](#requirement-1-三�
 
 - **WHEN** 打开画布
 - **THEN** 满窗但不强制全屏，提供中文界面、绘图、粘贴图片、标注、笔刷设置、撤销、清空和调尺寸。支持光标中心缩放、原大小／适应窗口和无笔迹平移；视野变化不改变实际像素或导出尺寸。
-- **AND** 浏览器 `Enter` 导出整张画布为 PNG 附件，保留原草稿和附件，不自动发送。兼容 Firefox 128，按本机隔离 Firefox 约定验证，不等同公司实机验收。
+- **AND** 画布中 `Enter` 导出整张 PNG，按钮获焦时沿用其键盘操作。保留草稿及附件，不自动发送。兼容 Firefox 128，本机隔离 Firefox 验证不等同公司实机。
 
 #### Scenario: offline 手动打开画布
 
@@ -36,8 +36,8 @@ fork 命令、关键词、会话契约及 [TUI 显示差异](#requirement-1-三�
 
 #### Scenario: 取消、隔离与本地服务清理
 
-- **WHEN** 启动、提交、按 `Escape` 取消、失败或失去归属
-- **THEN** 服务仅监听回环临时端口，每次使用独立能力 URL，拒跨源并限制载荷。提交、取消、失败或宿主销毁后关闭服务；取消保留草稿，迟到结果不串会话或视图。
+- **WHEN** 启动、提交、取消、失败或失去归属
+- **THEN** 仅用回环临时端口及独立能力 URL，拒跨源并限制载荷。无效图片可重试；提交成功、终态失败、取消、会话或原草稿失效及宿主退出均关闭服务。取消不清草稿，迟到结果不串会话或视图。
 
 ### Requirement: 内置 Developer Test Agent
 
@@ -45,7 +45,7 @@ MUST 内置 `developer-test-agent`、五技能及 `/dt`、`/generate-dt-files`�
 
 #### Scenario: 使用内置单元测试流程
 - **WHEN** 显式调用
-- **THEN** Python／Java／C/C++／Go 路由，生成／修复／覆盖率／断言审查／报告、覆盖率门禁、串行批任务。源码／发行内置文档／脚本／示例／二进制，不依赖插件／配置／项目 cwd。复用发现／展开／task／todo／ask／`skill://`。
+- **THEN** Python／Java／C/C++／Go 路由，生成／修复／覆盖率／断言审查／报告、覆盖率门禁、串行批任务。源码／发行内置文档、脚本、示例和配套资源，不依赖旧插件。复用发现／展开／task／todo／ask／`skill://`。`codecovcli` 缺失时优先用现有本地覆盖率路径；云门禁必需时报告缺项，不自动安装、升级或改 npm 配置。
 - **AND** 代理／技能仅手动发现调用，不默认展示／选用／路由／注入。主代理澄清，headless 子代理不用交互工具。报告 `.codecovcli/cache`；无 `@baize/dtagent-plugin` 自动遥测，不改旧配置／记忆。
 
 ### Requirement: `/loopn` 顺序循环提示词
@@ -63,7 +63,7 @@ MUST 内置 `developer-test-agent`、五技能及 `/dt`、`/generate-dt-files`�
 
 #### Scenario: 魔法关键词的内置命令的可观察行为
 - **WHEN** 尾随任务
-- **THEN** 接收并触发对应关键词。
+- **THEN** 设置和所需工具均启用时触发对应关键词；否则提示原因，不发送任务。
 
 ### Requirement: JCH 命令
 
@@ -77,13 +77,13 @@ MUST 内置 `developer-test-agent`、五技能及 `/dt`、`/generate-dt-files`�
 #### Scenario: 内网输入法恢复
 
 - **WHEN** 调用 `/jchime`
-- **THEN** 向内网小模型提交受限恢复任务，以 CentOS 7／GNOME Terminal／SSH X11（Exceed）／IBus 1.5.17／`libpinyin` 为默认背景，现场核实当前用户、显示、总线和 daemon，不沿用旧地址或 PID。
+- **THEN** 将受限恢复提示提交给当前会话模型；命令不指定、不切换模型，未覆盖时沿用默认模型。以 CentOS 7／GNOME Terminal／SSH X11（Exceed）／IBus 1.5.17／`libpinyin` 为默认背景，现场核实当前用户、显示、总线和 daemon，不沿用旧地址或 PID。
 - **AND** 优先正常重启 IBus、恢复并验证引擎；失败再按实况修复当前显示的引擎、总线或进程，不盲重试。只有复核进程身份和启动参数后才可向该 PID 发 SIGTERM；确认退出且无接管实例后才可重建。不自动 SIGKILL，不另建 D-Bus。归属或权限不明时仅调查。
 - **AND** 不提权、不批量杀进程、不安装或联网、不改持久配置、不关终端或重启客户端。分报服务状态和输入恢复；原故障窗口能否输入中文由用户确认，模拟或本机 Windows 验证不等同公司实机。
 
 ### Requirement: Grill Todo Markdown 任务清单
 
-MUST 内置仅显式调用的 `/skill:jch-grill-todo`，复用 `jch-grill-me`，仅调整收尾并附清单规则，不改变原技能。只交付 Markdown，不执行任务、不启会话、不新增权限。
+MUST 内置仅显式调用的 `/skill:jch-grill-todo`，复用 `jch-grill-me`，不改变原技能。允许只读子代理核实事实；只交付 Markdown，不执行任务、不启动执行会话、不新增权限。
 
 #### Scenario: 独立确认生成与覆盖
 
@@ -111,11 +111,11 @@ MUST 内置 `/skill:jch-codebase-design`，源 `mattpocock/skills` 的 `skills/e
 #### Scenario: `/wt` 会话工作树的详细边界
 - **WHEN** 指定分支
 - **THEN** 目标即当前目录则不迁移、不清理；否则复用已有分支的工作树，或按该分支提交新建。仅分支不存在时从当前 `HEAD` 建分支。新树与源 checkout 根平级（含子目录调用），不受 `worktree.base`／`OMP_WORKTREE_DIR`，不置于 `~/.omp/wt`；路径冲突另选、不覆盖。
-- **AND** 不切源分支、不搬未提交内容（含删除），保留两端暂存／未暂存／未跟踪改动；禁自动 stash／提交／reset／clean，忽略 `worktree.cleanSource`。仅新建树走原生 `post-checkout` 与技能／命令刷新；禁钩子约定不变。
+- **AND** 不切源分支、不搬未提交内容；保留两端暂存／未暂存／未跟踪改动。禁自动 stash／提交／reset／clean，忽略 `worktree.cleanSource`。变更 cwd 就刷新技能和命令；仅新建树走原生 `post-checkout`，禁钩子约定不变。
 
 ### Requirement: 显式调用无模型网页保存命令
 
-TUI／GUI MUST 支持 `/crawl <URL> [选项]` 和 `/crawl stop`。默认仅保存入口 Markdown，不调用模型或技能；缺 URL、未知选项或非法值报用法，不开始抓取。
+TUI／GUI MUST 支持 `/crawl <URL> [选项]` 和 `/crawl stop`。默认仅保存入口 Markdown，不调用模型或技能。参数错误报原因及用法，不开始抓取。
 
 #### Scenario: 保存单个页面
 
@@ -141,7 +141,7 @@ TUI／GUI MUST 支持 `/crawl <URL> [选项]` 和 `/crawl stop`。默认仅保�
 #### Scenario: 进度、取消与补全
 
 - **WHEN** 抓取、失败或取消
-- **THEN** 显示进度、最终结果及失败 URL／原因。单页失败不阻断其他页；取消或中断只释放本次标签，保留已存文件，重跑从入口起。TUI 补全命令、选项和本地输出目录，不用浏览器历史补 URL。
+- **THEN** 显示进度、结果及失败 URL／原因。单页失败不阻断其他页。后台用 `/crawl stop`，普通 Esc 仍控制前台；取消只释放本次标签，保留已存文件，重跑从入口起。TUI 补全参数及本地输出目录，不用浏览器历史补 URL。
 
 ### Requirement: `/todoloop` 普通 Markdown 文件入口
 
@@ -150,7 +150,7 @@ TUI／GUI MUST 支持 `/crawl <URL> [选项]` 和 `/crawl stop`。默认仅保�
 #### Scenario: 预检结果与执行前校验一致
 
 - **WHEN** 用 `--check` 或启动执行
-- **THEN** 使用同一校验；预检只读、无模型或派发，显示组、项及完成进度和首未完组／项。参数、读取或格式错误报实因，不猜路径、不修清单、不派发。
+- **THEN** 共用清单读取和语法校验。`--check` 只读，不查执行所需的 OpenSpec 材料、不调用模型或派发；显示分组、进度和首个未完组／项。参数错报用法，读取或格式错报实因。
 
 ### Requirement: `/todoloop` 清单格式、分组及运行不变量
 
@@ -197,11 +197,11 @@ Windows／CentOS 7 原生 TUI MUST 提供 `/collab2 <房间号>`、`/collab2 joi
 #### Scenario: 切换会话或登记期间结束
 - **WHEN** 已协作、启动中或结束
 - **THEN** 已主持／启动／作来宾时拒开或加入，不打断、替换或改绑；来宾用原生 `/leave`。`stop`、主持切换／退出只关闭本次自有房，不停 `/collab`；旧号失效，新会话不恢复。登记中停／撤，迟到登记不得报成功或关闭他房。
-- **AND** 主持／来宾断线或知识库关房时结束相应客户端，不自动重连／补登；主持释房，旧号失效后可手动同号重开；来宾恢复原本地会话。
+- **AND** 断线或关房不自动重连／补登；主持释房，旧号失效后可手动重开。来宾恢复原本地会话，`--no-session` 的历史只在内存恢复；取消恢复时可重试。
 
 #### Scenario: 地址选择与异常输入
 - **WHEN** `/collab2` 访问知识库
-- **THEN** 直连 IP:9333：`OMP_COLLAB2_IP` 有效 IP 字面量优先；显式非法（URL、主机名、带端口等）报错，不请求／回退。未设时，`OMP_OFFLINE` 存在（非真值）用 `10.239.93.104:9333`，否则 `127.0.0.1:9333`。HTTP 登记／查询、WS 中继均无代理／TLS，原生帧仍加密；仅该命令可向该端点用远程明文 WS。
+- **THEN** 直连 IP:9333：`OMP_COLLAB2_IP` 有效 IP 字面量优先；显式非法（URL、主机名、带端口等）报错，不请求／回退。未设时，只要环境中存在 `OMP_OFFLINE`（不判断变量值）就用 `10.239.93.104:9333`，否则用 `127.0.0.1:9333`。HTTP 登记／查询、WS 中继均无代理／TLS，原生帧仍加密；仅该命令可向该端点用远程明文 WS。
 - **AND** 房号、密钥、写令牌不入持久输入历史、日志或诊断；房号及加入凭据不经旧发现发布。配置存在／知识库不可达不影响普通发送或其他命令；旧协作入口的回环 WS／远程 WSS、发现、代理、重连不变。
 
 ### Requirement: 1. 三种显示模式
@@ -211,7 +211,7 @@ OMP MUST 以 `/display [clean|compact|detailed]` 投影同一会话，默认 `co
 #### Scenario: clean 与 compact 的显示差异
 
 - **WHEN** 同会话、尺寸、配置、草稿和执行状态
-- **THEN** clean 隐藏普通工具活动、结果图片及实际思考；compact 在 clean 上只增加活动区、最近 Output 和本轮 Diff，不另显示 `Working…` 行或逐次工具卡。detailed 沿用上游原序、全文、工具卡和 Diff，不强制展开。三档不显示自动后台完成状态行，仍可查原结果、诊断和工件。
+- **THEN** clean 隐藏普通工具活动、结果图片及实际思考；compact 仅增加活动区、最近 Output 和本轮 Diff，无 `Working…` 行或逐次工具卡。detailed 沿用原序、全文、工具卡和 Diff，不强制展开。ANSI／native 三档均不显示自动后台完成通知；原结果、诊断和工件仍可查。
 
 ### Requirement: 4. 显示投影边界
 
@@ -270,7 +270,7 @@ ANSI／native 内置 TUI MUST 使用英文，优先沿用上游文案；欢迎�
 
 ### Requirement: 全部工具的显示投影覆盖
 
-当前档位 MUST 一致处理内置、扩展、MCP 和设备工具。活动可用已知工具名、动作和目标；参数流不是正在执行，工具返回不等于后台任务成功。detailed 的 Web Search 保留全文，不影响 CLI。
+当前档位 MUST 一致处理内置、扩展、MCP 和设备工具。活动可用已知工具名、动作和目标；参数流不是正在执行，工具返回不等于后台任务成功。detailed 的 Web Search 折叠可限行，展开保留工具已返回的全文及来源摘录，不再联网，不影响 CLI。
 
 #### Scenario: 流式参数不完整
 
@@ -343,6 +343,6 @@ ANSI／native `/tree` 的 `toolResult` MUST 将本调用非空白字符串 `i` �
 - **THEN** 保原摘要，不借其他调用或结果正文。
 
 #### Scenario: 仅展开当前所选工具行
-- **WHEN** 对工具行按固定 `Alt+Enter`
-- **THEN** 仅切换所选行的完整已存参数、结果、成功／错误态；`bashExecution`／`pythonExecution` 用实存命令／代码、输出、退出／错误态，不补 `i`。
+- **WHEN** 对工具行按 `Alt+Enter` 或界面显示的替代键
+- **THEN** 用户导航或取消键优先，详情用首个不冲突的候选键。只切换所选行的已存参数、结果及成功／错误态；`bashExecution`／`pythonExecution` 用实存内容，不补 `i`。
 - `Shift+Up`／`Shift+Down` 滚详情，键盘／指针换行即收起、回选不恢复；保导航、`Enter` 选择／切换、`Ctrl+O` 循环过滤，不增键位配置。

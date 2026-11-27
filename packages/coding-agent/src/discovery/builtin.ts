@@ -155,13 +155,6 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				enabled = undefined;
 			}
 
-			const alwaysLoad = typeof serverConfig.alwaysLoad === "boolean" ? serverConfig.alwaysLoad : undefined;
-			if (alwaysLoad === undefined && serverConfig.alwaysLoad != null) {
-				logger.warn(
-					`MCP server "${serverName}": invalid alwaysLoad ${JSON.stringify(serverConfig.alwaysLoad)}, ignoring`,
-				);
-			}
-
 			// Validate timeout: coerce numeric strings, warn on invalid
 			let timeout: number | undefined;
 			if (serverConfig.timeout === undefined || serverConfig.timeout === null) {
@@ -204,7 +197,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			result.push({
 				name: serverName,
 				enabled,
-				alwaysLoad,
+				alwaysLoad: typeof serverConfig.alwaysLoad === "boolean" ? serverConfig.alwaysLoad : undefined,
 				timeout,
 				requestIdFormat,
 				instructions,
@@ -223,7 +216,16 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 							clientSecret?: string;
 					  }
 					| undefined,
-				oauth: serverConfig.oauth as MCPServer["oauth"],
+				oauth: serverConfig.oauth as
+					| {
+							clientId?: string;
+							clientSecret?: string;
+							redirectUri?: string;
+							callbackPort?: number;
+							callbackPath?: string;
+							prompt?: string;
+					  }
+					| undefined,
 				transport: serverConfig.type as "stdio" | "sse" | "http" | undefined,
 				_source: createSourceMeta(PROVIDER_ID, path, level),
 			});

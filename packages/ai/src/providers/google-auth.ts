@@ -15,7 +15,8 @@
 import { Buffer } from "node:buffer";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $envpos, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { $envpos, isEnoent, logger, offlineFromEnv } from "@oh-my-pi/pi-utils";
+import { credentialFetch } from "../auth/offline";
 import * as AIError from "../error";
 import type { FetchImpl } from "../types";
 import { raceWithSignal } from "../utils/abort";
@@ -336,8 +337,8 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
 	// override var; `GOOGLE_CLOUD_ACCESS_TOKEN` is the omp-facing alias.
 	const explicitToken = Bun.env.GOOGLE_CLOUD_ACCESS_TOKEN || Bun.env.CLOUDSDK_AUTH_ACCESS_TOKEN;
 	if (explicitToken) return explicitToken;
-	const fetchImpl = options?.fetch ?? globalThis.fetch.bind(globalThis);
-	const skew = getRefreshSkewMs();
+	const fetchImpl = credentialFetch("google-vertex", options?.fetch);
+	const skew = offlineFromEnv() ? 0 : getRefreshSkewMs();
 	const now = Date.now();
 
 	// Best-effort cache key probe: we don't know the source until we resolve, but cached entries

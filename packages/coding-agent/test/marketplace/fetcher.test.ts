@@ -328,7 +328,7 @@ describe("fetchMarketplace", () => {
 		fs.writeFileSync(catalogPath, `${cached}\n`);
 		fs.writeFileSync(path.join(destination, ".omp-plugin", "marketplace.json"), original);
 
-		await expect(promoteCloneToCache(clonePath, tmpDir, "test-marketplace", false)).rejects.toThrow(
+		await expect(promoteCloneToCache(clonePath, tmpDir, "test-marketplace")).rejects.toThrow(
 			/cache destination already exists/,
 		);
 		expect(fs.readFileSync(catalogPath, "utf8")).toBe(`${cached}\n`);

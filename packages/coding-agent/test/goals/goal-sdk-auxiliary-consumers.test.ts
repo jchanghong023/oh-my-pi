@@ -514,6 +514,12 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 						}),
 					).toBe(true);
 				}
+			} else if (consumer === "restored-subagent") {
+				// The fork retains the original record but has no active Autopilot authority.
+				for (const request of side) {
+					expect(occurrences(request, instruction)).toBe(0);
+					expect(occurrences(request, text)).toBe(0);
+				}
 			} else {
 				for (const request of side) {
 					expect(occurrences(request, instruction)).toBe(1);

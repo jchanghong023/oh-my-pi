@@ -43,7 +43,14 @@ interface MCPConfigFile {
 				clientSecret?: string;
 			};
 			type?: "stdio" | "sse" | "http";
-			oauth?: MCPServer["oauth"];
+			oauth?: {
+				clientId?: string;
+				clientSecret?: string;
+				redirectUri?: string;
+				callbackPort?: number;
+				callbackPath?: string;
+				prompt?: string;
+			};
 		}
 	>;
 }
@@ -64,14 +71,6 @@ function transformMCPConfig(config: MCPConfigFile, source: SourceMeta): MCPServe
 				} else {
 					logger.warn("MCP server has invalid 'enabled' value, ignoring", { name, value: serverConfig.enabled });
 				}
-			}
-
-			const alwaysLoad = typeof serverConfig.alwaysLoad === "boolean" ? serverConfig.alwaysLoad : undefined;
-			if (alwaysLoad === undefined && serverConfig.alwaysLoad !== undefined) {
-				logger.warn("MCP server has invalid 'alwaysLoad' value, ignoring", {
-					name,
-					value: serverConfig.alwaysLoad,
-				});
 			}
 
 			let timeout: number | undefined;
@@ -106,7 +105,7 @@ function transformMCPConfig(config: MCPConfigFile, source: SourceMeta): MCPServe
 			const server: MCPServer = {
 				name,
 				enabled,
-				alwaysLoad,
+				alwaysLoad: typeof serverConfig.alwaysLoad === "boolean" ? serverConfig.alwaysLoad : undefined,
 				timeout,
 				requestIdFormat,
 				instructions,

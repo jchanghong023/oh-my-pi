@@ -550,7 +550,7 @@ export class KeyCascade implements KeysApi {
 		// A transient OAuth refresh failure still lets later sources serve the request; it is
 		// rethrown only when none can, so callers retry instead of reporting a missing key.
 		let oauthResolved: OAuthResolutionResult | undefined;
-		let oauthRefreshFailure: AIError.OAuthRefreshUnavailableError | undefined;
+		let oauthRefreshFailure: AIError.OAuthRefreshUnavailableError | AIError.OAuthOfflineError | undefined;
 		// A tier-preferring resolve may still hand the request to an API key, so
 		// the session pin is recorded once the choice is final.
 		const tierPreferring = options?.serviceTier !== undefined;
@@ -561,7 +561,8 @@ export class KeyCascade implements KeysApi {
 				tierPreferring ? { ...options, recordAffinity: false } : options,
 			);
 		} catch (error) {
-			if (!(error instanceof AIError.OAuthRefreshUnavailableError)) throw error;
+			if (!(error instanceof AIError.OAuthRefreshUnavailableError || error instanceof AIError.OAuthOfflineError))
+				throw error;
 			oauthRefreshFailure = error;
 		}
 		if (oauthResolved) {

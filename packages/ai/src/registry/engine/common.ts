@@ -288,6 +288,7 @@ export async function postTokenRequest(
 			signal,
 		});
 	} catch (cause) {
+		if (cause instanceof AIError.OAuthOfflineError) throw cause;
 		if (context.signal?.aborted) {
 			throw new AIError.LoginCancelledError(`OAuth login cancelled: ${String(context.signal.reason)}`);
 		}

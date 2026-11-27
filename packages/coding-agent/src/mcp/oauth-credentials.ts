@@ -1,6 +1,7 @@
 import { REMOTE_REFRESH_SENTINEL, type StoredOAuthRefreshResult } from "@oh-my-pi/pi-ai";
-import { isDefinitiveOAuthFailure } from "@oh-my-pi/pi-ai/error";
+import { isDefinitiveOAuthFailure, OAuthError, OAuthOfflineError } from "@oh-my-pi/pi-ai/error";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
+import { offlineFromEnv } from "@oh-my-pi/pi-utils";
 import { getActiveProfile } from "@oh-my-pi/pi-utils/dirs";
 import { expandEnvVarsDeep } from "../discovery/helpers";
 import type { AuthStorage } from "../session/auth-storage";
@@ -183,12 +184,13 @@ export async function refreshStoredManagedMcpOAuthCredential(
 	const serverUrl =
 		opts.serverUrl ??
 		(opts.recoverServerUrlFromCredentialId ? mcpOAuthServerUrlFromCredentialId(provider) : undefined);
-	return authStorage.oauth.refreshStored<MCPStoredOAuthCredential>(provider, {
+	const offline = offlineFromEnv();
+	const result = await authStorage.oauth.refreshStored<MCPStoredOAuthCredential>(provider, {
 		credentialId: row.id,
 		observedCredential,
 		credentialFromRow: credential => credential,
 		forceRefresh: opts.forceRefresh,
-		refreshSkewMs: 5 * 60_000,
+		refreshSkewMs: offline ? 0 : 5 * 60_000,
 		canRefresh: current => {
 			const material = selectMcpOAuthRefreshMaterial(current, opts.auth);
 			return Boolean(current.refresh && material?.tokenUrl);
@@ -214,11 +216,20 @@ export async function refreshStoredManagedMcpOAuthCredential(
 				authorizationUrl: material && "authorizationUrl" in material ? material.authorizationUrl : undefined,
 			};
 		},
-		isDefinitiveFailure: error => isDefinitiveOAuthFailure(error instanceof Error ? error.message : String(error)),
+		isDefinitiveFailure: error =>
+			!(error instanceof OAuthOfflineError) &&
+			isDefinitiveOAuthFailure(error instanceof Error ? error.message : String(error)),
 		disabledCause: error => `oauth refresh failed: ${error instanceof Error ? error.message : String(error)}`,
-		keepCredentialOnRefreshFailure: opts.keepCredentialOnRefreshFailure ?? true,
-		onRefreshFailure: opts.onRefreshFailure,
+		keepCredentialOnRefreshFailure: !offline && (opts.keepCredentialOnRefreshFailure ?? true),
+		onRefreshFailure: offline ? undefined : opts.onRefreshFailure,
 	});
+	if (offline && (!result.credential?.access.trim() || Date.now() >= result.credential.expires)) {
+		throw new OAuthError("No usable MCP OAuth credential is available in OMP_OFFLINE mode", {
+			kind: "configuration",
+			definitive: false,
+		});
+	}
+	return result;
 }
 
 export async function removeManagedMcpOAuthCredential(

@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { authPolicyFor, providerDisabledReason, providerLoginWarning } from "@oh-my-pi/pi-catalog/compat/auth";
+import { assertOnlineCredentialExchange } from "../../auth/offline";
 import type { OAuthRefreshReason } from "../../auth/types";
 import * as AIError from "../../error";
 import { jwtExpiryMs, NEVER_EXPIRES } from "../engine/common";
@@ -174,6 +175,7 @@ export async function refreshProviderOAuthToken(
 			provider,
 		});
 	}
+	assertOnlineCredentialExchange(provider);
 	return custom.refreshToken(credentials, signal, reason);
 }
 const JWT_EXPIRY_SKEW_MS = 5 * 60_000;

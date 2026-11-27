@@ -9,7 +9,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
+import { installInMemoryRelay, stubGuestReplicaSwitch, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 // The guest mirrors host EventBus traffic onto the local session and
 // observability buses. When an SDK embedder wires the SAME EventBus into both
@@ -36,8 +36,7 @@ function makeGuestContext(eventBus: EventBus): InteractiveModeContext {
 		},
 		session: {
 			messages: [],
-			switchSession: () => Promise.resolve(),
-			newSession: () => Promise.resolve(),
+			switchSession: stubGuestReplicaSwitch,
 			resetReplicatedViewState: () => {},
 			agent: {
 				state: { model: undefined },
@@ -46,6 +45,7 @@ function makeGuestContext(eventBus: EventBus): InteractiveModeContext {
 				setDisableReasoning: () => {},
 			},
 		},
+		prepareSessionSwitch: async () => {},
 		clearTransientSessionUi: () => {},
 		clearWorking: () => false,
 		ensureWorkingRow: () => {},

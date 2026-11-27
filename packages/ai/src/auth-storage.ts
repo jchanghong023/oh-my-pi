@@ -332,6 +332,7 @@ class LocalAuthStorageBackend implements AuthStorageBackend {
 			pool,
 			blocks,
 			override: options.refreshOAuthCredential,
+			offlineOverride: options.refreshOAuthCredentialOffline,
 			overrideMints: options.refreshOAuthCredentialMints,
 		});
 		const affinity = new SessionAffinity(store, pool, overrides, this.#restrictions);

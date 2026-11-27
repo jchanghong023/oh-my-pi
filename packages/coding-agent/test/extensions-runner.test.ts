@@ -220,7 +220,7 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("shortcut conflicts", () => {
-		it.each(["ctrl+c", "alt+e"])("warns when extension shortcut %s conflicts with built-in", async key => {
+		it.each(["ctrl+c", "alt+p"])("warns when extension shortcut %s conflicts with built-in", async key => {
 			const extCode = `
 				export default function(pi) {
 					pi.registerShortcut("${key}", {

@@ -1,3 +1,4 @@
+import { assertOnlineCredentialExchange } from "../../auth/offline";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
 import { isRecord } from "../../utils";
@@ -125,6 +126,7 @@ export async function loginCursorHook(callbacks: OAuthController): Promise<OAuth
 }
 
 export async function refreshCursorToken(refreshToken: string, signal?: AbortSignal): Promise<OAuthCredentials> {
+	assertOnlineCredentialExchange("cursor");
 	const response = await fetch(CURSOR_REFRESH_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },

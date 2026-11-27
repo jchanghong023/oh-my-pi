@@ -280,7 +280,7 @@ describe("CodeAgent hot credential refresh", () => {
 		});
 	}
 
-	test("caller cancellation of a real HTTP/SSE request is aborted without replay", async () => {
+	test("caller cancellation of a real HTTP/SSE request neither rereads credentials nor replays", async () => {
 		let reads = 0;
 		const controller = new AbortController();
 		const probe = await httpProbe(
@@ -301,7 +301,7 @@ describe("CodeAgent hot credential refresh", () => {
 		expect(result.errorMessage).not.toContain("synthetic-cancel-A");
 		expect(result.errorMessage).not.toContain("private cancellation");
 		expect(probe.headers).toHaveLength(1);
-		expect(reads).toBe(2);
+		expect(reads).toBe(1);
 	});
 
 	test("missing/failed registry reads preserve the cached token", () => {
@@ -371,7 +371,7 @@ describe("CodeAgent hot credential refresh", () => {
 		});
 	}
 
-	test("cancelled requests never replay even if the registry changes", async () => {
+	test("a cancelled request leaves the cached credential untouched", async () => {
 		let requests = 0;
 		let reads = 0;
 		const controller = new AbortController();
@@ -392,7 +392,7 @@ describe("CodeAgent hot credential refresh", () => {
 		const result = await stream.result();
 		expect(result.stopReason).toBe("aborted");
 		expect(requests).toBe(1);
-		expect(cache.token).toBe("synthetic-B");
+		expect(cache.token).toBe("synthetic-A");
 		expect(result.errorMessage).not.toContain("synthetic-A");
 	});
 

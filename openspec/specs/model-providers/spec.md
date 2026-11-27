@@ -26,7 +26,7 @@ MUST 仅在 Windows 非 offline 注册 `codeagent/deepseek-v4.1-flash-1017`，�
 - **WHEN** 使用 CodeAgent
 - **THEN** 走 `https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2` 的 `openai-completions`；`auth: none`、`supports-strict-mode #false`、`contextWindow=409600`，不强制或禁用工具选择。
 - **AND** `low`／`high`／`max` 发送 `thinking: {type: "enabled"}` 和对应 `reasoning_effort`；关闭或未指定时发送 `thinking: {type: "disabled"}`。延续 DeepSeek V4 的思考规则，以 `reasoning_content` 回传历史 assistant 思考。
-- **AND** 启动时从 Windows 用户注册表 `HKCU\Environment\JCH_CODEAGENT3_X_AUTH_TOKEN`（非进程环境变量）读取并缓存 `x-auth-token`。仅认证/API 失败时重读，读失败保留缓存；仅新值不同于本次请求用值时更新，无须重启或切换会话；仅未取消且未流出正文、思考或工具输出时自动重试一次。对话、压缩摘要、handoff 不再做外层重试或回退重发。
+- **AND** 启动从 Windows 用户注册表 `HKCU\Environment\JCH_CODEAGENT3_X_AUTH_TOKEN` 读取并缓存 `x-auth-token`，不用进程环境变量。认证或 API 请求失败时重读，读失败保留缓存；取消或内容拦截不重读。不换会话，凭据已变且尚无正文、思考或工具输出时重试一次。对话、压缩摘要及 handoff 无外层重发。
 
 #### Scenario: 提交消息和标题的生成回退
 
@@ -57,9 +57,9 @@ MUST 仅在 offline 读取公司认证；有效才注册 `company` 和允许向�
 
 #### Scenario: 准入与发现
 
-- **WHEN** 非 offline 初始化或显式选择 `company`
+- **WHEN** 在非 offline 环境初始化目录，或在该环境显式选择 `company`
 - **THEN** 不注册、不发启动告警；显式选择失败并提示启用 `OMP_OFFLINE`。
-- **AND** offline 自动发现只读缓存，涵盖登录后同步、自动刷新、selector-miss 和扩展发现；仅 `omp models refresh` 或模型面板手动刷新可访问显式配置的发现或模型端点。模型与 OAuth 请求仍按用户选择。
+- **AND** offline 自动发现只读缓存，涵盖登录后同步、自动刷新、selector-miss 和扩展发现；仅 `omp models refresh` 或模型面板手动刷新可访问显式配置的发现或模型端点。凭据刷新遵守 [offline 运行规则](../fork-runtime/spec.md#requirement-安装与运行)。
 
 独立模型命令（含 `models`、`bench`、`compress`、`commit`、Git AI 提交和 `dry-balance`）在注册或解析前复用适用的 offline 初始化、角色和缓存规则，不另要求 offline 参数。`usage` 的目录只读缓存，实际请求照常，不虚构公司接口或额度。本地文件 `read` 和已有会话 `render` 不启动公司认证或在线发现；图片问答按需初始化。如果公司配置无效，明确报因；已解析的显式非 `company` vision/default 可用，依赖 `company` 时失败、不回退。
 
@@ -67,12 +67,12 @@ MUST 仅在 offline 读取公司认证；有效才注册 `company` 和允许向�
 
 - **WHEN** offline 启动或独立命令、SDK 需要公司认证
 - **THEN** 异步读取 `settings.json`（`CLAUDE_CONFIG_DIR` 优先于 `~/.claude`），校验 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`，仅存内存；无须登录、额外凭据或 `models.yml`。
-- **AND** 注册、解析及相关 Worker／受管子进程等待快照就绪；同步读取只用就绪快照，子进程只继承就绪值。每进程只读一次（含失败）；不监听、重试或回退，变更须重启。
+- **AND** 每进程启动时只读一次（含失败）；Worker 等待并继承快照，不重读、不回退。凭据不入参数、环境变量、持久文件或日志；变更须重启。
 - **AND** 无效认证禁用 `company`，显式调用失败。脱敏原因通过 TUI 或独立模型命令 stderr 各报一次；共享 SDK、认证发现和会话创建只提供可查状态，不直写终端。
 
-聊天只用快照，经 Anthropic Messages + Bearer；均支持文本，`maxTokens=81920`。[KDL 覆盖与角色优先级](../fork-runtime/spec.md#requirement-安装与运行)另计。
+聊天只用快照，经 Anthropic Messages + Bearer；均支持文本，`maxTokens=81920`。下表列出目录种子容量，offline 生效容量及角色默认见[运行规则](../fork-runtime/spec.md#requirement-安装与运行)。
 
-| ID | 图片 | 上下文（tokens） |
+| ID | 图片 | 目录种子上下文（tokens） |
 |---|---|---:|
 | `DeepSeek-V4-Flash-public`、`GLM-5.2-public`、`GLM-5.3-public` | 否 | 1000000 |
 | `Deepseek-v4.1-Flash` | 是 | 1000000 |
@@ -95,7 +95,7 @@ MUST 忽略并提示 `models.yml` 中的 `providers.codeagent`、`providers.comp
 #### Scenario: 拒绝替换
 
 - **WHEN** 扩展或运行时尝试注册 `company` 或 `codeagent`
-- **THEN** 明确报错，不替换已有 Provider，不影响目录和其他 Provider。
+- **THEN** 拒绝并报错，不替换内置 Provider。扩展加载与批次失败沿用上游。
 
 ### Requirement: 重试回退链的路由剥离
 
@@ -105,15 +105,6 @@ MUST 忽略并提示 `models.yml` 中的 `providers.codeagent`、`providers.comp
 
 - **WHEN** 重试或回退复制模型 ID（含通配项）
 - **THEN** 只在跨 Provider 时去掉路由后缀 `@upstream`。
-
-### Requirement: 容量未知的模型
-
-缺少容量 MUST 显示未知，不用零、预算、估值或其他模型的数据代填。
-
-#### Scenario: 缺值判定
-
-- **WHEN** `contextWindow` 或 `maxTokens` 缺失
-- **THEN** 不凭本地用量估算导致超上下文判定或要求先压缩。
 
 ### Requirement: Anthropic 思考块保真
 

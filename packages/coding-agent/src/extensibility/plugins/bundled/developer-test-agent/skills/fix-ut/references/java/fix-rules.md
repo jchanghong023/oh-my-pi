@@ -100,7 +100,7 @@ Java 修复流程由**阶段 1（编译/运行时错误修复）**和**阶段 2�
 | 编译/运行时修复策略 | [fix-strategies-runtime.md](fix-strategies-runtime.md) | 5 个修复策略章节：参数匹配器、Mock配置、反射、运行时异常、编译时异常 |
 | Codecheck 告警修复策略 | [fix-strategies-codecheck.md](fix-strategies-codecheck.md) | 3 个修复策略章节：缺少断言、虚假断言、中途退出 |
 | codecheckcli 检查 | [codecheck-check.md](codecheck-check.md) | codecheckcli 安装检查、版本对比、自动安装、华为内部 npm 仓库配置 |
-| codecovcli 检查 | [codecovcli-check.md](codecovcli-check.md) | codecovcli 安装检查、版本对比、自动安装、华为内部 npm 仓库配置 |
+| codecovcli 检查 | [codecovcli-check.md](codecovcli-check.md) | 本机可用性与缺失处理 |
 
 ## 工作语言
 

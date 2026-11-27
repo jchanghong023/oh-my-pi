@@ -15,7 +15,7 @@ import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/eve
 import type { InteractiveModeContext, PendingTool } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
-import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
+import { installInMemoryRelay, stubGuestReplicaSwitch, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 
 const restoreTheme = currentTheme();
@@ -42,7 +42,7 @@ afterEach(() => {
 function failingResyncContext(): InteractiveModeContext {
 	const ctx = createInteractiveModeContext({
 		session: {
-			switchSession: () => Promise.resolve(true),
+			switchSession: stubGuestReplicaSwitch,
 			resetReplicatedViewState: () => {},
 			agent: { setModel: () => {}, setThinkingLevel: () => {}, setDisableReasoning: () => {} },
 		},

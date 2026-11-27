@@ -5,6 +5,7 @@
  */
 import type { CompiledAuthProvider } from "@oh-my-pi/pi-catalog/compat/types";
 import { $pickenv } from "@oh-my-pi/pi-utils";
+import { assertOnlineCredentialExchange } from "../auth/offline";
 import * as AIError from "../error";
 import { createApiKeyLogin } from "./engine/api-key";
 import { loadLoginHook } from "./engine/common";
@@ -44,7 +45,12 @@ function loginFor(policy: CompiledAuthProvider): ProviderDefinition["login"] {
 		case "device-code":
 			return createDeviceCodeLogin(rule, policy.id);
 		case "custom":
-			return async (callbacks: OAuthController) => (await loadLoginHook(rule.hook))(callbacks);
+			return async (callbacks: OAuthController) => {
+				// Other named login hooks are tied to public services and can open
+				// a browser or exchange credentials outside the injected fetch.
+				if (rule.hook !== "snowflake") assertOnlineCredentialExchange(policy.id);
+				return (await loadLoginHook(rule.hook))(callbacks);
+			};
 	}
 }
 

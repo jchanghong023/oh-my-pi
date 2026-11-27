@@ -5,7 +5,7 @@ import { journalCompletion } from "../../../../session/model-usage-journal";
 import summaryPrompt from "./prompts/text-summary.md" with { type: "text" };
 import { normalizeTextReviewContextSummary } from "./text-review";
 
-type SummaryContext = Pick<CustomCommandContext, "cwd" | "model" | "modelRegistry" | "sessionManager">;
+type SummaryContext = Pick<CustomCommandContext, "model" | "modelRegistry" | "sessionManager">;
 
 /** Generate grounding context with the selected session model, never a hidden fallback model. */
 export async function generateTextReviewContextSummary(
@@ -31,7 +31,6 @@ export async function generateTextReviewContextSummary(
 			disableReasoning: true,
 			maxTokens: 512,
 			signal: requestSignal,
-			cwd: ctx.cwd,
 		},
 	);
 	journal?.(message, sourceText);

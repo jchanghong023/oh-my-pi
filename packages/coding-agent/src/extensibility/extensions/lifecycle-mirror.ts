@@ -25,6 +25,7 @@
  */
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { publicGoalModeState } from "../../goals/state";
 import type { LocalAgentSessionEvent } from "../../session/agent-session";
 import type { ExtensionRunner } from "./runner";
 import type {
@@ -230,7 +231,11 @@ export function extensionEventFromSessionEvent(
 				maxAttempts: event.maxAttempts,
 			};
 		case "goal_updated":
-			return { type: "goal_updated", goal: event.goal, state: event.state };
+			return {
+				type: "goal_updated",
+				goal: event.goal,
+				state: event.state && publicGoalModeState(event.state),
+			};
 		default:
 			return null;
 	}

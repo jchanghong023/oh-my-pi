@@ -791,10 +791,13 @@ function maybeExtractEmbeddedAddon(ctx, errors, file) {
  * path may belong to any of them and would pass the release-version check.
  * The embedded addon is reachable only through its own hash path, which the
  * caller probes after (re-)extracting it.
+ * On Windows, only this build's hash paths are eligible: external paths can
+ * still hold a different image with the same release stamp.
  *
- * @param {{ candidates: string[]; versionedDir: string; hasEmbedded: boolean; embedded: string[]; staged: string | null }} input
+ * @param {{ candidates: string[]; versionedDir: string; hasEmbedded: boolean; embedded: string[]; staged: string | null; requireEmbedded?: boolean }} input
  */
-export function resolveRuntimeCandidates({ candidates, versionedDir, hasEmbedded, embedded, staged }) {
+export function resolveRuntimeCandidates({ candidates, versionedDir, hasEmbedded, embedded, staged, requireEmbedded }) {
+	if (requireEmbedded) return [...new Set(embedded)];
 	const shared = hasEmbedded ? candidates.filter(candidate => path.dirname(candidate) !== versionedDir) : candidates;
 	// Retrying a failed dlopen of a NODELETE image can crash on older glibc.
 	return [...new Set([...embedded, ...(staged ? [staged] : []), ...shared])];
@@ -861,7 +864,20 @@ function isCompatiblePreSentinelNativeAddon(bindings, diskHasExpectedStamp) {
 	);
 }
 
-export function validateLoadedBindings(ctx, bindings, candidate) {
+export function validateLoadedBindings(ctx, bindings, candidate, requireEmbedded = false) {
+	if (requireEmbedded) {
+		// Check the actual DLL exports before accepting even a matching stamp.
+		// native/index.js wraps missing classes, so its exports cannot prove this ABI.
+		const trace = bindings.RunTrace;
+		if (
+			typeof trace !== "function" ||
+			typeof trace.prototype?.version !== "function" ||
+			typeof trace.prototype?.snapshot !== "function" ||
+			typeof trace.prototype?.present !== "function"
+		) {
+			throw new Error("The loaded image lacks the embedded Windows addon's required RunTrace capability.");
+		}
+	}
 	// In workspace dev (running out of `packages/natives/native/` rather than a
 	// `node_modules` install or a compiled bundle) the local `.node` only gains
 	// the new release stamp after `bun --cwd=packages/natives run build`. Skip
@@ -894,7 +910,7 @@ export function validateLoadedBindings(ctx, bindings, candidate) {
 		// The successful require above normally guarantees readability. If the
 		// file disappears concurrently, retain the safe reinstall diagnosis.
 	}
-	if (isCompatiblePreSentinelNativeAddon(bindings, diskHasExpectedStamp)) return;
+	if (!requireEmbedded && isCompatiblePreSentinelNativeAddon(bindings, diskHasExpectedStamp)) return;
 	if (residentVersion && diskHasExpectedStamp) {
 		throw new Error(
 			`Loaded ${candidate}, which reports @oh-my-pi/pi-natives@${residentVersion}, but this loader is ` +
@@ -1078,7 +1094,14 @@ function compiledAddonTargets(ctx) {
 	return ctx.addonFilenames.map(filename => ({ filename, targetPath: path.join(ctx.versionedDir, filename) }));
 }
 
-function buildHelpMessage(ctx) {
+function buildHelpMessage(ctx, requireEmbedded) {
+	if (requireEmbedded) {
+		return (
+			"This compiled Windows binary must load its own embedded native addon. " +
+			`Close running omp processes, move the native cache at ${ctx.versionedDir} aside, and retry. ` +
+			"If it still fails, reinstall this omp build."
+		);
+	}
 	if (ctx.isCompiledBinary) {
 		const targets = compiledAddonTargets(ctx);
 		const expectedPaths = targets.map(({ targetPath }) => `  ${targetPath}`).join("\n");
@@ -1250,7 +1273,11 @@ export function loadNative() {
 	const grammarDir = prepareNativeGrammarDir(ctx, versionCacheReady);
 
 	const hasEmbedded = hasMatchingEmbeddedAddon(ctx);
+	const requireEmbedded = hasEmbedded && process.platform === "win32";
 	const { primary: primaryEmbeddedFile, fallback: fallbackEmbeddedFile } = embeddedProbeFiles(ctx);
+	if (requireEmbedded && !primaryEmbeddedFile) {
+		errors.push(`No embedded native addon for ${ctx.addonLabel} in this build's manifest`);
+	}
 	const embeddedCandidate = versionCacheReady ? maybeExtractEmbeddedAddon(ctx, errors, primaryEmbeddedFile) : null;
 	const stagedCandidate = versionCacheReady && !embeddedCandidate ? maybeStageNodeModulesAddon(ctx, errors) : null;
 	const fallbackEmbeddedPath =
@@ -1261,6 +1288,7 @@ export function loadNative() {
 		hasEmbedded,
 		embedded: [embeddedCandidate, fallbackEmbeddedPath].filter(c => typeof c === "string"),
 		staged: stagedCandidate,
+		requireEmbedded,
 	});
 
 	for (const candidate of runtimeCandidates) {
@@ -1276,7 +1304,7 @@ export function loadNative() {
 			}
 			startupMarker(`native:require:${path.basename(candidate)}`);
 			const bindings = openNativeAddon(candidate);
-			validateLoadedBindings(ctx, bindings, candidate);
+			validateLoadedBindings(ctx, bindings, candidate, requireEmbedded);
 			installNativeTokioRuntime(bindings);
 			configureGrammarDir(bindings, grammarDir);
 			loadedAddon = describeLoadedAddon(bindings, candidate, ctx);
@@ -1317,6 +1345,6 @@ export function loadNative() {
 	}
 	const details = errors.map(error => `- ${error}`).join("\n");
 	throw new Error(
-		`Failed to load pi_natives native addon for ${ctx.addonLabel}.\n\nTried:\n${details}\n\n${buildHelpMessage(ctx)}`,
+		`Failed to load pi_natives native addon for ${ctx.addonLabel}.\n\nTried:\n${details}\n\n${buildHelpMessage(ctx, requireEmbedded)}`,
 	);
 }

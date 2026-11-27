@@ -3,36 +3,40 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import {
+	assetNames,
+	type AssetName,
+	linuxBinary,
+	linuxSdk,
+	type Source,
+	windowsBinary,
+	windowsSdk,
+} from "./cnb-build";
+import { publicationTitle, releaseVersionFrom } from "./cnb-version";
 
 const root = path.resolve(import.meta.dir, "..");
 const distro = "Ubuntu-24.04";
 const wslSource = "/root/oh-my-pi";
-const windowsName = "omp-windows-x64.exe";
-const linuxName = "omp-linux-x64";
-const windowsSdkName = "omp-sdk-win32-x64.zip";
-const linuxSdkName = "omp-sdk-linux-x64.zip";
-const versionPattern =
-	/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
-async function safeGit(wsl: string, linux: boolean, args: string[]): Promise<string> {
-	const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+type Host = "Windows" | "Linux";
+type BunIdentity = { version: string; revision: string };
+
+function withoutToken(): NodeJS.ProcessEnv {
+	const env = { ...process.env };
 	delete env.CNB_TOKEN;
-	const command = linux
-		? [
-				wsl,
-				"-d",
-				distro,
-				"--exec",
-				"env",
-				"GIT_TERMINAL_PROMPT=0",
-				"git",
-				"-c",
-				"core.hooksPath=/dev/null",
-				"-C",
-				wslSource,
-				...args,
-			]
-		: ["git", "-c", "core.hooksPath=/dev/null", ...args];
+	return env;
+}
+
+function wslCommand(wsl: string, ...args: string[]): string[] {
+	return [wsl, "-d", distro, "--exec", ...args];
+}
+
+async function safeGit(wsl: string | undefined, host: Host, args: string[]): Promise<string> {
+	const env = { ...withoutToken(), GIT_TERMINAL_PROMPT: "0" };
+	const git = ["git", "-c", "core.hooksPath=/dev/null"];
+	const command = host === "Linux"
+		? wslCommand(wsl!, "env", "-u", "CNB_TOKEN", "GIT_TERMINAL_PROMPT=0", ...git, "-C", wslSource, ...args)
+		: [...git, ...args];
 	const proc = Bun.spawn(command, { cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 	const [out, , code] = await Promise.all([
 		new Response(proc.stdout).text(),
@@ -41,36 +45,35 @@ async function safeGit(wsl: string, linux: boolean, args: string[]): Promise<str
 	]);
 	if (code !== 0)
 		throw new Error(
-			`${linux ? "WSL" : "Windows"} git ${args[0]} failed (${code}); check branch, upstream, credentials and fast-forward status. Diagnostic output withheld.`,
+			`${host} git ${args[0]} failed (${code}); check branch, upstream, credentials and fast-forward status. Diagnostic output withheld.`,
 		);
 	return out.trim();
 }
 
-async function ensureSource(wsl: string, linux: boolean, expectedCommit?: string): Promise<void> {
-	if (await safeGit(wsl, linux, ["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]))
-		throw new Error(
-			`${linux ? "WSL" : "Windows"} working tree has uncommitted changes; commit or preserve them before publishing.`,
-		);
-	if (expectedCommit && (await safeGit(wsl, linux, ["rev-parse", "HEAD"])) !== expectedCommit)
-		throw new Error(`${linux ? "WSL" : "Windows"} source commit changed during publication.`);
+async function pullHost(wsl: string | undefined, host: Host): Promise<Source> {
+	const git = (...args: string[]) => safeGit(wsl, host, args);
+	const status = () => git("status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none");
+	if (await status())
+		throw new Error(`${host} working tree or OpenWiki submodule is dirty; preserve local changes before publishing.`);
+	await git("pull", "--ff-only", "--no-recurse-submodules");
+	await git("submodule", "update", "--init", "--checkout", "--", "vendor/openwiki");
+	if (await status()) throw new Error(`${host} source or OpenWiki submodule is not clean after Git synchronization.`);
+	const [commit, openwiki] = (await git("rev-parse", "HEAD", "HEAD:vendor/openwiki")).split(/\r?\n/);
+	if (!commit || !openwiki) throw new Error(`${host} Git source identity is incomplete.`);
+	console.log(`${host} git pull --ff-only completed.`);
+	return { commit, openwiki };
 }
 
-async function pullBoth(wsl: string): Promise<string> {
-	await Promise.all([ensureSource(wsl, false), ensureSource(wsl, true)]);
-	const update = async (linux: boolean): Promise<string> => {
-		await safeGit(wsl, linux, ["pull", "--ff-only", "--no-recurse-submodules"]);
-		// The precheck rejected local submodule changes; now check out the new pinned gitlink without forcing it.
-		await safeGit(wsl, linux, ["submodule", "update", "--init", "--checkout", "--", "vendor/openwiki"]);
-		await ensureSource(wsl, linux);
-		console.log(`${linux ? "WSL" : "Windows"} git pull --ff-only completed.`);
-		return safeGit(wsl, linux, ["rev-parse", "HEAD"]);
-	};
-	const [windows, linux] = await Promise.allSettled([update(false), update(true)]);
-	if (windows.status === "rejected") throw windows.reason;
-	if (linux.status === "rejected") throw linux.reason;
-	if (windows.value !== linux.value)
-		throw new Error("Windows and WSL source commits differ; synchronize them through Git before publishing.");
-	return windows.value;
+async function linuxBun(wsl: string): Promise<BunIdentity> {
+	const proc = Bun.spawn(wslCommand(wsl, "bash", "-l", `${wslSource}/scripts/cnb-wsl.sh`, "--bun-identity"), {
+		env: withoutToken(), stdin: "ignore", stdout: "pipe", stderr: "inherit",
+	});
+	const [output, code] = await Promise.all([proc.stdout.text(), proc.exited]);
+	if (code !== 0) throw new Error(`WSL Bun identity probe failed (${code}).`);
+	const { version, revision } = JSON.parse(output) as BunIdentity;
+	if (typeof version !== "string" || !version || typeof revision !== "string" || !revision)
+		throw new Error("WSL Bun version or revision is missing.");
+	return { version, revision };
 }
 async function run(command: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
 	const proc = Bun.spawn(command, { cwd, env, stdout: "inherit", stderr: "inherit", stdin: "ignore" });
@@ -87,45 +90,56 @@ async function timed<T>(label: string, action: () => Promise<T>): Promise<T> {
 	}
 }
 
-async function artifactSize(file: string): Promise<number> {
-	const stat = await fs.stat(file);
-	if (!stat.isFile() || stat.size === 0) throw new Error(`Build output must be a non-empty file: ${file}`);
-	return stat.size;
-}
-
-function options(): { repo?: string; tag?: string } {
-	const result: { repo?: string; tag?: string } = {};
+function target(): { repo: string; tag: string; assets: AssetName[] } {
+	let repo: string | undefined;
+	let tag: string | undefined;
+	const assets = new Set<AssetName>();
 	const args = process.argv.slice(2);
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--help") {
 			console.log(
-				"Usage: bun run cnb [--repo owner/repository] [--tag tag]\nDefaults to CNB repository jchanghong/bin and existing release tag omp. Requires clean tracking branches on Windows and Ubuntu-24.04 WSL (/root/oh-my-pi), initialized vendor/openwiki submodules, Linux zip, and official @cnbcool/cnb-cli login. Both worktrees are fast-forward pulled and must have the same commit. Both binaries embed the CNB target and RELEASE_VERSION (defaults to packages/utils/package.json). Builds without tests, overwrites both binaries and both SDK ZIPs, then updates the release title.",
+				`Usage: bun run cnb [--repo owner/repository] [--tag tag] [--asset exact-name]...\n` +
+				`Defaults: jchanghong/bin, existing tag omp, and these four assets:\n  ${assetNames.join("\n  ")}\n` +
+				"Only selected hosts are synchronized and built. Linux builds in Ubuntu-24.04 WSL (/root/oh-my-pi). " +
+				"Selecting both hosts requires identical Git and Bun identities. Only selected attachments are overwritten. " +
+				"Changing a shared rolling version requires both existing platform binaries to remain compatible.",
 			);
 			process.exit(0);
 		}
-		if ((arg !== "--repo" && arg !== "--tag") || !args[i + 1] || args[i + 1]!.startsWith("--"))
-			throw new Error(`Invalid argument: ${arg}`);
-		const key = arg === "--repo" ? "repo" : "tag";
-		if (result[key]) throw new Error(`Duplicate argument: ${arg}`);
-		result[key] = args[++i];
+		const value = args[++i];
+		if (!value || value.startsWith("--")) throw new Error(`Missing value for ${arg}.`);
+		switch (arg) {
+			case "--repo":
+				if (repo !== undefined) throw new Error(`Duplicate argument: ${arg}`);
+				repo = value;
+				break;
+			case "--tag":
+				if (tag !== undefined) throw new Error(`Duplicate argument: ${arg}`);
+				tag = value;
+				break;
+			case "--asset": {
+				const asset = assetNames.find(name => name === value);
+				if (!asset) throw new Error(`Unsupported CNB asset: ${value}`);
+				assets.add(asset);
+				break;
+			}
+			default:
+				throw new Error(`Invalid argument: ${arg}`);
+		}
 	}
-	return result;
-}
-
-function target(): { repo: string; tag: string } {
-	const { repo = "jchanghong/bin", tag = "omp" } = options();
-	if (!repo || !/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$/.test(repo) || repo.endsWith(".git"))
+	repo ??= "jchanghong/bin";
+	tag ??= "omp";
+	if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$/.test(repo) || repo.endsWith(".git"))
 		throw new Error("Invalid CNB repository path.");
 	if (
-		!tag ||
-		!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(tag) ||
+		!/^[A-Za-z0-9][A-Za-z0-9._+/-]*$/.test(tag) ||
 		tag.includes("..") ||
 		tag.endsWith("/") ||
 		tag.includes("//")
 	)
 		throw new Error("Invalid release tag.");
-	return { repo, tag };
+	return { repo, tag, assets: assets.size ? [...assets] : [...assetNames] };
 }
 
 // Invoke the official npm CLI through Node, supplying arguments over stdin. This
@@ -170,7 +184,7 @@ async function cnb(args: string[]): Promise<unknown> {
 	}
 }
 
-type Release = { id: string; name: string; tag_name?: string };
+type Release = { id: string; name: string; tag_name?: string; assets?: unknown };
 async function getRelease(repo: string, tag: string): Promise<Release> {
 	const value = await cnb(["releases", "get-release-by-tag", "--repo", repo, "--tag", tag, "--verbose"]);
 	if (!value || typeof value !== "object")
@@ -184,12 +198,6 @@ async function getRelease(repo: string, tag: string): Promise<Release> {
 	)
 		throw new Error("CNB release response lacks a valid ID, title or tag; refusing to publish.");
 	return release;
-}
-
-function releaseTitle(name: string, tag: string, version: string): string {
-	const label = `v${version}`;
-	if (!name || name === tag || versionPattern.test(name.replace(/^v/, ""))) return label;
-	return `${name.replace(/ \[omp:v[0-9A-Za-z.+-]+\]$/, "")} [omp:${label}]`;
 }
 
 async function upload(repo: string, release: Release, file: string, name: string, size: number): Promise<void> {
@@ -265,11 +273,13 @@ async function upload(repo: string, release: Release, file: string, name: string
 
 async function main(): Promise<void> {
 	const started = performance.now();
-	const { repo, tag } = target();
+	const { repo, tag, assets } = target();
 	if (process.platform !== "win32" || process.arch !== "x64")
-		throw new Error("CNB distribution requires a Windows x64 host.");
-	const wsl = Bun.which("wsl.exe");
-	if (!wsl) throw new Error("WSL is required.");
+		throw new Error("CNB distribution requires a Windows x64 coordinator.");
+	const windowsAssets = assets.filter(name => name === windowsBinary || name === windowsSdk);
+	const linuxAssets = assets.filter(name => name === linuxBinary || name === linuxSdk);
+	const wsl = linuxAssets.length ? Bun.which("wsl.exe") : undefined;
+	if (linuxAssets.length && !wsl) throw new Error("WSL is required for the Linux assets.");
 	const cache = path.join(
 		process.env.LOCALAPPDATA ?? os.tmpdir(),
 		"omp-cnb",
@@ -280,152 +290,71 @@ async function main(): Promise<void> {
 	try {
 		await fs.mkdir(lock);
 	} catch {
-		throw new Error("Windows CNB build cache is locked.");
+		throw new Error("CNB publication is already running for this worktree.");
 	}
 	let temp: string | undefined;
 	try {
-		const commit = await timed("Git synchronization", () => pullBoth(wsl));
-		// Read the compiler's fallback from disk after pulling the pinned source on both hosts.
-		const rawVersion: unknown =
-			process.env.RELEASE_VERSION || (await Bun.file(path.join(root, "packages/utils/package.json")).json()).version;
-		const releaseVersion = typeof rawVersion === "string" ? rawVersion.replace(/^v/, "") : "";
-		if (!versionPattern.test(releaseVersion)) throw new Error("CNB release version must be a semantic version.");
-		const tagVersion = tag.replace(/^v/, "");
-		if (versionPattern.test(tagVersion) && tagVersion !== releaseVersion)
-			throw new Error(`Versioned CNB tag ${tag} does not match binary version v${releaseVersion}.`);
+		const [windows, linux] = await timed("Git synchronization", () => Promise.allSettled([
+			windowsAssets.length ? pullHost(wsl, "Windows") : undefined,
+			wsl ? pullHost(wsl, "Linux") : undefined,
+		]));
+		if (windows.status === "rejected") throw windows.reason;
+		if (linux.status === "rejected") throw linux.reason;
+		const source = (windows.value ?? linux.value)!;
+		const remoteBun = windows.value && wsl ? await linuxBun(wsl) : undefined;
+		if (windows.value && linux.value) {
+			if (windows.value.commit !== linux.value.commit || windows.value.openwiki !== linux.value.openwiki)
+				throw new Error("Windows and WSL Git identities differ; synchronize them through Git before publishing.");
+			if (Bun.version !== remoteBun!.version || Bun.revision !== remoteBun!.revision)
+				throw new Error("Windows and WSL Bun version and revision must match before building both hosts.");
+		}
+		const packageVersion = async () => JSON.parse(await safeGit(wsl, windows.value ? "Windows" : "Linux", [
+			"show", `${source.commit}:packages/utils/package.json`,
+		])).version as unknown;
+		const releaseVersion = releaseVersionFrom(process.env.RELEASE_VERSION || await packageVersion());
 		const updateRepository = `${repo}@${tag}`;
 		const release = await getRelease(repo, tag);
+		const nextTitle = publicationTitle(release, tag, releaseVersion, assets);
 		temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cnb-"));
-		const linuxOut = path.join(temp, linuxName);
-		const linuxSdkOut = path.join(temp, linuxSdkName);
-		const cacheKey = (target: string) =>
-			createHash("sha256")
-				.update(
-					JSON.stringify({
-						schema: 2,
-						commit,
-						bun: Bun.version,
-						bunRevision: Bun.revision,
-						target,
-						releaseVersion,
-						updateRepository,
-					}),
-				)
-				.digest("hex");
-		const windowsCache = path.join(cache, "win32-x64-modern");
-		const windowsCompleted = path.join(windowsCache, "completed", cacheKey("win32-x64-modern"));
-		const winOut = path.join(windowsCompleted, windowsName);
-		const winSdkOut = path.join(windowsCompleted, windowsSdkName);
-		const marker = path.join(windowsCompleted, "complete");
-		const cleanEnv: NodeJS.ProcessEnv = {
-			...process.env,
-			RELEASE_VERSION: releaseVersion,
-			UPDATE_REPOSITORY: updateRepository,
-			CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR ?? path.join(root, "target"),
-			OMP_RELEASE_NATIVE_DIR: path.join(windowsCache, "native"),
-			OMP_RELEASE_BINARY_DIR: windowsCompleted,
-			OMP_BUILD_CACHE_DIR: path.join(windowsCache, "build-assets"),
-		};
-		delete cleanEnv.CNB_TOKEN;
-		const wslEnv = { ...process.env };
-		delete wslEnv.CNB_TOKEN;
-		const runLinux = async () => {
-			const proc = Bun.spawn(
-				[
-					wsl,
-					"-d",
-					distro,
-					"--exec",
-					"bash",
-					"-l",
-					`${wslSource}/scripts/cnb-wsl.sh`,
-					linuxOut,
-					wslSource,
-					Bun.version,
-					commit,
-					cacheKey("linux-x64-baseline-glibc2.17"),
-					releaseVersion,
-					updateRepository,
-					Bun.revision,
-					linuxSdkOut,
-				],
-				{ stdin: "ignore", stdout: "inherit", stderr: "inherit", env: wslEnv },
-			);
-			const code = await proc.exited;
-			if (code !== 0) throw new Error(`WSL build failed (${code}).`);
-		};
-		console.log("Using existing Windows and WSL worktrees; CNB receives binaries and SDK ZIPs, never Git pushes.");
-		const windowsBuild = timed("Windows build", async () => {
-			await ensureSource(wsl, false, commit);
-			const cached = await timed("Windows cache lookup", async () => {
-				try {
-					const files = await Promise.all([fs.stat(winOut), fs.stat(winSdkOut)]);
-					return (
-						files.every(stat => stat.isFile() && stat.size > 0) &&
-						(await fs.readFile(marker, "utf8")) === cacheKey("win32-x64-modern")
-					);
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-					return false;
-				}
-			});
-			if (cached) {
-				console.log("Windows binary and SDK cache hit (win32-x64-modern); build and packaging skipped.");
-				return;
-			}
-			console.log("Windows binary and SDK cache miss (win32-x64-modern).");
-			await fs.mkdir(windowsCompleted, { recursive: true });
-			await fs.rm(marker, { force: true });
-			await fs.rm(winOut, { force: true });
-			await fs.rm(winSdkOut, { force: true });
-			await timed("Windows dependencies", () =>
-				run([process.execPath, "install", "--frozen-lockfile"], root, {
-					...cleanEnv,
-					OMP_SKIP_OPENWIKI_POSTINSTALL: "1",
-				}),
-			);
-			await timed("Windows native", () =>
-				run([process.execPath, "scripts/build-release-native.ts"], root, cleanEnv),
-			);
-			await timed("Windows package", () =>
-				run([process.execPath, "scripts/ci-release-build-binaries.ts", "--targets", "win32-x64"], root, cleanEnv),
-			);
-			await timed("Windows SDK ZIP", () =>
-				run([process.execPath, "scripts/pack-sdk.ts", winSdkOut], root, cleanEnv),
-			);
-			await Promise.all([artifactSize(winOut), artifactSize(winSdkOut)]);
-			await ensureSource(wsl, false, commit);
-			const pending = `${marker}.tmp`;
-			await fs.writeFile(pending, cacheKey("win32-x64-modern"));
-			await fs.rename(pending, marker);
-		});
-		const linuxBuild = timed("Linux build", runLinux);
-		const outcomes = await Promise.allSettled([windowsBuild, linuxBuild]);
+		const stage = temp;
+		const builds: Promise<void>[] = [];
+		if (windows.value) {
+			builds.push(run([
+				process.execPath, "scripts/cnb-build.ts", cache, stage, source.commit, source.openwiki, Bun.version,
+				Bun.revision, releaseVersion, updateRepository, ...windowsAssets,
+			], root, withoutToken()));
+		}
+		if (wsl) {
+			builds.push(run(wslCommand(
+				wsl, "bash", "-l", `${wslSource}/scripts/cnb-wsl.sh`, stage, source.commit, source.openwiki,
+				remoteBun?.version ?? "-", remoteBun?.revision ?? "-", releaseVersion, updateRepository, ...linuxAssets,
+			), root, withoutToken()));
+		}
+		const outcomes = await Promise.allSettled(builds);
 		const failure = outcomes.find((result): result is PromiseRejectedResult => result.status === "rejected");
 		if (failure) throw failure.reason;
-		const artifacts = await Promise.all(
-			[winOut, linuxOut, winSdkOut, linuxSdkOut].map(async file => ({ file, size: await artifactSize(file) })),
-		);
-		await Promise.all([ensureSource(wsl, false, commit), ensureSource(wsl, true, commit)]);
-		console.log(`Publishing ${repo} tag ${tag}, source commit ${commit}; overwriting matching attachments.`);
+		const artifacts = await Promise.all(assets.map(async name => {
+			const file = path.join(stage, name);
+			const stat = await fs.stat(file);
+			if (!stat.isFile() || stat.size === 0) throw new Error(`Missing or empty upload staging file: ${name}`);
+			return { file, name, size: stat.size };
+		}));
+		console.log(`Publishing ${repo} tag ${tag}, source commit ${source.commit}; overwriting selected attachments.`);
 		const uploads = await Promise.allSettled(
-			artifacts.map(({ file, size }) => upload(repo, release, file, path.basename(file), size)),
+			artifacts.map(({ file, name, size }) => upload(repo, release, file, name, size)),
 		);
+		const confirmed = assets.filter((_, index) => uploads[index]!.status === "fulfilled");
+		const unconfirmed = assets.filter((_, index) => uploads[index]!.status === "rejected");
+		console.log(`Confirmed CNB assets: ${confirmed.join(", ") || "none"}.`);
+		if (unconfirmed.length) console.error(`Unconfirmed CNB assets: ${unconfirmed.join(", ")}.`);
+		if (nextTitle && [windowsBinary, linuxBinary].every(name => !assets.includes(name) || confirmed.includes(name))) {
+			await cnb([
+				"releases", "patch-release", "--repo", repo, "--release-id", release.id, "--name", nextTitle, "--verbose",
+			]);
+			console.log(`Updated CNB release title for ${tag} (v${releaseVersion}).`);
+		}
 		const uploadFailure = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
 		if (uploadFailure) throw uploadFailure.reason;
-		console.log("Both CNB binaries and both SDK ZIPs uploaded and confirmed.");
-		await cnb([
-			"releases",
-			"patch-release",
-			"--repo",
-			repo,
-			"--release-id",
-			release.id,
-			"--name",
-			releaseTitle(release.name, tag, releaseVersion),
-			"--verbose",
-		]);
-		console.log(`Updated CNB release title for ${tag} (v${releaseVersion}).`);
 	} finally {
 		console.log(`CNB total elapsed: ${((performance.now() - started) / 1000).toFixed(1)}s`);
 		try {

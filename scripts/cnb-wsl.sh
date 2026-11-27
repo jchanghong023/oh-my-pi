@@ -1,90 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 9 ]; then echo 'Invalid CNB WSL build parameters' >&2; exit 1; fi
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-out=$(wslpath -u "$1")
-sdk_out=$(wslpath -u "$9")
-repo=$2
-expected_bun=$3
-commit=$4
-key=$5
-case "$key" in *[!0-9a-f]*|'') echo 'Invalid CNB cache identity' >&2; exit 1 ;; esac
-if [ "${#key}" -ne 64 ]; then echo 'Invalid CNB cache identity' >&2; exit 1; fi
 unset CNB_TOKEN
-export RELEASE_VERSION="$6"
-export UPDATE_REPOSITORY="$7"
-cd "$repo"
-actual_bun=$(bun --version)
-if [ "$actual_bun" != "$expected_bun" ]; then
-  echo "WSL Bun $actual_bun must match Windows Bun $expected_bun; install Bun $expected_bun before publishing." >&2
-  exit 1
+cd -- "$(dirname -- "$0")/.."
+if [ "$#" -eq 1 ] && [ "$1" = --bun-identity ]; then
+  exec bun -e 'process.stdout.write(JSON.stringify({version: Bun.version, revision: Bun.revision}))'
 fi
-actual_revision=$(bun -e 'process.stdout.write(Bun.revision)')
-if [ "$actual_revision" != "$8" ]; then
-  echo 'WSL Bun revision must match Windows Bun revision; install the same Bun build before publishing.' >&2
-  exit 1
-fi
-ensure_source() {
-  if [ "$(git rev-parse HEAD)" != "$commit" ]; then
-    echo 'WSL source commit changed during publication' >&2
-    exit 1
-  fi
-  if [ -n "$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)" ]; then
-    echo 'WSL working tree has uncommitted changes; refusing to publish' >&2
-    exit 1
-  fi
-}
-cache="$HOME/.cache/omp-cnb/linux-x64-baseline-glibc2.17"
+if [ "$#" -lt 8 ]; then echo 'Invalid CNB WSL build parameters' >&2; exit 1; fi
+
+stage=$(wslpath -u "$1")
+shift
+cache="$HOME/.cache/omp-cnb"
 mkdir -p "$cache"
 if ! mkdir "$cache/lock" 2>/dev/null; then echo 'CNB WSL worktree is locked' >&2; exit 1; fi
-completed="$cache/completed/$key"
-binary="$completed/omp-linux-x64"
-sdk="$completed/${sdk_out##*/}"
-marker="$completed/complete"
-cleanup() {
-  rm -f -- "$marker.tmp"
-  rmdir "$cache/lock"
-}
-trap cleanup EXIT
-ensure_source
-started=$SECONDS
-stored_key=
-if [ -f "$marker" ]; then stored_key=$(<"$marker"); fi
-if [ "$stored_key" = "$key" ] && [ -f "$binary" ] && [ -s "$binary" ] && [ -f "$sdk" ] && [ -s "$sdk" ]; then
-  echo "Linux binary and SDK cache hit (linux-x64-baseline-glibc2.17); build and packaging skipped; lookup elapsed: $((SECONDS - started))s"
-else
-  echo "Linux binary and SDK cache miss (linux-x64-baseline-glibc2.17); lookup elapsed: $((SECONDS - started))s"
-  mkdir -p "$completed"
-  rm -f -- "$marker" "$binary" "$sdk"
-  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/omp-cargo-target}"
-  export OMP_RELEASE_NATIVE_DIR="$cache/native"
-  export OMP_RELEASE_BINARY_DIR="$completed"
-  export OMP_BUILD_CACHE_DIR="$cache/build-assets"
-  started=$SECONDS
-  # Bun marks workspace bin entrypoints executable while linking dependencies.
-  cli_mode=$(stat -c '%a' packages/coding-agent/src/cli.ts)
-  OMP_SKIP_OPENWIKI_POSTINSTALL=1 bun install --frozen-lockfile
-  chmod "$cli_mode" packages/coding-agent/src/cli.ts
-  echo "Linux dependencies elapsed: $((SECONDS - started))s"
-  started=$SECONDS
-  bun scripts/build-release-native.ts
-  echo "Linux native elapsed: $((SECONDS - started))s"
-  started=$SECONDS
-  bun scripts/ci-release-build-binaries.ts --targets linux-x64
-  echo "Linux package elapsed: $((SECONDS - started))s"
-  started=$SECONDS
-  bun scripts/pack-sdk.ts "$sdk"
-  echo "Linux SDK ZIP elapsed: $((SECONDS - started))s"
-  if [ ! -f "$binary" ] || [ ! -s "$binary" ] || [ ! -f "$sdk" ] || [ ! -s "$sdk" ]; then
-    echo 'Linux packaging did not produce a non-empty binary and SDK ZIP' >&2
-    exit 1
-  fi
-  ensure_source
-  printf '%s' "$key" > "$marker.tmp"
-  mv -- "$marker.tmp" "$marker"
-fi
-started=$SECONDS
-cp -- "$binary" "$out"
-cp -- "$sdk" "$sdk_out"
-echo "Linux upload staging elapsed: $((SECONDS - started))s"
+trap 'rmdir "$cache/lock"' EXIT
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/omp-cargo-target}"
+bun scripts/cnb-build.ts "$cache" "$stage" "$@"

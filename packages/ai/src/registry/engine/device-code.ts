@@ -4,6 +4,8 @@
  * grant completes, then project / enrich the credentials.
  */
 import type { CompiledDeviceCodeLogin } from "@oh-my-pi/pi-catalog/compat/types";
+import { offlineFromEnv } from "@oh-my-pi/pi-utils";
+import { assertOfflineCredentialEndpoint, credentialFetch } from "../../auth/offline";
 import * as AIError from "../../error";
 import { type OAuthDeviceCodePollResult, pollOAuthDeviceCodeFlow } from "../oauth/device-code";
 import type { OAuthController, OAuthCredentials } from "../oauth/types";
@@ -39,7 +41,7 @@ export function createDeviceCodeLogin(
 ): (ctrl: OAuthController) => Promise<OAuthCredentials> {
 	return async ctrl => {
 		const signal = ctrl.signal;
-		const fetchImpl = ctrl.fetch ?? fetch;
+		const fetchImpl = credentialFetch(provider, ctrl.fetch);
 		throwIfCancelled(signal);
 		const clientId = await resolveValue(rule.clientId, signal);
 		const base = rule.baseUrl ? await resolveValue(rule.baseUrl, signal) : undefined;
@@ -67,6 +69,7 @@ export function createDeviceCodeLogin(
 				provider,
 			});
 		}
+		if (offlineFromEnv()) await assertOfflineCredentialEndpoint(provider, verificationUriComplete ?? verificationUri);
 		ctrl.onAuth?.({
 			url: verificationUriComplete ?? verificationUri,
 			instructions: template(rule.instructions, { user_code: userCode }),

@@ -30,7 +30,7 @@ import { vocalizer } from "@oh-my-pi/pi-coding-agent/tts/vocalizer";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
 import * as fsp from "node:fs/promises";
-import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
+import { installInMemoryRelay, stubGuestReplicaSwitch, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 interface Harness {
 	guest: CollabGuestLink;
@@ -113,8 +113,7 @@ async function makeHarness(
 		},
 		session: {
 			messages: [],
-			switchSession: () => Promise.resolve(),
-			newSession: () => Promise.resolve(),
+			switchSession: stubGuestReplicaSwitch,
 			resetReplicatedViewState: () => {},
 			applyReplicatedViewEvent: () => {},
 			agent: {
@@ -125,6 +124,7 @@ async function makeHarness(
 			},
 			extensionRunner: runner,
 		},
+		prepareSessionSwitch: async () => {},
 		clearTransientSessionUi: () => {},
 		clearWorking: () => false,
 		ensureWorkingRow: () => {},

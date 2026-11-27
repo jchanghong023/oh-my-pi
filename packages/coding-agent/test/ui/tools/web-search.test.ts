@@ -145,10 +145,13 @@ test("the terminal expands source excerpts and reveals sources beyond the collap
 			expect(sourceRow).toBeGreaterThanOrEqual(0);
 			expect(collapsed[sourceRow + 1]).toContain(EXCERPT[0]!);
 			expect(collapsed[sourceRow + 2]).toContain("Source 2");
-			EXCERPT.forEach((line, i) => {
-				expect(expanded[sourceRow + 1 + i]).toContain(line);
-			});
-			expect(expanded[sourceRow + 4]).toContain("Source 2");
+			expect(expanded[sourceRow + 1]).toContain("```");
+			expect(expanded[sourceRow + 2]).toMatch(/First +finding/);
+			expect(expanded[sourceRow + 3]).toContain("---");
+			expect(expanded[sourceRow + 4]).toContain(EXCERPT[1]!);
+			expect(expanded[sourceRow + 5]).toContain(EXCERPT[2]!);
+			expect(expanded[sourceRow + 6]).toContain("Fourth finding");
+			expect(expanded[sourceRow + 7]).toContain("Source 2");
 		} finally {
 			dispose();
 		}

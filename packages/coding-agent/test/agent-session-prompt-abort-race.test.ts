@@ -308,72 +308,19 @@ describe("AgentSession prompt admission racing abort", () => {
 		]);
 	});
 
-	it("cancels waiting custom-command work instead of letting it publish or call the model", async () => {
-		const started = Promise.withResolvers<AbortSignal>();
-		let stopped = false;
-		let modelCalls = 0;
-		const { session } = await createSession(
-			[
-				() => {
-					modelCalls++;
-					return { content: ["should not run"] };
-				},
-			],
-			{},
-			[
-				{
-					name: "waiting-command",
-					description: "Wait for cancellable nested work",
-					async execute(_args, ctx) {
-						const signal = ctx.signal;
-						if (!signal) throw new Error("Missing command cancellation signal");
-						try {
-							await new Promise<void>((_resolve, reject) => {
-								signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-								started.resolve(signal);
-							});
-							return "should not reach the model";
-						} finally {
-							stopped = true;
-						}
-					},
-				},
-			],
-		);
-
-		const pending = session.prompt("/waiting-command");
-		const signal = await withTimeout(started.promise, 2_000, "Custom command never started");
-		await session.abort({ reason: USER_INTERRUPT_LABEL });
-
-		expect(await withTimeout(pending, 2_000, "Abort did not release custom-command work")).toBe(false);
-		expect(signal.aborted).toBe(true);
-		expect(signal.reason).toBeInstanceOf(DOMException);
-		expect(signal.reason.name).toBe("AbortError");
-		expect(stopped).toBe(true);
-		expect(modelCalls).toBe(0);
-	});
-
-	it("discards a custom command's late prompt after abort and gives its next invocation a fresh signal", async () => {
+	it("discards a custom command's late prompt after abort and runs the next invocation", async () => {
 		const started = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
-		const signals: AbortSignal[] = [];
-		let modelCalls = 0;
-		const { session } = await createSession(
-			[
-				() => {
-					modelCalls++;
-					return { content: ["next invocation completed"] };
-				},
-			],
+		let invocations = 0;
+		const { session, calls } = await createSession(
+			[() => ({ content: ["next invocation completed"] })],
 			{},
 			[
 				{
 					name: "late-command",
 					description: "Return a prompt after delayed cleanup",
-					async execute(_args, ctx) {
-						if (!ctx.signal) throw new Error("Missing command cancellation signal");
-						signals.push(ctx.signal);
-						if (signals.length === 1) {
+					async execute() {
+						if (++invocations === 1) {
 							started.resolve();
 							// Non-cooperative work can finish late, but must not start a new model turn.
 							await release.promise;
@@ -391,14 +338,14 @@ describe("AgentSession prompt admission racing abort", () => {
 		release.resolve();
 
 		expect(await withTimeout(pending, 2_000, "Late custom command did not finish")).toBe(false);
-		expect(signals[0].aborted).toBe(true);
-		expect(modelCalls).toBe(0);
+		expect(calls).toHaveLength(0);
 
 		expect(await session.prompt("/late-command")).toBe(true);
-		expect(signals).toHaveLength(2);
-		expect(signals[1]).not.toBe(signals[0]);
-		expect(signals[1].aborted).toBe(false);
-		expect(modelCalls).toBe(1);
+		expect(invocations).toBe(2);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.context.messages.at(-1)?.content).toEqual([
+			{ type: "text", text: "next invocation's prompt" },
+		]);
 	});
 
 	it("joinActiveTurn refuses a steer that races abort instead of stranding it behind the cancel", async () => {

@@ -15,6 +15,7 @@
 import { type Mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import { rewriteEnvelopePeer, unpackEnvelope } from "@oh-my-pi/pi-coding-agent/collab/protocol";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { refreshDirsFromEnv, TempDir } from "@oh-my-pi/pi-utils";
 
 /** Active relay the fake transport routes through; set between install/uninstall. */
@@ -26,6 +27,12 @@ const RealHomedir = os.homedir();
 
 let relayHomeDir: TempDir | null = null;
 let relayHomedirSpy: Mock<typeof os.homedir> | null = null;
+
+/** Replica switch for view-only fixtures with no native session runtime. */
+export const stubGuestReplicaSwitch: AgentSession["switchSession"] = async (_file, options) => {
+	options?.onSuspendInMemory?.(async () => true);
+	return true;
+};
 
 export class FakeWebSocket {
 	static readonly CONNECTING = 0;

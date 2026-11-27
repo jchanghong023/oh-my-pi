@@ -4,7 +4,7 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { batch, isSettled, type Signal, signal } from "@oh-my-pi/pi-tui";
 import { notifyTerminal } from "@oh-my-pi/pi-tui/driver/session";
-import { formatDuration, isRecord, logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
 import { INTENT_FIELD, toolIntentLabel } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
@@ -119,35 +119,6 @@ function lastBashTodoUpdate(result: unknown): TodoPhase[] | undefined {
 			Array.isArray(entry.inner.phases),
 	);
 	return (dispatch?.inner as { phases: TodoPhase[] } | undefined)?.phases;
-}
-
-interface AsyncResultJob {
-	jobId?: string;
-	type?: string;
-	status?: string;
-	label?: string;
-	durationMs?: number;
-}
-
-/**
- * Toast text for an `async-result` delivery whose jobs are all background
- * task spawns, or undefined when it is anything else (bash jobs keep their
- * transcript rows). Native rendering only: the task call's agent nodes carry
- * the outcome, so the delivery needs no transcript block of its own.
- */
-function nativeTaskJobToast(message: { role: string; customType?: string; details?: unknown }): string | undefined {
-	if (message.role !== "custom" || message.customType !== "async-result" || !isRecord(message.details)) return;
-	const details = message.details as AsyncResultJob & {
-		jobs?: AsyncResultJob[];
-	};
-	const jobs = details.jobs && details.jobs.length > 0 ? details.jobs : [details];
-	if (!jobs.every(job => job.type === "task" && job.status === "completed" && job.jobId)) return;
-	// The native toast is transient; persisted diagnostics still take the transcript path.
-	if (jobs.length > 1) return `${jobs.length} background tasks completed`;
-	const job = jobs[0]!;
-	const name = sanitizeText(job.label ?? job.jobId ?? "task").trim() || "task";
-	const took = typeof job.durationMs === "number" ? ` · ${formatDuration(job.durationMs)}` : "";
-	return `Background task ${name} completed${took}`;
 }
 
 function exposesRawPartialJson(toolName: string, rawInput: boolean, tool: unknown): boolean {
@@ -1486,7 +1457,6 @@ export class EventController {
 				this.#turnStartedAt = event.message.timestamp;
 				this.#turnUsage.reset();
 			}
-			const taskJobToast = this.ctx.shell.native() ? nativeTaskJobToast(event.message) : undefined;
 			if (
 				event.message.role === "custom" &&
 				this.ctx.optimisticSkillMessagePending &&
@@ -1497,7 +1467,6 @@ export class EventController {
 				this.ctx.reconcileOptimisticSkillMessage(event.message);
 			} else {
 				this.ctx.addMessageToChat(event.message);
-				if (taskJobToast) this.ctx.showStatus(taskJobToast);
 			}
 			// Queued custom-message chips are derived from the agent queue; refresh the
 			// pending bar when the queued custom is consumed so the chip disappears

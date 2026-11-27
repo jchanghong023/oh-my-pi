@@ -16,7 +16,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/view-model/overlays/running-subagent-badge";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
+import { installInMemoryRelay, stubGuestReplicaSwitch, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 // In-memory transport: shared FakeWebSocket + InMemoryRelay harness (see
 // ./helpers/in-memory-relay), mirroring the relay's forwarding contract.
@@ -56,8 +56,7 @@ function makeGuestContext(): { ctx: InteractiveModeContext; subagentCount: () =>
 		},
 		session: {
 			messages: [],
-			switchSession: () => Promise.resolve(),
-			newSession: () => Promise.resolve(),
+			switchSession: stubGuestReplicaSwitch,
 			resetReplicatedViewState: () => {},
 			agent: {
 				state: { model: undefined },
@@ -66,6 +65,7 @@ function makeGuestContext(): { ctx: InteractiveModeContext; subagentCount: () =>
 				setDisableReasoning: () => {},
 			},
 		},
+		prepareSessionSwitch: async () => {},
 		clearTransientSessionUi: () => {},
 		clearWorking: () => false,
 		ensureWorkingRow: () => {},

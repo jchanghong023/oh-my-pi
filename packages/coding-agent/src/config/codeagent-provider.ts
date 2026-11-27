@@ -127,14 +127,12 @@ export function streamCodeAgent(
 			let replay = false;
 			for await (const event of inner) {
 				if (event.type === "error") {
-					const next = tokenCache.refresh();
-					replay =
-						attempt === 0 &&
-						!committed &&
+					const failed =
 						!options?.signal?.aborted &&
 						event.reason !== "aborted" &&
-						!AIError.is(event.error.errorId, AIError.Flag.ContentBlocked) &&
-						next !== token;
+						!AIError.is(event.error.errorId, AIError.Flag.ContentBlocked);
+					const next = failed ? tokenCache.refresh() : token;
+					replay = attempt === 0 && !committed && failed && next !== token;
 					logger.info("CodeAgent request failed", {
 						provider: CODEAGENT_PROVIDER_ID,
 						token_changed: next !== token,
@@ -166,7 +164,7 @@ export function streamCodeAgent(
 		}
 	})().catch(() => {
 		// 不向调用者或日志透传可能包含 Token 的底层异常。
-		tokenCache.refresh();
+		if (!options?.signal?.aborted) tokenCache.refresh();
 		outer.fail(new Error("CodeAgent request failed"));
 	});
 	return outer;

@@ -17,10 +17,6 @@ export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
 	BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [c.name, ...(c.aliases ?? [])]),
 );
 
-export function isTuiOnlyTodoLoopCommand(text: string): boolean {
-	return parseSlashCommand(text)?.name === "todoloop";
-}
-
 /**
  * Whether an extension command named `name` would be captured by ACP builtin
  * dispatch before reaching the extension handler. Beyond exact name/alias

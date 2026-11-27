@@ -1,5 +1,6 @@
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { credentialFetch } from "../../auth/offline";
 import * as AIError from "../../error";
 import { normalizeSnowflakeAccountUrl } from "../snowflake";
 import { OAuthCallbackFlow } from "./callback-server";
@@ -109,7 +110,7 @@ class SnowflakeOAuthFlow extends OAuthCallbackFlow {
 
 	async exchangeToken(code: string, _state: string, redirectUri: string): Promise<OAuthCredentials> {
 		const signal = this.ctrl.signal;
-		const fetchImpl = this.ctrl.fetch ?? fetch;
+		const fetchImpl = credentialFetch("snowflake", this.ctrl.fetch);
 		let tokens: SnowflakeTokens;
 		try {
 			const response = await fetchImpl(`${this.#accountUrl}/oauth/token-request`, {
@@ -167,7 +168,7 @@ export async function refreshSnowflakeToken(
 			provider: "snowflake",
 		});
 	}
-	const response = await fetch(`${accountUrl}/oauth/token-request`, {
+	const response = await credentialFetch("snowflake")(`${accountUrl}/oauth/token-request`, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: new URLSearchParams({

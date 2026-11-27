@@ -385,6 +385,12 @@ export type AuthStorageOptions = {
 		reason?: OAuthRefreshReason,
 	) => Promise<OAuthCredentials>;
 	/**
+	 * Offline variant for in-process credential owners. The backend must
+	 * enforce the credential transport policy on every exchange; it must not
+	 * delegate to an external broker or invoke a public-only grant.
+	 */
+	refreshOAuthCredentialOffline?: AuthStorageOptions["refreshOAuthCredential"];
+	/**
 	 * Set when {@link refreshOAuthCredential} exchanges the refresh token with the
 	 * provider itself instead of delegating (e.g. to a broker), so its tokens count
 	 * as this process's mints for auth-recovery reuse.

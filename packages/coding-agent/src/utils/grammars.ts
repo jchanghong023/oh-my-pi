@@ -44,7 +44,7 @@ async function fetchGrammar(
 	const url = `${base}/${info.release}/${info.file}.zst`;
 	const compressed = `${dest}.zst.part`;
 	const part = `${dest}.part`;
-	logger.debug("grammar: downloading", { language: info.language, url });
+	logger.debug("grammar: downloading", { language: info.language, ...logger.diagnosticUrl(url) });
 	try {
 		await downloadFile(url, compressed, { timeoutMs: DOWNLOAD_TIMEOUT_MS, onProgress });
 		const wasm = Bun.zstdDecompressSync(await Bun.file(compressed).bytes());
@@ -95,7 +95,7 @@ async function installLocked(info: WasmGrammarInfo, dir: string, dest: string, b
 		logger.warn("grammar: install failed; files in this language are skipped", {
 			language: info.language,
 			file: info.file,
-			error: String(error),
+			...logger.diagnosticError(error),
 		});
 		return false;
 	}
@@ -118,7 +118,9 @@ export function installGrammar(info: WasmGrammarInfo, dir: string = getNativeGra
 	if (pending) return pending;
 	const failed = failedAt.get(dest);
 	if (failed !== undefined && Date.now() - failed < RETRY_AFTER_FAILURE_MS) return Promise.resolve(false);
-	const install = installLocked(info, dir, dest, base || DEFAULT_GRAMMARS_URL).finally(() => inflight.delete(dest));
+	const install = logger
+		.withOperation(() => installLocked(info, dir, dest, base || DEFAULT_GRAMMARS_URL))
+		.finally(() => inflight.delete(dest));
 	inflight.set(dest, install);
 	return install;
 }

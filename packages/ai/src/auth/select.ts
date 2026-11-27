@@ -847,7 +847,9 @@ export class CredentialSelector {
 		// a missing key. Refresher outcomes after a dead grant (row disabled, CAS lost) are
 		// classified auth failures and keep resolving to undefined.
 		let transientRefreshFailure: unknown;
+		let offlineRefreshFailure: AIError.OAuthOfflineError | undefined;
 		const recordTransientRefreshFailure = (error: unknown): void => {
+			if (error instanceof AIError.OAuthOfflineError) offlineRefreshFailure = error;
 			if (AIError.retriable(AIError.classify(error))) transientRefreshFailure = error;
 		};
 
@@ -1043,7 +1045,9 @@ export class CredentialSelector {
 						}
 					} else if (!isAbandonedRefresh(error)) {
 						recordTransientRefreshFailure(error);
-						this.#blockFailedRefresh(provider, providerKey, credentialId);
+						if (!(error instanceof AIError.OAuthOfflineError)) {
+							this.#blockFailedRefresh(provider, providerKey, credentialId);
+						}
 					}
 					preflightFailures.add(candidate);
 				}
@@ -1143,6 +1147,7 @@ export class CredentialSelector {
 					: resolved;
 			}
 		}
+		if (offlineRefreshFailure) throw offlineRefreshFailure;
 
 		if (transientRefreshFailure !== undefined) {
 			throw new AIError.OAuthRefreshUnavailableError(provider, transientRefreshFailure);
@@ -1356,6 +1361,7 @@ export class CredentialSelector {
 			}
 			return { apiKey: result.apiKey, credential: updated, credentialId };
 		} catch (error) {
+			if (error instanceof AIError.OAuthOfflineError && !usageOptions.onTransientRefreshFailure) throw error;
 			const errorMsg = String(error);
 			// Only remove credentials for definitive auth failures
 			// Keep credentials for transient errors (network, 5xx) and block temporarily
@@ -1386,7 +1392,9 @@ export class CredentialSelector {
 				}
 			} else if (!isAbandonedRefresh(error)) {
 				usageOptions.onTransientRefreshFailure?.(error);
-				this.#blockFailedRefresh(provider, providerKey, credentialId);
+				if (!(error instanceof AIError.OAuthOfflineError)) {
+					this.#blockFailedRefresh(provider, providerKey, credentialId);
+				}
 			}
 		}
 

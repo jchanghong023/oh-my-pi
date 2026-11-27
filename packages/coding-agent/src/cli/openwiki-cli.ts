@@ -347,10 +347,6 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 				process.stderr.write("OpenWiki generation did not complete all pages; run update to retry.\n");
 				return 1;
 			}
-			if (result.sourceChanged)
-				process.stderr.write(
-					"Warning: repository source changed during generation; run omp openwiki --update to cover the latest changes.\n",
-				);
 			if (result.skipped) process.stdout.write("OpenWiki is up to date.\n");
 			return 0;
 		} finally {

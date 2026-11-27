@@ -843,9 +843,9 @@ Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
 	});
 }
 
-// Execute the installer functions in an isolated PowerShell process. Only HTTP
-// and user-PATH persistence are replaced; binary probes, live-image rename and
-// rollback use real files and processes. No network or real omp install is used.
+// Execute the installer functions in an isolated PowerShell process. The
+// fixture replaces HTTP and PATH persistence and can inject move failures;
+// otherwise binary probes, renames and rollback use real files and processes.
 describe.skipIf(!windowsPowerShell)("Windows fork installer replacement", () => {
 	async function scenario(mode: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-installer-"));
@@ -959,14 +959,14 @@ function Set-InstallEnvironment {
 }
 $script:blockMoves = $true
 if ($env:TEST_MODE -in @("rollback", "rollback-failed", "retry", "rename-failed")) {
-    function Move-Item([string]$LiteralPath, [string]$Destination) {
-        $name = [System.IO.Path]::GetFileName($LiteralPath)
+    function Move-InstallFile([string]$Source, [string]$Destination) {
+        $name = [System.IO.Path]::GetFileName($Source)
         if ($script:blockMoves) {
             if ($env:TEST_MODE -eq "rename-failed" -and $name -eq "omp.exe") { throw "fixture old image locked" }
             if ($name.StartsWith(".omp.tmp.")) { throw "fixture swap blocked" }
             if ($env:TEST_MODE -eq "rollback-failed" -and $name.StartsWith(".omp.old.")) { throw "fixture rollback access denied" }
         }
-        Microsoft.PowerShell.Management\\Move-Item -LiteralPath $LiteralPath -Destination $Destination
+        [IO.File]::Move($Source, $Destination)
     }
 }
 if ($env:TEST_MODE -eq "rename-failed") {
@@ -1015,8 +1015,7 @@ try {
         Write-Host "RESULT recoveryVersion=$(& ([scriptblock]::Create($probeCommand)))"
     }
     if ($env:TEST_MODE -eq "rollback-failed") {
-        $restoreCommand = $messages | Where-Object { $_.StartsWith("if (-not (Test-Path -LiteralPath ") } | Select-Object -First 1
-        $script:blockMoves = $false
+        $restoreCommand = $messages | Where-Object { $_.StartsWith("try { [IO.File]::Move(") } | Select-Object -First 1
         & ([scriptblock]::Create($restoreCommand))
         Write-Host "RESULT restoredVersion=$(& $old --version)"
     }

@@ -31,6 +31,7 @@ import {
 import { fetchWithRetry, isRecord, prompt } from "@oh-my-pi/pi-utils";
 import { readBoundedJson } from "@oh-my-pi/pi-utils/bounded-json";
 import { sanitizeText } from "@oh-my-pi/pi-utils/sanitize-text";
+import { assertOnlineCredentialExchange } from "../../auth/offline";
 import * as AIError from "../../error";
 import { throwIfCancelled } from "../engine/common";
 import { pollOAuthDeviceCodeFlow } from "./device-code";
@@ -384,6 +385,7 @@ export async function loginKiroHook(ctrl: OAuthController): Promise<OAuthCredent
  * repair fail `definitive`, so the row is disabled with a re-login hint.
  */
 export async function refreshKiroHook(current: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials> {
+	assertOnlineCredentialExchange(PROVIDER);
 	if (!current.refresh) throw incompleteRefreshState();
 	if (!current.kiroClientId) {
 		const response = await postJson(

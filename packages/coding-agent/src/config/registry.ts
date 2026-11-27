@@ -23,7 +23,7 @@
  * Declaration order is significant: the settings panel lists a tab's settings in registration order
  * (sections follow `TAB_GROUPS`), and `config/all-settings.ts` imports every domain in that order.
  */
-import { logger, parseFlag } from "@oh-my-pi/pi-utils";
+import { logger, offlineFromEnv, parseFlag } from "@oh-my-pi/pi-utils";
 import { FORK_SETTING_DEFAULTS } from "./fork-setting-defaults";
 import type { AnyUiMetadata, SubmenuOption, UiBase } from "./settings-defs";
 import type { SettingProvenance, Settings } from "./settings";
@@ -124,6 +124,8 @@ interface DefinitionBase {
 export interface BooleanDefinition extends DefinitionBase {
 	type: "boolean";
 	default: boolean | undefined;
+	/** Force off in the offline process, regardless of any settings layer. Never persisted. */
+	offlineDisabled?: true;
 	env?: SettingEnv<boolean>;
 	ui?: UiBoolean;
 }
@@ -588,6 +590,7 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 	}
 
 	override get(scope: ScopeLike): T {
+		if (this.definition.type === "boolean" && this.definition.offlineDisabled && offlineFromEnv()) return false as T;
 		return this.#effectiveEnv(scope) ?? super.get(scope);
 	}
 

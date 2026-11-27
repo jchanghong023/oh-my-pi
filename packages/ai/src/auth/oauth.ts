@@ -6,6 +6,7 @@ import type { OAuthProviderId } from "../registry/oauth/types";
 import { providerTypeKey } from "./blocks";
 import type { SessionAffinity } from "./affinity";
 import type { KeyOverrides } from "./cascade";
+import { assertOnlineCredentialExchange } from "./offline";
 import type { AccountPolicies } from "./policy";
 import type { CredentialPool } from "./pool";
 import type { OAuthRefresher } from "./refresh";
@@ -79,6 +80,7 @@ export class OAuthAccounts implements OAuthApi {
 			throw new AIError.ConfigurationError(`Unknown OAuth provider: ${provider}`);
 		}
 		assertProviderEnabled(provider);
+		if (getProviderDefinition(provider) === undefined) assertOnlineCredentialExchange(provider);
 		const warning = loginRiskWarning(provider);
 		if (warning !== undefined) {
 			// No answer but an explicit "yes" starts a login the provider's own terms put at risk.

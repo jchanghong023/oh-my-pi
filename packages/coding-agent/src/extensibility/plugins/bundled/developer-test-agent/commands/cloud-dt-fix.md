@@ -55,9 +55,9 @@ description: '获取云端UT问题（MR门禁级/codecov报告/版本级）进�
 
 ## 3. 门禁修复流程（MR / codecov 报告）
 
-### Step 0: 检查 codecovcli 是否已安装及版本更新
+### Step 0: 检查本机 codecovcli
 
-加载安装文档进行检查：使用 `read` 工具读取 `{{pluginRoot}}/skills/fix-ut/references/java/codecovcli-check.md`，按文档检查 codecovcli 安装状态及版本更新。
+按 `{{pluginRoot}}/skills/fix-ut/references/java/codecovcli-check.md` 检查。本机不可用时报缺项并停止门禁修复；JaCoCo 不能替代云门禁数据。
 
 ### Step 1: 获取分析数据
 

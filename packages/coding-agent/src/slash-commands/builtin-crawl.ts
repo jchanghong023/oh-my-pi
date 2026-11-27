@@ -16,7 +16,7 @@ function parseCrawlOptions(args: string): CrawlOptions | "stop" {
 	});
 	if (tokens.length === 1 && tokens[0] === "stop") return "stop";
 	const url = tokens[0];
-	if (!url || url.startsWith("-")) throw new Error(CRAWL_USAGE);
+	if (!url || url.startsWith("-")) throw new Error("Missing crawl URL.");
 	let parsedUrl: URL;
 	try {
 		parsedUrl = new URL(url);
@@ -36,7 +36,7 @@ function parseCrawlOptions(args: string): CrawlOptions | "stop" {
 				flag,
 			)
 		) {
-			throw new Error(`Unknown crawl argument: ${flag}. ${CRAWL_USAGE}`);
+			throw new Error(`Unknown crawl argument: ${flag}.`);
 		}
 		if (seen.has(flag)) throw new Error(`Duplicate crawl argument: ${flag}.`);
 		seen.add(flag);
@@ -115,7 +115,7 @@ async function handleCrawlCommand(command: ParsedSlashCommand, runtime: SlashCom
 	try {
 		options = parseCrawlOptions(command.args);
 	} catch (error) {
-		return usage(errorMessage(error), runtime);
+		return usage(`${errorMessage(error)}\n${CRAWL_USAGE}`, runtime);
 	}
 	const state = sessionState(runtime);
 	if (options === "stop") {

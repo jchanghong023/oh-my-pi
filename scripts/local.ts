@@ -25,6 +25,7 @@ async function checkExistingTarget(target: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+	const started = performance.now();
 	if (process.platform !== "win32") throw new Error("Local installation is supported only on Windows.");
 	const installDir =
 		process.env.PI_INSTALL_DIR || (process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "omp"));
@@ -58,7 +59,7 @@ async function main(): Promise<void> {
 		}
 		// Empty overrides select the host defaults without letting Bun reload them from .env.
 		const buildEnv: NodeJS.ProcessEnv = { ...process.env, CROSS_TARGET: "", BUN_COMPILE_EXECUTABLE_PATH: "" };
-		console.log("Building the native addon and local executable...");
+		console.log(`Building the native addon for ${process.platform}-${process.arch}...`);
 		await run(
 			[
 				process.execPath,
@@ -70,9 +71,12 @@ async function main(): Promise<void> {
 			],
 			buildEnv,
 		);
+		console.log("Building the local executable...");
 		await run([process.execPath, "packages/coding-agent/scripts/build-binary.ts"], buildEnv);
 
+		console.log("Installing the local executable...");
 		await fs.mkdir(path.dirname(target), { recursive: true });
+		const installedPath = path.join(await fs.realpath(path.dirname(target)), path.basename(target));
 		await fs.copyFile(output, candidate, constants.COPYFILE_EXCL);
 		candidateCreated = true;
 		await checkExistingTarget(target);
@@ -107,7 +111,7 @@ async function main(): Promise<void> {
 				.unlink(previous)
 				.catch(error => console.warn(`Could not remove previous executable ${previous}: ${error}`));
 		}
-		console.log(`Installed omp to ${target}`);
+		console.log(`Installed omp to ${installedPath} (total elapsed: ${((performance.now() - started) / 1000).toFixed(1)}s)`);
 	} finally {
 		if (candidateCreated) {
 			await fs.unlink(candidate).catch(error => console.warn(`Could not remove candidate ${candidate}: ${error}`));

@@ -26,7 +26,7 @@ import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
 import { caretField } from "./common";
 import { canonicalKeyId } from "../../../config/keybindings/key-id";
 import { getKeybindings } from "../../../config/keybindings/keybindings";
-import { selectKeyId } from "../../../config/keybindings/matchers";
+import { matchesAppInterrupt, selectKeyId } from "../../../config/keybindings/matchers";
 import { keyLabel } from "../../keys/hints";
 import { bindingGlyph, keyLabels } from "../panels/common";
 
@@ -65,22 +65,34 @@ export function treeDetailHeight(maxRows: number): number {
 	return Math.max(1, Math.floor(maxRows / 2));
 }
 
-/** A user-bound selector action takes precedence over the details shortcut. */
+const TREE_BRANCH_ACTIONS = ["app.tree.previousBranch", "app.tree.nextBranch"] as const;
+
+/** Existing navigation and interrupt bindings take precedence over tool details. */
 export function treeDetailsKey(): string {
 	const keybindings = getKeybindings();
-	return ["alt+enter", "alt+i", "alt+v"].find(key => selectKeyId(key, keybindings) === key) ?? "";
+	return (
+		["alt+enter", "alt+i", "alt+v"].find(
+			key =>
+				selectKeyId(key, keybindings) === key &&
+				!matchesAppInterrupt(key, keybindings) &&
+				!TREE_BRANCH_ACTIONS.some(action => keybindings.matchesId(key, action)),
+		) ?? ""
+	);
 }
 
 /** The key help line, in the user's bindings (branch keys only when bound). */
 function help(theme: Theme): string {
-	const branchKeys = (["app.tree.previousBranch", "app.tree.nextBranch"] as const)
+	const branchKeys = TREE_BRANCH_ACTIONS
 		.map(action => getKeybindings().keysFor(action)[0])
 		.filter(key => key !== undefined)
 		.map(key => keyLabel(theme, canonicalKeyId(key)))
 		.join("/");
+	const detailsKey = treeDetailsKey();
 	return [
 		`${bindingGlyph("tui.select.confirm", "enter", theme)}: switch.`,
-		`${keyLabel(theme, treeDetailsKey())}: tool details, ${keyLabels(theme, ["shift+up", "shift+down"])}: scroll details.`,
+		...(detailsKey
+			? [`${keyLabel(theme, detailsKey)}: tool details, ${keyLabels(theme, ["shift+up", "shift+down"])}: scroll details.`]
+			: []),
 		`${keyLabels(theme, ["alt+up", "alt+down"])}: previous/next turn.`,
 		...(branchKeys ? [`${branchKeys}: previous/next branch.`] : []),
 		`${bindingGlyph("tui.select.pageUp", "pageUp", theme)}/${bindingGlyph("tui.select.pageDown", "pageDown", theme)} (${keyLabels(theme, ["left", "right"])}): page.`,

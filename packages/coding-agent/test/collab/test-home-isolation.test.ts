@@ -27,7 +27,7 @@ import {
 	setAgentDir,
 } from "@oh-my-pi/pi-utils";
 import { restoreEnvValue } from "../helpers/settings-test-state";
-import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
+import { installInMemoryRelay, stubGuestReplicaSwitch, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 const REAL_HOMEDIR = os.homedir();
 const ISOLATED_DIR_ENV_KEYS = [
@@ -89,11 +89,10 @@ function makeGuestContext(onReplicaSwitch: (replicaPath: string) => void): Inter
 			getCwd: () => "/tmp",
 		},
 		session: {
-			switchSession: async (replicaPath: string) => {
-				onReplicaSwitch(replicaPath);
-				return true;
+			switchSession: (...args: Parameters<typeof stubGuestReplicaSwitch>) => {
+				onReplicaSwitch(args[0]);
+				return stubGuestReplicaSwitch(...args);
 			},
-			newSession: () => Promise.resolve(),
 			resetReplicatedViewState: () => {},
 			messages: [],
 			agent: {
@@ -103,6 +102,7 @@ function makeGuestContext(onReplicaSwitch: (replicaPath: string) => void): Inter
 				setDisableReasoning: () => {},
 			},
 		},
+		prepareSessionSwitch: async () => {},
 		clearTransientSessionUi: () => {},
 		clearWorking: () => false,
 		ensureWorkingRow: () => {},

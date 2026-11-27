@@ -13,7 +13,7 @@ OpenWiki 随 OMP 发行，复用 OMP 模型和认证生成、更新仓库 Wiki�
 #### Scenario: 显式生成和更新
 
 - **WHEN** 执行 `omp openwiki [code] --init` 或 `--update`
-- **THEN** 使用 OMP 模型；`--language` 优先，默认 `zh-CN`。仅在缺少 `openwiki/INSTRUCTIONS.md` 时创建空文件。
+- **THEN** 使用 OMP 模型；新运行未指定 `--language` 时用 `zh-CN`。续跑沿用检查点语言，拒绝冲突的显式值。仅缺少 `openwiki/INSTRUCTIONS.md` 时创建空文件。
 
 #### Scenario: 只读预览生成和更新
 
@@ -48,7 +48,7 @@ OpenWiki 随 OMP [通过 CNB 一体交付](../fork-runtime/spec.md#requirement-c
 - **WHEN** 使用 `--planner-model`
 - **THEN** 仅覆盖本次规划模型及 effort；按 OMP selector 解析，尊重 `off`，不强加 effort 或 `auto`。调试显示两阶段实际模型 ID，持久化仍记共享／页面模型，不改变检查点格式。
 
-内网和免认证模型仍由 OMP 配置。离线只用已配置且可达的内网模型，不联网发现或登录；读取浏览不需模型凭据。解析、认证、工具能力或调用失败，以及取消时，如实报告并释放资源，不擅自切换模型。
+内网和免认证模型仍由 OMP 配置。离线只用已配置且可达的内网模型，不联网发现或登录；凭据解析也须遵守 [offline 运行规则](../fork-runtime/spec.md#requirement-安装与运行)，不得触发公网刷新。读取浏览不需模型凭据。解析、认证、工具能力或调用失败，以及取消时，如实报告并释放资源，不擅自切换模型。
 
 ### Requirement: 复用原生生成编排与恢复
 
@@ -57,7 +57,7 @@ OpenWiki 随 OMP [通过 CNB 一体交付](../fork-runtime/spec.md#requirement-c
 #### Scenario: 原有页面并行行为
 
 - **WHEN** 页面并行生成、失败或恢复
-- **THEN** 每项只提交所属页面，不影响在途页面和验证；单次运行去重，不另加跨进程锁。中断或部分失败可在同一 checkout 原生恢复；失败或跳过页面以非零退出，不推进全局成功基线。
+- **THEN** 复用原生状态与恢复；失败或跳过页面以非零退出，不推进成功基线。仅源码变化时透传原生提示，不推进源码基线，退出码按页面结果。
 - **AND** 帮助说明 `OPENWIKI_PAGE_CONCURRENCY` 默认 1、范围 1–8。增量执行不因 Git 干净而忽略未完成状态。指令变更仅跟踪根 `AGENTS.md` 和 `openwiki/INSTRUCTIONS.md`：有基线看有效内容差异；无基线看非空 Wiki 指令或 Git 可见的根指令变更，不追溯之前已清空的 Wiki 指令。
 - **AND** 收尾只做无 DOM 的 Mermaid 结构检查：流程图节点标签／保留字、时序图和复合状态块。确认有错时保留正文为纯文本并记录原因，未覆盖的语法照原样保留。
 
@@ -68,7 +68,7 @@ OpenWiki 随 OMP [通过 CNB 一体交付](../fork-runtime/spec.md#requirement-c
 #### Scenario: 按设置启用或关闭内置查询
 
 - **WHEN** `openwiki.tools.enabled` 变化
-- **THEN** 同步更新会话工具与提示。默认关闭（含离线），显式工具列表不能绕过；允许使用时，若 `tools.commands` 启用且有内置 Bash，挂为 Bash 命令，否则挂为顶层工具。CLI 不变。
+- **THEN** 同步更新会话工具与提示。默认关闭（含离线），显式工具列表不能绕过。自动加入的工具在可用时挂到内置 Bash 命令；显式点名的保留顶层。CLI 不变。
 
 | 查询 | 契约 |
 |---|---|

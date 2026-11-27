@@ -1374,8 +1374,7 @@ export class Agent {
 		this.#state.systemPrompt = typeof v === "string" ? [v] : v;
 	}
 
-	setModel(model: Model) {
-		// Sessions may start with no model selected (`initialState.model: undefined`).
+	setModel(model: Model | undefined) {
 		const resolved = this.#modelResolver && model ? this.#modelResolver(model) : model;
 		this.#state.model = resolved;
 		this.#syncTokenizer(resolved);
@@ -1964,9 +1963,9 @@ export class Agent {
 		}
 	}
 
-	/** Run `fn` with {@link logContext} on every record it logs. */
+	/** Link the request and its asynchronous work to the same diagnostic operation. */
 	#inLogContext<T>(fn: () => T): T {
-		return this.logContext ? logger.withContext(this.logContext, fn) : fn();
+		return logger.withOperation(() => (this.logContext ? logger.withContext(this.logContext, fn) : fn()));
 	}
 
 	/**

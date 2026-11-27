@@ -11,6 +11,7 @@ import type { CoordinationDetails } from "../tools/details/wait";
 import type { ToolResult } from "../ui/tools/contract";
 import { sliceWithWidth, wrapTextWithAnsi } from "../utils/text-width";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "../session/transcript/thinking-display";
+import { asyncJobState, isSettledJobFrame } from "../session/transcript/tool-execution";
 import type { CompactPreviewActivity } from "./compact-tool-output-preview";
 import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
@@ -21,13 +22,12 @@ const THINKING_LABEL_WIDTH = 14;
 const ACTION_GAP = "  ";
 
 type ToolActionCategory = "read" | "exec" | "write" | "call";
-type ActionState = "running" | "done" | "failed";
 
-const ACTION_WORDS: Record<ToolActionCategory, Record<ActionState, string>> = {
-	read: { running: "Reading", done: "read OK", failed: "read failed" },
-	exec: { running: "Running", done: "run OK", failed: "run failed" },
-	write: { running: "Writing", done: "write OK", failed: "write failed" },
-	call: { running: "Calling", done: "call OK", failed: "call failed" },
+const ACTION_WORDS: Record<ToolActionCategory, string> = {
+	read: "Reading",
+	exec: "Running",
+	write: "Writing",
+	call: "Calling",
 };
 
 type Call = {
@@ -40,23 +40,19 @@ type Call = {
 	intent?: string;
 	shellCommand?: string;
 	file?: CompactFileSummary;
-	startedAt?: number;
 	background?: boolean;
-	settled?: boolean;
-	failed?: boolean;
+	asyncSettled?: boolean;
 };
 type ToolAction = {
 	id: string;
 	category: ToolActionCategory;
-	running: boolean;
-	failed: boolean;
 	detail: string;
 	file?: CompactFileSummary;
 	previewIntent?: string;
 	additional?: number;
 };
 
-type Action = ToolAction | { category: "thinking"; detail: string; stage: ModelStage; running: true };
+type Action = ToolAction | { category: "thinking"; detail: string; stage: ModelStage };
 
 const MODEL_WORDS: Record<ModelStage, string> = {
 	waiting: "waiting",
@@ -74,7 +70,6 @@ export type CompactActionRow = {
 };
 type SessionMemory = {
 	calls: Call[];
-	latestStart?: number;
 };
 
 /** Retain view facts for a live session without pinning closed sessions or mixing equal IDs. */
@@ -230,7 +225,7 @@ function fileDetail(path: string, file: CompactFileSummary, width: number): [str
 	return ["…", sliceWithWidth(path, pathWidth - room + 1, room - 1, true).text, suffix];
 }
 
-/** Composer-only projection of action records and the last displayed content. */
+/** Composer-only projection of running work and the live model stage. */
 export class CompactThinkingPreview {
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
@@ -266,13 +261,18 @@ export class CompactThinkingPreview {
 		memories.set(session, { id, memory });
 		this.#memory = memory;
 		const pending = session.agent.state.pendingToolCalls;
-		// While not viewing this session, we may have missed tool end events.
-		// Agent-owned calls need a live pending entry; an async receipt has its own terminal update.
-		memory.calls = memory.calls.filter(call => call.settled || call.background || pending.has(call.id));
+		if (!pending.size && !memory.calls.length) return;
+		const updates = session.activeToolExecutionUpdates();
+		// While not viewing this session, a foreground call may have ended or a
+		// parked job may have sent its terminal frame.
+		memory.calls = memory.calls.filter(call =>
+			call.background
+				? !isSettledJobFrame(updates.find(update => update.toolCallId === call.id)?.partialResult.details)
+				: pending.has(call.id),
+		);
 		if (!pending.size) return;
 		const branch = session.sessionManager.getBranch();
 		const diagnostics = collectPendingToolCalls(branch);
-		const existing = memory.calls.length > 0;
 		const markerIndex = (callId: string): number =>
 			branch.findLastIndex(
 				entry =>
@@ -283,7 +283,6 @@ export class CompactThinkingPreview {
 					"toolCallId" in entry.data &&
 					entry.data.toolCallId === callId,
 			);
-		const cutoff = Math.max(-1, ...memory.calls.map(call => markerIndex(call.id)));
 		const stream = session.agent.state.streamMessage;
 		const messages = stream ? [...session.agent.state.messages, stream] : session.agent.state.messages;
 		for (const callId of pending) {
@@ -295,25 +294,13 @@ export class CompactThinkingPreview {
 				entry?.type === "custom" && entry.data && typeof entry.data === "object"
 					? (entry.data as Record<string, unknown>)
 					: undefined;
-			const timestamp =
-				diagnostic?.startedAt ?? (typeof marker?.startedAt === "string" ? marker.startedAt : entry?.timestamp);
-			const parsed = timestamp ? Date.parse(timestamp) : NaN;
-			const startedAt = Number.isFinite(parsed) ? parsed : undefined;
-			if (
-				existing &&
-				(index < 0 ||
-					(cutoff >= 0
-						? index <= cutoff
-						: startedAt === undefined || (memory.latestStart !== undefined && startedAt <= memory.latestStart)))
-			)
-				continue;
 			let block: ToolCall | undefined;
 			for (let index = messages.length - 1; index >= 0 && !block; index--) {
 				const message = messages[index];
 				if (message?.role !== "assistant") continue;
 				block = message.content.find((item): item is ToolCall => item.type === "toolCall" && item.id === callId);
 			}
-			const update = session.activeToolExecutionUpdates().find(item => item.toolCallId === callId);
+			const update = updates.find(item => item.toolCallId === callId);
 			const name =
 				block?.name ??
 				diagnostic?.toolName ??
@@ -327,31 +314,17 @@ export class CompactThinkingPreview {
 				name,
 				detail: "",
 				intent,
-				startedAt,
 			};
 			updateCall(call, args);
-			if (update) updateCall(call, update.args, update.partialResult);
-			this.#appendCall(call);
+			if (update) {
+				updateCall(call, update.args, update.partialResult);
+				call.asyncSettled = isSettledJobFrame(update.partialResult.details);
+			}
+			memory.calls.push(call);
 		}
 	}
 
-	#appendCall(call: Call): void {
-		const memory = this.#memory!;
-		memory.calls.push(call);
-		if (call.startedAt !== undefined)
-			memory.latestStart = Math.max(memory.latestStart ?? call.startedAt, call.startedAt);
-	}
-
-	/** Terminal outcomes arrive in completion order, even when timestamps would tie. */
-	#settle(call: Call, failed: boolean): void {
-		call.settled = true;
-		call.failed = failed;
-		const memory = this.#memory!;
-		memory.calls = memory.calls.filter(item => !item.settled || item === call);
-	}
-
 	observe(event: LocalAgentSessionEvent): void {
-		const now = Date.now();
 		this.#syncSession();
 		const memory = this.#memory!;
 		const calls = memory.calls;
@@ -364,36 +337,46 @@ export class CompactThinkingPreview {
 				call.name = event.toolName;
 				call.intent = event.intent ?? call.intent;
 				updateCall(call, event.args);
-				call.startedAt ??= now;
 			} else {
 				const next: Call = {
 					id: event.toolCallId,
 					name: event.toolName,
 					detail: "",
 					intent: event.intent,
-					startedAt: now,
 				};
 				updateCall(next, event.args);
-				this.#appendCall(next);
+				calls.push(next);
 			}
 		} else if (event.type === "tool_execution_end" || event.type === "tool_execution_update") {
-			const call = calls.find(item => item.id === event.toolCallId);
-			if (!call || call.settled) return;
-			const result = event.type === "tool_execution_end" ? event.result : event.partialResult;
-			updateCall(call, event.type === "tool_execution_update" ? event.args : undefined, result);
-			const state = fields(fields(result?.details).async).state;
-			const failed =
-				result?.isError === true || (event.type === "tool_execution_end" && (event.isError || event.cancelled === true));
-			if (state === "completed" || state === "failed" || state === "cancelled") {
-				this.#settle(call, state !== "completed" || failed);
-			} else if (event.type === "tool_execution_end") {
-				if (state === "running" && !failed) call.background = true;
-				else this.#settle(call, failed);
+			const index = calls.findIndex(item => item.id === event.toolCallId);
+			const call = calls[index];
+			if (!call) return;
+			if (event.type === "tool_execution_update") {
+				if (isSettledJobFrame(event.partialResult.details)) {
+					if (call.background) {
+						calls.splice(index, 1);
+						return;
+					}
+					// The blocking subset of a mixed task may still be running.
+					call.asyncSettled = true;
+				}
+				updateCall(call, event.args, event.partialResult);
+			} else if (
+				!call.asyncSettled &&
+				!event.isError &&
+				!event.cancelled &&
+				!event.result.isError &&
+				asyncJobState(event.result.details) === "running"
+			) {
+				call.background = true;
+				updateCall(call, undefined, event.result);
+			} else {
+				calls.splice(index, 1);
 			}
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
 			for (const block of event.message.content) {
 				if (block.type !== "toolCall") continue;
-				const call = calls.find(item => item.id === block.id && !item.settled);
+				const call = calls.find(item => item.id === block.id);
 				if (!call) continue;
 				updateCall(call, streamedArgs(block));
 			}
@@ -447,29 +430,26 @@ export class CompactThinkingPreview {
 		return text;
 	}
 
-	/** Show the first running call, or the last retained call when none are running. */
+	/** Show the first running call and count other work in progress. */
 	#currentTool(): ToolAction | undefined {
 		const { calls } = this.#memory!;
 		const pending = this.ctx.viewSession.agent.state.pendingToolCalls;
 		let current: Call | undefined;
 		let running = 0;
 		for (const call of calls) {
-			if (call.settled || (!call.background && !pending.has(call.id))) continue;
+			if (!call.background && !pending.has(call.id)) continue;
 			current ??= call;
 			running++;
 		}
-		current ??= calls.find(call => call.settled);
 		if (!current) return;
 		const category = categoryOf(current);
 		return {
 			id: current.id,
 			category,
-			running: running > 0,
-			failed: current.failed === true,
 			detail: toolDetail(current, category),
 			file: current.file,
 			previewIntent: category === "exec" && current.command ? clean(current.detail).trim() : undefined,
-			additional: Math.max(0, running - 1),
+			additional: running - 1,
 		};
 	}
 
@@ -479,7 +459,7 @@ export class CompactThinkingPreview {
 		if (contentWidth < 1) return [];
 		const stage = this.ctx.viewSession.modelStage;
 		const detail = this.#thinkingDetail(stage, contentWidth - THINKING_LABEL_WIDTH - ACTION_GAP.length);
-		const model: Action | undefined = stage ? { category: "thinking", running: true, detail, stage } : undefined;
+		const model: Action | undefined = stage ? { category: "thinking", detail, stage } : undefined;
 		const agent = waitRow ? undefined : this.#currentTool();
 		if (agent?.category === "exec") {
 			const activity = this.compactActivity?.(width);
@@ -493,25 +473,19 @@ export class CompactThinkingPreview {
 	/** Keep the path or thinking text ahead of optional detail on narrow terminals. */
 	#buildRow(action: Action, width: number): CompactActionRow {
 		const model = action.category === "thinking";
-		const failed = !model && action.failed;
-		const state = action.running ? "running" : failed ? "failed" : "done";
-		const full = model
-			? `Model ${MODEL_WORDS[action.stage]}`
-			: `Agent: ${action.running ? "" : "Last "}${ACTION_WORDS[action.category][state]}`;
+		const full = model ? `Model ${MODEL_WORDS[action.stage]}` : `Agent: ${ACTION_WORDS[action.category]}`;
 		const extra = !model && action.additional ? ` +${action.additional}` : "";
 		const word = truncateToWidth(full, width);
-		const runningCall = action.running && action.category === "call";
-		const tone = runningCall ? "accent" : action.running ? "muted" : failed ? "error" : "dim";
+		const runningCall = action.category === "call";
+		const tone = runningCall ? "accent" : "muted";
 		const detailWidth = width - visibleWidth(word) - ACTION_GAP.length - visibleWidth(extra);
 		const detail: CompactActionRow["detail"] = [];
 		if (detailWidth > 0 && action.detail) {
 			if (!model && action.file) {
 				const [prefix, target, suffix] = fileDetail(action.detail, action.file, detailWidth);
-				if (action.running) {
-					if (prefix) detail.push({ text: prefix, tone: "dim" });
-					if (target) detail.push({ text: target, tone: "text" });
-					if (suffix) detail.push({ text: suffix, tone: "dim" });
-				} else detail.push({ text: prefix + target + suffix, tone: "dim" });
+				if (prefix) detail.push({ text: prefix, tone: "dim" });
+				if (target) detail.push({ text: target, tone: "text" });
+				if (suffix) detail.push({ text: suffix, tone: "dim" });
 			} else {
 				const value = truncateToWidth(action.detail, detailWidth);
 				const tone = runningCall || model ? "text" : "dim";
@@ -520,7 +494,7 @@ export class CompactThinkingPreview {
 		}
 		if (extra && width - visibleWidth(word) >= visibleWidth(extra) + ACTION_GAP.length)
 			detail.push({ text: extra, tone: "muted" });
-		return { word, tone, detail, running: action.running };
+		return { word, tone, detail, running: true };
 	}
 
 	#paintAnsi({ word, tone, detail }: CompactActionRow): string {

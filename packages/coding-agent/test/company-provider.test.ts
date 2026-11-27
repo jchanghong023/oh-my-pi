@@ -31,7 +31,7 @@ function runSnapshotProbe(initial: string | undefined, relocateClaudeConfig = fa
 				if (String(path) !== file) return result;
 				return { text: async () => { reads++; return result.text(); } };
 			};
-			const { getCompanyConfig, getCompanyConfigError, setCompanyOfflineEnabled, companySnapshotForSubprocess } = await import(${JSON.stringify(modulePath)});
+			const { getCompanyConfig, getCompanyConfigError, setCompanyOfflineEnabled } = await import(${JSON.stringify(modulePath)});
 			// The lane starts gated off even when the fixture config is valid.
 			const gatedConfig = getCompanyConfig();
 			const gatedError = getCompanyConfigError();
@@ -45,19 +45,6 @@ function runSnapshotProbe(initial: string | undefined, relocateClaudeConfig = fa
 			} }));
 			const afterWrite = getCompanyConfig();
 			rmSync(file);
-			const inherited = Bun.spawnSync([process.execPath, "--eval", \`
-				const state = JSON.parse(await Bun.stdin.text());
-				const realFile = Bun.file.bind(Bun);
-				Bun.file = (path, ...args) => {
-					if (String(path) === \${JSON.stringify(file)}) throw new Error("inherited snapshot must not read Claude settings");
-					return realFile(path, ...args);
-				};
-				const provider = await import(\${JSON.stringify(modulePath)});
-				await provider.inheritCompanyProcessSnapshot(state);
-				console.log(JSON.stringify({ token: provider.getCompanyConfig()?.token, error: provider.getCompanyConfigError() }));
-			\`], { stdin: Buffer.from(JSON.stringify(companySnapshotForSubprocess())), stdout: "pipe", stderr: "pipe" });
-			if (inherited.exitCode !== 0) throw new Error(inherited.stderr.toString());
-			const inheritedResult = JSON.parse(inherited.stdout.toString());
 			const workerResult = await new Promise((resolve, reject) => {
 				const worker = new Worker(
 					'import { parentPort } from "node:worker_threads";' +
@@ -78,7 +65,6 @@ function runSnapshotProbe(initial: string | undefined, relocateClaudeConfig = fa
 				embeddingBaseUrl: before?.embeddingBaseUrl,
 				tokenMatches: before?.token === "fixture-secret",
 				serialized: JSON.stringify(before),
-				inheritedMatches: inheritedResult.token === before?.token && inheritedResult.error === error,
 				workerMatches: workerResult.tokenMatches === (before?.token === "fixture-secret") && workerResult.error === error,
 				error
 			}));
@@ -131,7 +117,7 @@ describe("company provider startup snapshot", () => {
 					const first = provider.setCompanyOfflineEnabled(true).then(() => { settled = true; });
 					const second = provider.setCompanyOfflineEnabled(true);
 					let blocked = 0;
-					for (const consume of [provider.getCompanyConfig, provider.getCompanyConfigError, provider.companySnapshotForSubprocess]) {
+					for (const consume of [provider.getCompanyConfig, provider.getCompanyConfigError]) {
 						try { consume(); } catch (error) { if (String(error).includes("not ready")) blocked++; }
 					}
 					await Bun.write(${JSON.stringify(join(home, "independent"))}, "continued");
@@ -154,7 +140,7 @@ describe("company provider startup snapshot", () => {
 			expect(result).toEqual({
 				onlineReads: 0,
 				reads: 1,
-				blocked: 3,
+				blocked: 2,
 				progressed: true,
 				settled: true,
 				tokenMatches: true,
@@ -177,7 +163,6 @@ describe("company provider startup snapshot", () => {
 		expect(result.gatedErrorUndefined).toBe(true);
 		expect(result.unchanged).toBe(true);
 		expect(result.workerMatches).toBe(true);
-		expect(result.inheritedMatches).toBe(true);
 		expect(result.baseUrl).toBe("http://internal.invalid/gateway/v1");
 		expect(result.embeddingBaseUrl).toBe("http://internal.invalid/gateway/v1");
 		expect(result.tokenMatches).toBe(true);
@@ -188,7 +173,6 @@ describe("company provider startup snapshot", () => {
 		const result = runSnapshotProbe(undefined);
 		expect(result.available).toBe(false);
 		expect(result.unchanged).toBe(true);
-		expect(result.inheritedMatches).toBe(true);
 		expect(result.workerMatches).toBe(true);
 		expect(result.error).toContain("cannot read");
 	});
@@ -197,7 +181,6 @@ describe("company provider startup snapshot", () => {
 		const result = runSnapshotProbe('{"env":{"ANTHROPIC_AUTH_TOKEN":"fixture-secret"');
 		expect(result.available).toBe(false);
 		expect(result.unchanged).toBe(true);
-		expect(result.inheritedMatches).toBe(true);
 		expect(result.workerMatches).toBe(true);
 		expect(result.error).toContain("not valid JSON");
 		expect(JSON.stringify(result)).not.toContain("fixture-secret");
@@ -254,7 +237,6 @@ describe("company provider startup snapshot", () => {
 		const result = runSnapshotProbe(JSON.stringify(config));
 		expect(result.available).toBe(false);
 		expect(result.unchanged).toBe(true);
-		expect(result.inheritedMatches).toBe(true);
 		expect(result.workerMatches).toBe(true);
 		expect(result.error).toContain(error);
 		expect(JSON.stringify(result)).not.toContain("fixture-secret");

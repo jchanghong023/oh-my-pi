@@ -28,7 +28,7 @@ import { takeAutoRejoin } from "@oh-my-pi/pi-wire";
 import type { AgentHubRemote, AgentHubRemoteTranscript } from "../modes/view-model/overlays/agent-hub";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentRegistry } from "../registry/agent-registry";
-import type { LocalAgentSessionEvent } from "../session/agent-session";
+import type { LocalAgentSessionEvent, ResumeInMemorySession } from "../session/agent-session";
 import { fromWireEvent } from "../session/loop-end-wire";
 import type { SessionEntry } from "../session/session-entries";
 import { mintSessionId, SessionManager } from "../session/session-manager";
@@ -199,8 +199,9 @@ export class CollabGuestLink {
 	 * collectable by `omp gc`).
 	 */
 	#replicaLease: (() => void) | undefined;
-	/** Previous session file to restore on leave; null = previous session was unsaved. */
-	#returnSessionFile: string | null = null;
+	#returnSessionFile: string | undefined;
+	#resumeInMemory: ResumeInMemorySession | undefined;
+	#memorySessionResumed = false;
 	#returnSessionLease: (() => void) | undefined;
 	/** Frames apply strictly in arrival order through this chain. */
 	#applyChain: Promise<void> = Promise.resolve();
@@ -318,7 +319,7 @@ export class CollabGuestLink {
 		if (this.#ctx.collabGuest || this.#left) throw new Error("Already in a collab session (/leave first)");
 		this.#roomId = parsed.roomId;
 		this.#writeToken = parsed.writeToken ? Buffer.from(parsed.writeToken).toString("base64url") : undefined;
-		this.#returnSessionFile = this.#ctx.sessionManager.getSessionFile() ?? null;
+		this.#returnSessionFile = this.#ctx.sessionManager.getSessionFile() ?? undefined;
 		// Claim the process before any async setup or replica session transition.
 		this.#ctx.setCollabGuest(this);
 		let key: CryptoKey;
@@ -591,14 +592,21 @@ export class CollabGuestLink {
 
 		// Resume through AgentSession without adopting the host's cwd. The replica
 		// keeps its model: #applyHostState mirrors the host's, which runs inference.
-		const switched = await this.#ctx.session.switchSession(replicaPath, { preserveLocalCwd: true, keepModel: true });
+		const firstActivation = !this.#replicaActivated;
+		const switched = await this.#ctx.session.switchSession(replicaPath, {
+			preserveLocalCwd: true,
+			keepModel: true,
+			readLocalFile: true,
+			onSuspendInMemory:
+				firstActivation && !this.#returnSessionFile ? resume => (this.#resumeInMemory = resume) : undefined,
+		});
 		if (switched === false) {
 			throw new Error("Collab replica activation was cancelled");
 		}
+		this.#replicaActivated = true;
 		// A numbered join can bypass the compaction queue. Return the local
 		// input to the editor before clearing old-session UI state.
-		if (numberedRoom && !this.#replicaActivated) this.#ctx.restoreCompactionQueueToEditor();
-		this.#replicaActivated = true;
+		if (numberedRoom && firstActivation) this.#ctx.restoreCompactionQueueToEditor();
 		if (this.#left) return;
 		const orphanedLiveBlocks = [
 			...this.#ctx.pendingTools.values(),
@@ -1037,6 +1045,7 @@ export class CollabGuestLink {
 		this.#replicaLease = undefined;
 		this.#returnSessionLease?.();
 		this.#returnSessionLease = undefined;
+		this.#resumeInMemory = undefined;
 		if (this.#ctx.collabGuest !== this) return false;
 		this.#ctx.setCollabGuest(undefined);
 		this.#ctx.syncRunningSubagentBadge();
@@ -1064,8 +1073,13 @@ export class CollabGuestLink {
 			}
 			return;
 		}
-		if ((await this.#ctx.session.newSession()) === false) {
-			throw new Error("Local session restoration was cancelled");
+		if (!this.#memorySessionResumed) {
+			await this.#ctx.settings.flush();
+			await this.#ctx.prepareSessionSwitch();
+			if (!(await this.#resumeInMemory?.(cwd => this.#ctx.applyCwdChange(cwd)))) {
+				throw new Error("Local session restoration was cancelled");
+			}
+			this.#memorySessionResumed = true;
 		}
 		setSessionTerminalTitle(this.#ctx.sessionManager.getSessionName(), this.#ctx.sessionManager.getCwd());
 		this.#ctx.statusLine.refresh();

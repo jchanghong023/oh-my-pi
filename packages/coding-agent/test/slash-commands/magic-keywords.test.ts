@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	buildAvailableSlashCommands,
 	type AvailableCommandsSession,
@@ -12,7 +13,8 @@ describe("magic keyword public slash dispatch", () => {
 		expect(
 			await executeBuiltinSlashCommand(editor, {
 				ctx: {
-					session: { model: undefined },
+					settings: Settings.isolated(),
+					session: { model: undefined, getEnabledToolNames: () => ["task", "eval"] },
 					composer: {
 						setText: (text: string) => {
 							editor = text;

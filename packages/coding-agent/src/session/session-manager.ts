@@ -913,6 +913,8 @@ interface SessionManagerStateSnapshot {
 	/** Stashed sibling family candidate; moveTo drops it, so a rollback must restore it. */
 	taskSiblingCandidate: string | undefined;
 	header: SessionHeader;
+	leafId: string | null;
+	loadedMalformedRecords: number;
 	entries: SessionEntry[];
 }
 
@@ -1209,7 +1211,7 @@ export class SessionManager {
 
 	#rememberBreadcrumb(cwd: string, sessionFile: string, fresh = false): void {
 		this.#breadcrumbFresh = fresh;
-		if (this.#suppressBreadcrumb || this.#origin) return;
+		if (!this.#persist || this.#suppressBreadcrumb || this.#origin) return;
 		writeTerminalBreadcrumb(cwd, sessionFile, fresh, {
 			remoteStorage: !(this.#storage instanceof FileSessionStorage),
 		});
@@ -2513,6 +2515,8 @@ export class SessionManager {
 			draftOnlySessionCleanupArmed: this.#draftOnlySessionCleanupArmed,
 			fallbackRuntimeOnly: this.#fallbackRuntimeOnly,
 			taskSiblingCandidate: this.#taskSiblingCandidate,
+			leafId: this.#index.leafId(),
+			loadedMalformedRecords: this.#loadedMalformedRecords,
 			// Entries are snapshotted by reference (switch/reload replaces the
 			// array wholesale). The header is cloned: moveTo mutates it in place
 			// (cwd, additionalDirectories), so a by-reference capture would let
@@ -2561,6 +2565,8 @@ export class SessionManager {
 		// A completed moveTo drops the stash, so a rollback restores it here.
 		this.#taskSiblingCandidate = snapshot.taskSiblingCandidate;
 		this.#applyEntries(snapshot.header, [...snapshot.entries]);
+		this.#index.setLeaf(snapshot.leafId);
+		this.#loadedMalformedRecords = snapshot.loadedMalformedRecords;
 		this.#additionalDirectories = snapshot.header.additionalDirectories ?? [];
 		this.#sessionName = snapshot.sessionName;
 
@@ -2613,7 +2619,16 @@ export class SessionManager {
 		}
 	}
 	/** Switch to a different session file (resume / branch). */
-	async setSessionFile(sessionFile: string): Promise<void> {
+	async setSessionFile(sessionFile: string, options?: { readLocalFile?: boolean }): Promise<void> {
+		if (options?.readLocalFile && !this.#persist && !(this.#storage instanceof FileSessionStorage)) {
+			// A --no-session guest can read its disk replica without enabling writes
+			// or replacing the manager's in-memory storage.
+			const file = path.resolve(sessionFile);
+			await this.#setSessionFile(file, await loadSessionFile(file, new FileSessionStorage()), {
+				throwIfMissing: true,
+			});
+			return;
+		}
 		await this.#setSessionFile(sessionFile);
 	}
 

@@ -359,12 +359,7 @@ export class RpcGoalController {
 			runtime.clearAccounting();
 			return;
 		}
-		this.#session.setGoalModeState({
-			enabled: context.mode === "goal",
-			mode: "active",
-			...(context.modeData?.autoOrchestrate === true ? { autoOrchestrate: true } : {}),
-			goal,
-		});
+		this.#session.setGoalModeState({ enabled: context.mode === "goal", mode: "active", goal });
 		const restored = await runtime.onThreadResumed({ preserveActiveGoal: options?.preserveActiveGoal });
 		if (!restored?.goal) return;
 		const enabledTools = this.#session.getEnabledToolNames();

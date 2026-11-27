@@ -330,22 +330,13 @@ async function cloneAndReadCatalog(url: string, source: string, cacheDir: string
 	}
 }
 
-/** Promote a staged clone; migrations must not replace an occupied destination. */
-export async function promoteCloneToCache(
-	tmpDir: string,
-	cacheDir: string,
-	name: string,
-	replaceExisting = true,
-): Promise<string> {
+/** Promote a staged clone without replacing an unowned destination. */
+export async function promoteCloneToCache(tmpDir: string, cacheDir: string, name: string): Promise<string> {
 	const destination = path.join(cacheDir, name);
-	if (replaceExisting) {
-		await fs.rm(destination, { recursive: true, force: true });
-	} else {
-		const occupied = await fs.lstat(destination).catch(err => {
-			if (!isEnoent(err)) throw err;
-		});
-		if (occupied) throw new Error(`Marketplace cache destination already exists: ${destination}`);
-	}
+	const occupied = await fs.lstat(destination).catch(err => {
+		if (!isEnoent(err)) throw err;
+	});
+	if (occupied) throw new Error(`Marketplace cache destination already exists: ${destination}`);
 	await fs.rename(tmpDir, destination);
 	return destination;
 }

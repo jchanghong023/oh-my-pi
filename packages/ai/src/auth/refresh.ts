@@ -1,6 +1,6 @@
 import { scheduler } from "node:timers/promises";
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
-import { isSqliteBusyError, logger, postmortem } from "@oh-my-pi/pi-utils";
+import { isSqliteBusyError, logger, offlineFromEnv, postmortem } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { normalizeOAuthCredentialExpiry, refreshProviderOAuthToken } from "../registry/oauth";
 import type { OAuthCredentials } from "../registry/oauth/types";
@@ -21,6 +21,7 @@ import {
 	type OAuthCredential,
 	type OAuthRefreshByIdOptions,
 	type OAuthRefreshReason,
+	REMOTE_REFRESH_SENTINEL,
 	type StoredAuthCredential,
 	type StoredOAuthRefreshOptions,
 	type StoredOAuthRefreshResult,
@@ -43,6 +44,7 @@ const OAUTH_REFRESH_SKEW_MS = 60_000;
 
 /** How long before expiry `provider`'s OAuth access tokens are refreshed. */
 export function oauthRefreshSkewMs(provider: string): number {
+	if (offlineFromEnv()) return 0;
 	const refresh = authPolicyFor(provider)?.refresh;
 	return (refresh?.kind === "request" ? refresh.windowMs : undefined) ?? OAUTH_REFRESH_SKEW_MS;
 }
@@ -161,6 +163,7 @@ export interface OAuthRefresherDeps {
 	pool: CredentialPool;
 	blocks: CredentialBlocks;
 	override?: AuthStorageOptions["refreshOAuthCredential"];
+	offlineOverride?: AuthStorageOptions["refreshOAuthCredentialOffline"];
 	overrideMints?: AuthStorageOptions["refreshOAuthCredentialMints"];
 }
 
@@ -1142,8 +1145,16 @@ export class OAuthRefresher {
 		// Caller override > store-level hook > local per-provider refresh.
 		// `RemoteAuthCredentialStore` exposes the hook so a broker-backed gateway
 		// routes refresh through the broker without explicit wiring.
-		const storeRefresh = this.#deps.store.refreshOAuthCredential?.bind(this.#deps.store);
-		const overrideRefresh = this.#deps.override ?? storeRefresh;
+		const offline = offlineFromEnv();
+		// A broker-redacted row cannot be renewed locally. Delegating it to a
+		// broker might cause a public exchange even when the broker is on the LAN.
+		if (offline) {
+			if (credential.refresh === REMOTE_REFRESH_SENTINEL) throw new AIError.OAuthOfflineError("auth broker");
+			if (this.#deps.override && !this.#deps.offlineOverride) throw new AIError.OAuthOfflineError(provider);
+		}
+		const overrideRefresh = offline
+			? this.#deps.offlineOverride
+			: (this.#deps.override ?? this.#deps.store.refreshOAuthCredential?.bind(this.#deps.store));
 		if (overrideRefresh && credentialId !== undefined) {
 			refreshPromise = overrideRefresh(provider, credentialId, credential, signal, reason);
 		} else {

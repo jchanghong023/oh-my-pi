@@ -34,7 +34,7 @@ import type {
 import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller";
 import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
-import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
+import { installInMemoryRelay, stubGuestReplicaSwitch, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 import { instrumentRelay, waitFor } from "./helpers/throttled-host";
 
 // In-memory transport: shared FakeWebSocket + InMemoryRelay harness (see
@@ -205,8 +205,7 @@ async function makeHarness(opts?: { readOnly?: boolean; rejectWith?: unknown }):
 		},
 		session: {
 			messages: [],
-			switchSession: () => Promise.resolve(),
-			newSession: () => Promise.resolve(),
+			switchSession: stubGuestReplicaSwitch,
 			resetReplicatedViewState: () => {},
 			agent: {
 				state: { model: undefined },
@@ -215,6 +214,7 @@ async function makeHarness(opts?: { readOnly?: boolean; rejectWith?: unknown }):
 				setDisableReasoning: () => {},
 			},
 		},
+		prepareSessionSwitch: async () => {},
 		clearTransientSessionUi: () => {},
 		clearWorking: () => false,
 		ensureWorkingRow: () => {},

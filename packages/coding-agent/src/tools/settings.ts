@@ -963,6 +963,7 @@ export const cfgWebSearchEnabled = register({
 	id: "web_search.enabled",
 	type: "boolean",
 	default: true,
+	offlineDisabled: true,
 	ui: {
 		tab: "tools",
 		group: "Available Tools",
