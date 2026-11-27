@@ -6,7 +6,6 @@
  */
 // Import capability definitions (ensures capabilities are defined before providers register)
 import "../capability/context-file";
-import "../capability/extension";
 import "../capability/extension-module";
 import "../capability/hook";
 import "../capability/instruction";
@@ -28,13 +27,9 @@ import "./builtin";
 import "./builtin-defaults";
 import "./claude";
 import "./claude-plugins";
-import "./cline";
 import "./agents";
 import "./codex";
-import "./cursor";
-import "./gemini";
 import "./opencode";
-import "./github";
 import "./mcp-json";
 import "./omp-plugins";
 import "./skillshare";
@@ -42,8 +37,6 @@ import "./developer-test-agent";
 import "./spec-driven";
 import "./ssh";
 import "./ssh-config";
-import "./vscode";
-import "./windsurf";
 
 // Re-export the main API from capability registry
 export {
@@ -77,7 +70,6 @@ export {
 	setEnabledProviders,
 } from "../capability";
 export type { ContextFile } from "../capability/context-file";
-export type { Extension, ExtensionManifest } from "../capability/extension";
 export type { ExtensionModule } from "../capability/extension-module";
 export type { Hook } from "../capability/hook";
 export type { Instruction } from "../capability/instruction";

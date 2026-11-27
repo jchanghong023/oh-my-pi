@@ -46,7 +46,7 @@ export function userOptInProvider(source: SourceMeta): string | undefined {
 	const { provider, origin, level } = source;
 	if (provider === "claude-plugins" && origin !== undefined) return origin === "claude" ? provider : undefined;
 	if (provider === "agent-plugins" && origin === "claude") return "claude-plugins";
-	return level === "user" ? provider : undefined;
+	return provider === "claude" && level === "user" ? provider : undefined;
 }
 
 /** Item disable and shadowing take precedence over provider and source switches. */
@@ -144,7 +144,7 @@ export async function loadAllExtensions(
 			getDescription?: (item: T) => string | undefined;
 			getTrigger?: (item: T) => string | undefined;
 			getShadowedBy?: (item: T) => string | undefined;
-			/** Skip provider/user-source gates for items only `disabledExtensions` controls. */
+			/** Skip the provider gate for items only `disabledExtensions` controls. */
 			itemGateOnly?: boolean;
 		},
 	): void {

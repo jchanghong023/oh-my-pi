@@ -32,7 +32,6 @@ import { AppFrame } from "../src/modes/interactive/frame";
 import { initTheme } from "../src/ui/theme/service";
 import {
 	applyRenderFixtureEvent,
-	contextDisplay,
 	createInteractiveModeContext,
 	createSessionStub,
 	renderTranscript,
@@ -891,8 +890,6 @@ describe("compact action dock", () => {
 		const compact = mode === "compact";
 		cfgDisplayMode.set(h.ctx.settings, mode);
 		h.ctx.hideToolActivity = compact;
-		// The fixture overrides the context property, so sync the presenter's signal separately.
-		contextDisplay(h.ctx).hideToolActivity.set(compact);
 		const live = liveSession();
 		h.register("Writer", live);
 		await h.focus.focusAgent("Writer");

@@ -459,12 +459,12 @@ describe("retry fallback selector resolution", () => {
 	});
 
 	it("does not adopt a model-kind role's chain for a chat session on the same model", () => {
-		const model = fixtureModel("google-antigravity", "gemini-3.8-flash");
+		const model = fixtureModel("google", "gemini-3.8-flash");
 		const webModel: Model = { ...fixtureModel("web", "parallel"), kind: "search" };
-		const live = "google-antigravity/gemini-3.8-flash:medium";
+		const live = "google/gemini-3.8-flash:medium";
 		const models = [model, webModel];
 		const roleModels: Record<string, string> = {
-			web: "google-antigravity/gemini-3.8-flash:minimal",
+			web: "google/gemini-3.8-flash:minimal",
 			task: live,
 		};
 		const withWebChain = (chains: RetryFallbackResolutionContext["chains"]): RetryFallbackResolutionContext => ({

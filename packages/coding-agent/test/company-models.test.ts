@@ -11,6 +11,7 @@ interface CompanyProbe {
 	selectedModel: string;
 	companyKey: string;
 	credentialKey: string;
+	chatBaseUrl: string;
 	resolvedKey: string;
 	headers: Record<string, string>;
 	ignoredCompanyKeySource: boolean;
@@ -95,6 +96,7 @@ function runCompanyProbe(): CompanyProbe {
 				const model = registry.find("company", "GLM-5.3-public");
 				if (!model) throw new Error("company model missing");
 				const companyKey = await registry.getApiKey(model);
+				const chatClient = buildAnthropicClientOptions({ model, apiKey: companyKey });
 				const result = {
 					models,
 					selectedModel: resolveSessionModelSelector(registry, "company/GLM-5.3-public")?.model.id,
@@ -104,7 +106,8 @@ function runCompanyProbe(): CompanyProbe {
 					companyKey,
 					credentialKey: (await registry.getApiKeyWithCredentialForProvider("company"))?.apiKey,
 					resolvedKey: await resolveApiKeyOnce(registry.resolver(model)),
-					headers: buildAnthropicClientOptions({ model, apiKey: companyKey }).defaultHeaders,
+					chatBaseUrl: chatClient.baseURL,
+					headers: chatClient.defaultHeaders,
 					ignoredCompanyKeySource: authStorage.keys.source("company") !== undefined,
 					warnings: registry.getReservedProviderWarnings(),
 					retrievalVisible: COMPANY_RETRIEVAL_MODELS.some(model => registry.find("company", model.id) !== undefined),
@@ -193,7 +196,7 @@ describe("company runtime catalog and request auth", () => {
 			slow: "GLM-5.3-public",
 		});
 		for (const model of result.capped) {
-			expect(model.baseUrl).toBe("http://127.0.0.1:8081/gateway");
+			expect(model.baseUrl).toBe("http://127.0.0.1:8081/gateway/v1");
 			expect(model.contextWindow).toBe(model.id === "Qwen3.8-27B" ? 262_144 : 204_800);
 			expect(model.maxTokens).toBe(81_920);
 		}
@@ -216,6 +219,7 @@ describe("company runtime catalog and request auth", () => {
 		expect(result.companyKey).toBe("company-fixture-token");
 		expect(result.credentialKey).toBe(result.companyKey);
 		expect(result.resolvedKey).toBe(result.companyKey);
+		expect(result.chatBaseUrl).toBe("http://127.0.0.1:8081/gateway");
 		expect(result.headers.Authorization).toBe("Bearer company-fixture-token");
 		expect(result.headers["X-Api-Key"]).toBeUndefined();
 		expect(result.ignoredCompanyKeySource).toBe(false);

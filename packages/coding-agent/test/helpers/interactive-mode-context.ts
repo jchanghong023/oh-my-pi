@@ -22,7 +22,7 @@
  *   (focus moves in; closing restores it).
  * - Working rows keep real state: `working` follows `showWorking` /
  *   `clearWorking` / `ensureWorkingRow` (all `vi.fn`).
- * - Display flags (`toolOutputExpanded`, `hideToolActivity`, `hideThinkingBlock`,
+ * - Display flags (`toolOutputExpanded`, `toolActivity`, `hideThinkingBlock`,
  *   `proseOnlyThinking`, `expandThinkingBlocks`) are signals behind plain
  *   properties ({@link contextDisplay} returns them).
  *
@@ -52,7 +52,12 @@ import { CompactToolOutputPreview } from "../../src/modes/compact-tool-output-pr
 import { AppFrame } from "../../src/modes/interactive/frame";
 import { TranscriptPresenter } from "../../src/modes/interactive/transcript";
 import { OAuthManualInputManager } from "@oh-my-pi/pi-coding-agent/modes/oauth-manual-input";
-import { cfgDisplayMode, cfgMotionResolved, cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import {
+	cfgDisplayMode,
+	cfgMotionResolved,
+	cfgTerminalShowImages,
+	type ToolActivityMode,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type {
 	InteractiveModeContext,
 	PresentOptions,
@@ -429,11 +434,17 @@ export function createInteractiveModeContext(
 		set toolOutputExpanded(value: boolean) {
 			display.toolOutputExpanded.set(value);
 		},
-		get hideToolActivity() {
-			return display.hideToolActivity();
+		get toolActivity() {
+			return display.toolActivity();
 		},
-		set hideToolActivity(value: boolean) {
-			display.hideToolActivity.set(value);
+		set toolActivity(value: ToolActivityMode) {
+			display.toolActivity.set(value);
+		},
+		get hideToolActivity() {
+			return display.toolActivity() === "hidden";
+		},
+		set hideToolActivity(hidden: boolean) {
+			display.toolActivity.set(hidden ? "hidden" : "detailed");
 		},
 		get hideThinkingBlock() {
 			return display.hideThinkingBlock();
@@ -492,9 +503,11 @@ export function createInteractiveModeContext(
 			present(factory, options);
 		}),
 		flushPendingCommandOutput: vi.fn(),
+		dismissDeferredCommandOutput: vi.fn(() => false),
 		showStatus: vi.fn(),
 		showError: vi.fn(),
 		showWarning: vi.fn(),
+		showActiveModelNotice: vi.fn(),
 		showModelCycleTrack: vi.fn(),
 		showPinnedError: vi.fn(),
 		clearPinnedError: vi.fn(),
@@ -538,7 +551,7 @@ export function createInteractiveModeContext(
 		setTodos: vi.fn(),
 	} satisfies ContextOverrides;
 	layer(ctx, overrides, RESOLVED_AHEAD);
-	ctx.hideToolActivity = overrides.hideToolActivity ?? false;
+	if (overrides.hideToolActivity !== undefined) ctx.hideToolActivity = overrides.hideToolActivity;
 	displays.set(ctx, display);
 	inputs.set(ctx, input);
 	const built = ctx as unknown as InteractiveModeContext;
@@ -575,7 +588,7 @@ export function createInteractiveModeContext(
 			},
 			display: {
 				toolOutputExpanded: display.toolOutputExpanded,
-				hideToolActivity: display.hideToolActivity,
+				toolActivity: display.toolActivity,
 				hideThinking: display.hideThinkingBlock,
 				proseOnlyThinking: display.proseOnlyThinking,
 				expandThinkingBlocks: display.expandThinkingBlocks,
@@ -593,7 +606,7 @@ export function createInteractiveModeContext(
 			linkTargets: () => getAssistantMessageLinkTargets(built),
 			messages: {
 				expanded: () => display.toolOutputExpanded(),
-				activityVisible: () => !display.hideToolActivity(),
+				activityVisible: () => display.toolActivity() !== "hidden",
 				advisorCollapsedLines: () => 0,
 				renderer: customType => built.viewSession.extensionRunner?.getMessageRenderer(customType),
 				onRenderError: () => {},
@@ -614,7 +627,7 @@ export function createInteractiveModeContext(
 /** The display flags behind a fixture context's flag properties. */
 export interface ContextDisplay {
 	readonly toolOutputExpanded: Signal<boolean>;
-	readonly hideToolActivity: Signal<boolean>;
+	readonly toolActivity: Signal<ToolActivityMode>;
 	readonly hideThinkingBlock: Signal<boolean>;
 	readonly proseOnlyThinking: Signal<boolean>;
 	readonly expandThinkingBlocks: Signal<boolean>;
@@ -625,7 +638,7 @@ const displays = new WeakMap<object, ContextDisplay>();
 function createDisplay(): ContextDisplay {
 	return {
 		toolOutputExpanded: signal(false),
-		hideToolActivity: signal(false),
+		toolActivity: signal<ToolActivityMode>("detailed"),
 		hideThinkingBlock: signal(false),
 		proseOnlyThinking: signal(true),
 		expandThinkingBlocks: signal(false),

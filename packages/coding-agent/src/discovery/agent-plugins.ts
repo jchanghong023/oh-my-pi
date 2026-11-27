@@ -62,18 +62,13 @@ interface CandidateRoot {
 /**
  * Every directory that may contain an Agent Plugin: marketplace and
  * `--plugin-dir` roots from the shared registries, plus configured extension
- * package roots. First occurrence wins on duplicates, except an inventory-only
- * Claude root cannot mask an active installation of the same plugin.
+ * package roots. First occurrence wins on duplicates.
  */
 async function listCandidateRoots(ctx: LoadContext): Promise<CandidateRoot[]> {
 	const [marketplace, extensionRoots] = await Promise.all([
 		listClaudePluginRoots(ctx.home, ctx.cwd, { includeClaude: isUserSourceEnabled("claude-plugins", ctx) }),
 		listOmpExtensionRoots(ctx),
 	]);
-	const prioritizeActive =
-		ctx.includeOptOutUserSources &&
-		!isUserSourceEnabled("claude-plugins", { ...ctx, includeOptOutUserSources: false });
-	let optedOut: CandidateRoot[] | undefined;
 	const seen = new Set<string>();
 	const candidates: CandidateRoot[] = [];
 	for (const root of marketplace.roots) {
@@ -84,10 +79,6 @@ async function listCandidateRoots(ctx: LoadContext): Promise<CandidateRoot[]> {
 			origin: root.origin,
 			instanceKey: root.marketplace === "__local__" ? `dir:${root.path}` : `${root.id}#${root.scope}`,
 		};
-		if (prioritizeActive && root.origin === "claude") {
-			(optedOut ??= []).push(candidate);
-			continue;
-		}
 		seen.add(root.path);
 		candidates.push(candidate);
 	}
@@ -95,13 +86,6 @@ async function listCandidateRoots(ctx: LoadContext): Promise<CandidateRoot[]> {
 		if (seen.has(root.path)) continue;
 		seen.add(root.path);
 		candidates.push({ path: root.path, level: root.level, instanceKey: `ext:${root.path}` });
-	}
-	if (optedOut) {
-		for (const candidate of optedOut) {
-			if (seen.has(candidate.path)) continue;
-			seen.add(candidate.path);
-			candidates.push(candidate);
-		}
 	}
 	return candidates;
 }

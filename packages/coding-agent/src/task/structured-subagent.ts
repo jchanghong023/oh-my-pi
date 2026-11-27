@@ -24,6 +24,7 @@ import {
 } from "../config/compaction-threshold";
 import { type ServiceTierInheritSettingValue, validateAgentServiceTierOverrides } from "../config/service-tier";
 import type { Settings } from "../config/settings";
+import { withActiveSettings } from "../config/settings-context";
 import { isProviderEnabled, isUserSourceEnabled } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -521,7 +522,9 @@ export async function resolveEffectiveSubagentPolicy(
 	const denial = spawnDenial(request.session, agentName, request.blockedAgent);
 	if (denial) throw new StructuredSubagentError("preflight", denial);
 
-	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
+	const discovery = await withActiveSettings(request.session.settings, () =>
+		discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.()),
+	);
 	const sessionAgents = request.session.getSessionAgents?.() ?? [];
 	const agents = [...discovery.agents, ...sessionAgents];
 	const agent = request.agentDefinition ?? (bundled ? getBundledAgent(agentName) : getAgent(agents, agentName));

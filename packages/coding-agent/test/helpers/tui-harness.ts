@@ -134,7 +134,9 @@ async function withTui(
 	await using provider = createProviderFixture(scenario);
 	const cwd = root.join("project");
 	const home = root.join("home");
-	const agentDir = root.join("config", "profiles", "acceptance", "agent");
+	const profile = "acceptance";
+	const profileDir = root.join("config", "profiles", profile);
+	const agentDir = path.join(profileDir, "agent");
 	const temp = root.join("tmp");
 	const appData = root.join("home", "AppData", "Roaming");
 	const localData = root.join("home", "AppData", "Local");
@@ -169,7 +171,7 @@ async function withTui(
 		),
 		TZ: "UTC",
 		OMP_CONFIG_ROOT: root.join("config"),
-		OMP_PROFILE: "acceptance",
+		OMP_PROFILE: profile,
 		PI_CODING_AGENT_DIR: agentDir,
 		PI_CONFIG_DIR: ".omp",
 		PI_PROFILE: "",
@@ -290,7 +292,7 @@ async function withTui(
 	} catch (error) {
 		// Preserve existing out-of-band program logs before TempDir cleanup.
 		try {
-			const logsDir = root.join("config", "logs");
+			const logsDir = path.join(profileDir, "logs");
 			for (const name of await fs.readdir(logsDir)) {
 				if (/^omp\..*\.log(?:\.\d+)?$/.test(name)) {
 					console.error(`Native program log ${name}:`, await fs.readFile(path.join(logsDir, name), "utf8"));

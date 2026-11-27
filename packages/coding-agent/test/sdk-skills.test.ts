@@ -21,8 +21,6 @@ import { cfgSkillsCustomDirectories } from "@oh-my-pi/pi-coding-agent/extensibil
 function createIsolatedSkillsSettings(extensions: string[] = []): Settings {
 	return Settings.isolated({
 		"skills.enabled": true,
-		"skills.enableCodexUser": false,
-		"skills.enableClaudeUser": false,
 		"skills.enableClaudeProject": false,
 		"skills.enablePiUser": false,
 		"skills.enablePiProject": true,
@@ -422,8 +420,6 @@ This skill is added after session creation.
 		setAgentDir(managedAgentDir);
 		const settings = Settings.isolated({
 			"skills.enabled": true,
-			"skills.enableCodexUser": false,
-			"skills.enableClaudeUser": false,
 			"skills.enableClaudeProject": false,
 			"skills.enablePiUser": false,
 			"skills.enablePiProject": true,

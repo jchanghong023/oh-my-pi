@@ -44,21 +44,10 @@ const providerMeta = new Map<string, { displayName: string; description: string 
 let unboundDisabledProviders = new Set<string>();
 let unboundEnabledProviders = new Set<string>();
 
-/** `disabledProviders` / `enabledProviders` as sets, memoized per settings instance. */
-const cfgDisabledProviderSet = cfgDisabledProviders.map(ids => new Set(ids));
 const cfgEnabledProviderSet = cfgEnabledProviders.map(ids => new Set(ids));
 
-/** Foreign tools whose user-level (~/...) configs are opt-in */
-const FOREIGN_USER_PROVIDERS: Record<string, true> = {
-	cursor: true,
-	codex: true,
-	claude: true,
-	"claude-plugins": true,
-	gemini: true,
-	opencode: true,
-	windsurf: true,
-	github: true,
-};
+/** `disabledProviders` as a set, memoized per settings instance. */
+const cfgDisabledProviderSet = cfgDisabledProviders.map(ids => new Set(ids));
 
 /** Outstanding {@link initializeWithSettings} holds, oldest first; the newest one is bound. */
 const settingsHolds: { settings: Settings }[] = [];
@@ -71,7 +60,7 @@ const switchListeners = new Set<() => void>();
 
 /** Provider switches a worker thread inherits from the main thread ({@link providerSwitches}). */
 export interface ProviderSwitches {
-	/** Settings the newest hold bound; the live switches come from its `enabledProviders`/`disabledProviders`. */
+	/** Settings the newest hold bound; the live switches come from its provider settings. */
 	readonly bound: Settings | null;
 	/** Switches in effect while nothing is bound. */
 	readonly unboundDisabled: readonly string[];
@@ -405,9 +394,11 @@ export async function loadCapability<T>(
 	const ctx: LoadContext = { cwd, home, repoRoot };
 	if (options.agentDir !== undefined) ctx.agentDir = options.agentDir;
 	if (options.providers) ctx.explicitProviders = new Set(options.providers);
-	if (options.includeDisabled) ctx.includeOptOutUserSources = true;
+	if (options.includeDisabled && capability.id === "skills") ctx.includeOptOutUserSkills = true;
 	if (options.extensionRoots !== undefined) ctx.extensionRoots = options.extensionRoots;
 	if (options.skillSourceFilter !== undefined) ctx.skillSourceFilter = options.skillSourceFilter;
+	if (options.enableCodexUserSkills !== undefined) ctx.enableCodexUserSkills = options.enableCodexUserSkills;
+	if (options.enableClaudeUserSkills !== undefined) ctx.enableClaudeUserSkills = options.enableClaudeUserSkills;
 	return await withActiveSettings(scopedSettings(ctx), async () => {
 		const providers = filterProviders(capability, options, ctx);
 		return await loadImpl(capability, providers, ctx, options);
@@ -420,27 +411,19 @@ export async function loadCapability<T>(
 
 /** Whether `providerId` is a foreign tool whose `~/` config is opt-in. */
 export function isForeignUserProvider(providerId: string): boolean {
-	return FOREIGN_USER_PROVIDERS[providerId] === true;
+	return providerId === "claude" || providerId === "claude-plugins";
 }
 
-/**
- * Check whether a user-level (~/...) config source is enabled.
- * Native (.omp) and .agents directories are enabled by default.
- * Foreign tool directories (~/.cursor, ~/.codex, ~/.claude, etc.) are opt-in
- * via `enabledProviders`. Project-level (cwd) config is unaffected; see
- * {@link isProviderEnabled} for the whole-provider switch.
- */
+/** Check the surviving Claude source opt-ins; retired providers are not registered. */
 export function isUserSourceEnabled(source: string, ctx?: LoadContext): boolean {
 	const id = source.replace(/^\./, "");
-	if (disabledProviders(ctx).has(id) && !ctx?.includeOptOutUserSources) return false;
-	if (ctx?.skillSourceFilter) return ctx.skillSourceFilter({ provider: id, level: "user" });
-	if (FOREIGN_USER_PROVIDERS[id] !== true) return true;
-	if (ctx?.explicitProviders?.has(id) || ctx?.includeOptOutUserSources) return true;
+	if (disabledProviders(ctx).has(id)) return false;
+	if (!isForeignUserProvider(id)) return true;
+	if (ctx?.explicitProviders?.has(id)) return true;
 	const enabled = enabledProviders(ctx);
 	if (enabled.has(id) || enabled.has("*") || enabled.has("all")) return true;
-	if (id === "claude-plugins" && enabled.has("claude")) return true;
-	if (id === "claude" && process.env.CLAUDE_CONFIG_DIR?.trim()) return true;
-	return false;
+	if (id === "claude-plugins") return enabled.has("claude");
+	return Boolean(process.env.CLAUDE_CONFIG_DIR?.trim());
 }
 
 /** Opt a foreign provider's `~/` config in. */
@@ -455,7 +438,7 @@ export function disableUserSource(providerId: string): void {
 
 /**
  * Bind the capability system to `activeSettings`: provider switches are read live
- * from its `enabledProviders`/`disabledProviders` (settings UI, `set()` from any
+ * from its `enabledProviders` and `disabledProviders` (settings UI, `set()` from any
  * caller, on-disk reloads — the next discovery pass sees them) and persisted to it.
  * Holds stack: the newest outstanding hold is bound, and releasing it (the returned
  * function) hands the binding back to the previous hold. The release is idempotent
@@ -489,11 +472,10 @@ export function enableProvider(providerId: string): void {
 
 /**
  * Check if a provider is enabled (the whole-provider switch backed by
- * `disabledProviders`). Foreign `~/` config additionally needs
- * {@link isUserSourceEnabled}.
+ * `disabledProviders`).
  */
-export function isProviderEnabled(providerId: string): boolean {
-	return !disabledProviders().has(providerId);
+export function isProviderEnabled(providerId: string, ctx?: LoadContext): boolean {
+	return !disabledProviders(ctx).has(providerId);
 }
 
 /**

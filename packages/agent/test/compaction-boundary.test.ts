@@ -78,6 +78,7 @@ describe("compaction summary boundaries", () => {
 	test("sends resolved session headers and exposes chat compaction to payload hooks", async () => {
 		const model = {
 			...getModel(),
+			baseUrl: "https://gateway.example/v1",
 			headers: { "x-static": "configured" },
 			resolveHeaders: async () => ({ "x-static": "configured", "x-session-id": "live-session" }),
 		};
@@ -118,7 +119,11 @@ describe("compaction summary boundaries", () => {
 	});
 
 	test("lets resolved headers replace the default bearer regardless of case", async () => {
-		const model = { ...getModel(), resolveHeaders: async () => ({ authorization: "Bearer gateway-token" }) };
+		const model = {
+			...getModel(),
+			baseUrl: "https://gateway.example/v1",
+			resolveHeaders: async () => ({ authorization: "Bearer gateway-token" }),
+		};
 		let headers: Headers | undefined;
 		await generateSummary(
 			[{ role: "user", content: "conversation", timestamp: 1 }],

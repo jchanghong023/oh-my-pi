@@ -27,6 +27,7 @@ import {
 	getApprovalGrants,
 } from "@oh-my-pi/pi-coding-agent/tools/approval-cache";
 import { approvalTargetKey, approvalTreeSearchKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
+import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { getAgentDir, isRecord, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 /** Tool whose targets come from `args.path`, like read/write/edit. */
@@ -68,6 +69,16 @@ beforeEach(() => {
 afterEach(() => temp.removeSync());
 
 const restrictions = (): ApprovalRestrictions => ({ restrictedFolders: [restricted], cwd });
+
+function commandTool(workingDirectory = cwd): BashTool {
+	return new BashTool({
+		cwd: workingDirectory,
+		settings: Settings.isolated(),
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => null,
+	});
+}
 
 describe("restricted folder resolution", () => {
 	it("prompts for a restricted target even in yolo, with a per-call reason", () => {
@@ -127,7 +138,14 @@ describe("restricted folder resolution", () => {
 				expect(sessionApprovalScope(result, name)).toBeUndefined();
 			}
 			expect(
-				resolveApproval(bash, { cwd: "restricted/nested" }, mode, { bash: "allow" }, grants, restrictions()),
+				resolveApproval(
+					commandTool(),
+					{ command: "cd restricted/nested && pwd" },
+					mode,
+					{ bash: "allow" },
+					grants,
+					restrictions(),
+				),
 			).toMatchObject({
 				policy: "prompt",
 				source: "restriction",
@@ -148,15 +166,30 @@ describe("restricted folder resolution", () => {
 		);
 	});
 
-	it("matches a tool that names no path by its working directory or its cwd argument", () => {
+	it("matches Bash by its session directory and a literal shell cd", () => {
 		const inside: ApprovalRestrictions = { restrictedFolders: [restricted], cwd: path.join(restricted, "nested") };
 		expect(resolveApproval(bash, {}, "yolo", {}, undefined, inside)).toMatchObject({
 			policy: "prompt",
 			source: "restriction",
 		});
 		expect(resolveApproval(bash, {}, "yolo", {}, undefined, restrictions()).policy).toBe("allow");
-		// A command run from outside, pointed into the folder by its own `cwd`, asks too.
-		expect(resolveApproval(bash, { cwd: "restricted" }, "yolo", {}, undefined, restrictions()).policy).toBe("prompt");
+		const tool = commandTool();
+		const restrict = (command: string) =>
+			resolveApproval(tool, { command }, "guarded", {}, undefined, restrictions()).source;
+		expect(restrict("cd restricted && pwd")).toBe("restriction");
+		expect(restrict("cd restricted/nested; pwd")).toBe("restriction");
+		expect(restrict("cd plain && pwd")).not.toBe("restriction");
+	});
+
+	it("uses shell root semantics and recognizes restricted directories outside the workspace", () => {
+		const workspace = path.join(cwd, "plain");
+		const tool = commandTool(workspace);
+		const folders = { cwd: workspace, restrictedFolders: [restricted] };
+		const command = { command: "cd ../restricted && pwd" };
+		expect(tool.approvalRestrictionPaths(command)).toEqual([restricted]);
+		expect(resolveApproval(tool, { command: "pwd" }, "guarded", {}, undefined, folders).policy).toBe("allow");
+		expect(resolveApproval(tool, command, "guarded", {}, undefined, folders).source).toBe("restriction");
+		expect(tool.approvalRestrictionPaths({ command: "cd / && pwd" })).toEqual(["/"]);
 	});
 
 	it("prompts for a recursive search rooted above a restricted folder, not a one-level listing", () => {

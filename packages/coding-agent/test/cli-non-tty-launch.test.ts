@@ -43,6 +43,8 @@ async function launchWithoutTerminal(
 		NO_COLOR: "1",
 		// CI can run on EC2 even when no credential variables are inherited.
 		AWS_EC2_METADATA_DISABLED: "true",
+		// Test runtime: keeps the child off the OS keychain.
+		PI_TEST_RUNTIME: "1",
 	};
 	const discoveryArgs = extensionDiscovery ? [] : ["--no-extensions"];
 	// Bundled skill hint compression selects its own model; these launches exercise

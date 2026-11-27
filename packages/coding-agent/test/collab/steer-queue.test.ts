@@ -103,6 +103,7 @@ function makeStreamingHostContext(): StreamingHostHarness {
 			onEntryAppended: undefined,
 		},
 		session: {
+			agent: { state: { pendingToolCalls: new Set<string>() } },
 			isStreaming: true,
 			get queuedMessageCount(): number {
 				return prompts.filter(prompt => prompt.options?.queueChipText).length;

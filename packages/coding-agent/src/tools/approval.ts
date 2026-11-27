@@ -581,8 +581,9 @@ function isWithinFolder(root: string, candidate: string): boolean {
 
 /**
  * Absolute filesystem paths a call touches, keyed like grants (symlinks resolved, case-folded on
- * Windows). Both cache targets and restriction-only paths may encode recursive tree scopes. A
- * call with no cache targets is also matched by its own `cwd` argument or the session directory.
+ * Windows). Both cache targets and restriction-only paths may encode recursive tree scopes.
+ * A call with no cache targets is also matched by its own `cwd` argument (except Bash,
+ * which reports a shell `cd` through restriction-only paths) or the session directory.
  * Non-filesystem targets (internal and web URLs) touch no folder. `null` means the tool
  * cannot determine all targets before execution, not that it touches no folder.
  */
@@ -610,7 +611,7 @@ function restrictionSubjects(
 	if (targets.length > 0) return subjects;
 	if (cwd === undefined) return subjects;
 	let workingDirectory = cwd;
-	const requested = isRecord(args) ? args.cwd : undefined;
+	const requested = tool.name !== "bash" && isRecord(args) ? args.cwd : undefined;
 	if (typeof requested === "string" && requested.trim().length > 0) {
 		try {
 			workingDirectory = resolveToCwd(requested, cwd);

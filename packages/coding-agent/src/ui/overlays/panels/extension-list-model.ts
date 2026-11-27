@@ -1,6 +1,6 @@
 /**
  * The extension inventory list: kind groups with headers (the unfiltered
- * ALL view), a provider's master switch (and `~/` opt-in) above its items,
+ * ALL view), a provider's master switch above its items,
  * or a flat list of search hits; the selection, its window, the search
  * field, and the row under the pointer.
  */
@@ -166,7 +166,7 @@ export class ExtensionListModel {
 					type: "user-source",
 					providerId: this.masterSwitchProvider,
 					providerName,
-					enabled: provider.userSourceEnabled,
+					enabled: provider.userSourceEnabled === true,
 				});
 			}
 			for (const item of filtered) rows.push({ type: "extension", item });
@@ -280,7 +280,7 @@ export class ExtensionListModel {
 
 	// ─── Input ──────────────────────────────────────────────────────────────
 
-	/** Toggle the selected row, or flip the provider's master switch / `~/` opt-in. */
+	/** Toggle the selected row, or flip the provider's master switch. */
 	activateSelected(): void {
 		const row = this.selectedRow();
 		if (row?.type === "master") this.callbacks.onMasterToggle?.(row.providerId);

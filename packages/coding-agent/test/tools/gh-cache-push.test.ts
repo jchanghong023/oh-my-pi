@@ -65,9 +65,9 @@ function bash(): BashTool {
 	return new BashTool(session);
 }
 
-async function run(command: string, options: { exitCode?: number; cwd?: string } = {}): Promise<void> {
+async function run(command: string, options: { exitCode?: number } = {}): Promise<void> {
 	vi.spyOn(bashExecutor, "executeBash").mockResolvedValue(exited(options.exitCode ?? 0));
-	await bash().execute("push", { command, cwd: options.cwd });
+	await bash().execute("push", { command });
 }
 
 beforeEach(async () => {
@@ -165,7 +165,7 @@ describe("bash git push cache invalidation", () => {
 
 	it("resolves repeated git -C arguments relative to the command's cwd", async () => {
 		await fs.mkdir(path.join(cwd, "outer"));
-		await run(`git -C ${JSON.stringify(path.join(cwd, "outer"))} -C .. push origin HEAD:main`, { cwd: os.tmpdir() });
+		await run(`cd .. && git -C ${path.basename(cwd)}/outer -C .. push origin HEAD:main`);
 		expect(cached(REPO)).toBeUndefined();
 	});
 

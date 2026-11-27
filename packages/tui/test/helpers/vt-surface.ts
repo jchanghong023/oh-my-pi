@@ -20,6 +20,7 @@ export const CAPABILITIES: TerminalCapabilities = {
 	multiplexer: null,
 	textSizing: false,
 	tsp: false,
+	emoji: { vs16Wide: false, bareFits: false },
 };
 
 /** A backend driver over the real frame writer and a terminal emulator. */

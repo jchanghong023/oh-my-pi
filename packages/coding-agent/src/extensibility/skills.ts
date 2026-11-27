@@ -16,7 +16,7 @@ import {
 } from "../autolearn/managed-skills";
 import { reset as resetCapabilities } from "../capability";
 import { skillCapability } from "../capability/skill";
-import type { EffectiveExtensionRoots, SourceMeta } from "../capability/types";
+import type { EffectiveExtensionRoots, LoadContext, SourceMeta } from "../capability/types";
 import type { Settings } from "../config/settings";
 import { withActiveSettings } from "../config/settings-context";
 import { cfgDisabledExtensions, cfgSkills, type SkillsSettings } from "./settings";
@@ -110,7 +110,7 @@ export interface LoadSkillCatalogResult {
  * Otherwise derived from the path so every other provider gets one without
  * plumbing: the directory owning `skills/` (a plugin or package root), else
  * the directory holding the skill (a custom skills root), else the provider.
- * Dotted homes (`~/.claude/skills`) are not meaningful names.
+ * Dotted homes (`.claude/skills`, `~/.agents/skills`) are not meaningful names.
  */
 function skillNamespace(skill: Pick<CapabilitySkill, "path" | "_source">): string {
 	let root = skill._source.pluginName;
@@ -384,18 +384,18 @@ export async function loadSkillCatalog(
 	} = options;
 
 	const home = os.homedir();
-	const claudePluginSourceEnabled = isUserSourceEnabled("claude-plugins", { cwd, home, repoRoot: null, agentDir });
+	const ctx: LoadContext = { cwd, home, repoRoot: null, agentDir };
+	const claudePluginSourceEnabled = isUserSourceEnabled("claude-plugins", ctx);
 
 	function isSourceEnabled(source: Pick<SourceMeta, "provider" | "level" | "origin">): boolean {
 		const { provider, level } = source;
-		if (!isProviderEnabled(provider)) return false;
+		if (!isProviderEnabled(provider, ctx)) return false;
 		// Managed skills (auto-learn) are OMP-native and discovered unconditionally
 		// — third-party CLI toggles must never silently hide them (cf. #2401). The
 		// master `enabled` flag above still gates them.
 		if (provider === MANAGED_SKILLS_PROVIDER_ID) return true;
-		if (provider === "codex" && level === "user") return enableCodexUser || isUserSourceEnabled("codex");
-		if (provider === "claude" && level === "user") return enableClaudeUser || isUserSourceEnabled("claude");
-		if (provider === "claude" && level === "project") return enableClaudeProject;
+		if (provider === "claude") return level === "project" ? enableClaudeProject : enableClaudeUser || isUserSourceEnabled(provider, ctx);
+		if (provider === "codex" && level === "user") return enableCodexUser;
 		if (provider === "native" && level === "user") return enablePiUser;
 		if (provider === "native" && level === "project") return enablePiProject;
 		if (provider === "agents" && level === "user") return enableAgentsUser;
@@ -407,7 +407,7 @@ export async function loadSkillCatalog(
 			if (level === "user") return claudePluginSourceEnabled; // Registry discovery has no root origin yet.
 		}
 		if (provider === "agent-plugins" && source.origin === "claude") return claudePluginSourceEnabled;
-		if (level === "user") return isUserSourceEnabled(provider);
+		if (level === "user") return isUserSourceEnabled(provider, ctx);
 		return true;
 	}
 
@@ -431,6 +431,8 @@ export async function loadSkillCatalog(
 			disabledExtensions: scope === "active" ? [] : disabledExtensions,
 			extensionRoots,
 			includeDisabled: scope === "inventory",
+			enableCodexUserSkills: enableCodexUser,
+			enableClaudeUserSkills: enableClaudeUser,
 			skillSourceFilter: scope === "active" ? isSourceEnabled : undefined,
 		}),
 		Promise.all(
@@ -479,7 +481,7 @@ export async function loadSkillCatalog(
 	const inactiveSkills = authoredSkills.filter(capSkill => !isSourceEnabled(capSkill._source));
 
 	function sourceDisabledReason(source: SourceMeta): SkillCatalogEntry["disabledReason"] {
-		if (!isProviderEnabled(source.provider)) return "provider-disabled";
+		if (!isProviderEnabled(source.provider, ctx)) return "provider-disabled";
 		return isSourceEnabled(source) ? undefined : "user-opt-in";
 	}
 

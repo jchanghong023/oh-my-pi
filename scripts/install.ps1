@@ -2,12 +2,15 @@
 # Requires Windows PowerShell 5.1 or PowerShell 7+ (x64).
 # Usage: .\scripts\install.ps1 [-Ref <tag>]
 #
+# Uninstall: .\scripts\install.ps1 -Uninstall [-Purge]
 # Binary fallback uses Invoke-WebRequest -UseBasicParsing so Windows
 # PowerShell 5.1 can run without Internet Explorer.
 
 param(
     [switch]$Binary,
-    [string]$Ref
+    [string]$Ref,
+    [switch]$Uninstall,
+    [switch]$Purge
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,6 +62,15 @@ function Write-InstallLog {
     }
 }
 
+function Get-ExplicitConfigRoot {
+    param([string]$HomeDir)
+    $root = $env:OMP_CONFIG_ROOT
+    if ($root) { $root = $root.Trim() }
+    if ($root -eq "~") { $root = $HomeDir }
+    elseif ($root -match '^~[/\\]') { $root = $HomeDir + $root.Substring(1) }
+    if ($root -match '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)') { return $root }
+}
+
 function Initialize-InstallLog {
     try {
         $homeDir = [Environment]::GetFolderPath("UserProfile")
@@ -66,11 +78,8 @@ function Initialize-InstallLog {
         $absoluteRoot = '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)'
         $configDir = if ($env:PI_CONFIG_DIR) { $env:PI_CONFIG_DIR } else { ".omp" }
         $root = "$homeDir\$configDir"
-        $explicitRoot = $env:OMP_CONFIG_ROOT
-        if ($explicitRoot) { $explicitRoot = $explicitRoot.Trim() }
-        if ($explicitRoot -eq "~") { $explicitRoot = $homeDir }
-        elseif ($explicitRoot -match '^~[/\\]') { $explicitRoot = $homeDir + $explicitRoot.Substring(1) }
-        if ($explicitRoot -match $absoluteRoot) { $root = $explicitRoot }
+        $explicitRoot = Get-ExplicitConfigRoot $homeDir
+        if ($explicitRoot) { $root = $explicitRoot }
         $profile = if (Test-Path Env:OMP_PROFILE) { $env:OMP_PROFILE } else { $env:PI_PROFILE }
         if ($profile) { $profile = $profile.Trim() }
         if ($profile -and $profile -ne "default" -and $profile -cmatch '^[a-z0-9][a-z0-9._-]{0,63}$' -and
@@ -172,8 +181,10 @@ function Complete-InstallLog {
     else { Write-InstallLog INFO install_completed $fields }
 }
 
-Initialize-InstallLog
-Write-InstallLog INFO install_started @{ result = "started"; version_selection = "pending" }
+if (-not ($Uninstall -or $Purge)) {
+    Initialize-InstallLog
+    Write-InstallLog INFO install_started @{ result = "started"; version_selection = "pending" }
+}
 # Covers initialization failures before Install-Binary can establish its boundary.
 trap { Complete-InstallLog "failed" $_; break }
 Set-InstallStage "environment"
@@ -376,6 +387,7 @@ namespace Omp {
 $CnbApi = "https://api.cnb.cool/jchanghong/bin"
 $VersionPattern = '(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
+$Package = "@oh-my-pi/pi-coding-agent"
 # Read the OS architecture from environment variables for compatibility with Windows PowerShell 5.1 and PowerShell 7+.
 # A 32-bit host on 64-bit Windows reports PROCESSOR_ARCHITEW6432; only x64 is supported.
 $RawArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
@@ -945,6 +957,208 @@ function Install-Binary {
     }
 }
 
+function Remove-OmpPath {
+    param([string]$Path)
+    Write-Host "Removing $Path"
+    try {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    } catch {
+        throw "Could not remove ${Path}: $_`nClose any running omp sessions, then re-run the uninstall."
+    }
+}
+
+# Remove what an update can leave beside launcher $Path: omp's self-update
+# temporaries and backups (<name>.<timestamp>.<pid>[.<seq>].bak|.new|.patch,
+# legacy <name>.bak and <name>.new, shims renamed aside by a takeover) and this
+# script's .omp.download.exe.
+function Remove-UpdateLeftovers {
+    param([string]$Path)
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        return
+    }
+    $pattern = '^' + [regex]::Escape((Split-Path -Leaf $Path)) + '\.(?:\d+(?:\.\d+)*\.(?:bak|new|patch)|bak|new)$'
+    Get-ChildItem -LiteralPath $dir -Force -File |
+        Where-Object {
+            $_.Name -match $pattern -or $_.Name -eq ".omp.download.exe" -or
+            ((Split-Path -Leaf $Path) -eq "omp.exe" -and $_.Name -cmatch '^\.omp\.tmp\.\d+\.[0-9a-f]{32}\.exe$')
+        } |
+        ForEach-Object { Remove-OmpPath $_.FullName }
+}
+
+# After a package manager removed omp, an omp.exe still in its launcher
+# directory is the standalone binary omp's self-update installed there.
+function Remove-TakenOverLauncher {
+    param([string]$Dir)
+    $exe = Join-Path $Dir "omp.exe"
+    if (Test-Path -LiteralPath $exe -PathType Leaf) {
+        Remove-OmpPath $exe
+    }
+    foreach ($name in @("omp.exe", "omp", "omp.cmd", "omp.ps1", "omp.bat")) {
+        Remove-UpdateLeftovers (Join-Path $Dir $name)
+    }
+}
+
+function Remove-UserPathEntry {
+    param([string]$Dir)
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not $userPath) {
+        return
+    }
+    $target = $Dir.TrimEnd("\")
+    $entries = $userPath -split ";"
+    $kept = @($entries | Where-Object { $_.TrimEnd("\") -ne $target })
+    if ($kept.Count -eq $entries.Count) {
+        return
+    }
+    Write-Host "Removing $Dir from your user PATH"
+    [Environment]::SetEnvironmentVariable("Path", ($kept -join ";"), "User")
+}
+
+# Remove the binary this script installs. The installer also creates
+# $InstallDir and adds it to the user PATH; once nothing else lives there,
+# undo both. Returns whether omp.exe was there.
+function Uninstall-Binary {
+    $exe = Join-Path $InstallDir "omp.exe"
+    if (Test-Path -LiteralPath $exe -PathType Container) {
+        throw "Refusing to remove a directory at $exe"
+    }
+    $found = Test-Path -LiteralPath $exe
+    if ($found) {
+        Remove-OmpPath $exe
+    }
+    Remove-UpdateLeftovers $exe
+    if (Test-Path -LiteralPath $InstallDir -PathType Container) {
+        Clear-InstallAsides
+    }
+    if ((Test-Path -LiteralPath $InstallDir -PathType Container) -and
+        -not (Get-ChildItem -LiteralPath $InstallDir -Force | Select-Object -First 1)) {
+        Remove-OmpPath $InstallDir
+    }
+    if (-not (Test-Path -LiteralPath $InstallDir)) {
+        Remove-UserPathEntry $InstallDir
+    }
+    return $found
+}
+
+# Remove a legacy bun global install. Returns whether it was installed.
+function Uninstall-BunPackage {
+    $bunRoot = if ($env:BUN_INSTALL) { $env:BUN_INSTALL } else { Join-Path $env:USERPROFILE ".bun" }
+    $globalDir = if ($env:BUN_INSTALL_GLOBAL_DIR) { $env:BUN_INSTALL_GLOBAL_DIR } else { Join-Path $bunRoot "install\global" }
+    if (-not (Test-Path -LiteralPath (Join-Path $globalDir "node_modules\$Package"))) {
+        return $false
+    }
+    $bun = Get-Command bun -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $bunPath = if ($bun) { $bun.Source } else { Join-Path $bunRoot "bin\bun.exe" }
+    if (-not (Test-Path -LiteralPath $bunPath)) {
+        throw "Found $Package in bun's global packages ($globalDir), but bun is not available to remove it"
+    }
+    Write-Host "Removing the bun global package $Package..."
+    Invoke-Native { & $bunPath remove -g $Package | Out-Host }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to remove $Package with bun"
+    }
+    $binDir = if ($env:BUN_INSTALL_BIN) { $env:BUN_INSTALL_BIN } else { Join-Path $bunRoot "bin" }
+    Remove-TakenOverLauncher $binDir
+    return $true
+}
+
+# Remove an npm global install of the package. Returns whether there was one.
+function Uninstall-NpmPackage {
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+    $npmRoot = Invoke-Native { npm root -g 2>$null } | Select-Object -First 1
+    if (-not $npmRoot -or -not (Test-Path -LiteralPath (Join-Path "$npmRoot".Trim() $Package))) {
+        return $false
+    }
+    $npmPrefix = Invoke-Native { npm prefix -g 2>$null } | Select-Object -First 1
+    Write-Host "Removing the npm global package $Package..."
+    Invoke-Native { npm uninstall -g $Package | Out-Host }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to remove $Package with npm"
+    }
+    # npm puts Windows launchers directly in the global prefix.
+    if ($npmPrefix) {
+        Remove-TakenOverLauncher "$npmPrefix".Trim()
+    }
+    return $true
+}
+
+# Delete omp's state directory with -Purge, or when an interactive user
+# confirms; otherwise keep it and say how to delete it.
+function Remove-OmpState {
+    $dirName = if ($env:PI_CONFIG_DIR) { $env:PI_CONFIG_DIR } else { ".omp" }
+    $explicitRoot = Get-ExplicitConfigRoot $env:USERPROFILE
+    $stateRoot = [System.IO.Path]::GetFullPath($(if ($explicitRoot) { $explicitRoot } else { Join-Path $env:USERPROFILE $dirName }))
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+    $statePrefix = $stateRoot.TrimEnd($sep) + $sep
+    if ($statePrefix -eq ([System.IO.Path]::GetPathRoot($stateRoot).TrimEnd($sep) + $sep)) {
+        throw "Refusing to delete omp's state at ${stateRoot}: it is a filesystem root"
+    }
+    if (-not (Test-Path -LiteralPath $stateRoot -PathType Container)) {
+        return
+    }
+    # A PI_CONFIG_DIR of "." or ".." would otherwise name the profile directory
+    # or one of its ancestors.
+    $homeFull = [System.IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd($sep) + $sep
+    if ($homeFull.StartsWith($statePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to delete omp's state at ${stateRoot}: it contains your profile directory (check PI_CONFIG_DIR)"
+    }
+    for ($dir = Get-Item -LiteralPath $stateRoot -Force; $dir; $dir = $dir.Parent) {
+        if ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Refusing to delete omp's state through the linked directory $($dir.FullName)"
+        }
+    }
+
+    if (-not $Purge) {
+        $confirmed = $false
+        $nonInteractive = [Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-noni' }
+        if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $nonInteractive) {
+            Write-Host ""
+            Write-Host "omp's state is stored in $stateRoot"
+            Write-Host "It holds your sessions, settings, credentials, caches and the git"
+            Write-Host "worktrees omp created, which may contain uncommitted work."
+            $answer = Read-Host "Delete it too? [y/N]"
+            $confirmed = $answer -match '^(y|yes)$'
+        }
+        if (-not $confirmed) {
+            Write-Host ""
+            Write-Host "Kept omp's state (sessions, settings, credentials, caches, worktrees) in $stateRoot"
+            Write-Host "To delete it as well, re-run with -Purge."
+            return
+        }
+    }
+
+    Remove-OmpPath $stateRoot
+    Write-Host "[OK] Deleted omp's state" -ForegroundColor Green
+}
+
+function Uninstall-Omp {
+    $removed = Uninstall-Binary
+    if (Uninstall-BunPackage) {
+        $removed = $true
+    }
+    if (Uninstall-NpmPackage) {
+        $removed = $true
+    }
+
+    if ($removed) {
+        Write-Host ""
+        Write-Host "[OK] Uninstalled omp" -ForegroundColor Green
+    } else {
+        Write-Host "No omp install found in $InstallDir or in bun's or npm's global packages."
+    }
+
+    $Active = Get-Command omp -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($Active) {
+        Write-Host "[WARN] 'omp' still resolves to $($Active.Source), which this script did not install; remove it with the tool that installed it." -ForegroundColor Yellow
+    }
+
+    Remove-OmpState
+}
+
+
 function Clear-InstallAsides {
     param([string]$CommittedGuard)
 
@@ -981,5 +1195,11 @@ function Clear-InstallAsides {
     }
 }
 
-# This installer only downloads published release binaries.
-Install-Binary
+if ($Uninstall -or $Purge) {
+    if ($Binary -or $Ref) {
+        throw "-Uninstall and -Purge do not combine with -Binary or -Ref"
+    }
+    Uninstall-Omp
+} else {
+    Install-Binary
+}

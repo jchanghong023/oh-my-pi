@@ -56,6 +56,15 @@ import {
 } from "./tools/path-utils";
 import type { EditToolDetails } from "./tools/details/edit";
 import type { TodoPhase, TodoStatus } from "./tools/details/todo";
+import { quotePosixArgument } from "./utils/shell-quote";
+
+function shellToolArgs(args: Parameters<NonNullable<ICursorExecHandlers["shell"]>>[0]) {
+	const directory = args.workingDirectory;
+	const command = directory
+		? `cd ${quotePosixArgument(/^[+-]/.test(directory) ? `./${directory}` : directory)} && ${args.command}`
+		: args.command;
+	return { command, timeout: shellDeadlineSeconds(args) };
+}
 
 /** Phase used for Cursor-owned tasks with no local phase grouping. */
 const CURSOR_TODO_PHASE = "Tasks";
@@ -720,13 +729,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 
 	async shell(args: Parameters<NonNullable<ICursorExecHandlers["shell"]>>[0]) {
 		const toolCallId = decodeToolCallId(args.toolCallId);
-		const timeoutSeconds = shellDeadlineSeconds(args);
-		const toolResultMessage = await executeTool(this.options, "bash", toolCallId, {
-			command: args.command,
-			cwd: args.workingDirectory || undefined,
-			timeout: timeoutSeconds,
-		});
-		return toolResultMessage;
+		return await executeTool(this.options, "bash", toolCallId, shellToolArgs(args));
 	}
 
 	async shellStream(
@@ -740,12 +743,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			return buildUnavailableToolResult(this.options, toolCallId, toolName);
 		}
 
-		const timeoutSeconds = shellDeadlineSeconds(args);
-		const toolArgs = omitUndefinedArgs({
-			command: args.command,
-			cwd: args.workingDirectory || undefined,
-			timeout: timeoutSeconds,
-		});
+		const toolArgs = omitUndefinedArgs(shellToolArgs(args));
 
 		this.options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: toolArgs });
 

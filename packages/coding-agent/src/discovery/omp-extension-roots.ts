@@ -364,10 +364,7 @@ async function listInstalledPluginRoots(ctx: LoadContext): Promise<InjectedRoot[
 		const [plugins, marketplaceRoots] = await Promise.all([
 			getEnabledPlugins(ctx.cwd, { home: ctx.home }),
 			listClaudePluginRoots(ctx.home, ctx.cwd, {
-				includeClaude: isUserSourceEnabled(
-					"claude-plugins",
-					ctx.includeOptOutUserSources ? { ...ctx, includeOptOutUserSources: false } : ctx,
-				),
+				includeClaude: isUserSourceEnabled("claude-plugins", ctx),
 			}),
 		]);
 		const marketplaceRealpaths = new Set(

@@ -40,7 +40,7 @@ export const cfgSkillsEnableSkillCommands = register({
 	},
 });
 
-export const cfgSkillsEnableCodexUser = register({ id: "skills.enableCodexUser", type: "boolean", default: false });
+export const cfgSkillsEnableCodexUser = register({ id: "skills.enableCodexUser", type: "boolean", default: true });
 
 export const cfgSkillsEnableClaudeUser = register({ id: "skills.enableClaudeUser", type: "boolean", default: false });
 
@@ -107,17 +107,6 @@ export const cfgSkills = combine({
 export type SkillsSettings = Partial<SettingValueOf<typeof cfgSkills>>;
 
 // Commands
-export const cfgCommandsEnableClaudeUser = register({
-	id: "commands.enableClaudeUser",
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "tasks",
-		group: "Commands & Skills",
-		label: "Claude User Commands",
-		description: "Load commands from ~/.claude/commands/",
-	},
-});
 
 export const cfgCommandsEnableClaudeProject = register({
 	id: "commands.enableClaudeProject",
@@ -128,18 +117,6 @@ export const cfgCommandsEnableClaudeProject = register({
 		group: "Commands & Skills",
 		label: "Claude Project Commands",
 		description: "Load commands from .claude/commands/",
-	},
-});
-
-export const cfgCommandsEnableOpencodeUser = register({
-	id: "commands.enableOpencodeUser",
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "tasks",
-		group: "Commands & Skills",
-		label: "OpenCode User Commands",
-		description: "Load commands from ~/.config/opencode/commands/",
 	},
 });
 

@@ -3,15 +3,19 @@ set -e
 
 # OMP Coding Agent Installer
 # Usage: sh scripts/install.sh [--ref <tag>]
+#        sh scripts/install.sh --uninstall [--purge]
 #
 # Options:
-#   --binary       Install prebuilt binary (default)
-#   --ref <tag>    Install a specific published release
-#   -r <tag>      Shorthand for --ref
+#   --binary       Install the prebuilt binary (default)
+#   --ref <tag>    Install a specific published CNB release
+#   -r <tag>       Shorthand for --ref
+#   --uninstall    Remove omp; keep state unless confirmed interactively
+#   --purge        Uninstall and delete omp's state without asking
 
 CNB_API="https://api.cnb.cool/jchanghong/bin"
 VERSION_PATTERN='v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
+PACKAGE="@oh-my-pi/pi-coding-agent"
 
 # Standalone bootstrap diagnostics: no Bun/omp dependency, no command output or
 # untrusted release text. Fixed-size events bound each attempt; keep at most 20
@@ -147,6 +151,19 @@ prepare_linux_cache_log_dir() (
     done
 )
 
+explicit_config_root() {
+    configured_root="$(printf '%s' "${OMP_CONFIG_ROOT:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "${HOME:-}" in
+        /*)
+            case "$configured_root" in
+                "~") configured_root="$HOME" ;;
+                "~/"*|"~\\"*) configured_root="$HOME${configured_root#?}" ;;
+            esac
+            ;;
+    esac
+    case "$configured_root" in /*) normalize_absolute_path "$configured_root" ;; esac
+}
+
 install_log_init() {
     log_root=""
     platform_root=""
@@ -156,15 +173,7 @@ install_log_init() {
             platform_root="$HOME/.local/state/omp"
             ;;
     esac
-    expanded_root="$(printf '%s' "${OMP_CONFIG_ROOT:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    case "${HOME:-}" in
-        /*)
-            case "$expanded_root" in
-                "~") expanded_root="$HOME" ;;
-                "~/"*|"~\\"*) expanded_root="$HOME${expanded_root#?}" ;;
-            esac
-            ;;
-    esac
+    expanded_root="$(explicit_config_root)"
     case "$expanded_root" in
         /*) log_root="$expanded_root" ;;
         *)
@@ -316,9 +325,13 @@ install_curl_failed() {
 
 # Parse arguments
 REF=""
+UNINSTALL=""
+PURGE=""
+BINARY_SELECTED=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --binary)
+            BINARY_SELECTED=1
             shift
             ;;
         --ref)
@@ -338,6 +351,15 @@ while [ $# -gt 0 ]; do
             fi
             shift
             ;;
+        --uninstall)
+            UNINSTALL=1
+            shift
+            ;;
+        --purge)
+            UNINSTALL=1
+            PURGE=1
+            shift
+            ;;
         -r)
             shift
             if [ -z "$1" ]; then
@@ -353,6 +375,10 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+if [ -n "$UNINSTALL" ] && { [ -n "$BINARY_SELECTED" ] || [ -n "$REF" ]; }; then
+    echo "--uninstall and --purge do not combine with --binary or --ref"
+    exit 1
+fi
 install_log_version "${REF:-}"
 INSTALL_STAGE=platform
 INSTALL_STAGE_MS="$(install_now_ms)"
@@ -576,10 +602,215 @@ cnb_api_request() {
         curl -q --config - --header 'Accept: application/vnd.cnb.api+json' "$@"
 }
 
+# True when $1 exists, including as a dangling symlink.
+path_exists() {
+    [ -e "$1" ] || [ -L "$1" ]
+}
+
+# Remove file or directory $1, saying so.
+remove_path() {
+    echo "Removing $1"
+    rm -rf -- "$1"
+}
+
+# Remove what an update can leave beside launcher $1: omp's self-update
+# temporaries and backups (<name>.<timestamp>.<pid>[.<seq>].bak|.new|.patch,
+# legacy <name>.bak and <name>.new) and this script's .omp.download.<pid>.
+remove_update_leftovers() {
+    dir="$(dirname "$1")"
+    base="$(basename "$1")"
+    for leftover in "$dir/$base".* "$dir"/.omp.download.* "$dir"/.omp.tmp.??????; do
+        path_exists "$leftover" || continue
+        case "$leftover" in
+            "$dir/.omp.download."*) ;;
+            "$dir/.omp.tmp."*)
+                case "${leftover##*.}" in *[!A-Za-z0-9]*) continue ;; esac
+                ;;
+            *)
+                rest="${leftover#"$dir/$base".}"
+                case "$rest" in
+                    bak|new) ;;
+                    *.bak|*.new|*.patch)
+                        case "${rest%.*}" in
+                            ""|*[!0-9.]*) continue ;;
+                        esac
+                        ;;
+                    *) continue ;;
+                esac
+                ;;
+        esac
+        [ -f "$leftover" ] || [ -L "$leftover" ] || continue
+        remove_path "$leftover"
+    done
+}
+
+# After a package manager removed omp, a regular file still at launcher path $1
+# is the standalone binary omp's self-update wrote over the manager's symlink.
+# The managers' own launchers are symlinks, which they remove themselves.
+remove_taken_over_launcher() {
+    if [ -f "$1" ] && ! [ -L "$1" ]; then
+        remove_path "$1"
+    fi
+    remove_update_leftovers "$1"
+}
+
+# Bun's executable, also when ~/.bun/bin is not on this shell's PATH.
+bun_executable() {
+    if command -v bun >/dev/null 2>&1; then
+        command -v bun
+    elif [ -x "${BUN_INSTALL:-$HOME/.bun}/bin/bun" ]; then
+        echo "${BUN_INSTALL:-$HOME/.bun}/bin/bun"
+    fi
+}
+
+# Remove a legacy bun global install. Returns 1 when it is not installed.
+uninstall_bun_package() {
+    bun_root="${BUN_INSTALL:-$HOME/.bun}"
+    bun_global="${BUN_INSTALL_GLOBAL_DIR:-$bun_root/install/global}"
+    path_exists "$bun_global/node_modules/$PACKAGE" || return 1
+    bun_cmd="$(bun_executable)"
+    if [ -z "$bun_cmd" ]; then
+        echo "Found $PACKAGE in bun's global packages (${bun_global}), but bun is not available to remove it"
+        exit 1
+    fi
+    echo "Removing the bun global package $PACKAGE..."
+    "$bun_cmd" remove -g "$PACKAGE" || {
+        echo "Failed to remove $PACKAGE with bun"
+        exit 1
+    }
+    remove_taken_over_launcher "${BUN_INSTALL_BIN:-$bun_root/bin}/omp"
+}
+
+# Remove an npm global install of the package. Returns 1 when there is none.
+uninstall_npm_package() {
+    command -v npm >/dev/null 2>&1 || return 1
+    npm_root="$(npm root -g 2>/dev/null)" || return 1
+    [ -n "$npm_root" ] && path_exists "$npm_root/$PACKAGE" || return 1
+    echo "Removing the npm global package $PACKAGE..."
+    npm uninstall -g "$PACKAGE" || {
+        echo "Failed to remove $PACKAGE with npm"
+        exit 1
+    }
+    remove_taken_over_launcher "$(npm prefix -g)/bin/omp"
+}
+
+# Refuse to delete a state root that is the home directory, / or an ancestor of
+# the home directory, as a PI_CONFIG_DIR of "." or ".." would name.
+assert_safe_state_root() {
+    root_real="$(CDPATH= cd -- "$1" && pwd -P)"
+    home_real="$(CDPATH= cd -- "$HOME" && pwd -P)"
+    case "$root_real" in
+        /) unsafe=1 ;;
+        *)
+            case "$home_real/" in
+                "$root_real"/*) unsafe=1 ;;
+                *) unsafe="" ;;
+            esac
+            ;;
+    esac
+    if [ -n "$unsafe" ]; then
+        echo "Refusing to delete omp's state at $1: it contains the home directory (check PI_CONFIG_DIR)"
+        exit 1
+    fi
+}
+
+# Delete omp's state directories with --purge, or when an interactive user
+# confirms; otherwise keep them and say how to delete them. They are the config
+# root ($HOME/$PI_CONFIG_DIR, default ~/.omp) and any $XDG_*_HOME/omp that
+# `omp config init-xdg` moved state to.
+remove_state() {
+    set --
+    state_root="$(explicit_config_root)"
+    state_root="${state_root:-$(normalize_absolute_path "$HOME/${PI_CONFIG_DIR:-.omp}")}"
+    if [ -d "$state_root" ]; then
+        assert_safe_state_root "$state_root"
+        set -- "$state_root"
+    fi
+    for xdg_home in "${XDG_DATA_HOME:-}" "${XDG_STATE_HOME:-}" "${XDG_CACHE_HOME:-}"; do
+        [ -n "$xdg_home" ] && [ -d "$xdg_home/omp" ] || continue
+        for listed in "$@"; do
+            [ "$listed" = "$xdg_home/omp" ] && continue 2
+        done
+        assert_safe_state_root "$xdg_home/omp"
+        set -- "$@" "$xdg_home/omp"
+    done
+    [ $# -gt 0 ] || return 0
+
+    if [ -z "$PURGE" ]; then
+        confirmed=""
+        # Piped runs (curl ... | sh) read the script from stdin, so they never
+        # prompt and never delete state without --purge.
+        if [ -t 0 ]; then
+            echo ""
+            echo "omp's state is stored in:"
+            printf '  %s\n' "$@"
+            echo "It holds your sessions, settings, credentials, caches and the git"
+            echo "worktrees omp created, which may contain uncommitted work."
+            printf 'Delete it too? [y/N] '
+            read -r answer || answer=""
+            case "$answer" in
+                y|Y|yes|Yes|YES) confirmed=1 ;;
+            esac
+        fi
+        if [ -z "$confirmed" ]; then
+            echo ""
+            echo "Kept omp's state (sessions, settings, credentials, caches, worktrees):"
+            printf '  %s\n' "$@"
+            echo "To delete it as well, re-run with --purge."
+            return 0
+        fi
+    fi
+
+    for state_dir in "$@"; do
+        remove_path "$state_dir"
+    done
+    echo "✓ Deleted omp's state"
+}
+
+# Remove what this script installs (the binary in INSTALL_DIR or the bun global
+# package), an npm global install, and, when confirmed, omp's state. Homebrew
+# installs are left to brew.
+uninstall_omp() {
+    removed=""
+    brewed=""
+    if [ -d "${INSTALL_DIR}/omp" ] && ! [ -L "${INSTALL_DIR}/omp" ]; then
+        echo "Refusing to remove a directory at ${INSTALL_DIR}/omp" >&2
+        exit 1
+    fi
+    if path_exists "${INSTALL_DIR}/omp"; then
+        remove_path "${INSTALL_DIR}/omp"
+        removed=1
+    fi
+    remove_update_leftovers "${INSTALL_DIR}/omp"
+    if uninstall_bun_package; then
+        removed=1
+    fi
+    if uninstall_npm_package; then
+        removed=1
+    fi
+    if command -v brew >/dev/null 2>&1 && brew list --formula omp >/dev/null 2>&1; then
+        brewed=1
+        echo "omp is installed with Homebrew; remove it with: brew uninstall omp"
+    fi
+
+    if [ -n "$removed" ]; then
+        echo ""
+        echo "✓ Uninstalled omp"
+    elif [ -z "$brewed" ]; then
+        echo "No omp install found in ${INSTALL_DIR} or in bun's or npm's global packages."
+    fi
+
+    hash -r 2>/dev/null || true
+    REMAINING_OMP="$(command -v omp 2>/dev/null || true)"
+    if [ -n "$REMAINING_OMP" ] && [ -z "$brewed" ]; then
+        echo "'omp' still resolves to ${REMAINING_OMP}, which this script did not install; remove it with the tool that installed it."
+    fi
+
+    remove_state
+}
+
 # Install a binary published by the fork on CNB.
 install_binary() {
-
-    # Detect platform
     OS="$(uname -s)"
     case "$OS" in
         Darwin) echo "macOS is not supported by this fork."; exit 1 ;;
@@ -837,5 +1068,8 @@ install_binary() {
     report_path_hint
 }
 
-# This installer only downloads published release binaries.
-install_binary
+if [ -n "$UNINSTALL" ]; then
+    uninstall_omp
+else
+    install_binary
+fi

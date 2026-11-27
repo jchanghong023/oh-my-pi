@@ -6,8 +6,8 @@ export interface ExtensionProvider {
 	id: string;
 	displayName: string;
 	enabled: boolean;
-	userSourceEnabled: boolean;
-	foreignUserSource: boolean;
+	userSourceEnabled?: boolean;
+	foreignUserSource?: boolean;
 }
 
 /**

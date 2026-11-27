@@ -60,11 +60,11 @@ describe("MCPManager connection status events", () => {
 	it("includes the originating config path for an invalid discovered server", async () => {
 		const manager = new MCPManager(workDir);
 		const events: McpConnectionStatusEvent[] = [];
-		const configPath = path.join(os.homedir(), ".codex", "config.toml");
+		const configPath = path.join(workDir, ".codex", "config.toml");
 		try {
 			await manager.connectServers(
 				{ broken: { type: "stdio", command: "" } },
-				{ broken: { provider: "codex", providerName: "Codex", path: configPath, level: "user" } },
+				{ broken: { provider: "codex", providerName: "Codex", path: configPath, level: "project" } },
 				event => events.push(event),
 				0,
 			);
@@ -86,7 +86,7 @@ describe("MCPManager connection status events", () => {
 			const manager = new MCPManager(workDir);
 			const events: McpConnectionStatusEvent[] = [];
 			const missingCommand = path.join(workDir, "missing-mcp-server");
-			const configPath = path.join(os.homedir(), ".codex", "config.toml");
+			const configPath = path.join(workDir, ".codex", "config.toml");
 
 			try {
 				const result = await manager.connectServers(
@@ -101,7 +101,7 @@ describe("MCPManager connection status events", () => {
 							provider: "codex",
 							providerName: "Codex",
 							path: configPath,
-							level: "user",
+							level: "project",
 						},
 					},
 					event => events.push(event),

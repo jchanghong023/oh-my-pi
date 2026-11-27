@@ -333,9 +333,8 @@ const CD_TARGET_TERMINATORS: Record<string, true> = {
 const CD_TARGET_EXPANSION_CHARS = "$`()*?[]{}";
 
 /**
- * Parses a leading `cd <path> && ...` or `cd <path>; ...` prefix so the bash
- * tool can route the target through its structured `cwd` parameter when the
- * model omits it.
+ * Parses a leading `cd <path> && ...` or `cd <path>; ...` prefix so execution
+ * and approval can use the same literal shell working directory.
  *
  * Returns the single path token (quotes and backslash escapes resolved to their
  * literal value), the command remainder after the separator, and which

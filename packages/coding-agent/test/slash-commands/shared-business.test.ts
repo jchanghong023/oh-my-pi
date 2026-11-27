@@ -132,6 +132,7 @@ function ordinaryTaskDispatchFixture() {
 		ctx: {
 			settings,
 			sessionManager,
+			session: { getEnabledToolNames: () => ["task", "eval"] },
 			composer: { setText },
 			showStatus: runtime.output,
 			refreshSlashCommandState: runtime.refreshCommands,

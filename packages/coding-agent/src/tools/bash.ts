@@ -74,7 +74,7 @@ import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-intera
 import type { ShellTrace } from "@oh-my-pi/pi-wire";
 import { applyPatchShellInput } from "./bash-apply-patch";
 import { hostCommandUrls, urlBacking } from "./bash-host-urls";
-import { checkBashInterception } from "./bash-interceptor";
+import { bashInterception } from "./bash-interceptor";
 import { rewriteGitWorktreeAdd } from "./bash-worktree-rewrite";
 import { canUseInteractiveBashPty } from "./bash-pty-selection";
 import { resolveEvalBackends } from "./eval-backends";
@@ -85,7 +85,7 @@ import { findHintVisible } from "./jfind";
 import { formatArtifactErrorNotice } from "./output-meta-format";
 import { formatOutputNotice } from "./output-meta-format";
 import { outputMeta, resolveInlineByteCapBudget } from "./output-meta";
-import { resolveShellDirectory, resolveToCwd } from "./path-utils";
+import { resolveShellDirectory } from "./path-utils";
 import {
 	bashApprovalDialect,
 	clauseMutatesShellState,
@@ -126,8 +126,6 @@ import {
 	cfgBashDirenv,
 	cfgBashDirenvLoadTimeoutMs,
 	cfgBashGitGuard,
-	cfgBashInterceptorEnabled,
-	cfgBashInterceptorPatterns,
 	cfgBashPatterns,
 } from "../exec/settings";
 import { cfgDisplayShellVisualization } from "../modes/settings";
@@ -168,19 +166,28 @@ export function wrapShellLineForClientTerminal(
 	return { command: shellConfig.shell, args: [...shellConfig.args, finalLine] };
 }
 
+// Scan complete operands so a protected target can follow ordinary paths, but
+// never borrow an operand from a later shell command.
+const RM_WORD = /(?!#)(?:[^\s;&|()<>"'`\\]|\\[^\n]|"[^"\\]*(?:\\.[^"\\]*)*"|'[^']*')+/u;
+// Include individual home roots and the macOS backing paths for /etc and /var.
+const RM_PROTECTED_TARGET =
+	/(?:\/+(?:\.\/+)*(?:(?:Applications|bin|boot|dev|etc|lib(?:32|64|x32)?|opt|proc|root|sbin|sys|usr|var|Library|System|(?:home|Users)(?:\/+[^/\s;&|()<>"'`\\]+)?|private(?:\/+(?:etc|var))?)(?:\/+\.)*(?:\/+\*?)?|[.*])?|(?:~|\$(?:HOME|\{HOME\}))(?:\/+\.)*(?:\/+\*?)?)/u;
+const CRITICAL_RM_PATTERN = new RegExp(
+	String.raw`\brm[ \t]+(?:-[^\s;&|()<>"'\x60]+[ \t]+)*(?:-[a-z]*[rf][a-z]*|--recursive|--force)[ \t]+` +
+		String.raw`(?:${RM_WORD.source}[ \t]+)*?(["']?)${RM_PROTECTED_TARGET.source}\1(?=["'\x60]?(?:[\s;&|()<>]|$))`,
+	"iu",
+);
+
 /**
  * Bash patterns flagged as safety critical for approval policy.
  *
- * Kept intentionally tight — the cost of a false negative is data loss or a compromised host,
- * while false positives remain actionable through user policy control.
+ * Kept intentionally tight: outside yolo, built-in critical patterns force a
+ * prompt even when the user allows bash.
  * New patterns should target shapes that are virtually never legitimate in automation.
  */
 export const CRITICAL_BASH_PATTERNS = [
-	// Recursive destruction.
-	// Options may sit on either side of the recursive/force flag, so only that flag is pinned and
-	// any other options are skipped: `rm -rf /`, `rm -rf -- /`, `rm --recursive --force /`,
-	// `rm -rf -v /`, `rm -v -rf /`. An absolute target is still required.
-	/\brm\s+(?:-\S+\s+)*(?:-[a-z]*[rRfF][a-z]*|--recursive|--force)\s+(?:-\S+\s+)*\//i,
+	// Recursive/forced removal of the filesystem, system-directory, or home roots.
+	CRITICAL_RM_PATTERN,
 	// `--no-preserve-root` defeats coreutils' own refusal to recurse on `/`, so it is critical
 	// wherever it appears — including forms this list would otherwise reach only via the target.
 	/\brm\s+(?:-\S+\s+)*--no-preserve-root\b/i,
@@ -560,14 +567,12 @@ const SERVICE_READY = type({
 const bashSchemaBase = type({
 	command: type("string"),
 	"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
-	"cwd?": "string",
 	"pty?": "boolean",
 });
 
 const bashSchemaWithAsync = type({
 	command: "string",
 	"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
-	"cwd?": "string",
 	"pty?": "boolean",
 	"async?": "boolean",
 	"notify?": "string",
@@ -576,7 +581,6 @@ const bashSchemaWithAsync = type({
 const bashSchemaWithService = type({
 	command: "string",
 	"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
-	"cwd?": "string",
 	"pty?": "boolean",
 	"notify?": "string",
 	"name?": SERVICE_NAME,
@@ -586,7 +590,6 @@ const bashSchemaWithService = type({
 const bashSchemaWithAsyncAndService = type({
 	command: "string",
 	"timeout?": type("number").describe(BASH_TIMEOUT_DESCRIPTION),
-	"cwd?": "string",
 	"pty?": "boolean",
 	"async?": "boolean",
 	"notify?": "string",
@@ -610,7 +613,6 @@ type BashToolSchema =
 export interface BashToolInput {
 	command: string;
 	timeout?: number;
-	cwd?: string;
 	name?: string;
 	ready?: ServiceReady;
 	async?: boolean;
@@ -762,12 +764,6 @@ function noticeUrlWrites(notices: string[]): (report: UrlWriteReport) => void {
 	};
 }
 
-/** Explicit tool `cwd` keeps the workspace-root alias; a hoisted shell `cd` does not. */
-function resolveCommandCwd(cwd: string | undefined, sessionCwd: string, hoistedShellCwd: boolean): string {
-	if (!cwd) return sessionCwd;
-	return hoistedShellCwd ? resolveShellDirectory(cwd, sessionCwd) : resolveToCwd(cwd, sessionCwd);
-}
-
 /** Words that may precede a simple command in a command list without being its name. */
 const SHELL_COMMAND_PREFIX_WORDS: ReadonlySet<string> = new Set([
 	"!",
@@ -795,12 +791,6 @@ function invokedToolCommand(command: string, names: ReadonlySet<string>): string
 		if (name !== undefined && names.has(name)) return name;
 	}
 	return undefined;
-}
-
-/** Whether the first simple command of `command` is a session tool command. */
-function startsWithToolCommand(command: string, names: ReadonlySet<string>): boolean {
-	const first = tokenizeShellSegments(command)[0]?.[0];
-	return first !== undefined && names.has(first);
 }
 
 /** Operators that may join the commands of a line made only of tool commands. */
@@ -889,34 +879,12 @@ class ToolCommandRecorder {
 /**
  * Bash tool implementation.
  *
- * Executes bash commands with optional timeout and working directory.
+ * Executes bash commands with an optional timeout.
  */
 export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	readonly name = "bash";
 	/** Bash reads `skill://` paths through its shell filesystem, including as a working directory. */
 	readonly readsSkillUris = true;
-	/**
-	 * The interceptor message for a call, checking the raw command and the one after a leading
-	 * `cd … &&` so the wrapper hides neither shell-navigation rules nor the dedicated-tool command.
-	 * A command led by a session tool command is that tool's own call and is never intercepted.
-	 */
-	#interception(
-		rawCommand: string,
-		command: string,
-		name: string | undefined,
-		toolNames: string[],
-		toolCommands: ReadonlySet<string>,
-	): string | undefined {
-		if (!cfgBashInterceptorEnabled.get(this.session.settings)) return undefined;
-		const rules = cfgBashInterceptorPatterns.get(this.session.settings).filter(rule => !name || rule.tool !== "bash");
-		for (const commandToCheck of rawCommand === command ? [command] : [rawCommand, command]) {
-			if (startsWithToolCommand(commandToCheck, toolCommands)) continue;
-			const interception = checkBashInterception(commandToCheck, toolNames, rules, rawCommand);
-			if (interception.block) return interception.message ?? "Command blocked";
-		}
-		return undefined;
-	}
-
 	/**
 	 * Whether this line is pure tool-command traffic: every simple command is a mounted tool
 	 * command (or a special command), joined only by `;`, `&&`, `||`, `|` and newlines, with no
@@ -937,18 +905,29 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		}
 		const command = rawCommand;
 		// An intercepted call is refused outright; asking first would only approve a doomed call.
-		const cwdCommand = input.cwd ? command : (extractLeadingCdTarget(command)?.rest ?? command);
+		const cwdCommand = extractLeadingCdTarget(command)?.rest ?? command;
 		const name = typeof input.name === "string" ? blankToUndefined(input.name) : undefined;
 		const toolCommands = new Set(toolCommandNames(this.session));
-		const interception = this.#interception(command, cwdCommand, name, ctx?.toolNames ?? [], toolCommands);
+		const interception = bashInterception(
+			this.session.settings,
+			command,
+			cwdCommand,
+			name,
+			ctx?.toolNames ?? [],
+			toolCommands,
+		);
 		if (interception) {
 			return { tier: "exec", override: true, policy: "deny", reason: interception.replace(/^Blocked:\s*/u, "") };
 		}
+		// A line made only of tool commands runs no program: its text is tool arguments, so
+		// `bash.patterns` and critical patterns would only match data. Each tool command passes
+		// its own approval when it runs; the line itself only reads.
+		if (isToolCommandLine(command, toolCommands)) return "read";
 		const { session: policy, authority } = this.#patternPolicies();
 		// Without `bash.patterns` rules the native analysis only feeds critical-command prompts,
 		// which a caller that cannot prompt (yolo, tier-only reads) never shows.
 		if (query?.prompts === false && policy.rules.length === 0 && authority.rules.length === 0) {
-			return isToolCommandLine(command, toolCommands) ? "read" : "exec";
+			return "exec";
 		}
 		const allowCompound = cfgBashAllowCompoundCommands.get(this.session.settings);
 		const shell = this.session.settings.getShellConfig().shell;
@@ -1020,16 +999,17 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				}
 			}
 		}
-		// Each tool command passes its own approval when it runs; the line itself only reads.
-		if (isToolCommandLine(command, toolCommands)) return "read";
 		if (decision.kind === "allow") return { tier: "write", policy: "allow" };
 		return "exec";
 	};
 
 	readonly approvalRestrictionPaths = (args: unknown): readonly string[] | undefined => {
-		const { command, cwd } = (args ?? {}) as Partial<BashToolInput>;
-		const target = cwd || (typeof command === "string" ? extractLeadingCdTarget(command)?.path : undefined);
-		if (!target || !InternalUrlRouter.instance().normalize(target).startsWith("local://")) return undefined;
+		const { command } = (args ?? {}) as Partial<BashToolInput>;
+		const target = typeof command === "string" ? extractLeadingCdTarget(command)?.path : undefined;
+		if (!target) return undefined;
+		const router = InternalUrlRouter.instance();
+		if (!router.canHandle(target)) return [resolveShellDirectory(target, this.session.cwd)];
+		if (!router.normalize(target).startsWith("local://")) return undefined;
 		const key = approvalTargetKey(this.session.cwd, target, this.session);
 		return key ? [key] : undefined;
 	};
@@ -1981,7 +1961,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		{
 			command: rawCommand,
 			timeout: rawTimeout,
-			cwd,
 			name: rawName,
 			ready: rawReady,
 			async: rawAsync,
@@ -2000,30 +1979,25 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const sessionId = this.session.getSessionId?.() ?? undefined;
 		const sessionEnv = this.#sessionEnv(toolCallId);
 
-		// Extract a leading `cd <path> && ...` / `cd <path>; ...` into cwd when the
-		// model ignores the cwd parameter. The scanner captures only a single path
-		// token and defers to the shell for anything else (redirects, extra args,
-		// shell expansion), so it never absorbs shell syntax like
-		// `cd /tmp 2>/dev/null && ...` into the structured cwd. `&&` always hoists:
-		// a missing directory fails early, as the shell would short-circuit. `;`
-		// runs the rest even when `cd` fails, so it hoists only onto an existing host
-		// directory; anything else (URL targets included) stays with the shell.
-		// The target is a shell path: `/` is the filesystem root, not the workspace
-		// alias an explicit tool `cwd` keeps.
-		let hoistedShellCwd = false;
-		if (!cwd) {
-			const cd = extractLeadingCdTarget(command);
-			const virtualTarget = cd !== null && InternalUrlRouter.instance().canHandle(cd.path);
-			const semicolonDirectory =
-				cd?.separator === ";" &&
-				!virtualTarget &&
-				(await fs.promises.stat(resolveShellDirectory(cd.path, this.session.cwd)).catch(() => null))?.isDirectory();
-			if (cd && (cd.separator === "&&" || semicolonDirectory === true)) {
-				hoistedShellCwd = !virtualTarget;
-				cwd = cd.path;
-				command = cd.rest;
-				if (cd.separator === ";") ran.cdSeparator = ";";
-			}
+		// Extract a leading `cd <path> && ...` / `cd <path>; ...` into the working
+		// directory. The scanner captures only a single path token and defers to the
+		// shell for anything else (redirects, extra args, shell expansion), so it
+		// never absorbs shell syntax like `cd /tmp 2>/dev/null && ...`. `&&` always
+		// hoists: a missing directory fails early, as the shell would short-circuit.
+		// `;` runs the rest even when `cd` fails, so it hoists only onto an existing
+		// host directory; anything else (URL targets included) stays with the shell.
+		// The target is a shell path: `/` is the filesystem root.
+		let cwd: string | undefined;
+		const cd = extractLeadingCdTarget(command);
+		const virtualTarget = cd !== null && InternalUrlRouter.instance().canHandle(cd.path);
+		const semicolonDirectory =
+			cd?.separator === ";" &&
+			!virtualTarget &&
+			(await fs.promises.stat(resolveShellDirectory(cd.path, this.session.cwd)).catch(() => null))?.isDirectory();
+		if (cd && (cd.separator === "&&" || semicolonDirectory === true)) {
+			cwd = cd.path;
+			command = cd.rest;
+			if (cd.separator === ";") ran.cdSeparator = ";";
 		}
 		// Mode selection runs on normalized fields: a caller that materializes
 		// every optional argument with empty or placeholder values still asked
@@ -2077,7 +2051,14 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 
 		const toolCommandNameList = toolCommandNames(this.session);
 		const toolCommands = new Set(toolCommandNameList);
-		const interception = this.#interception(rawCommand, command, name, ctx?.toolNames ?? [], toolCommands);
+		const interception = bashInterception(
+			this.session.settings,
+			rawCommand,
+			command,
+			name,
+			ctx?.toolNames ?? [],
+			toolCommands,
+		);
 		if (interception) throw new ToolError(interception);
 		// Tool commands exist only in the embedded shell: a line naming one never leaves it.
 		const invokedCommand = invokedToolCommand(command, toolCommands);
@@ -2124,11 +2105,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// tier this command was approved at. A URL cwd stays a URL: only that
 		// filesystem can enter it, so a service's or pty command's shell process
 		// starts on the host and enters it, and the client terminal never runs there.
-		const approval = this.approval({ command: rawCommand, cwd, name }, ctx, { prompts: false });
+		const approval = this.approval({ command: rawCommand, name }, ctx, { prompts: false });
 		const approvalTier = typeof approval === "string" ? approval : approval.tier;
 		const router = InternalUrlRouter.instance();
 		const virtualCwd = cwd && router.canHandle(cwd) ? router.normalize(cwd) : undefined;
-		const commandCwd = virtualCwd ?? resolveCommandCwd(cwd, this.session.cwd, hoistedShellCwd);
+		const commandCwd = virtualCwd ?? (cwd ? resolveShellDirectory(cwd, this.session.cwd) : this.session.cwd);
 		if (cwd) ran.cwd = commandCwd;
 		// Where a process for this command starts: a URL directory has none of its own.
 		const hostCwd = virtualCwd === undefined ? commandCwd : this.session.cwd;

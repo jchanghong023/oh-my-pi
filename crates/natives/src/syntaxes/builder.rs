@@ -11,7 +11,7 @@ const EXTRA_SYNTAXES: &[(&str, &str)] = &[
 	("CMakeCommands", include_str!("CMakeCommands.sublime-syntax")),
 	("Dockerfile", include_str!("Dockerfile.sublime-syntax")),
 	("Elixir", include_str!("Elixir.sublime-syntax")),
-	("Regular Expressions (Elixir)", include_str!("ElixirRegex.sublime-syntax")),
+	("Regular Expressions (Elixir)", include_str!("RegularExpressionsElixir.sublime-syntax")),
 	("Git Ignore", include_str!("GitIgnore.sublime-syntax")),
 	("GraphQL", include_str!("GraphQL.sublime-syntax")),
 	("INI", include_str!("INI.sublime-syntax")),

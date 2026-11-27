@@ -45,11 +45,7 @@ import {
 	type SearchResultDetails,
 } from "./types";
 
-import {
-	cfgProvidersAntigravityEndpoint,
-	cfgProvidersWebKeyless,
-	cfgProvidersWebSearchTimeoutSeconds,
-} from "../../session/settings";
+import { cfgProvidersWebKeyless, cfgProvidersWebSearchTimeoutSeconds } from "../../session/settings";
 
 /** Web search tool parameters schema */
 export const webSearchSchema = type({
@@ -303,14 +299,6 @@ async function executeSearch(
 		parsedQuery.sites.length > 0 && parsedQuery.sites.every(site => site.split("/", 1)[0] === "news.ycombinator.com");
 	if (!params.model && hnOnly) expanded = preferHackerNews(expanded, pool);
 
-	// Invariant across candidates; resolve once before walking the role chain.
-	let antigravityEndpointMode: "auto" | "production" | "sandbox" | undefined;
-	try {
-		antigravityEndpointMode = cfgProvidersAntigravityEndpoint.get(activeSettings);
-	} catch {
-		antigravityEndpointMode = undefined;
-	}
-
 	let timeoutMs = DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS * 1_000;
 	try {
 		const configuredSeconds = cfgProvidersWebSearchTimeoutSeconds.get(activeSettings);
@@ -411,7 +399,6 @@ async function executeSearch(
 				modelRegistry,
 				explicit: candidate.explicit,
 				sessionId,
-				antigravityEndpointMode,
 			};
 			// An extension may own the request for its provider's models; availability stays the backend's.
 			const extensionSearch = modelRegistry.getProviderWebSearch(model.provider);

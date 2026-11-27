@@ -1201,11 +1201,11 @@ describe("CursorExecHandlers error results", () => {
 
 	it("omits unset optional kwargs from shellStream start events and execute args", async () => {
 		// shellStream bypasses executeTool(), so omitUndefinedArgs must be
-		// applied here directly — otherwise absent cwd/timeout become
+		// applied here directly — otherwise an absent timeout becomes
 		// present-undefined and ArkType rejects the bash call.
 		const events: AgentEvent[] = [];
 		const executeArgs: Record<string, unknown>[] = [];
-		const bashSchema = type({ command: "string", "cwd?": "string", "timeout?": "number" });
+		const bashSchema = type({ command: "string", "timeout?": "number" });
 		const bashTool: AgentTool<typeof bashSchema> = {
 			name: "bash",
 			label: "bash",
@@ -1226,7 +1226,7 @@ describe("CursorExecHandlers error results", () => {
 			create(ShellArgsSchema, {
 				toolCallId: "call-shell-omit",
 				command: "echo hi",
-				// Proto string defaults to ""; the bridge maps that to undefined.
+				// Proto string defaults to ""; the bridge leaves the command unchanged.
 				workingDirectory: "",
 			}),
 			{ onStdout: () => {}, onStderr: () => {} },
@@ -1249,7 +1249,7 @@ describe("CursorExecHandlers error results", () => {
 			create(ShellArgsSchema, {
 				toolCallId: "call-shell-keep",
 				command: "pwd",
-				workingDirectory: "/tmp",
+				workingDirectory: "/tmp/a b",
 				// Milliseconds on the wire; the bridge forwards bash seconds.
 				timeout: 5_000,
 				hardTimeout: 12_000,
@@ -1259,8 +1259,17 @@ describe("CursorExecHandlers error results", () => {
 		const keepStart = events.find(event => event.type === "tool_execution_start");
 		expect(keepStart?.type).toBe("tool_execution_start");
 		if (keepStart?.type !== "tool_execution_start") throw new Error("expected tool_execution_start");
-		expect(keepStart.args).toEqual({ command: "pwd", cwd: "/tmp", timeout: 12 });
-		expect(executeArgs[0]).toEqual({ command: "pwd", cwd: "/tmp", timeout: 12 });
+		expect(keepStart.args).toEqual({ command: "cd '/tmp/a b' && pwd", timeout: 12 });
+		expect(executeArgs[0]).toEqual({ command: "cd '/tmp/a b' && pwd", timeout: 12 });
+
+		await handlers.shell(
+			create(ShellArgsSchema, {
+				toolCallId: "call-shell-legacy",
+				command: "pwd",
+				workingDirectory: "/tmp/a'b",
+			}),
+		);
+		expect(executeArgs[1]).toEqual({ command: "cd '/tmp/a'\\''b' && pwd" });
 	});
 });
 
@@ -1423,7 +1432,7 @@ describe("CursorExecHandlers argument validation", () => {
 
 	it("passes schema-normalized scalar and optional values to Cursor MCP tools", async () => {
 		const { handlers, calls } = recordingBridge(new BashTool(createTestSession(".")).parameters);
-		const result = await mcp(handlers, "bash", { command: 42, cwd: null, timeout: null });
+		const result = await mcp(handlers, "bash", { command: 42, timeout: null });
 		expect(result.isError).toBe(false);
 		expect(calls).toEqual([{ command: "42" }]);
 	});

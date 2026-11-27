@@ -103,7 +103,6 @@ const OPTION_TIERS = {
 	codexSseMaxAttempts: "server",
 	fallbackCreditRedemption: "server",
 	anthropicSlowMode: "server",
-	antigravityEndpointMode: "server",
 	fallbacks: "server",
 	disableServerSideFallback: "server",
 	textVerbosity: "server",

@@ -14,13 +14,8 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
-import {
-	disableProvider,
-	enableProvider,
-	getDisabledProviders,
-	isProviderEnabled,
-	setDisabledProviders,
-} from "@oh-my-pi/pi-coding-agent/capability";
+import { isProviderEnabled } from "@oh-my-pi/pi-coding-agent/capability";
+import { cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -439,8 +434,8 @@ describe("structured subagent primitive", () => {
 	});
 
 	it("rescans agents when a plugin provider is disabled while an earlier discovery is in flight", async () => {
-		const previouslyDisabled = getDisabledProviders();
-		enableProvider("omp-plugins");
+		const parent = session();
+		const workerRequest = request({ session: parent, agent: "plugin-worker" });
 		const firstEntered = Promise.withResolvers<void>();
 		const releaseFirst = Promise.withResolvers<void>();
 		let scans = 0;
@@ -453,18 +448,14 @@ describe("structured subagent primitive", () => {
 			const agents = pluginsEnabled ? [AGENT, { ...AGENT, name: "plugin-worker" }] : [AGENT];
 			return { agents, projectAgentsDir: null };
 		});
-		try {
-			const first = resolveEffectiveSubagentPolicy(request({ agent: "plugin-worker" }));
-			await firstEntered.promise;
-			disableProvider("omp-plugins");
-			const second = resolveEffectiveSubagentPolicy(request({ agent: "plugin-worker" }));
-			releaseFirst.resolve();
+		const first = resolveEffectiveSubagentPolicy(workerRequest);
+		await firstEntered.promise;
+		cfgDisabledProviders.set(parent.settings, ["omp-plugins"]);
+		const second = resolveEffectiveSubagentPolicy(workerRequest);
+		releaseFirst.resolve();
 
-			expect((await first).agent.name).toBe("plugin-worker");
-			await expect(second).rejects.toThrow('Unknown agent "plugin-worker"');
-		} finally {
-			setDisabledProviders(previouslyDisabled);
-		}
+		expect((await first).agent.name).toBe("plugin-worker");
+		await expect(second).rejects.toThrow('Unknown agent "plugin-worker"');
 	});
 
 	it("uses caller, agent, then session schemas in precedence order", async () => {

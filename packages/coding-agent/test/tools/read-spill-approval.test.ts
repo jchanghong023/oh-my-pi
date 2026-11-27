@@ -139,7 +139,7 @@ describe("local:// spill reads through session approval", () => {
 			resolveApproval(write, { path: "local://private/a.txt", content: "a" }, "yolo", {}, undefined, restrictions),
 		).toMatchObject({ source: "restriction", policy: "prompt", override: true });
 		expect(
-			resolveApproval(bash, { command: "pwd", cwd: "local://private" }, "yolo", {}, undefined, restrictions),
+			resolveApproval(bash, { command: "cd local://private && pwd" }, "yolo", {}, undefined, restrictions),
 		).toMatchObject({ source: "restriction", policy: "prompt", override: true });
 	});
 

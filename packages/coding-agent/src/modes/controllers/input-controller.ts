@@ -60,6 +60,7 @@ import { resizeImage } from "../../utils/image-resize";
 import { type ImageAttachmentSource, tagImageAttachmentSource } from "../../utils/image-source";
 import { shortenPath, TRUNCATE_LENGTHS } from "../../utils/render-utils";
 import { resendProgramStatus } from "../../utils/run-status";
+import { resendProgramResume } from "../../utils/program-resume";
 import { truncateToWidth } from "../../utils/text-width";
 import { commandUsage, hintUsage } from "../../utils/usage-counter";
 import { buildVideoContactSheetPng, probeVideo, VideoError } from "../../utils/video";
@@ -67,11 +68,10 @@ import { isVideoPath } from "../../utils/video-preview";
 import { openLocalFileInEditor } from "../local-file-editor";
 import { createModelBrowserSource } from "../model-browser-source";
 import {
+	applyDisplayPreset,
 	cfgBareExitOnEmptySession,
 	cfgBareSlashCommands,
-	applyDisplayPreset,
 	cfgDisplayMode,
-	nextDisplayMode,
 	cfgDoubleEscapeAction,
 	cfgEmojiAutocomplete,
 	cfgImagesAutoResize,
@@ -79,6 +79,7 @@ import {
 	cfgPasteLargeMenuThreshold,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
+	nextDisplayMode,
 } from "../settings";
 import { type ConversationPosition, continuesConversation, conversationPosition } from "../utils/conversation-position";
 import { materializeImageChipLinks } from "../utils/ui-helpers";
@@ -807,6 +808,10 @@ export class InputController {
 			return;
 		}
 		if (this.ctx.dismissCommandReport()) {
+			return;
+		}
+		// Command output queued mid-turn is hidden, not dropped: it still enters the transcript at the settle.
+		if (this.ctx.dismissDeferredCommandOutput()) {
 			return;
 		}
 
@@ -1917,6 +1922,7 @@ export class InputController {
 			.then(
 				() => {
 					resendProgramStatus();
+					resendProgramResume();
 				},
 				(err: unknown) => {
 					const reason = err instanceof Error ? err.message : String(err);

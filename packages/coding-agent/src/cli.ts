@@ -55,6 +55,11 @@ import type {
 	WorkerInbound as JsWorkerInbound,
 } from "./eval/js/worker-protocol";
 import { startParentWatchdog } from "./subprocess/parent-watchdog";
+import { captureProgramResumeToken } from "./utils/program-resume-token";
+
+// Capture OSC7577_TOKEN into memory and remove it from process.env before any
+// subprocess, worker, or tool can inherit it.
+captureProgramResumeToken();
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(

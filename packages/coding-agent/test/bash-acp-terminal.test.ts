@@ -214,7 +214,6 @@ describe("BashTool ACP terminal routing", () => {
 	});
 
 	it("resolves using the last polled output when final output retrieval fails", async () => {
-		shortenAcpWaits();
 		const pendingExit = Promise.withResolvers<{ exitCode: number | null; signal: string | null }>();
 		let currentOutputCalls = 0;
 		const handle: ClientBridgeTerminalHandle = {
@@ -222,11 +221,7 @@ describe("BashTool ACP terminal routing", () => {
 			waitForExit: async () => pendingExit.promise,
 			currentOutput: async () => {
 				currentOutputCalls++;
-				if (currentOutputCalls === 1) {
-					// first poll loop iteration
-					setTimeout(() => pendingExit.resolve({ exitCode: 0, signal: null }), 0);
-					return { output: "polled text", truncated: false };
-				}
+				if (currentOutputCalls === 1) return { output: "polled text", truncated: false };
 				throw new Error("client output unavailable");
 			},
 			kill: async () => {},
@@ -240,11 +235,15 @@ describe("BashTool ACP terminal routing", () => {
 
 		const tool = new BashTool(makeSession(bridge));
 
-		const result = await tool.execute("call-output-failure", { command: "echo hi" });
+		const result = await tool.execute("call-output-failure", { command: "echo hi" }, undefined, update => {
+			// Exit only after the poll snapshot has been published and cached.
+			if (update.content.length > 0) pendingExit.resolve({ exitCode: 0, signal: null });
+		});
 
 		const text = result.content.find(c => c.type === "text");
 		expect(text?.text).toContain("polled text"); // proves fallback
 		expect(result.isError).toBeUndefined();
+		expect(currentOutputCalls).toBe(2);
 		expect(releaseSpy).toHaveBeenCalledTimes(1);
 	});
 

@@ -864,9 +864,10 @@ describe("AgentLifecycleManager", () => {
 		expect(registry.get("Race-ParkOnce")?.session).toBeNull();
 	});
 
-	it("dispose failure still leaves the agent parked and detached", async () => {
+	it("keeps the agent parked and detached until failed disposal can be retried", async () => {
+		let disposeAttempts = 0;
 		const stub = makeSessionStub(async () => {
-			throw new Error("dispose blew up");
+			if (++disposeAttempts < 3) throw new Error("dispose blew up");
 		});
 		registerIdleSub("Park-FailDispose", stub.session, "/tmp/Park-FailDispose.jsonl");
 		lifecycle.adopt("Park-FailDispose", {
@@ -881,8 +882,13 @@ describe("AgentLifecycleManager", () => {
 		expect(registry.get("Park-FailDispose")?.session).toBeNull();
 		expect(lifecycle.isParking("Park-FailDispose")).toBe(false);
 
-		// Still revivable after a failed dispose.
+		// Do not reopen a transcript while the detached session still owns it.
+		await expect(lifecycle.ensureLive("Park-FailDispose")).rejects.toThrow("dispose blew up");
+		expect(registry.get("Park-FailDispose")).toMatchObject({ status: "parked", session: null });
+
+		// A later retry can revive once the old session has been disposed.
 		const session = await lifecycle.ensureLive("Park-FailDispose");
+		expect(stub.disposeCalls()).toBe(3);
 		expect(session).toBeTruthy();
 		expect(registry.get("Park-FailDispose")?.status).toBe("idle");
 	});

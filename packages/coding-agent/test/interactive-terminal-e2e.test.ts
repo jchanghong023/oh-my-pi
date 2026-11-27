@@ -459,7 +459,7 @@ describe("libkitty end-to-end", () => {
 			expect(viewport().some(row => row.includes("LIVE_EDITOR_DRAFT"))).toBe(true);
 		}
 	});
-	it("hides tool activity already retired to native scrollback when the real shortcut toggles", async () => {
+	it("cycles display modes without leaving retired tool rows or changing the draft", async () => {
 		const usage: Usage = {
 			input: 0,
 			output: 0,
@@ -502,6 +502,7 @@ describe("libkitty end-to-end", () => {
 		mode.stop();
 		term.dispose();
 		start(120, 10);
+		releaseSessionEffects = bindEffects(session.settings);
 		await mode.init({ suppressWelcomeIntro: true });
 		void mode.getUserInput();
 		await term.settle();
@@ -530,11 +531,16 @@ describe("libkitty end-to-end", () => {
 		term.type("LIVE_EDITOR_DRAFT");
 		await term.waitFor(() => viewport().some(row => row.includes("LIVE_EDITOR_DRAFT")));
 
-		// Alt+O is the configured app.tools.toggleVisibility binding from this test's keybinding manager.
-		term.press("alt+o");
-		await term.waitFor(() => !buffer().some(row => row.includes(TOOL_MARKER)));
-		expect(mode.hideToolActivity).toBe(true);
-		expect(buffer().some(row => row.includes(TOOL_MARKER))).toBe(false);
-		expect(viewport().some(row => row.includes("LIVE_EDITOR_DRAFT"))).toBe(true);
+		// Detailed → clean → compact → detailed. Neither of the hidden tiers keeps tool rows in history.
+		for (const display of ["clean", "compact", "detailed"] as const) {
+			term.press("alt+o");
+			await term.waitFor(
+				() =>
+					cfgDisplayMode.get(session.settings) === display &&
+					buffer().some(row => row.includes(TOOL_MARKER)) === (display === "detailed"),
+			);
+			expect(mode.hideToolActivity).toBe(display !== "detailed");
+			expect(viewport().some(row => row.includes("LIVE_EDITOR_DRAFT"))).toBe(true);
+		}
 	});
 });

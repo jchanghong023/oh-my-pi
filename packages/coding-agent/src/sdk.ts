@@ -46,7 +46,6 @@ import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-mes
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { syncOpenAIResponsesHistoryTexts } from "@oh-my-pi/pi-ai/utils";
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
-import type { ModelRefreshStrategy } from "@oh-my-pi/pi-catalog/model-manager";
 import { logger } from "@oh-my-pi/pi-utils";
 import { $env, isInteractiveHost } from "@oh-my-pi/pi-utils/env";
 import { getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
@@ -468,16 +467,14 @@ import { cfgFollowUpMode } from "./modes/settings";
 import { cfgSteeringMode } from "./modes/settings";
 import {
 	cfgCommandsEnableClaudeProject,
-	cfgCommandsEnableClaudeUser,
 	cfgCommandsEnableOpencodeProject,
-	cfgCommandsEnableOpencodeUser,
 	cfgDisabledExtensions,
 	cfgExtensions,
 	cfgSkills,
 	type SkillsSettings,
 } from "./extensibility/settings";
 import { cfgTtsr } from "./export/ttsr-settings";
-import { cfgDisabledProviders, cfgEnabledModels, cfgEnabledProviders, cfgModelRoles } from "./config/model-settings";
+import { cfgDisabledProviders, cfgEnabledModels, cfgModelRoles } from "./config/model-settings";
 import { cfgEditRecoverInlineEdits } from "./edit/settings";
 import { activeGoalAutopilotContextId } from "./goals/request-context";
 import { cfgGoalEnabled } from "./goals/settings";
@@ -525,14 +522,11 @@ function intentTracingActive(settings: Settings): boolean {
 	return cfgToolsIntentTracing.isConfigured(settings) ? cfgToolsIntentTracing.get(settings) : isInteractiveHost();
 }
 
-/** Settings skill and file slash-command discovery reads (foreign sources gated by the provider lists). */
+/** Settings skill and file slash-command discovery reads (provider sources gated by `disabledProviders`). */
 const cfgSkillsAndCommandsDiscovery = combine({
 	skills: cfgSkills,
-	commandsClaudeUser: cfgCommandsEnableClaudeUser,
 	commandsClaudeProject: cfgCommandsEnableClaudeProject,
-	commandsOpencodeUser: cfgCommandsEnableOpencodeUser,
 	commandsOpencodeProject: cfgCommandsEnableOpencodeProject,
-	enabledProviders: cfgEnabledProviders,
 	disabledProviders: cfgDisabledProviders,
 });
 
@@ -736,8 +730,6 @@ export interface CreateAgentSessionOptions {
 	/** Raw model pattern(s) (e.g. from --model CLI flag) to resolve after extensions load.
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
 	modelPattern?: string | string[];
-	/** A deferred CLI model scope uses automatic, cache-only discovery in offline processes. */
-	modelPatternSource?: "explicit" | "scope";
 	/**
 	 * Parent model selector a subagent falls back to when its deferred patterns
 	 * resolve to no model, or to one without credentials.
@@ -748,12 +740,9 @@ export interface CreateAgentSessionOptions {
 	/** Validated inherited retry chain for a deferred singleton pattern; empty explicitly disables fallbacks. */
 	modelPatternDefaultFallbackChain?: string[];
 	/**
-	 * Process uses the company intranet profile (`OMP_OFFLINE`): automatic model-discovery fallbacks
-	 * (session-restore retry, default-role resolution) use the cache-only
-	 * `"offline"` refresh strategy instead of `online-if-uncached`, so a cold
-	 * catalog degrades to the default role instead of reaching the network.
-	 * In OMP_OFFLINE processes, explicit selectors also use cache-only catalog discovery;
-	 * selecting a model does not suppress its actual inference requests.
+	 * Use cache-only catalog discovery for session startup, including explicit model
+	 * selectors. OMP_OFFLINE implies this option. Resolved models can still make
+	 * inference requests.
 	 */
 	offline?: boolean;
 	/**
@@ -3626,18 +3615,9 @@ async function createAgentSessionScoped(
 		// because they await it below; normal UI startup receives a one-shot
 		// starter in CreateAgentSessionResult and calls it after mode.init paints.
 		let runtimeDiscoveryPromise: Promise<void> | undefined;
-		const deferredDiscoveryStrategy =
-			options.offline &&
-			(!companyLane ||
-				agentKind === SUB_AGENT_RULE_NAME ||
-				options.modelPatternSource === "scope" ||
-				deferredModelPatterns.length === 0)
-				? "offline"
-				: "online-if-uncached";
-		const startRuntimeDiscovery = (
-			strategy: ModelRefreshStrategy = options.offline ? "offline" : "online-if-uncached",
-		): Promise<void> => {
-			runtimeDiscoveryPromise ??= modelRegistry.refreshRuntimeProviders(strategy).catch(error => {
+		const discoveryStrategy = options.offline ? "offline" : "online-if-uncached";
+		const startRuntimeDiscovery = (): Promise<void> => {
+			runtimeDiscoveryPromise ??= modelRegistry.refreshRuntimeProviders(discoveryStrategy).catch(error => {
 				logger.warn("runtime provider discovery failed", {
 					error: error instanceof Error ? error.message : String(error),
 				});
@@ -3731,9 +3711,7 @@ async function createAgentSessionScoped(
 			// exist to fetch from. By then runtime managers short-circuit on the
 			// fresh cache written by the awaited pass, closing the double-fetch
 			// window.
-			await logger.time("resolveModelDiscoveryDeferredRetry", () =>
-				startRuntimeDiscovery(deferredDiscoveryStrategy),
-			);
+			await logger.time("resolveModelDiscoveryDeferredRetry", startRuntimeDiscovery);
 			const matchPreferences = getModelMatchPreferences(settings);
 			const disabledProviders = new Set(cfgDisabledProviders.get(settings));
 			const runtimeResolved = deferredModelPatterns.some(pattern =>
@@ -3759,9 +3737,8 @@ async function createAgentSessionScoped(
 				}),
 			);
 			if (!runtimeResolved && modelRegistry.getDiscoverableProviders().length > 0) {
-				// Only the process/CLI lane permits the explicit top-level online exception.
 				await logger.time("resolveModelDiscoveryFallbackNonRuntime", () =>
-					modelRegistry.refresh(deferredDiscoveryStrategy),
+					modelRegistry.refresh(discoveryStrategy),
 				);
 			}
 			const allEnabledModels =
@@ -4052,7 +4029,7 @@ async function createAgentSessionScoped(
 				// Online, keep the upstream no-match fallback. An offline cache miss
 				// must not dispatch to a parent outside the resolved candidate chain.
 				const parentFallback =
-					deferredDiscoveryStrategy !== "offline" && options.modelPatternParentFallback
+					!options.offline && options.modelPatternParentFallback
 						? resolveDeferredPattern(options.modelPatternParentFallback, availableModels)
 						: undefined;
 				if (parentFallback?.model) {
@@ -5107,7 +5084,8 @@ async function createAgentSessionScoped(
 				autoQaEnabled: !restrictToolNames && isAutoQaEnabled(settings),
 				ovnfs: ovnfsCommand(settings),
 				secretsEnabled: obfuscator?.obfuscates() === true,
-				resultShaping: spotlightExperiment ? SHAPE_RULE : undefined,
+				// Shaping needs `read` to bring cut lines back; without it nothing is shaped (`shapingExperiment`).
+				resultShaping: spotlightExperiment && toolNames.includes("read") ? SHAPE_RULE : undefined,
 				workspaceTree: workspaceTreePromise ?? emptyWorkspaceTree,
 				includeWorkspaceTree,
 				memoryBackend: memoryBackend?.id,
@@ -5483,8 +5461,8 @@ async function createAgentSessionScoped(
 		let notifyFirstChatDispatch = options.onFirstChatDispatch;
 		// Shared, settings-aware stream wrapper used by the main agent, advisor,
 		// and side-channel requests (`/btw`, `/omfg`, IRC auto-replies, handoff).
-		// Keeps OpenRouter sticky-routing variants, antigravity endpoint routing,
-		// in-flight caps, and the loop guard consistent across every provider call
+		// Keeps OpenRouter sticky-routing variants, in-flight caps,
+		// , and the loop guard consistent across every provider call
 		// the session drives. Wrapped in a per-provider concurrency limiter so
 		// each LLM HTTP request — not the whole subagent lifecycle — holds the
 		// slot, preventing the nested-spawn deadlock from issue #3749.
@@ -6399,7 +6377,7 @@ async function createAgentSessionScoped(
 		if (agentKind === "main") {
 			// Live skills/commands discovery settings: rediscover skills and file slash
 			// commands, rebuild the prompt, and notify command pickers (TUI/RPC/ACP).
-			// `enabledProviders`/`disabledProviders` gate foreign provider sources.
+			// `disabledProviders` gates provider sources.
 			cfgSkillsAndCommandsDiscovery.listen(session, () => session.refreshSkillsAndCommands());
 			// Project scope: extensions and file custom tools follow the session cwd (`/move`,
 			// cross-project resume) and the live `extensions` / `disabledExtensions` settings.

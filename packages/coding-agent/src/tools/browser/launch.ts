@@ -655,7 +655,7 @@ export interface LaunchHeadlessResult {
  */
 export function buildHeadlessLaunchArgs(
 	viewport: { width: number; height: number },
-	features: HeadlessLaunchFeatures = {},
+	features: HeadlessLaunchFeatures & { headless?: boolean; platform?: NodeJS.Platform } = {},
 ): string[] {
 	const launchArgs = [
 		"--no-sandbox",
@@ -668,6 +668,12 @@ export function buildHeadlessLaunchArgs(
 		`--window-size=${viewport.width},${viewport.height}`,
 		...RENDERER_PRIORITY_ARGS,
 	];
+	// Unified headless Chrome still owns a hidden native window; some Windows
+	// builds compose it as a blank white window (Chromium 359921643). Park it
+	// off the visible desktop.
+	if (features.headless && (features.platform ?? process.platform) === "win32") {
+		launchArgs.push("--window-position=-10000,-10000");
+	}
 	if (features.insecure) launchArgs.push("--ignore-certificate-errors");
 	const proxy = process.env.PUPPETEER_PROXY;
 	if (proxy) {
@@ -698,6 +704,7 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 	};
 	const puppeteer = await loadPuppeteer();
 	const launchArgs = buildHeadlessLaunchArgs(initialViewport, {
+		headless: opts.headless,
 		insecure: opts.insecure,
 	});
 	for (const arg of opts.args ?? []) {
@@ -994,7 +1001,7 @@ export async function resolveSharedBrowserLaunchSpec(opts: {
 	const ignored = new Set(stealthIgnoreDefaultArgs(executablePath));
 	const defaults = await puppeteer.defaultArgs({
 		headless: opts.headless,
-		args: buildHeadlessLaunchArgs(vp),
+		args: buildHeadlessLaunchArgs(vp, { headless: opts.headless }),
 		userDataDir: opts.userDataDir,
 	});
 	return {

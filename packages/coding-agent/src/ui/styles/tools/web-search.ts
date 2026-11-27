@@ -96,7 +96,12 @@ function paintLines(cx: PaintContext, text: string, expanded: boolean): Block {
 	if (hidden > 0) head += expandHint(theme);
 	const rows = wrap(head, cx.width);
 	const item = (last: boolean, text: string) =>
-		wrap(` ${theme.fg("dim", theme.symbols.symbol(last ? "tree.last" : "tree.branch"))} ${text}`, cx.width);
+		hangingWrap(
+			` ${theme.fg("dim", theme.symbols.symbol(last ? "tree.last" : "tree.branch"))} `,
+			last ? "    " : ` ${theme.fg("dim", theme.symbols.symbol("tree.vertical"))}  `,
+			text,
+			cx.width,
+		);
 	if (lines.length === 0)
 		return {
 			rows: [...rows, ...item(true, theme.fg("muted", "No response data"))],

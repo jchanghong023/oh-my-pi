@@ -1,8 +1,7 @@
 /**
  * The extension control center: provider tabs over the inventory list and
- * the inspector of the selected extension. Toggling an item, a provider
- * (its master switch) or a provider's `~/` opt-in goes through the runtime,
- * then the inventory reloads.
+ * the inspector of the selected extension. Toggling an item or a provider
+ * (its master switch) goes through the runtime, then the inventory reloads.
  *
  * Keys: Tab/Shift+Tab or ←/→ switch provider, ↑/↓ move, Space/Enter toggle,
  * PgUp/PgDn page the inspector (when it overflows), the expand key expands
@@ -206,7 +205,8 @@ export class ExtensionDashboardModel {
 	}
 
 	#toggleUserSource(providerId: string): void {
-		this.#syncProviderMcp(providerId, true, this.runtime.toggleUserSource(providerId));
+		const enabled = this.runtime.toggleUserSource?.(providerId);
+		if (enabled !== undefined) this.#syncProviderMcp(providerId, true, enabled);
 	}
 
 	#syncProviderMcp(providerId: string, userSourceOnly: boolean, enabled: boolean): void {
