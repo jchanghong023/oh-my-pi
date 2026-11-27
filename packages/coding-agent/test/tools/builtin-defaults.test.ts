@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveBuiltinToolPlan, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { BUILTIN_TOOL_HELP, BUILTIN_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
+import {
+	BUILTIN_TOOL_HELP,
+	BUILTIN_TOOL_NAMES,
+	OPENWIKI_QUERY_TOOL_NAMES,
+} from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
 
 describe("BUILTIN_TOOL_HELP", () => {
 	// `omp --help` groups tools by this map; it must match what a default session actually gets.
@@ -15,7 +19,9 @@ describe("BUILTIN_TOOL_HELP", () => {
 		};
 		const plan = await resolveBuiltinToolPlan(session);
 		// `detected` tools depend on host capabilities, such as judge availability.
-		const settled = BUILTIN_TOOL_NAMES.filter(name => BUILTIN_TOOL_HELP[name].defaultState !== "detected");
+		const settled = BUILTIN_TOOL_NAMES.filter(
+			name => BUILTIN_TOOL_HELP[name].defaultState !== "detected" && !OPENWIKI_QUERY_TOOL_NAMES.includes(name),
+		);
 		const actual = Object.fromEntries(settled.map(name => [name, plan.isAllowed(name) ? "on" : "off"]));
 		const declared = Object.fromEntries(settled.map(name => [name, BUILTIN_TOOL_HELP[name].defaultState]));
 		expect(actual).toEqual(declared);

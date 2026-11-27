@@ -59,15 +59,16 @@ Fork MUST 直接使用上游验证链路及显式局部测试，不另建入口�
 | `bun run ci:test:smoke`、`ci:test:install-methods` | 分别显式验证源码 CLI 与安装产物；按各入口依赖和授权单独运行 |
 
 - **AND** `check:rs` 和 `test:rs` 使用上游 Rust 变更判定，在 Git 能确认无 Rust 相关改动时可能跳过；清单、锁文件、构建脚本、工具链、生成输入和跨语言依赖不能一律视为无关。需要强制执行时用上游 `OMP_FORCE_RUST_TASKS=1` 机制，不新增模式或命令别名。Windows Rust 入口继续使用既有 MSVC 工具链发现。
-- **AND** 父仓静态检查及测试发现 MUST 排除 `vendor/openwiki` 子模块本身；当前工作树的 fork 功能及宿主集成测试仍按正常入口加载和验证。
-- **AND** 独立 Python SDK 与 RoboOMP 普通测试使用 `bun run test:py`（或显式指定 pytest 文件），各自的 Go/Rust SDK 使用其原生局部测试。`bun run robomp:test:integration` 仅在有 Python 依赖、`PATH` 上有 `omp` 的 POSIX 环境显式启用；普通入口不启用它。安装路由有变更时，在支持 POSIX `sh` 的环境中可显式运行 `bun test ./scripts/install-tests/fork-installer-routing.test.ts`。
+- **AND** 父仓静态检查及测试发现 MUST 排除 `vendor/openwiki` 子模块。OpenWiki、OpenSpec、Superpowers 等内置框架仅交付业务实现及资源；父仓不维护这些框架的专项或宿主集成测试，通用测试不为其生成专项用例。
+- **AND** fork 自有自动化用例只覆盖可观察的功能合同与真实回归；不维护仅检查静态文件、配置形状、打包计划或发行产物的测试。构建及发行自身的必要校验不变。
+- **AND** `bun run test:py` 在各平台运行 Python SDK，仅在 Linux 运行 RoboOMP 普通测试；也可显式指定 pytest 文件。各自的 Go/Rust SDK 使用其原生局部测试。`bun run robomp:test:integration` 仅在有 Python 依赖、`PATH` 上有 `omp` 的 Linux 环境显式启用；普通入口不启用它。依赖 POSIX `sh` 与进程语义的安装器和 Python 内核用例按 Linux 选测；保留独立的跨平台和 Windows 用例，不以 Windows 上失败作为过滤依据。
 
 #### Scenario: 维护实际产品测试合同
 
 - **WHEN** fork 产品行为变化
 - **THEN** 继续验证适用的消费者合同，包括 Team/Goal 的取消与持久化、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/TUI、审批/个人命令/默认值及分发消费者；`/wt` 策略由相关消费者验证，不因此重跑全部 task/worktree 或 pi-vcs。
 - **AND** fork 新增代码的行为覆盖归入上游现有测试目录或原生套件，由原生命令发现并执行；不为 fork 增设测试入口、发现器或白名单。
-- **AND** coding-agent 已有 `.test.ts` 与 `.test.tsx` 共用上游 Bun 分组；需要特定 Git 检出或构建产物的仓库脚本测试继续使用显式 `bun test` 路径。
+- **AND** coding-agent 已有 `.test.ts` 与 `.test.tsx` 共用上游 Bun 分组；验证实际功能的仓库脚本测试可使用显式 `bun test` 路径。
 - **AND** 原生 Agent、MCP 与 TUI 继续按相关产品规格验证，使用隔离配置、凭据、会话、端口和工作区，不读取真实用户配置；涉及 Windows Chromium 时 `USERPROFILE`、`APPDATA`、`LOCALAPPDATA` 与浏览器数据目录均与用户环境隔离。原生 MCP 能力边界不增加真实连接或授权验收。
 - **AND** 真实 PTY 的普通 CLI、`/team`、取消、输入、焦点与退出仍按涉及的业务边界用现有 `tui-test`／TUI harness 显式验证，不另建 PTY 或 ANSI 驱动。启动敏感路径的证据须来自对应真实入口，不能以单纯 CLI 启动、虚拟终端或模拟状态替代。
 

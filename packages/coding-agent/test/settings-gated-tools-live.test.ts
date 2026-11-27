@@ -12,8 +12,7 @@ import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 import { cfgEditMode } from "@oh-my-pi/pi-coding-agent/edit/settings";
 import { cfgBashEnabled } from "@oh-my-pi/pi-coding-agent/exec/settings";
-import { OPENWIKI_QUERY_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
-import { cfgGithubEnabled, cfgGrepEnabled, cfgOpenWikiToolsEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { cfgGithubEnabled, cfgGrepEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { pythonBackend } from "@oh-my-pi/pi-coding-agent/eval";
 import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import { getTestModel } from "./helpers/model-fixtures";
@@ -139,25 +138,6 @@ describe("settings-gated tools in a live session", () => {
 		await settle(session);
 		expect(session.getActiveToolNames()).toContain("grep");
 		expect(promptToolNames(session)).toContain("grep");
-	});
-
-	it("toggles OpenWiki queries and their prompt guidance in an explicit read and bash session", async () => {
-		const settings = Settings.isolated({ "tools.commands": true });
-		const session = await startSession(settings, ["read", "bash"]);
-		const wikiTools = () => session.getAllToolNames().filter(name => OPENWIKI_QUERY_TOOL_NAMES.includes(name));
-		expect(wikiTools()).toEqual([]);
-		expect(session.systemPrompt.join("\n")).not.toContain("openwiki_search");
-
-		cfgOpenWikiToolsEnabled.set(settings, true);
-		await settle(session);
-		expect(session.getMountedToolCommandNames()).toEqual(expect.arrayContaining([...OPENWIKI_QUERY_TOOL_NAMES]));
-		expect(session.systemPrompt.join("\n")).toContain("openwiki_search");
-
-		cfgOpenWikiToolsEnabled.set(settings, false);
-		await settle(session);
-		expect(wikiTools()).toEqual([]);
-		expect(session.getMountedToolCommandNames()).not.toContain("openwiki_search");
-		expect(session.systemPrompt.join("\n")).not.toContain("openwiki_search");
 	});
 
 	it("edit.mode none swaps edit out and keeps bash despite bash.enabled", async () => {

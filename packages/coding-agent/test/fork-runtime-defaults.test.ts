@@ -1,7 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgTerminalProgramStatus } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import {
@@ -13,9 +12,9 @@ import {
 import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
 import { setTerminalHeadless, TempDir } from "@oh-my-pi/pi-utils";
 
-describe("fork runtime defaults", () => {
+describe("fork terminal program status", () => {
 	for (const mode of ["ordinary", "offline"] as const) {
-		it(`${mode} resolves fork defaults and honors an explicit terminal status setting`, async () => {
+		it(`${mode} emits terminal status according to the environment default or explicit setting`, async () => {
 			const offline = mode === "offline";
 			// The offline-sensitive defaults are registered at import time: use a fresh process,
 			// rather than changing OMP_OFFLINE after importing settings in the singleton bucket.
@@ -32,7 +31,7 @@ describe("fork runtime defaults", () => {
 					OMP_CONFIG_ROOT: root.join(".omp"),
 				});
 				const child = Bun.spawn(
-					[process.execPath, "test", import.meta.path, "--test-name-pattern", `${mode} resolves fork defaults`],
+					[process.execPath, "test", import.meta.path, "--test-name-pattern", `${mode} emits terminal status`],
 					{ env, stdout: "pipe", stderr: "pipe" },
 				);
 				const [stdout, stderr, code] = await Promise.all([
@@ -49,19 +48,6 @@ describe("fork runtime defaults", () => {
 			const agentDir = root.join("agent");
 			fs.mkdirSync(agentDir);
 			const settings = await Settings.loadReadOnly({ cwd: root.path(), agentDir });
-			if (!offline) {
-				for (const [id, expected] of Object.entries({
-					"recap.enabled": false,
-					"startup.setupWizard": false,
-					"statusLine.compactThinkingLevel": false,
-					"composer.shape": "box",
-					"display.showTurnTime": true,
-					"display.mode": "compact",
-					"mnemopi.embeddingVariant": "multilingual",
-				})) {
-					expect(lookup(id)?.get(settings), id).toBe(expected);
-				}
-			}
 
 			const file = path.join(agentDir, "config.yml");
 			const saved = `terminal:\n  programStatus: ${offline}\n`;

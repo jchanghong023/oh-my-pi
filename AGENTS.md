@@ -365,7 +365,7 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - offline 的 `/sketch` 不自动启动浏览器；显示完整地址供手动打开，保留 Linux offline 地址复制。非 offline 与普通链接／文件打开沿用原行为，详见[运行约定](openspec/specs/fork-runtime/spec.md)。
 - Developer Test Agent 内置资源位于 `packages/coding-agent/src/extensibility/plugins/bundled/developer-test-agent/`；其命令和技能使用 OMP 原生接口，业务流程边界见[个人命令](openspec/specs/personal-commands/spec.md)。
 - [OpenWiki](openspec/specs/openwiki/spec.md) 通过 `vendor/openwiki` 子模块维护；`omp openwiki` 默认使用 OMP 的 `default` 模型，内置 `openwiki_*` 查询工具只读。修改子模块源码、技能或资源依赖后运行 `bun run gen:openwiki-resources`；资源指纹不匹配时不得使用旧资源。
-- 父仓静态检查与测试发现 MUST 排除 `vendor/openwiki` 子模块；OMP 宿主集成测试不受此限制。
+- 父仓静态检查与测试发现 MUST 排除 `vendor/openwiki` 子模块。OpenWiki、OpenSpec、Superpowers 等内置框架仅交付业务代码及资源，不维护专项或宿主集成测试。fork 自有测试只覆盖可观察的功能合同与真实回归，不检查静态文件、打包计划或发行产物。
 - [python/robomp/AGENTS.md](python/robomp/AGENTS.md) 是 GitHub triage/fix bot 子树的架构、命令、开发约定及验证规则。
 
 - 原生 TUI `/todoloop <Markdown 路径> [--check]` 支持首个 checkbox 前置标题层级推断及 Superpowers Step，采用组级编排和组内连续执行；有剩余组时程序先做一次只读 scout 调研，实际结清后通过原生 context 供全部组及接续复用，准备失败即停止，不限制执行 task 自主派生或更改原生缓存策略。实现位于 `packages/coding-agent/src/todoloop/`，命令入口位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；现行需求见[个人命令规格](openspec/specs/personal-commands/spec.md)，操作说明见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。

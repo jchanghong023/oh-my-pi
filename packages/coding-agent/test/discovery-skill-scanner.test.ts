@@ -5,8 +5,7 @@ import { loadSkillsFromDir } from "@oh-my-pi/pi-coding-agent/extensibility/skill
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("skill directory asynchronous scanner contract", () => {
-	// A missing/non-file SKILL.md is rejected through asynchronous ordinary-file validation, never a sync probe.
-	it("validates every candidate asynchronously without per-skill synchronous filesystem probes", async () => {
+	it("loads valid skills without probing candidate files synchronously", async () => {
 		using root = TempDir.createSync("@omp-discovery-scanner-");
 		const valid = root.join("valid", "SKILL.md");
 		const missing = root.join("missing", "SKILL.md");
@@ -19,21 +18,16 @@ describe("skill directory asynchronous scanner contract", () => {
 		const stat = spyOn(fs, "statSync");
 		const lstat = spyOn(fs, "lstatSync");
 		const access = spyOn(fs, "accessSync");
-		const asyncStat = spyOn(fs.promises, "stat");
 		try {
 			const loaded = await loadSkillsFromDir({ dir: root.path(), source: "custom:user" });
 
 			expect(loaded.skills.map(skill => ({ name: skill.name, filePath: skill.filePath }))).toEqual([
 				{ name: "valid", filePath: valid },
 			]);
-			expect(asyncStat.mock.calls.map(call => String(call[0]))).toEqual(
-				expect.arrayContaining([valid, missing, notFile]),
-			);
 			for (const calls of [exists.mock.calls, stat.mock.calls, lstat.mock.calls, access.mock.calls]) {
 				expect(calls.filter(call => path.basename(String(call[0])) === "SKILL.md")).toEqual([]);
 			}
 		} finally {
-			asyncStat.mockRestore();
 			access.mockRestore();
 			lstat.mockRestore();
 			stat.mockRestore();

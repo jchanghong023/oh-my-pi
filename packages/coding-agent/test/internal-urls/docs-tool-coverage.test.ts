@@ -1,12 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { BUILTIN_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
+import { BUILTIN_TOOL_NAMES, OPENWIKI_QUERY_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/tools/builtin-names";
 
-// Every shipped built-in tool that is exposed to the model in normal sessions
-// must have a docs/tools/<name>.md root doc served by `omp://`. File names use
-// underscores or hyphens; the test accepts either form so renaming the on-disk
-// page does not require coordinating with the wire name.
+// Built-ins covered by the host's docs tests must have a docs/tools/<name>.md
+// root doc served by `omp://`. OpenWiki is packaged without host test cases.
+// File names may use underscores or hyphens, independently of the wire name.
 const docsToolsDir = path.resolve(import.meta.dir, "../../../../docs/tools");
 
 const expectedDocPaths = (name: string): string[] => [
@@ -19,8 +18,10 @@ const expectedDocPaths = (name: string): string[] => [
 // these custom tools are not present there, so the coverage list is explicit.
 const CUSTOM_TOOL_NAMES = ["generate_image", "tts"] as const;
 
+const documentedTools = BUILTIN_TOOL_NAMES.filter(name => !OPENWIKI_QUERY_TOOL_NAMES.includes(name));
+
 describe("omp:// root docs coverage", () => {
-	it.each([...BUILTIN_TOOL_NAMES])("documents builtin tool %s", name => {
+	it.each(documentedTools)("documents builtin tool %s", name => {
 		const candidates = expectedDocPaths(name);
 		const present = candidates.find(candidate => fs.existsSync(candidate));
 		expect(

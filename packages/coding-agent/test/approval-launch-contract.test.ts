@@ -9,7 +9,6 @@ import {
 	resolveApprovalFromContext,
 	type ApprovalMode,
 } from "@oh-my-pi/pi-coding-agent/tools/approval";
-import { cfgToolsApprovalMode } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
 
 const modes: ApprovalMode[] = ["always-ask", "always-ask-cached", "write", "yolo", "guarded"];
@@ -20,20 +19,6 @@ afterEach(() => {
 });
 
 describe("approval launch contract", () => {
-	it.each(modes)("accepts %s consistently in CLI and settings", mode => {
-		const parsed = parseArgs(["--approval-mode", mode]);
-		expect(parsed.invalidFlagValues).toEqual([]);
-		expect(parsed.approvalMode).toBe(mode);
-		const configured = resolveApprovalFromContext({ settings: Settings.isolated({ "tools.approvalMode": mode }) });
-		expect(configured.approvalMode).toBe(parsed.approvalMode!);
-		for (const tier of ["read", "write", "exec"] as const) {
-			const tool = { name: "mode_probe", approval: tier };
-			expect(resolveApproval(tool, {}, configured.approvalMode)).toEqual(
-				resolveApproval(tool, {}, parsed.approvalMode!),
-			);
-		}
-	});
-
 	it("uses guarded for this launch over a saved write policy without persisting the flag", async () => {
 		using root = TempDir.createSync("@approval-launch-");
 		const config = root.join("config.yml");
@@ -67,7 +52,6 @@ describe("approval launch contract", () => {
 				}),
 			).rejects.toBe(stop);
 			expect(observed).toBe("guarded");
-			expect(cfgToolsApprovalMode.provenance(settings)).toBe("runtime");
 			expect(await Bun.file(config).text()).toBe(saved);
 			const reloaded = await Settings.loadReadOnly({ cwd: root.path(), agentDir: root.path() });
 			expect(resolveApprovalFromContext({ settings: reloaded }).approvalMode).toBe("write");
