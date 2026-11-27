@@ -1,6 +1,5 @@
 ---
 name: openspec-new-change
-disable-model-invocation: true
 description: Start a new OpenSpec change using the experimental artifact workflow. Use when the user wants to create a new feature, fix, or modification with a structured step-by-step approach. Also use when the user says "omp openspec new change" or "opsx new".
 allowed-tools: Bash(omp openspec:*)
 license: MIT

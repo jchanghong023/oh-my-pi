@@ -172,7 +172,6 @@ export function MiniSpark(props: { readonly spark: JobWidgetSparkBlock }): JSXNo
 function AgentsSegment(props: {
 	readonly running: number;
 	readonly inSession: number;
-	readonly hideCount: boolean;
 }): JSXNode {
 	const shortcut = formatTooltipDoubleTap("left");
 	if (props.running === 0) {
@@ -203,7 +202,7 @@ function AgentsSegment(props: {
 			actions={{ click: "agents.open" }}
 		>
 			<icon key="icon" name="users" tone="accent" />
-			{!props.hideCount && <text key="count" spans={[{ t: String(props.running), s: "num" }]} wrap="none" />}
+			<text key="count" spans={[{ t: String(props.running), s: "num" }]} wrap="none" />
 		</row>
 	);
 }
@@ -241,7 +240,6 @@ function JobsSegment(props: { readonly running: number; readonly entries: readon
 /** See the module docs. */
 export function HudPills(props: {
 	readonly model: HudPillsModel;
-	readonly composerShowsAgentCount?: () => boolean;
 }): JSXNode {
 	const model = props.model;
 	const agents = computed(() => {
@@ -266,13 +264,7 @@ export function HudPills(props: {
 			<row role="omp.hud" justify="end" hidden={empty || undefined} onAction={onAction}>
 				{!empty && (
 					<row key="running" role="omp.hud.pill" align="center">
-						{a && (
-							<AgentsSegment
-								running={a.running}
-								inSession={a.inSession}
-								hideCount={props.composerShowsAgentCount?.() === true}
-							/>
-						)}
+						{a && <AgentsSegment running={a.running} inSession={a.inSession} />}
 						{j && <JobsSegment running={j.running} entries={j.entries} />}
 					</row>
 				)}

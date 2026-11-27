@@ -22,6 +22,9 @@ import { computerTurnInFlight, registerComputerController } from "@oh-my-pi/pi-c
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { initTheme } from "../src/ui/theme/service";
 
+const GO_ON_FORM =
+	'<form><p>Go on?</p><label><input type="radio" name="go" value="Yes"> Yes</label><label><input type="radio" name="go" value="No"> No</label></form>';
+
 describe("SDK session dialogs and the computer display hold", () => {
 	let tempDir: string;
 	let authStorage: AuthStorage;
@@ -112,12 +115,7 @@ describe("SDK session dialogs and the computer display hold", () => {
 	});
 
 	it("ends the hold while `ask` waits for an answer", async () => {
-		const target = await createSession({ "ask.timeout": 0 }, [
-			call("ask", {
-				html: '<form><p>Go on?</p><label><input type="radio" name="go" value="Yes"> Yes</label><label><input type="radio" name="go" value="No"> No</label></form>',
-			}),
-			{ content: ["done"] },
-		]);
+		const target = await createSession({ "ask.timeout": 0 }, [call("ask", { html: GO_ON_FORM }), { content: ["done"] }]);
 		const running = target.prompt("go");
 		const open = await dialog.promise;
 		expect(open).toMatchObject({ turn: undefined, releases: 1 });
@@ -129,9 +127,7 @@ describe("SDK session dialogs and the computer display hold", () => {
 
 	it("keeps the hold while an `ask` with an `ask.timeout` deadline waits, since the turn goes on unattended", async () => {
 		const target = await createSession({ "ask.timeout": 30 }, [
-			call("ask", {
-				html: '<form><p>Go on?</p><label><input type="radio" name="go" value="Yes"> Yes</label><label><input type="radio" name="go" value="No"> No</label></form>',
-			}),
+			call("ask", { html: GO_ON_FORM }),
 			{ content: ["done"] },
 		]);
 		const running = target.prompt("go");

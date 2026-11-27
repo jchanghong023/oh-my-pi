@@ -6,7 +6,7 @@ import { ensureSpecDrivenResources } from "../spec-driven/resources";
 import { SPEC_DRIVEN_SKILL_PROVIDER } from "../spec-driven/skill-policy";
 import { scanSkillsFromDir } from "./helpers";
 
-/** Low-priority builtins use the ordinary catalog collision rules; native autoload bypasses that catalog. */
+/** Low-priority bundled skills use the ordinary catalog collision and visibility rules. */
 export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	const resources = await ensureSpecDrivenResources();
 	const items: Skill[] = [];

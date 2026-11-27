@@ -201,8 +201,9 @@ class FakeAgentSession {
 	constructor(
 		cwd: string,
 		private readonly models: Model[] = TEST_MODELS,
+		sessionManager = SessionManager.create(cwd),
 	) {
-		this.sessionManager = SessionManager.create(cwd);
+		this.sessionManager = sessionManager;
 		this.sessionId = this.sessionManager.getSessionId();
 		this.agent = {
 			sessionId: this.sessionId,
@@ -605,8 +606,11 @@ async function createHarness(
 
 	const initialSession = new FakeAgentSession(cwdA);
 	sessions.push(initialSession);
-	const factory = async (cwd: string, factoryOptions?: { interactivePrompts?: boolean }) => {
-		const session = new FakeAgentSession(cwd);
+	const factory = async (cwd: string, factoryOptions?: { interactivePrompts?: boolean; forkSourcePath?: string }) => {
+		const sessionManager = factoryOptions?.forkSourcePath
+			? await SessionManager.forkFrom(factoryOptions.forkSourcePath, cwd)
+			: undefined;
+		const session = new FakeAgentSession(cwd, undefined, sessionManager);
 		if (options.authStorage) session.authStorage = options.authStorage;
 		if (options.extensionRunners) {
 			session.extensionRunner = new ExtensionRunner(

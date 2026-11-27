@@ -9,6 +9,8 @@ import type { MathToken, Token, Tokens } from "./lexer";
 import { extensionLinkMarker } from "./links";
 import type { MarkdownStyles } from "./styles";
 
+export { decodeEntities };
+
 /** How plain text is drawn where inline content sits. */
 export interface InlineContext {
 	/** Style of plain text runs. */

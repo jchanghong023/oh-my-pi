@@ -1127,13 +1127,16 @@ export class TermBackend {
 			}
 		});
 		// After the first invalidation the watcher is disarmed until the queued frame paints.
-		// A key or paste can still promote it; unchanged pointer reports must not.
+		// Keys, paste and scrolling can still promote it; unchanged pointer motion must not.
 		if (
 			!this.#offlineLinux ||
 			(this.#frameRequested &&
 				(event.type === "paste" ||
 					(event.type === "key" && event.key.kind !== "release") ||
-					(event.type === "mouse" && this.#hover.peek() !== hover)))
+					(event.type === "mouse" &&
+						((event.mouse.action === "press" &&
+							(event.mouse.button === "wheel-up" || event.mouse.button === "wheel-down")) ||
+							this.#hover.peek() !== hover))))
 		)
 			this.requestRender();
 	}

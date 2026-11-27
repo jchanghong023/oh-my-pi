@@ -167,7 +167,6 @@ describe("enum flag validation", () => {
 		let stderr = "";
 		expect(reportInvalidFlagValues(parsed, text => (stderr += text))).toBe(true);
 		expect(stderr).toContain(
-			// 在途改动新增 guarded 审批模式,枚举报错串随之扩展。
 			'Invalid --approval-mode value: "sometimes". Expected one of: always-ask, always-ask-cached, write, yolo, guarded.',
 		);
 	});
@@ -278,7 +277,6 @@ describe("restartArgv (/restart relaunch argv)", () => {
 		const parsed = parseArgs(argv);
 		expect(parsed.profile).toBe("work");
 		expect(parsed.print).toBe(true);
-		expect(parsed.resume).toBe("sid");
 		expect(parsed.messages).toEqual([]);
 	});
 

@@ -803,7 +803,7 @@ async function wrappedExecute(
 	}
 	// The Spotlight experiment shapes what the agent's own calls return; calls a tool or script makes stay whole.
 	const shape = context?.spotlightShape;
-	if (shape && isAgentCall(this, toolCallId, context)) {
+	if (shape && result.details?.meta?.completePage !== true && isAgentCall(this, toolCallId, context)) {
 		result = await shape({
 			tool: this.name,
 			toolCallId,

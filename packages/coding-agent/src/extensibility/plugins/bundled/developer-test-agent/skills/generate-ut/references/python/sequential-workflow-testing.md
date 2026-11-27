@@ -158,7 +158,7 @@ Functions that:
 4. **Cleanup per exception**: If different exception types trigger different cleanup, verify each cleanup path independently
 5. **Logging differentiation**: When different exception types log at different levels (warning vs error), verify the correct level is used
 6. **Outcome routing exclusivity**: When different exception types route to different outcomes (e.g., requeue vs acknowledge), verify the correct outcome for each type AND that the outcomes are mutually exclusive (exactly one called, never both, never neither)
-7. **Exception suppression verification**: When a specific exception type is caught and suppressed (not re-raised), verify the function does NOT re-raise it and that cleanup operations still execute after suppression. Use `pytest.raises()` to confirm the exception does NOT propagate.
+7. **Exception suppression verification**: Trigger the exception in the dependency, call the target directly without `pytest.raises()`, and verify its expected return and cleanup. Any propagated exception fails the test.
 8. **Recursive self-call in exception handling**: When a function calls `self.method()` recursively within exception handling, mock `self.method` on the instance to intercept the recursive call, then call `ClassName.method(instance, ...)` to invoke the real method. Verify the recursive call was made with correct arguments.
 9. **Thread/cleanup tracking verification**: For functions that clean up tracked resources (e.g., removing threads from sets), verify removal is called for each resource and that tracking collections are emptied.
 

@@ -276,18 +276,27 @@ impl Scope {
 	/// Identity-pinned; a `Process` scope has nothing beyond the pid (and
 	/// no family: [`UnixProc::family`]).
 	fn sweep(self, family: &[ProcInfo]) {
-		if matches!(self, Self::Process { .. }) {
+		if matches!(self, Self::Process { .. }) || family.is_empty() {
 			return;
 		}
+		let me = std::process::id() as i32;
 		let Ok(table) = proc::list() else {
+			proc::signal_each(family.iter().filter(|p| p.pid != me), libc::SIGKILL);
 			return;
 		};
-		let doomed = proc::family(&table, family);
-		let me = std::process::id() as i32;
-		let rest = table
-			.iter()
-			.filter(|p| p.pid != me && self.contains(p) && !doomed.iter().any(|d| d.pid == p.pid));
-		proc::signal_each(doomed.iter().chain(rest), libc::SIGKILL);
+		let retained: HashSet<_> = family.iter().map(|p| (p.pid, p.start)).collect();
+		// After reaping the leader, a numeric PGID/SID alone may name a
+		// different job. Expand a scope only if it still has a known member.
+		let anchored = table.iter().any(|p| {
+			p.pid != me
+				&& self.contains(p)
+				&& retained.contains(&(p.pid, p.start))
+				&& proc::info(p.pid).is_some_and(|now| now.start == p.start && self.contains(&now))
+		});
+		let doomed = proc::family_where(&table, |p| {
+			p.pid != me && (retained.contains(&(p.pid, p.start)) || (anchored && self.contains(p)))
+		});
+		proc::signal_each(doomed.iter().filter(|p| p.pid != me), libc::SIGKILL);
 	}
 }
 
@@ -743,6 +752,8 @@ pub(super) fn spawn(
 		shared: Arc::clone(shared),
 		detached: lineage.detached,
 		reaped: false,
+		operand_only: false,
+		drain_at_exit: false,
 		family: Vec::new(),
 		batched: false,
 		pumps,
@@ -1658,6 +1669,11 @@ struct UnixProc {
 	/// [`ExtProc::usage`] reaped it already: dropping it must not reap again
 	/// (the pid may name another child by then).
 	reaped:   bool,
+	/// An operand-only wave must not expand to descendants on abandonment.
+	operand_only: bool,
+	/// Foreground timeout reports the exit without requiring descendants'
+	/// output pipes to reach end of file.
+	drain_at_exit: bool,
 	/// Identities captured before TERM or KILL ([`UnixProc::family_from`]):
 	/// a cancel signals before it drops, so those it orphaned still need KILL.
 	family:   Vec<ProcInfo>,
@@ -1681,6 +1697,18 @@ struct UnixProc {
 }
 
 impl UnixProc {
+	fn poll_output_snapshot(&mut self, cx: &mut Context<'_>) -> Option<Poll<ExitStatus>> {
+		if !self.drain_at_exit || !self.tracker.lock().has_exited() {
+			return None;
+		}
+		Some(
+			self
+				.pumps
+				.poll_exit_snapshot(cx)
+				.map(|()| self.tracker.lock().collect_snapshot()),
+		)
+	}
+
 	/// From a pre-signal snapshot, keep this scope's members and their
 	/// descendants, plus surviving members orphaned by an earlier signal.
 	/// Only while the leader is unreaped, so its pid and scope still name it.
@@ -1764,6 +1792,7 @@ impl UnixProc {
 		if let Abandon::Escalate { term, .. } = action {
 			if term {
 				let _ = process.signal_root(libc::SIGTERM);
+				resume_helper(&process);
 			}
 			if let Some(at) = kill_due {
 				let delayed = process.clone();
@@ -1773,15 +1802,24 @@ impl UnixProc {
 					.spawn(move || {
 						thread::sleep(at.saturating_duration_since(Instant::now()));
 						let _ = delayed.signal_root(libc::SIGKILL);
+						resume_helper(&delayed);
 					});
 				if started.is_err() {
 					let _ = process.signal_root(libc::SIGKILL);
+					resume_helper(&process);
 				}
 			}
 			self.unpark();
 		} else if !self.reaped {
 			self.shared.state.reap(self.pid);
 		}
+	}
+}
+
+#[cfg(target_os = "linux")]
+fn resume_helper(process: &crate::proctree::Process) {
+	if proc::info(process.pid()).is_some_and(|p| p.state == ProcState::Stopped) {
+		let _ = process.signal(libc::SIGCONT);
 	}
 }
 
@@ -1807,6 +1845,9 @@ impl ExtProc for UnixProc {
 		if self.pidfd.is_some() && !(self.awaited && self.exited_now()) {
 			self.await_exit(cx.waker());
 		}
+		if let Some(status) = self.poll_output_snapshot(cx) {
+			return status;
+		}
 		self.pumps.poll(cx, &self.tracker);
 		self.tracker.poll(cx)
 	}
@@ -1816,8 +1857,15 @@ impl ExtProc for UnixProc {
 		if self.pidfd.is_some() && !(self.awaited && self.exited_now()) {
 			self.await_exit(cx.waker());
 		}
+		if let Some(status) = self.poll_output_snapshot(cx) {
+			return status.map(ProcEvent::Exited);
+		}
 		self.pumps.poll(cx, &self.tracker);
 		self.tracker.poll_event(cx)
+	}
+
+	fn drain_output_at_exit(&mut self) {
+		self.drain_at_exit = true;
 	}
 
 	fn pgid(&self) -> Option<u32> {
@@ -1843,11 +1891,7 @@ impl ExtProc for UnixProc {
 			return Err(io::Error::from_raw_os_error(libc::ESRCH));
 		}
 		#[cfg(target_os = "linux")]
-		if self
-			.report
-			.as_ref()
-			.is_some_and(|report| report.operand_only)
-		{
+		if self.operand_only && self.report.is_some() {
 			if self
 				.process()
 				.is_some_and(|process| process.signal_root(number))
@@ -1912,9 +1956,19 @@ impl ExtProc for UnixProc {
 			}
 		}
 		for &(pid, pgid) in children {
-			let Some(process) = i32::try_from(pid)
-				.ok()
-				.and_then(crate::proctree::Process::from_pid)
+			let Some(process) = i32::try_from(pid).ok().and_then(|pid| {
+				extra
+					.iter()
+					.find(|process| process.pid() == pid)
+					.cloned()
+					.or_else(|| {
+						#[cfg(target_os = "linux")]
+						if pid == self.pid {
+							return self.process();
+						}
+						crate::proctree::Process::from_pid(pid)
+					})
+			})
 			else {
 				// Nothing has been sent yet: use the original host handles
 				// when one of the children cannot be pinned.
@@ -1934,12 +1988,18 @@ impl ExtProc for UnixProc {
 		Some(targets.signal_wave(single, number))
 	}
 
-	fn record_wave_signal(&mut self, sig: Signal, wave: &crate::proctree::SignalWave) {
-		#[cfg(target_os = "linux")]
-		if let Some(report) = &mut self.report {
-			report.operand_only = wave.roots_only;
-		}
-		if matches!(sig, Signal::Term | Signal::Kill)
+	fn record_wave_signal(
+		&mut self,
+		sig: Signal,
+		groups: bool,
+		wave: Option<&crate::proctree::SignalWave>,
+	) {
+		self.operand_only = !groups;
+		let Some(wave) = wave else {
+			return;
+		};
+		if groups
+			&& matches!(sig, Signal::Term | Signal::Kill)
 			&& !self.detached
 			&& !matches!(self.scope, Scope::Process { .. })
 			&& !wave.family.is_empty()
@@ -1956,6 +2016,13 @@ impl ExtProc for UnixProc {
 		if !wave.failed.contains(&self.pid) {
 			self.tracker.lock().signalled(sig);
 		}
+	}
+
+	fn continue_stopped(&mut self) -> io::Result<()> {
+		if self.reaped {
+			return Err(io::Error::from_raw_os_error(libc::ESRCH));
+		}
+		Scope::Process { pid: self.pid }.signal(Signal::Cont)
 	}
 
 	fn stop(&mut self) -> io::Result<()> {
@@ -2007,10 +2074,8 @@ impl Drop for UnixProc {
 		}
 		let grace = self.shared.config.grace;
 		#[cfg(target_os = "linux")]
-		if self
-			.report
-			.as_ref()
-			.is_some_and(|report| report.operand_only)
+		if self.operand_only
+			&& self.report.is_some()
 			&& !self.detached
 			&& !self.tracker.lock().collected()
 		{
@@ -2020,10 +2085,15 @@ impl Drop for UnixProc {
 		// Taken before anything is signalled, so no member is orphaned
 		// mid-walk. Only the engine polls the tracker, so an exit that is
 		// not collected now is not collected below either.
-		if !self.tracker.lock().collected() {
+		let scope = if self.operand_only {
+			Scope::Process { pid: self.pid }
+		} else {
+			self.scope
+		};
+		if !self.operand_only && !self.tracker.lock().collected() {
 			self.refresh_family();
 		}
-		let family = std::mem::take(&mut self.family);
+		let family = if self.operand_only { Vec::new() } else { std::mem::take(&mut self.family) };
 		let mut life = self.tracker.lock();
 		if self.detached {
 			let exited = life.release();
@@ -2049,25 +2119,25 @@ impl Drop for UnixProc {
 			Abandon::Orphaned { term, sweep_at } => {
 				// Unreaped (a zombie), so the scope is still ours.
 				if term {
-					let _ = self.scope.signal(Signal::Term);
+					let _ = scope.signal(Signal::Term);
 				}
-				let _ = self.scope.signal(Signal::Cont);
+				let _ = scope.signal(Signal::Cont);
 				drop(life);
 				self.term_outside_group(&family);
 				self.shared.state.reap(self.pid);
-				escalate_at(&self.tracker, self.scope, sweep_at, family);
+				escalate_at(&self.tracker, scope, sweep_at, family);
 			},
 			Abandon::Escalate { term, kill_at } => {
 				// Under the lock: the waiter cannot record the exit and reap
 				// in between, so the scope is still ours.
 				if term {
-					let _ = self.scope.signal(Signal::Term);
+					let _ = scope.signal(Signal::Term);
 				}
 				// A stopped (paused) group acts on TERM only once continued.
-				let _ = self.scope.signal(Signal::Cont);
+				let _ = scope.signal(Signal::Cont);
 				drop(life);
 				self.term_outside_group(&family);
-				escalate_at(&self.tracker, self.scope, kill_at, family);
+				escalate_at(&self.tracker, scope, kill_at, family);
 				// Parked: a waiter observes the exit and reaps.
 				#[cfg(target_os = "linux")]
 				self.unpark();

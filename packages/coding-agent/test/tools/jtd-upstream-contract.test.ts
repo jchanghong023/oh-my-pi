@@ -42,12 +42,6 @@ const forms = [
 		],
 		rejected: { kind: "text", value: 2 },
 	},
-	{
-		name: "ref",
-		form: { ref: "entry" },
-		accepted: ["linked value"],
-		rejected: false,
-	},
 ];
 
 describe("upstream JTD form contracts", () => {
@@ -55,13 +49,17 @@ describe("upstream JTD form contracts", () => {
 	// not merely by comparing a converted object to constants.
 	it.each(forms)("preserves the $name form for an output-schema consumer", ({ form, accepted, rejected }) => {
 		const converted = jtdToJsonSchema({
-			definitions: { entry: { type: "string" } },
 			properties: { payload: form },
 		});
 		for (const payload of accepted) {
 			expect(validateJsonSchemaValue(converted, { payload }).success).toBe(true);
 		}
 		expect(validateJsonSchemaValue(converted, { payload: rejected }).success).toBe(false);
+	});
+
+	it("converts a JTD ref to the upstream JSON Schema pointer", () => {
+		const converted = jtdToJsonSchema({ definitions: { entry: { type: "string" } }, ref: "entry" });
+		expect(converted).toEqual({ $ref: "#/$defs/entry" });
 	});
 
 	// The empty form accepts arbitrary values but must not open its parent.

@@ -22,7 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isPromise } from "node:util/types";
-import { APP_NAME, getLogPath, getLogsDir, localDay, VERSION } from "./dirs";
+import { APP_NAME, getActiveProfile, getLogPath, getLogsDir, localDay, VERSION } from "./dirs";
 import { RotatingFileSink } from "./logger/rotating-file";
 import { isPidAlive } from "./pid";
 import { drainModuleLoadEvents } from "./timing-buffer";
@@ -58,28 +58,40 @@ export interface LogForwarder {
 }
 
 const logSinks = new Set<LogSink>();
-const logContextStorage = new AsyncLocalStorage<Readonly<Record<string, unknown>>>();
+interface LogScope {
+	readonly fields: Readonly<Record<string, unknown>>;
+	readonly operation?: Readonly<Record<string, unknown>>;
+}
+const logContextStorage = new AsyncLocalStorage<LogScope>();
 const EMPTY_LOG_CONTEXT: Readonly<Record<string, unknown>> = Object.freeze({});
 
-/** Inherit correlation fields across asynchronous work; inner and explicit fields win. */
-export function withLogContext<T>(context: Record<string, unknown>, fn: () => T): T {
-	let merged: Readonly<Record<string, unknown>>;
+function extendLogContext(
+	parent: Readonly<Record<string, unknown>> | undefined,
+	context: Record<string, unknown>,
+): Readonly<Record<string, unknown>> {
 	try {
-		merged = { ...getLogContext(), ...context };
+		return Object.freeze({ ...parent, ...context });
 	} catch {
 		// A throwing inherited getter must not suppress the operation's own fields.
 		try {
-			merged = { ...context };
+			return Object.freeze({ ...context });
 		} catch {
-			merged = EMPTY_LOG_CONTEXT;
+			return EMPTY_LOG_CONTEXT;
 		}
 	}
-	return logContextStorage.run(Object.freeze(merged), fn);
+}
+
+/** Inherit correlation fields across asynchronous work; inner and explicit fields win. */
+export function withLogContext<T>(context: Record<string, unknown>, fn: () => T): T {
+	const parent = logContextStorage.getStore();
+	const operation = extendLogContext(parent?.operation, context);
+	const fields = parent?.fields === parent?.operation ? operation : extendLogContext(parent?.fields, operation);
+	return logContextStorage.run({ fields, operation }, fn);
 }
 
 /** Current operation context, or a shared immutable empty object outside an operation. */
 export function getLogContext(): Readonly<Record<string, unknown>> {
-	return logContextStorage.getStore() ?? EMPTY_LOG_CONTEXT;
+	return logContextStorage.getStore()?.fields ?? EMPTY_LOG_CONTEXT;
 }
 
 /** Summarize an exception without copying messages, bodies, causes, or arbitrary properties. */
@@ -154,7 +166,7 @@ export function diagnosticUrl(value: string | URL): Record<string, unknown> {
 }
 
 function mergedLogContext(context: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-	const inherited = logContextStorage.getStore();
+	const inherited = logContextStorage.getStore()?.fields;
 	try {
 		if (!inherited) return context;
 		return {
@@ -230,7 +242,7 @@ function forwardRecord(
 function forwardableContext(context: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
 	// An Error passed as the context carries its fields as non-enumerable properties.
 	let merged = context instanceof Error ? errorToRecord(context) : context;
-	const scoped = logContextStorage.getStore();
+	const scoped = logContextStorage.getStore()?.fields;
 	if (scoped) {
 		try {
 			merged = { ...scoped, ...merged };
@@ -392,16 +404,24 @@ function schedulePruneStaleProcessLogs(dir: string): void {
 /** Platform-standard user state directory, independent of relocated application data. */
 function fallbackLogsDir(primaryDirectory: string): string {
 	const home = os.homedir();
+	const profile = getActiveProfile();
+	const profilePath = profile ? ["profiles", profile] : [];
 	let directory: string;
 	if (process.platform === "win32") {
-		directory = path.join(process.env.LOCALAPPDATA || path.join(home, "AppData", "Local"), APP_NAME, "Logs");
+		const localAppData = process.env.LOCALAPPDATA;
+		const root = localAppData && path.isAbsolute(localAppData) ? localAppData : path.join(home, "AppData", "Local");
+		directory = path.join(root, APP_NAME, ...profilePath, "Logs");
 	} else if (process.platform === "darwin") {
-		directory = path.join(home, "Library", "Logs", APP_NAME);
+		directory = path.join(home, "Library", "Logs", APP_NAME, ...profilePath);
 	} else {
-		directory = path.join(process.env.XDG_STATE_HOME || path.join(home, ".local", "state"), APP_NAME, "logs");
+		const xdgState = process.env.XDG_STATE_HOME;
+		const root = xdgState && path.isAbsolute(xdgState) ? xdgState : path.join(home, ".local", "state");
+		directory = path.join(root, APP_NAME, ...profilePath, "logs");
 	}
 	// An already-standard default must still get a distinct user-owned attempt.
-	return path.relative(directory, primaryDirectory) === "" ? path.join(home, ".omp", "fallback-logs") : directory;
+	return path.relative(directory, primaryDirectory) === ""
+		? path.join(home, ".omp", ...profilePath, "fallback-logs")
+		: directory;
 }
 
 let logFailureReported = false;
@@ -475,12 +495,16 @@ const FORMAT_TOKEN_PATTERN = /%[scdjifoO%]/;
 /**
  * Run `fn` with `context`'s fields on every record logged while it runs,
  * including from the promises, timers and callbacks it starts. A nested call
- * replaces the enclosing context, as a subagent's session replaces its
- * parent's; a field passed to the log call itself wins. Fields are read as each
+ * replaces the enclosing session context, while preserving the operation
+ * context; a field passed to the log call itself wins. Fields are read as each
  * record is written, so a getter stays current.
  */
 export function withContext<T>(context: Readonly<Record<string, unknown>>, fn: () => T): T {
-	return logContextStorage.run(context, fn);
+	const operation = logContextStorage.getStore()?.operation;
+	const fields = operation
+		? Object.defineProperties({ ...operation }, Object.getOwnPropertyDescriptors(context))
+		: context;
+	return logContextStorage.run({ fields, operation }, fn);
 }
 
 /**
@@ -558,8 +582,7 @@ function installExitFlush(): void {
 }
 
 /** Build a rotating file sink with process-local rotation and shared retention. */
-function makeFileTransport(dir: string | undefined, levelRank: number): RotatingFileSink {
-	const logsDir = dir ?? getLogsDir();
+function makeFileTransport(logsDir: string, fallbackDir: string, levelRank: number): RotatingFileSink {
 	let scheduledPruneDir: string | undefined;
 	installExitFlush();
 	return new RotatingFileSink({
@@ -578,7 +601,7 @@ function makeFileTransport(dir: string | undefined, levelRank: number): Rotating
 			// Keep the stderr guard's fd 2 on the file this sink is writing.
 			logFileObserver?.(filePath);
 		},
-		fallbackDirectory: () => fallbackLogsDir(logsDir),
+		fallbackDirectory: () => fallbackDir,
 		onFailure: (error, stage, recoveredPath) => {
 			if (recoveredPath) {
 				if (LOG_LEVEL_RANK.warn > levelRank) return undefined;
@@ -662,6 +685,7 @@ let transportOpts: { console?: boolean; file?: boolean | string } = { file: true
 
 interface LocalTransports {
 	readonly file: RotatingFileSink | undefined;
+	readonly fallbackDir?: string;
 	readonly console: boolean;
 	/** Rank of the most verbose level written to {@link file} and the console. */
 	readonly levelRank: number;
@@ -694,6 +718,11 @@ export function getConfiguredLogsDir(): string {
 		activeTransports?.file?.configuredDirectory ??
 		(typeof transportOpts.file === "string" ? transportOpts.file : getLogsDir())
 	);
+}
+
+/** Profile-local fallback, including logs from a prior process. */
+export function getFallbackLogsDir(): string {
+	return activeTransports?.fallbackDir ?? fallbackLogsDir(getConfiguredLogsDir());
 }
 
 /** Open the local file transport for native stderr without logging a record. */
@@ -767,11 +796,11 @@ export function currentLogFile(): string | undefined {
 
 function buildTransports(opts: { console?: boolean; file?: boolean | string }): LocalTransports {
 	const levelRank = resolveLevelRank();
-	return {
-		file: opts.file ? makeFileTransport(typeof opts.file === "string" ? opts.file : undefined, levelRank) : undefined,
-		console: opts.console === true,
-		levelRank,
-	};
+	const console = opts.console === true;
+	if (!opts.file) return { file: undefined, console, levelRank };
+	const logsDir = path.resolve(typeof opts.file === "string" ? opts.file : getLogsDir());
+	const fallbackDir = fallbackLogsDir(logsDir);
+	return { file: makeFileTransport(logsDir, fallbackDir, levelRank), fallbackDir, console, levelRank };
 }
 
 function getLocalTransports(): LocalTransports {
@@ -795,7 +824,7 @@ function emitLocally(
 	const rank = LOG_LEVEL_RANK[level];
 	if (rank > transports.levelRank || (!transports.file && !transports.console)) return;
 	const now = new Date();
-	const scoped = foreignTimestamp ? undefined : logContextStorage.getStore();
+	const scoped = foreignTimestamp ? undefined : logContextStorage.getStore()?.fields;
 	const line = formatLogRecord(level, message, context, formatLocalTimestamp(foreignTimestamp ?? now), scoped);
 	transports.file?.write(line, rank <= IMMEDIATE_FLUSH_RANK || exiting, localDay(now));
 	if (transports.console) fs.writeSync(1, `${line}${os.EOL}`);

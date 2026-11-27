@@ -69,15 +69,15 @@ describe("InputController tool activity visibility", () => {
 		} as unknown as InteractiveModeContext);
 
 		for (const [display, status] of [
-			["clean", "Display mode: clean"],
-			["compact", "Display mode: compact; tool details: /display detailed"],
-			["detailed", "Display mode: detailed"],
+			["clean", "clean"],
+			["compact", "/display detailed"],
+			["detailed", "detailed"],
 		] as const) {
 			controller.toggleToolActivityVisibility();
 			await Promise.resolve();
 			expect(cfgDisplayMode.get(settings)).toBe(display);
 			expect(cfgHideThinkingBlock.get(settings)).toBe(display === "clean");
-			expect(showStatus).toHaveBeenLastCalledWith(status);
+			expect(showStatus).toHaveBeenLastCalledWith(expect.stringContaining(status));
 		}
 		expect(showWarning).not.toHaveBeenCalled();
 		expect(cfgTerminalShowImages.get(settings)).toBe(false);

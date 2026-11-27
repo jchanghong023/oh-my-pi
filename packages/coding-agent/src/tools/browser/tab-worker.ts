@@ -4445,9 +4445,13 @@ export class WorkerCore {
 		await this.#certificateOverride?.detach().catch(() => undefined);
 		this.#certificateOverride = undefined;
 		this.#emulation?.dispose();
-		if (this.#ownsPage && !keepPage && page && !page.isClosed()) await page.close().catch(() => undefined);
+		let pageClosed: boolean | undefined;
+		if (this.#ownsPage && !keepPage && page && !page.isClosed()) {
+			// In Relay, isClosed can mean the debugger was dismissed, not that the tab closed.
+			pageClosed = await page.close().then(() => true, () => false);
+		}
 		if (this.#browser?.connected) this.#browser.disconnect();
-		this.#transport.send({ type: "closed" });
+		this.#transport.send({ type: "closed", pageClosed });
 		this.#transport.close();
 	}
 

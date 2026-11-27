@@ -488,7 +488,7 @@ export function HtmlFormDialog(props: HtmlFormProps): JSXNode {
 		last = group;
 		reveal.set(untrack(reveal) + 1);
 	});
-	// The countdown restarts on every key; when it runs out the draft is sent as it is.
+	// Input restarts the countdown; when it runs out the draft is sent as it is.
 	const timeout = props.timeout;
 	const now = props.now ?? (() => Date.now());
 	const deadline = signal(timeout === undefined ? undefined : untrack(now) + timeout);
@@ -529,6 +529,7 @@ export function HtmlFormDialog(props: HtmlFormProps): JSXNode {
 				return model.key(key);
 			}}
 			onPaste={paste => {
+				restart();
 				model.paste(paste.text);
 				return true;
 			}}

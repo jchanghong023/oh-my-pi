@@ -44,7 +44,6 @@ import readSourcesDoc from "../prompts/tools/read-sources.md" with { type: "text
 import type { ToolSession } from "../sdk";
 import { McpResourceNotFoundError } from "../internal-urls/mcp-protocol";
 import { parseInternalUrl } from "../internal-urls/parse";
-import type { SkillReadContext } from "../internal-urls/skill-protocol";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -92,6 +91,7 @@ import { executeReadUrl, fetchReadUrl, parseReadUrlTarget, type ReadUrlEntry } f
 import { approvalCacheKeyForPath, approvalDirectoryKey } from "./approval-cache";
 import {
 	approvalLocalBackingPath,
+	approvalLocalListingKey,
 	approvalTargetKey,
 	approvalTargetNamesFile,
 	isApprovalPublicUrl,
@@ -115,7 +115,6 @@ import {
 } from "./path-utils";
 import { splitPathAndSel } from "./details/read";
 import type { LineRange } from "./line-ranges";
-import { assertTeamReadTarget } from "./team-read-isolation";
 import { readArchive, resolveArchiveReadPath } from "./read-archive";
 import {
 	appendReadNotice,
@@ -1296,11 +1295,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			// only from inside this machine or network, so it is gated like a file.
 			if (isApprovalPublicUrl(selectorless)) return undefined;
 		}
-		const backing = approvalLocalBackingPath(router.normalize(selectorless.trim()), this.session);
+		const backing = approvalLocalBackingPath(router.normalize(selectorless), this.session);
 		// A directory read lists that folder itself, so it keys as the folder grant: approving it
 		// covers the folder's own entries, and a parent folder's grant never authorizes reading a
 		// subfolder's contents.
 		if (backing !== undefined) {
+			if (backing === approvalLocalBackingPath("local://", this.session)) {
+				return [approvalLocalListingKey(backing)];
+			}
 			return [approvalTargetNamesFile(backing) ? approvalCacheKeyForPath(backing) : approvalDirectoryKey(backing)];
 		}
 		const key = approvalTargetKey(this.session.cwd, selectorless);
@@ -2182,11 +2184,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			if (!cfgFetchEnabled.get(this.session.settings)) {
 				throw new ToolError("URL reads are disabled by settings.");
 			}
-			if (this.initializeXModels && !this.session.modelRegistry && parseXUrl(parsedUrlTarget.path)) {
-				await this.initializeXModels();
-			}
 			const urlSel = parsedUrlTarget.sel;
 			const urlRaw = isRawSelector(urlSel);
+			if (!urlRaw && this.initializeXModels && !this.session.modelRegistry && parseXUrl(parsedUrlTarget.path)) {
+				await this.initializeXModels();
+			}
 			if (urlSel.kind === "lines" || urlSel.kind === "tail") {
 				// `…/A8:A1:59` or `?pid=diva2:2075459` names a resource, not line 59 of what precedes the colon.
 				const literal = () => executeReadUrl(this.session, { path: readPath, raw: false }, signal);
@@ -2390,7 +2392,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				markRawSuffixResolution(archivePath.suffixResolution, isRawSelector(parseSel(literalSplit.sel)));
 			}
 			if (archivePath) {
-				await assertTeamReadTarget(this.session, archivePath.absolutePath);
 				if (question !== undefined) throw new ToolError(IMAGE_QUESTION_SELECTOR_ERROR);
 				const archiveSubPath = located
 					? { path: archivePath.archiveSubPath, sel: located.sel }
@@ -2428,7 +2429,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					? null
 					: await resolveJsonReadPath(this.session, jsonReadPath, suffixCache, signal);
 			if (jsonPath) {
-				await assertTeamReadTarget(this.session, jsonPath.absolutePath);
 				if (jsonPath.suffixResolution) {
 					markRawSuffixResolution(jsonPath.suffixResolution, isRawSelector(parseSel(literalSplit.sel)));
 				}
@@ -2568,7 +2568,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				throw error;
 			}
 		}
-		await assertTeamReadTarget(this.session, absolutePath);
 		if (specialKind) {
 			throw new ToolError(
 				`Cannot read '${localReadPath}': it is a ${specialKind}, not a regular file or directory.`,
@@ -3581,17 +3580,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const { url, spec } = target;
 		const programmatic = toolContext?.programmatic === true;
 		const router = InternalUrlRouter.instance();
-		const context: SkillReadContext = sessionResolveContext(this.session, { signal });
-		if (this.session.localProtocolOptions?.allowCrossAgentReads === false) {
-			if (extractUriScheme(url) === "skill") {
-				// A skill resource may come from MCP. Check its actual local backing, if any,
-				// inside resolve rather than requiring a local file from a read-only route.
-				context.assertSkillReadTarget = backing => assertTeamReadTarget(this.session, backing);
-			} else {
-				const backing = await router.locate(url, context, { localOnly: true });
-				if (backing) await assertTeamReadTarget(this.session, backing);
-			}
-		}
+		const context = sessionResolveContext(this.session, { signal });
 		if (parsedSel.kind === "image") {
 			// A file-backed URL that locate deferred to a remote resolve (an unknown skill:// while
 			// MCP is available) reports its local miss (`Unknown skill`), not the selector refusal.

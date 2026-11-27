@@ -18,6 +18,8 @@ export type AnthropicHeaderOptions = {
 	claudeCodeBetas?: readonly string[];
 	/** Allow explicit fingerprint headers to replace OAuth defaults on non-official endpoints. */
 	allowAnthropicHeaderOverrides?: boolean;
+	/** Honor the declared Authorization header instead of synthesizing an OAuth bearer. */
+	headerOnlyAuth?: boolean;
 	/** Leave Claude Code's `x-app` and browser-access headers off API-key requests. */
 	omitClaudeCodeAppHeaders?: boolean;
 };
@@ -153,11 +155,9 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	// modelHeaders so a case-insensitive spread can't produce duplicate keys; each
 	// branch re-adds the caller's value explicitly. User-Agent and X-Api-Key are
 	// always honored (with branch-specific defaults filling in when absent), while
-	// Authorization is honored for every non-OAuth, non-Cloudflare-gateway branch —
-	// OAuth requests MUST carry `Authorization: Bearer <oauth-token>` (the OAuth
-	// credential itself) and Cloudflare AI Gateway authenticates via
-	// `cf-aig-authorization`, so user-supplied auth there would just leak. Both of
-	// those cases drop + log the caller value (#3391).
+	// Authorization is honored for non-Cloudflare API-key requests and explicit
+	// header-only OAuth requests. Other OAuth requests use the OAuth token;
+	// Cloudflare authenticates through `cf-aig-authorization`.
 	const incomingUserAgent = getHeaderCaseInsensitive(options.modelHeaders, "User-Agent");
 	const incomingAuthorization = getHeaderCaseInsensitive(options.modelHeaders, "Authorization");
 	const incomingApiKey = getHeaderCaseInsensitive(options.modelHeaders, "X-Api-Key");
@@ -171,7 +171,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	const apiVersion = resolveAnthropicApiVersion(options.baseUrl);
 	const acceptHeader = oauthToken ? "application/json" : stream ? "text/event-stream" : "application/json";
 	const isCloudflare = options.isCloudflareAiGateway ?? false;
-	const honorAuthorization = !oauthToken && !isCloudflare;
+	const honorAuthorization = !isCloudflare && (!oauthToken || options.headerOnlyAuth);
 	const allowAnthropicHeaderOverrides =
 		oauthToken &&
 		options.allowAnthropicHeaderOverrides === true &&
@@ -236,7 +236,11 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
 			"anthropic-dangerous-direct-browser-access": "true",
 			"anthropic-version": apiVersion,
-			Authorization: `Bearer ${options.apiKey}`,
+			...(options.headerOnlyAuth
+				? incomingAuthorization
+					? { Authorization: incomingAuthorization }
+					: {}
+				: { Authorization: `Bearer ${options.apiKey}` }),
 			"x-app": "cli",
 			Connection: "keep-alive",
 			"Accept-Encoding": "gzip, deflate, br, zstd",

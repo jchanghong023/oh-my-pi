@@ -6,7 +6,6 @@ import { Agent, type AgentMessage, type StreamFn } from "@oh-my-pi/pi-agent-core
 import * as compaction from "@oh-my-pi/pi-agent-core/compaction";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockModelOptions } from "@oh-my-pi/pi-ai/providers/mock";
-import { planSteeredRequest } from "@oh-my-pi/pi-ai/providers/openai-codex/live-steering";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
@@ -168,8 +167,7 @@ describe("native workspace input delivery", () => {
 		expect(liveRequests[0].map(text)).toContain("first steer");
 		expect(liveRequests[0].map(text)).toContain("second steer [redacted]");
 		expect(reminders(mock.calls[0].context.messages, localRoot)).toHaveLength(1);
-		// Replay the accepted delivery through the full provider pipeline. Codex
-		// requires the same ordered user items, not a developer replacement.
+		// Replay must deliver the accepted items in order without changing their role or text.
 		const replay = await session.convertMessagesToLlm(session.messages);
 		const delivered = replay
 			.slice(mock.calls[0].context.messages.length)
@@ -177,12 +175,6 @@ describe("native workspace input delivery", () => {
 		expect<Array<{ role: Message["role"]; content: string }>>(
 			delivered.map(message => ({ role: message.role, content: text(message) })),
 		).toEqual(liveRequests[0].map(message => ({ role: message.role, content: text(message) })));
-		expect(
-			planSteeredRequest(
-				delivered.map(message => ({ role: message.role, content: text(message) })),
-				liveRequests[0].map(message => ({ role: message.role, content: text(message) })),
-			),
-		).toEqual({ kind: "attach" });
 	});
 
 	it("refreshes a queued follow-up batch exactly once and does not treat synthetic input as a submission", async () => {

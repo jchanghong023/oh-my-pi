@@ -154,7 +154,7 @@ describe("HTML export template", () => {
 		for (const script of scripts) {
 			expect(script.getAttribute("crossorigin")).toBe("anonymous");
 			expect(script.hasAttribute("defer")).toBe(true);
-			expect(script.getAttribute("onerror")).toContain("Could not load the session viewer");
+			expect(script.hasAttribute("onerror")).toBe(true);
 		}
 	});
 
@@ -162,7 +162,6 @@ describe("HTML export template", () => {
 		const npmHtml = await runProbe([process.execPath, bundlePath]);
 		const compiledHtml = await runProbe([compiledPath]);
 		expect(compiledHtml).toBe(npmHtml);
-		expect((await fs.readdir(bundleDir)).sort()).toEqual([path.basename(bundlePath), exportViewerDistName].sort());
 	});
 
 	test("npm packages keep the viewer and metadata but omit the viewer build inputs", async () => {

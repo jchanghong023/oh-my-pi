@@ -1,4 +1,4 @@
-import type { OpenWikiVendor } from "../src/openwiki/vendor-contract";
+import type { OpenWikiVendor } from "../src/openwiki/vendor-contract.js";
 
 export declare const runNativeRepositoryGeneration: OpenWikiVendor["runNativeRepositoryGeneration"];
 export declare const parseCommand: OpenWikiVendor["parseCommand"];
@@ -8,6 +8,7 @@ export declare const resolvePageConcurrency: OpenWikiVendor["resolvePageConcurre
 export declare function getActiveOpenWikiHomeDir(): string;
 export declare const setEmbeddedOpenWikiHomeDir: OpenWikiVendor["setEmbeddedOpenWikiHomeDir"];
 export declare const resolveRepositoryRoot: OpenWikiVendor["resolveRepositoryRoot"];
+export declare const readRepositoryRunState: OpenWikiVendor["readRepositoryRunState"];
 export declare const SearchInput: OpenWikiVendor["SearchInput"];
 export declare const ReadInput: OpenWikiVendor["ReadInput"];
 export declare const ListWorkspacesInput: OpenWikiVendor["ListWorkspacesInput"];

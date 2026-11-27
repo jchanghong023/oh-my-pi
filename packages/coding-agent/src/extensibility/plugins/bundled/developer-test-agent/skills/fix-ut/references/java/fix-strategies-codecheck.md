@@ -11,7 +11,7 @@
 **修复策略**：
 1. 识别被测方法是否有返回值：有返回值 → 补充返回值断言（精确值 `assertEquals` > 布尔 `assertTrue`）
 2. 无返回值 → 验证副作用（状态变化 `assertEquals(dao.findById(1).getName())`、Mock 调用 `verify(mockDao).save()`）
-3. 异常场景 → 补充异常验证（`@Test(expected=...)` 或 `try-catch + fail()`）
+3. 异常场景 → 使用 JUnit 5 的 `assertThrows(X.class, () -> ...)` 验证被测调用
 4. 数据构建循环 → 验证构建结果（`assertEquals(10, list.size())`）
 
 **修复优先级**：精确值断言 > 布尔条件断言；内容验证 > 非空验证；具体字段验证 > 整体对象验证
@@ -38,7 +38,7 @@
 2. 循环内 return 无意义 → 直接移除
 3. if/else 分支内 return → 移除 return，补充分支逻辑的断言
 4. 不同条件分支代表不同测试场景 → 拆分为独立用例（如 `testProcess_validInput` / `testProcess_invalidInput`）
-5. try-catch 内 return → 移除 return，改用 `fail("Should throw exception")`
+5. 捕获预期异常后 `return` → 用 `assertThrows(X.class, () -> ...)` 替换 try-catch，保留对异常内容的断言
 
 ## 验证方法
 

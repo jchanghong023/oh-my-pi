@@ -1359,7 +1359,8 @@ export interface AgentTool<
 export interface AgentContext {
 	systemPrompt: string[];
 	messages: AgentMessage[];
-	captureToolRequestScope?: () => unknown;
+	/** Capture at dispatch or renew after the provider accepts original steering messages. */
+	captureToolRequestScope?: (acceptedSteering?: readonly AgentMessage[]) => unknown;
 	tools?: AgentTool<any>[];
 	/**
 	 * Inactive tools that may become active later in the conversation. A provider that announces tool changes

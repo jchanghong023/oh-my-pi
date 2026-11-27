@@ -30,10 +30,10 @@ const perCallSettings = (model: Model, extra: Record<string, unknown> = {}) =>
 const cleanups: (() => Promise<void>)[] = [];
 let runs = 0;
 
-/** Runs a bundled `worker` through the real executor and mock registry. */
+/** Runs a bundled `worker` on `perCallModel` through the real executor, with `model` as the only registry entry. */
 async function runWorker(options: {
 	model: Model;
-	perCallModel?: string;
+	perCallModel: string;
 	settings?: Settings;
 	assignment?: string;
 	setup?: (modelRegistry: ModelRegistry) => void;
@@ -54,14 +54,12 @@ async function runWorker(options: {
 	authStorage.keys.setRuntime("mock", "test-key");
 	registerMockApi(sourceId);
 	const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
-	const models = [model];
 	const find = modelRegistry.find.bind(modelRegistry);
-	vi.spyOn(modelRegistry, "find").mockImplementation(
-		(provider, id) =>
-			models.find(candidate => candidate.provider === provider && candidate.id === id) ?? find(provider, id),
+	vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) =>
+		provider === "mock" && id === model.id ? model : find(provider, id),
 	);
-	vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => models);
-	vi.spyOn(modelRegistry, "getAll").mockImplementation(() => models);
+	vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => [model]);
+	vi.spyOn(modelRegistry, "getAll").mockImplementation(() => [model]);
 	options.setup?.(modelRegistry);
 	vi.spyOn(discovery, "discoverAgents").mockResolvedValue({
 		agents: [{ name: "worker", description: "test", systemPrompt: "test", source: "bundled", tools: ["read"] }],
@@ -86,7 +84,7 @@ async function runWorker(options: {
 		invocationKind: "task",
 		assignment: options.assignment ?? "Answer the question.",
 		agent: "worker",
-		...(options.perCallModel === undefined ? { model: `mock/${model.id}` } : { perCallModel: options.perCallModel }),
+		perCallModel: options.perCallModel,
 		structured: false,
 		identity: { id: agentId },
 		keepAlive: false,

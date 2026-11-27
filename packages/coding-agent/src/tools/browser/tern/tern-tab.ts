@@ -818,7 +818,7 @@ export class TernTab implements InProcessRunTab {
 			if (this.#hostExited?.()) return true;
 			if (error instanceof TernError && error.kind === "not_found") return true;
 			if (!opts.strict && error instanceof TernError && error.kind === "closed") return false;
-			if (!(this.adopted && error instanceof TernError && error.kind === "invalid")) throw error;
+			if (opts.strict || !(this.adopted && error instanceof TernError && error.kind === "invalid")) throw error;
 			try {
 				await this.#client.request(
 					{ op: "scripts", block: this.block, scripts: [] },
@@ -827,7 +827,6 @@ export class TernTab implements InProcessRunTab {
 				return true;
 			} catch (cleanupError) {
 				if (cleanupError instanceof TernError && cleanupError.kind === "not_found") return true;
-				if (opts.strict) throw cleanupError;
 				return false;
 			}
 		}

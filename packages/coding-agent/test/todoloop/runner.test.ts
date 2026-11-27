@@ -713,7 +713,6 @@ describe("TodoLoop native context and cleanup boundaries", () => {
 			expect((await h.run()).phase).toBe("settlement_failed");
 			expect(run).toHaveBeenCalledTimes(1);
 			const ref = registry.list()[0];
-			expect(ref).toBeDefined();
 			expect(lifecycle.has(ref!.id, ref)).toBe(true);
 		} finally {
 			fail = false;

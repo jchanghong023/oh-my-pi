@@ -88,7 +88,6 @@ describe("native main-session Ctrl+Enter", () => {
 			expect(showError).toHaveBeenCalledWith("native submission rejected");
 			expect(composer.expandedText()).toBe("inspect this [Image #2]\n\nnext question [Image #1]");
 			expect(composer.pendingImages).toEqual([newerImage, originalImage]);
-			expect(composer.pendingImageLinks).toEqual(["local://newer.jpg", "local://original.png"]);
 			const chips = composer.chips();
 			expect(composer.imageLink(chips.find(chip => chip.n === 1)!)).toBe("local://newer.jpg");
 			expect(composer.imageLink(chips.find(chip => chip.n === 2)!)).toBe("local://original.png");

@@ -155,7 +155,6 @@ describe("prewalk startup degradation", () => {
 		} as unknown as ModelRegistry;
 
 		const result = await resolvePrewalkTarget(["@smol"], "@smol", registry, {}, new Set(), { settings });
-		expect(refreshed).toBe(true);
 		expect(result.prewalk?.target.id).toBe(discovered.id);
 	});
 

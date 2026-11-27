@@ -21,7 +21,7 @@ import type { Prompt } from "../capability/prompt";
 import { promptCapability } from "../capability/prompt";
 import type { Settings } from "../capability/settings";
 import { settingsCapability } from "../capability/settings";
-import { settings as activeSettings } from "../config/settings";
+import { findScopedSettings } from "../config/settings";
 import type { Skill } from "../capability/skill";
 import { skillCapability } from "../capability/skill";
 import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
@@ -64,11 +64,8 @@ function getUserCodexDir(ctx: LoadContext, capabilityToggle = false): string | n
 
 /** Legacy per-capability toggle; defaults on even before settings initialize. */
 function readCodexUserSkillsToggle(): boolean {
-	try {
-		return cfgSkillsEnableCodexUser.get(activeSettings) === true;
-	} catch {
-		return true;
-	}
+	const settings = findScopedSettings();
+	return settings ? cfgSkillsEnableCodexUser.get(settings) : cfgSkillsEnableCodexUser.default;
 }
 
 // =============================================================================

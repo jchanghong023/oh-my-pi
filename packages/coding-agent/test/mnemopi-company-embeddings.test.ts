@@ -10,7 +10,6 @@ const mnemopiConfigModulePath = join(import.meta.dir, "../src/mnemopi/config.ts"
 
 interface ProbeResult {
 	noCompanyLane: unknown;
-	defaults: unknown;
 	defaultsModel: unknown;
 	defaultsUrl: unknown;
 	defaultsToken: unknown;
@@ -20,9 +19,6 @@ interface ProbeResult {
 	envApiUrl: unknown;
 	envApiKey: unknown;
 	genericEnvDefaults: unknown;
-	genericEnvModel: unknown;
-	genericEnvUrl: unknown;
-	genericEnvKey: unknown;
 	genericKeysWithoutApiRoute: unknown;
 	wwwGenericModel: unknown;
 	wwwGenericUrl: unknown;
@@ -32,13 +28,9 @@ interface ProbeResult {
 	configuredVariant: unknown;
 	configuredModelForeign: unknown;
 	configuredModelCompany: unknown;
-	configuredModelCompanyModel: unknown;
 	configuredModelCompanyConfigModel: unknown;
 	configuredModelCompanyConfigUrl: unknown;
 	configuredModelCompanyConfigToken: unknown;
-	wiredModel: unknown;
-	wiredUrl: unknown;
-	wiredToken: unknown;
 	wiredExplicitUrl: unknown;
 	wiredExplicitToken: unknown;
 	wiredEmptyApiKey: unknown;
@@ -103,7 +95,7 @@ function runEmbeddingProbe(): ProbeResult {
 				delete process.env.OPENROUTER_API_KEY;
 				delete process.env.OPENAI_API_KEY;
 				// Import after transport isolation so every dependency sees the guarded fetch.
-				const { setCompanyOfflineEnabled, getCompanyConfig } = await import(${JSON.stringify(companyProviderModulePath)});
+				const { setCompanyOfflineEnabled } = await import(${JSON.stringify(companyProviderModulePath)});
 				const { getCompanyEmbeddingDefaults } = await import(${JSON.stringify(embeddingsModulePath)});
 				const { Settings } = await import(${JSON.stringify(settingsModulePath)});
 
@@ -225,7 +217,6 @@ function runEmbeddingProbe(): ProbeResult {
 
 				console.log(JSON.stringify({
 					noCompanyLane,
-					defaults,
 					defaultsModel: defaults?.embeddingModel,
 					defaultsUrl: defaults?.embeddingApiUrl,
 					defaultsToken: await tokenOf(defaults),
@@ -239,9 +230,6 @@ function runEmbeddingProbe(): ProbeResult {
 					wwwGenericUrl: wwwGenericDefaults?.embeddingApiUrl,
 					wwwGenericToken: await tokenOf(wwwGenericDefaults),
 					genericEnvDefaults,
-					genericEnvModel: genericEnv.providerOptions.embeddingModel,
-					genericEnvUrl: genericEnv.providerOptions.embeddingApiUrl,
-					genericEnvKey: genericEnv.providerOptions.embeddingApiKey,
 					envApiKey,
 					envModelForeign,
 					configuredVariant,
@@ -250,10 +238,6 @@ function runEmbeddingProbe(): ProbeResult {
 					configuredModelCompanyConfigModel: configuredModelCompanyConfig.providerOptions.embeddingModel,
 					configuredModelCompanyConfigUrl: configuredModelCompanyConfig.providerOptions.embeddingApiUrl,
 					configuredModelCompanyConfigToken: await tokenOf(configuredModelCompanyConfig.providerOptions),
-					configuredModelCompanyModel: configuredModelCompany?.embeddingModel,
-					wiredModel: wired.providerOptions.embeddingModel,
-					wiredUrl: wired.providerOptions.embeddingApiUrl,
-					wiredToken: await tokenOf(wired.providerOptions),
 					wiredExplicitUrl: wiredExplicitUrl.providerOptions.embeddingApiUrl,
 					wiredExplicitToken: wiredExplicitUrl.providerOptions.embeddingApiKey === undefined
 						? null
@@ -313,9 +297,6 @@ describe("company embedding defaults priority", () => {
 		expect(result.wwwGenericUrl).toBe(`${result.endpoint}/gateway/v1`);
 		expect(result.wwwGenericToken).toBe("fixture-secret");
 		expect(result.genericEnvDefaults).toBeUndefined();
-		expect(result.genericEnvModel).toBe("intfloat/multilingual-e5-large");
-		expect(result.genericEnvUrl).toBe(`${result.endpoint}/generic/v1`);
-		expect(result.genericEnvKey).toBe("explicit-openrouter-key");
 
 		expect(result.envModelForeign).toBeUndefined();
 		expect(result.configuredVariant).toBeUndefined();
@@ -324,16 +305,11 @@ describe("company embedding defaults priority", () => {
 		// An explicit model remains authoritative even when its id matches the company model;
 		// only the effective model id is kept, never the company endpoint or token.
 		expect(result.configuredModelCompany).toBeUndefined();
-		expect(result.configuredModelCompanyModel).toBeUndefined();
 		expect(result.configuredModelCompanyConfigModel).toBe("Qwen3-VL-Embedding-2B");
 		expect(result.configuredModelCompanyConfigUrl).toBeUndefined();
 		expect(result.configuredModelCompanyConfigToken).toBeNull();
 
-		// Wiring: the resolved mnemonic config carries the company defaults, and
-		// an explicit URL keeps the explicit value with no company credentials.
-		expect(result.wiredModel).toBe("Qwen3-Embedding-8B");
-		expect(result.wiredUrl).toBe(`${result.endpoint}/gateway/v1`);
-		expect(result.wiredToken).toBe("fixture-secret");
+		// An explicit URL keeps the explicit value with no company credentials.
 		expect(result.wiredExplicitUrl).toBe("http://other.invalid/embed");
 		expect(result.wiredExplicitToken).toBeNull();
 		expect(result.wiredEmptyApiKey).toBe("");

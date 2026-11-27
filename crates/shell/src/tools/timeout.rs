@@ -333,6 +333,10 @@ impl Timeout {
 				self
 					.child
 					.start(api, turn, &self.call, opts.command.clone(), false, "");
+				#[cfg(unix)]
+				if opts.foreground {
+					turn.log.set_foreground(self.child.label);
+				}
 				let deadline = opts.limit.map(|d| now.saturating_add(nanos(d)));
 				Phase::Running { opts, deadline }
 			},
@@ -341,9 +345,20 @@ impl Timeout {
 				None if deadline.is_some_and(|at| now >= at) => {
 					self.send(turn, &opts, opts.signal, turn.log.live(turn.group));
 					let killed = opts.signal == Signal::Kill;
+					// Windows has no native delivery for most POSIX signals.
+					// Give the virtual signal time to run a trap, but do not
+					// keep waiting forever when it cannot stop the operand.
+					let kill_after = opts.kill_after.or_else(|| {
+						(cfg!(windows)
+							&& !matches!(
+								opts.signal,
+								Signal::Term | Signal::Int | Signal::Hup | Signal::Quit | Signal::Kill
+							))
+						.then_some(crate::host::TERM_GRACE)
+					});
 					Phase::Signalled {
 						kill_at: (!killed)
-							.then(|| opts.kill_after.map(|d| now.saturating_add(nanos(d))))
+							.then(|| kill_after.map(|d| now.saturating_add(nanos(d))))
 							.flatten(),
 						give_up: killed.then(|| now.saturating_add(nanos(REAP_AFTER_KILL))),
 						recheck: now.saturating_add(nanos(RECHECK)),

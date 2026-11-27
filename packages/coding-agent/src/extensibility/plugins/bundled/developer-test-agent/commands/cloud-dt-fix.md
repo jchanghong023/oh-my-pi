@@ -32,29 +32,24 @@ description: '获取云端UT问题（MR门禁级/codecov报告/版本级）进�
 
 ### 1. 获取链接
 
-若命令参数中已包含 `{url}`，直接使用。若未传入，**必须使用 `ask` 工具让用户输入链接**：
+若命令已传入 `{url}`，直接使用；否则 MUST 用 `ask` 获取链接：
 
 ```json
-{
-  "questions": [{
-    "id": "url",
-    "question": "请输入需要修复的链接（MR 链接、codecov 报告链接或版本testcodecheck检查任务链接）：",
-    "header": "链接",
-    "options": [
-      { "label": "手动输入", "description": "在 Other 中输入 MR、codecov 报告或版本testcodecheck任务链接" }
-    ]
-  }]
-}
+{"html":"<form><label>请输入待修复的 MR、CodeCov 报告或版本 testcodecheck 链接：<input type=\"text\" name=\"url\" required></label></form>"}
 ```
-使用返回的自定义输入作为链接。
+使用返回的 `url` 字段；取消或未提交链接则终止。
+
+下文 `q(...)` 表示 MUST 将完整值编码为 Bash 单参数：加外层单引号，值中的每个单引号替换为 `'\''`。NEVER 将外部值直接插入双引号或未加引号的命令中。
+
+前置云端查询不得改动项目工作树；CLI 需写入告警数据或缓存时用临时目录。
 
 ### 2. 判断链接类型并路由
 
-根据链接特征判断类型：
+解析 HTTP(S) URL，无法解析则停止并提示用户。只按路径分类，并在后续步骤沿用该类型：
 
-- **包含 `merge_request`** → MR 链接，执行 [门禁修复流程（MR/codecov 报告）](#3-门禁修复流程mr--codecov-报告)
-- **包含 `dtReport`** → codecov 报告链接，执行 [门禁修复流程（MR/codecov 报告）](#3-门禁修复流程mr--codecov-报告)
-- **其他** → 版本testcodecheck检查任务链接（taskUrl），执行 [版本testcodecheck检查任务流程](#4-版本testcodecheck检查任务流程)
+- 路径以 `/merge_requests/<id>` 结尾（允许末尾 `/`）→ [MR 门禁修复](#3-门禁修复流程mr--codecov-报告)
+- 路径为 `/code-cov-web/dtReport/<jobId>`（允许末尾 `/`）→ [CodeCov 门禁修复](#3-门禁修复流程mr--codecov-报告)
+- 其他 → [版本 testcodecheck 检查任务](#4-版本testcodecheck检查任务流程)
 
 ---
 
@@ -68,52 +63,43 @@ description: '获取云端UT问题（MR门禁级/codecov报告/版本级）进�
 
 根据链接类型执行不同的 codecovcli 分析命令，获取门禁执行信息。
 
-#### 链接类型判断
-
-| 判断条件 | 链接类型 | 执行命令 |
-|----------|---------|---------|
-| URL 包含 `dtReport` | codecov 报告链接 | `codecovcli analyze --scenario codecovJobId --codecovid "{jobId}"` |
-| 其他 | MR 链接 | `codecovcli analyze --scenario mr --mrpath "{url}"` |
-
-**codecov 报告链接的 jobid 提取规则**：
-- 从 URL 中 `dtReport/` 后截取至 `?` 或字符串末尾
-- 示例：`https://codecov.rnd.huawei.com/code-cov-web/dtReport/CodeCCP20-157f9fa53c1245e08220657a06cc5d47?param=xxx` → jobid 为 `CodeCCP20-157f9fa53c1245e08220657a06cc5d47`
+沿用步骤 2 的链接类型。CodeCov 报告的 `jobId` 为路径中紧接 `dtReport/` 的段，不含查询串或片段。
 
 **MR 链接场景**：
 
 ```bash
-codecovcli analyze --scenario mr --mrpath "{url}"
+codecovcli analyze --scenario mr --mrpath q(url)
 ```
 
 **codecov 报告链接场景**：
 
 ```bash
-codecovcli analyze --scenario codecovJobId --codecovid "{jobId}"
+codecovcli analyze --scenario codecovJobId --codecovid q(jobId)
 ```
 
 从输出中解析以下信息。两种场景的返回结构不同，需分别处理：
 
 #### MR 链接场景输出结构
 
-返回 JSON 包含 `jobs[]` 数组，每个 job 包含：
+MUST 遍历 `jobs[]`。逐个判定是否需要修复；对每个待修复 job 独立执行 Step 2–5，保留其分支、阈值、失败列表及覆盖率，不跨 job 合并数据。汇总全部 job 的结果。下表中 `job` 表示当前项：
 
 | 输出字段 | 映射到 | 说明 |
 |----------|--------|------|
-| `jobs[0].serviceName` | service | 服务名称 |
-| `jobs[0].language` | language | 语言 |
-| `jobs[0].jobId` | jobId | codecov 任务 ID |
-| `jobs[0].sourceBranch` | sourceBranch | 源分支 |
-| `jobs[0].targetBranch` | targetBranch | 目标分支 |
+| `job.serviceName` | service | 服务名称 |
+| `job.language` | language | 语言 |
+| `job.jobId` | jobId | codecov 任务 ID |
+| `job.sourceBranch` | sourceBranch | 源分支 |
+| `job.targetBranch` | targetBranch | 目标分支 |
 | `codeRepository` | gitPath | 代码仓地址 |
-| `jobs[0].diffCoverage.coverage` | incrementalCoverage | 增量覆盖率 |
-| `jobs[0].diffCoverage.total` | totalLines | 增量总行数 |
-| `jobs[0].diffCoverage.missing` | uncoveredLineCount | 增量未覆盖行数 |
-| `jobs[0].diffCoverThreshold` | threshold | 覆盖率阈值 |
-| `jobs[0].failedTests.failures` | failedTests | 用例执行失败数 |
-| `jobs[0].failedTests.testClasses` | failedTestList | 失败用例列表 |
-| `jobs[0].testActualValue` | testPassRate | 用例通过率实际值 |
-| `jobs[0].testThreshold` | testPassThreshold | 用例通过率阈值 |
-| `jobs[0].diffCoverage.files[]` | uncoveredFiles | 未覆盖文件列表 |
+| `job.diffCoverage.coverage` | incrementalCoverage | 增量覆盖率 |
+| `job.diffCoverage.total` | totalLines | 增量总行数 |
+| `job.diffCoverage.missing` | uncoveredLineCount | 增量未覆盖行数 |
+| `job.diffCoverThreshold` | threshold | 覆盖率阈值 |
+| `job.failedTests.failures` | failedTests | 用例执行失败数 |
+| `job.failedTests.testClasses` | failedTestList | 失败用例列表 |
+| `job.testActualValue` | testPassRate | 用例通过率实际值 |
+| `job.testThreshold` | testPassThreshold | 用例通过率阈值 |
+| `job.diffCoverage.files[]` | uncoveredFiles | 未覆盖文件列表 |
 
 #### codecov 报告链接场景输出结构
 
@@ -147,7 +133,7 @@ codecovcli analyze --scenario codecovJobId --codecovid "{jobId}"
 **全限定类名拼接规则**：`{package}.{filename去除.java后缀}`
 
 **阈值处理规则**：
-- MR 链接场景：从 `jobs[0].diffCoverThreshold` 获取阈值，若输出中无阈值则询问用户
+- MR 链接场景：从当前 `job.diffCoverThreshold` 获取阈值；缺失时询问用户。
 - codecov 报告链接场景：默认使用 80%
 
 **分析失败处理**：
@@ -207,9 +193,27 @@ Job ID: {jobId}
 ==========================================
 ```
 
-若覆盖率已达标且无失败用例，输出提示并**终止执行**。
+当前 job 的覆盖率已达标且无失败用例 → 记录通过，继续检查下一 job；只有全部 job 都不需要修复时才结束，无需调度任务。
 
 若 CodeCov 报告需要修复，进入 Step 3 前必须用 `ask` 获取该报告实际用于增量对比的目标分支名，并保存为 `targetBranch`，后续修复任务及本地检查均使用此值。不得使用空值、远端默认分支或推测值；用户无法提供时终止流程并说明原因。
+
+#### 本地仓库及分支前置检查
+
+在创建、委托修复任务和修改任何项目文件之前，MUST 在当前工作目录获取 `git rev-parse --show-toplevel` 的仓库根目录，并执行：
+
+```bash
+node q({{pluginRoot}}/scripts/local-gitbranch.js) q(sourceBranch) q(targetBranch) q(gitPath)
+```
+
+在 `bash` 中把 `cwd` 固定为该仓库根目录。只在脚本返回 `ok: true` 时继续；记录 `remoteTracking`。失败按下表处理后重查；无法修正则不得修复该 job。NEVER 自动切换分支或工作树。每次委托（含澄清后重新委托）及 Step 5 验证前在同一工作树重查。
+
+| reason | 提醒用户操作 |
+|--------|-------------|
+| `BRANCH_MISMATCH` | 切换至 `sourceBranch` |
+| `NO_REMOTE` | 为 `gitPath` 配置匹配的远端 |
+| `NO_REMOTE_BRANCH` | 按脚本提示抓取目标分支，并确认 fetch refspec 映射 |
+| `GIT_ERROR` | 检查当前目录及 Git 仓库状态 |
+| `INVALID_ARGS` | 用 `ask` 获取正确仓库或分支参数 |
 
 ### Step 3: 创建修复任务队列
 
@@ -219,7 +223,7 @@ Job ID: {jobId}
 
 以业务类为粒度合并任务：若同一业务类同时存在覆盖率不足和用例失败问题，合并为一个任务。
 
-**任务创建模板**：保留各任务标题和详情；使用 `todo` 的 `op: "init"` 将所有标题作为 `items` 建立队列，并保存每个标题对应的完整任务内容：
+**任务创建模板**：为当前 job 和修复轮次创建新 `phase`，用 `todo` 的 `op: "append"` 将标题作为 `items` 加入，不覆盖已有待办；若标题重复则加 job、轮次或本次运行后缀。保存实际标题对应的完整内容：
 
 **仅覆盖率不足**：
 
@@ -231,7 +235,7 @@ Job ID: {jobId}
 
 标题：`修复 {ClassName} 的失败用例`
 
-任务内容：`【门禁修复-用例修复】\n\n链接: {url}\n业务类: {sourceClass}\n测试类: {testClass}\n失败用例: {failedMethods}\n源分支: {sourceBranch}\n目标分支: {targetBranch}\n覆盖率模式: incremental\n\n目标：修复失败的测试用例，确保所有用例通过，覆盖率达到{threshold}%，并且断言有效性检查无问题。`
+任务内容：`【门禁修复-用例修复】\n\n链接: {url}\n业务类: {sourceClass}\n测试类: {testClass}\n失败用例: {failedMethods}\n源分支: {sourceBranch}\n目标分支: {targetBranch}\n覆盖率模式: incremental\n\n目标：修复失败的测试用例，确保所有用例通过，并保持覆盖率达标、断言有效。`
 
 **覆盖率不足 + 用例失败（合并）**：
 
@@ -239,7 +243,7 @@ Job ID: {jobId}
 
 任务内容：`【门禁修复-用例修复+覆盖率补充】\n\n链接: {url}\n业务类: {sourceClass}\n测试类: {testClass}\n失败用例: {failedMethods}\n源分支: {sourceBranch}\n目标分支: {targetBranch}\n当前覆盖率: {currentCoverage}%\n分支覆盖率: {branchCoverage}%\n未覆盖行: {uncoveredLines}\n目标阈值: {threshold}%\n覆盖率模式: incremental\n\n目标：先修复失败的测试用例，再针对未覆盖行 {uncoveredLines} 补充测试用例使增量覆盖率达到{threshold}%，确保所有用例通过，并且断言有效性检查无问题。`
 
-**prompt 中只传入当前文件的详情，不允许传入多个文件的详情信息。**
+**prompt MUST 包含当前文件详情及已验证的仓库根目录，NEVER 混入多个文件的详情。** 将模板中的 `目标分支` 值设为检查返回的 `remoteTracking`，供子代理本地覆盖率分析；父流程保留云端 `targetBranch` 用于检查。子代理 MUST 核对实际目标路径及当前源分支后才修改测试；不一致则返回阻断原因。
 
 > 注意：任务由 Step 4 按创建顺序串行调度，无需设置 blockedBy 依赖链。
 
@@ -247,7 +251,7 @@ Job ID: {jobId}
 
 按任务创建顺序，逐一执行：
 
-1. 用 `todo` 的 `op: "start"` 和逐字标题 `task` 标记开始。
+1. 重做本地仓库及分支前置检查。仅在 `todo` 的 `view` 没有其他进行中任务时，用 `op: "start"` 和逐字标题 `task` 标记开始；NEVER 改动其他任务状态。
 2. 调用一次 `task`，仅传入当前文件完整任务内容：
 
 ```json
@@ -255,6 +259,7 @@ Job ID: {jobId}
   "context": "按当前文件的门禁问题执行修复",
   "tasks": [{
     "agent": "developer-test-agent",
+    "isolated": false,
     "task": "<当前文件完整任务内容>",
     "solutionSpace": "按门禁问题修复测试并满足指定阈值"
   }]
@@ -275,41 +280,22 @@ Job ID: {jobId}
 
 ### Step 5: 增量覆盖率验证
 
-所有修复任务执行完毕后，验证增量覆盖率是否达标。
+当前 job 的修复任务执行完毕后，在同一工作树重做分支前置检查，再使用返回的 `remoteTracking` 验证增量覆盖率。
 
-#### Step 5.1: 前置检查
-
-检查本地分支与源分支是否一致，并获取远端跟踪分支信息。
-
-使用 `bash` 执行 `node q({{pluginRoot}}/scripts/local-gitbranch.js) q(sourceBranch) q(targetBranch) q(gitPath)`，解析输出中的检查结果。`q(...)` 表示需替换为经 Bash 单参数编码的完整值：外层加单引号，值中的每个单引号用 `'\''` 替代。逐值编码后再构造命令，不得直接将外部值插入双引号或未加引号的命令中，也不得重新解释参数。
-
-- 如果输出 `ok: true`，记录 `remoteTracking` 字段用于 Step 5.3 的 `--targetbranch` 参数，继续执行
-- 如果输出 `ok: false`，根据 `reason` 使用 `ask` 收集正确参数或提示用户处理；处理完后重新执行脚本。若无法修正，不得继续增量验证。
-
-| reason | 含义 | 提醒用户操作 |
-|--------|------|-------------|
-| `BRANCH_MISMATCH` | 当前分支与源分支不一致 | 提示用户执行 `git checkout q(sourceBranch)` |
-| `NO_REMOTE` | 未找到代码仓对应的远端配置 | 提示用户执行 `git remote add <name> q(gitPath)` |
-| `NO_REMOTE_BRANCH` | 合法的目标分支名对应的远端跟踪引用不存在 | 提示用户执行 `git fetch q(remoteName)` |
-| `GIT_ERROR` | 无法执行 Git 分支检查 | 提示用户确认当前目录及 Git 仓库状态 |
-| `INVALID_ARGS` | 参数缺失或目标分支名无效 | 用 `ask` 获取正确参数，尤其是报告实际使用的目标分支，不要提示 `git fetch` |
-
-不可跳过分支检查直接执行增量覆盖率分析。
-
-#### Step 5.2: 收集测试类列表
+#### Step 5.1: 收集测试类列表
 
 从修复任务执行结果中收集所有涉及的全限定测试类名，拼接为逗号分隔的字符串。
 
-#### Step 5.3: 执行增量覆盖率分析
+#### Step 5.2: 执行增量覆盖率分析
 
 **Maven 配置提取**：
-- 执行 `node q({{pluginRoot}}/skills/fix-ut/scripts/java/extract-maven-config.js) q(projectDir)` 获取 Maven 配置（`settingsPath`、`mavenProperties`、`vmOptions`）；脚本无输出时从 AGENTS.md/DT_AGENTS.md 读取，都没有则使用默认命令。
-- 下列命令的动态参数同样按 Step 5.1 的 `q(...)` 规则编码。仅在相应字段非空时使用 `--settings` 或 `--param`；`--param` 只传 `mavenProperties`。
+- 执行 `node q({{pluginRoot}}/skills/fix-ut/scripts/java/extract-maven-config.js) q(projectDir)`，解析 `settingsPath`、`mavenProperties`、`vmOptions`。无输出、返回 `{}` 或三项均为空 → 读取目标项目 AGENTS.md/DT_AGENTS.md；均无配置才使用默认命令。
+- 仅在字段非空时使用 `--settings` 或 `--param`。把 `mavenProperties` 数组的各个 `-Dkey=value` 参数以空格连接为 `propertyArg`，整个值用 `q(propertyArg)` 编码。若某项含空白且无法确认当前 CodeCov CLI 的无损编码，停止验证并报告；NEVER 拆分或丢弃该参数。
 - 有 `vmOptions` 时，在 `codecovcli` 命令前加 `MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }"q(vmOptions)`，让其启动的 Maven 从环境继承 JVM 选项，并保留已有 `MAVEN_OPTS`；否则不设置该变量。
 
 **有 Maven 配置时**：
 ```bash
-codecovcli analyze --tests q(testClasses) --scenario incremental --targetbranch q(remoteTracking) --settings q(settingsPath) --param q(mavenProperties)
+codecovcli analyze --tests q(testClasses) --scenario incremental --targetbranch q(remoteTracking) --settings q(settingsPath) --param q(propertyArg)
 ```
 
 **无 Maven 配置时（默认）**：
@@ -317,13 +303,13 @@ codecovcli analyze --tests q(testClasses) --scenario incremental --targetbranch 
 codecovcli analyze --tests q(testClasses) --scenario incremental --targetbranch q(remoteTracking)
 ```
 
-#### Step 5.4: 判断是否达标
+#### Step 5.3: 判断是否达标
 
 解析增量覆盖率分析结果：
-- **覆盖率 ≥ 阈值且无失败用例**：达标，进入 Step 6
+- **覆盖率 ≥ 阈值且无失败用例**：记录当前 job 达标，继续下一 job；全部处理后进入 Step 6
 - **覆盖率 < 阈值或有失败用例**：未达标，回到 Step 2 重新分析问题，创建新的修复任务
 
-#### Step 5.5: 循环控制
+#### Step 5.4: 循环控制
 
 | 参数 | 值 |
 |------|---|
@@ -340,7 +326,7 @@ codecovcli analyze --tests q(testClasses) --scenario incremental --targetbranch 
 
 ### Step 6: 输出执行报告
 
-所有修复和验证完成后，汇总输出执行报告。
+按 jobId 分列汇总；包含通过、无法修复及已修复的任务，覆盖率和阈值不跨 job 合并。
 
 ```
 ==========================================
@@ -392,7 +378,7 @@ MR/CodeCov 门禁修复报告
 使用 codecheck 获取告警数据：
 
 ```bash
-codecheck version-defect --taskUrl {url}
+codecheck version-defect --taskUrl q(url)
 ```
 
 执行命令后得到以下结果：
@@ -420,11 +406,11 @@ codecheck version-defect --taskUrl {url}
 
 ### Step 3: 按类分组并创建任务队列
 
-为 Step 2 分组后的每个测试类创建一个独立任务：用 `todo` 的 `op: "init"` 将所有标题作为 `items` 建立队列，并保存标题对应的完整任务内容。
+创建任务前 MUST 获取当前工作树根目录。逐个核对告警的测试文件路径能在该工作树内对应到唯一实际文件（解析链接后的路径也 MUST 位于根目录内）；若无法确认，跳过该文件并报告原因，NEVER 在其他工作树修改文件。为每个确认的测试类建立独立任务，通过 `todo` 的 `op: "append"` 将标题作为 `items` 加到本次运行的新 `phase`，保留已有待办；重复标题加本次运行后缀，保存实际标题及完整内容。
 
 标题：`修复 {ClassName} 中的无效断言`
 
-任务内容：`测试文件: {filePath}\n告警数: {alertCount}\n告警详情:\n{alerts}\nMaven配置: {mavenConfig}`
+任务内容：`仓库根目录: {repoRoot}\n测试文件: {filePath}\n告警数: {alertCount}\n告警详情:\n{alerts}\nMaven配置: {mavenConfig}`。子代理 MUST 在修改前核对路径仍位于给定工作树。
 
 **prompt 中只传入当前测试类的告警详情，不允许传入多个类的告警信息。**
 
@@ -434,7 +420,7 @@ codecheck version-defect --taskUrl {url}
 
 按任务创建顺序，逐一执行：
 
-1. 用 `todo` 的 `op: "start"` 和逐字标题 `task` 标记开始。
+1. 仅在 `todo` 的 `view` 没有其他进行中任务时，用 `op: "start"` 和逐字标题 `task` 标记开始；NEVER 改动其他任务状态。
 2. 调用一次 `task`，仅传入当前测试类完整任务内容：
 
 ```json
@@ -442,6 +428,7 @@ codecheck version-defect --taskUrl {url}
   "context": "按当前测试类告警执行修复",
   "tasks": [{
     "agent": "developer-test-agent",
+    "isolated": false,
     "task": "<当前测试类完整任务内容>",
     "solutionSpace": "按告警修复测试断言"
   }]
@@ -503,8 +490,8 @@ taskUrl: {url}
 5. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
 6. 任务由主 Agent 按创建顺序串行调度，无需设置 blockedBy 依赖链
 7. 循环验证最多 3 轮，避免无限循环
-8. 增量覆盖率验证前，必须通过 `local-gitbranch.js` 脚本检查本地分支状态；只有得到 `ok: true` 才能继续
-9. Maven 配置获取优先级：extract-maven-config.js 脚本 → 目标项目 AGENTS.md → 默认命令
+8. 门禁修复委托和增量验证前 MUST 通过 `local-gitbranch.js`，且只在已检查的工作树内修改文件
+9. Maven 优先使用提取脚本的非空配置，再查 AGENTS.md/DT_AGENTS.md，最后才使用默认命令
 10. codecovcli 命令执行超时设为 20 分钟（1200000ms）
 11. codecovcli 如果失败禁止使用jacoco执行代码覆盖率，如果codecovcli执行失败了要引导用户去处理
-12. **禁止使用 Team 模式**：任务必须按队列顺序每次只启动一个 `task` 并等待完成
+12. 任务必须按队列顺序每次只启动一个 `task` 并等待完成

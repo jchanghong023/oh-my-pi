@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as nodePath from "node:path";
-import { type ApiKey, getOpenRouterHeaders, withAuth } from "@oh-my-pi/pi-ai";
+import { type ApiKey, getOpenRouterHeaders, isAuthRetryableError, withAuth } from "@oh-my-pi/pi-ai";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import {
 	$env,
@@ -485,6 +485,7 @@ async function embedApiBatch(
 			};
 			let stage = "configuration";
 			let authAttempt = 0;
+			let remainingAttempts = maxAttempts;
 			let status: number | undefined;
 			let requestSignal: AbortSignal | undefined =
 				strict && !retryTimeouts
@@ -536,7 +537,6 @@ async function embedApiBatch(
 				...(sendInputType() ? { input_type: role === "query" ? "query" : "passage" } : {}),
 			});
 			try {
-				// Auth refresh remains outside the existing per-request HTTP retry loop.
 				stage = "auth";
 				const response = await withAuth(
 					apiKey,
@@ -563,11 +563,11 @@ async function embedApiBatch(
 							requestSignal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
 						}
 						const init = { method: "POST", headers, body, signal: retryTimeouts ? callerSignal : requestSignal };
-						const extraCa = resolveExtraCa();
+						const extraCa = new URL(url).protocol === "https:" ? resolveExtraCa() : undefined;
 						const res = await logger.withLogContext({ auth_attempt: authAttempt }, () =>
 							fetchWithRetry(url, {
 								...(extraCa ? withExtraCaInit(init, extraCa) : init),
-								maxAttempts,
+								maxAttempts: remainingAttempts,
 								defaultDelayMs: [1000, 2000, 4000],
 								fixedDelayMs,
 								prepareInit: retryTimeouts
@@ -582,6 +582,7 @@ async function embedApiBatch(
 										throw new Error("Remote embedding provider is not allowed");
 									const redirect = requestRedirect?.();
 									// Let a blocked redirect return as a non-retryable HTTP response.
+									remainingAttempts--;
 									const response = await fetch(
 										input,
 										redirect === undefined
@@ -612,7 +613,7 @@ async function embedApiBatch(
 							status,
 							elapsed_ms: performance.now() - startedAt,
 						});
-						if (res.status === 401) {
+						if (res.status === 401 && remainingAttempts > 0) {
 							logger.warn("Embedding API auth refresh requested", {
 								...fields,
 								event: "embedding_api_auth_rejected",
@@ -630,7 +631,10 @@ async function embedApiBatch(
 						}
 						return res;
 					},
-					{ signal: retryTimeouts ? callerSignal : (requestSignal ?? callerSignal) },
+					{
+						signal: retryTimeouts ? callerSignal : (requestSignal ?? callerSignal),
+						isAuthError: error => remainingAttempts > 0 && isAuthRetryableError(error),
+					},
 				);
 				if (!response.ok) {
 					const detail = await response.text().catch(() => "");
@@ -643,7 +647,7 @@ async function embedApiBatch(
 					data?: Array<{ index?: unknown; embedding: number[] }>;
 				};
 				return withLoopPhase("mnemopi.embed", () => {
-					let { data: rows } = data;
+					const { data: rows } = data;
 					stage = "response_schema";
 					if (rows === undefined) {
 						return degraded("missing_data", undefined, "the response did not carry one embedding per input");
@@ -652,33 +656,37 @@ async function embedApiBatch(
 					if (rows.length !== texts.length) {
 						return degraded("row_count", undefined, "the response did not carry one embedding per input");
 					}
+					let matrix: EmbeddingMatrix;
 					if (strict) {
 						if (data.model !== undefined && data.model !== model) return degraded("model_mismatch");
 						if (!Array.isArray(rows)) return degraded("row_count");
-						const indexed: typeof rows = [];
+						const dimension = expectedDimension ?? rows[0]?.embedding?.length;
+						matrix = new Array<Vector>(rows.length);
 						for (const row of rows) {
 							if (
 								!row ||
 								!Number.isInteger(row.index) ||
 								(row.index as number) < 0 ||
 								(row.index as number) >= rows.length ||
-								indexed[row.index as number] ||
+								matrix[row.index as number] ||
 								!Array.isArray(row.embedding) ||
 								row.embedding.length === 0 ||
-								row.embedding.some(value => typeof value !== "number" || !Number.isFinite(value))
+								row.embedding.some(value => typeof value !== "number")
 							) {
 								return degraded("invalid_row");
 							}
-							indexed[row.index as number] = row;
+							const vector = new Float32Array(row.embedding);
+							if (
+								vector.length !== dimension ||
+								vector.some(value => !Number.isFinite(value)) ||
+								!vector.some(value => value !== 0)
+							) {
+								return degraded("invalid_vector");
+							}
+							matrix[row.index as number] = vector;
 						}
-						const dimension = expectedDimension ?? indexed[0].embedding.length;
-						if (
-							indexed.some(
-								row => row.embedding.length !== dimension || !row.embedding.some(value => value !== 0),
-							)
-						)
-							return degraded("invalid_vector");
-						rows = indexed;
+					} else {
+						matrix = rows.map(row => new Float32Array(row.embedding));
 					}
 					logger.info("Embedding API schema received", {
 						...fields,
@@ -691,7 +699,6 @@ async function embedApiBatch(
 						elapsed_ms: performance.now() - startedAt,
 					});
 					apiCallCount += 1;
-					const matrix = rows.map(row => new Float32Array(row.embedding));
 					logger.info("Embedding API completed", {
 						...fields,
 						event: "embedding_api_completed",

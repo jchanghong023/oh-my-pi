@@ -14,6 +14,7 @@ import {
 	resolveApproval,
 	resolveApprovalFromContext,
 } from "../approval";
+import { getApprovalGrants } from "../approval-cache";
 import type { CrawlBrowserOperation } from "../browser";
 import { expandTilde } from "../path-utils";
 import { enforcePlanModeWrite, targetsLocalSandbox } from "../plan-mode-guard";
@@ -89,6 +90,9 @@ export async function writeCrawlMarkdownWithSession(
 	const outputDirectory = path.resolve(session.cwd, expandTilde(directory));
 	const { name, ext } = path.parse(basename);
 	const tool = new WriteTool(session);
+	const settings = context.settings ?? session.settings;
+	const grants = getApprovalGrants(settings?.getAgentDir(), session.sessionManager?.getSessionId?.());
+	const { approvalMode, userPolicies } = resolveApprovalFromContext(context);
 	for (let suffix = 0; ; suffix++) {
 		signal?.throwIfAborted();
 		const target = path.join(outputDirectory, suffix === 0 ? basename : `${name}-${suffix}${ext}`);
@@ -97,15 +101,14 @@ export async function writeCrawlMarkdownWithSession(
 			throw new Error("The current session does not permit filesystem writes.");
 		}
 		await enforcePlanModeWrite(session, target, { op: "create", signal });
-		const settings = context.settings ?? session.settings;
-		const { approvalMode, userPolicies } = resolveApprovalFromContext(context);
 		const approval = resolveApproval(
 			tool,
 			args,
 			approvalMode,
 			userPolicies,
-			undefined,
+			grants,
 			approvalRestrictions(settings, session.cwd),
+			context,
 		);
 		if (approval.policy === "deny") throw denyError(approval, "write");
 		if (approval.policy === "prompt") {
@@ -120,12 +123,25 @@ export async function writeCrawlMarkdownWithSession(
 		signal?.throwIfAborted();
 		await fs.mkdir(outputDirectory, { recursive: true });
 		signal?.throwIfAborted();
+		const staged = path.join(outputDirectory, `.omp-crawl-${randomUUID()}.tmp`);
+		const file = await fs.open(staged, "wx");
 		try {
-			await fs.writeFile(target, content, { encoding: "utf8", flag: "wx", signal });
-			return target;
-		} catch (error) {
-			if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") continue;
-			throw error;
+			try {
+				await file.writeFile(content, { encoding: "utf8", signal });
+			} finally {
+				await file.close();
+			}
+			signal?.throwIfAborted();
+			try {
+				// A hard link publishes complete contents without replacing an existing name.
+				await fs.link(staged, target);
+				return target;
+			} catch (error) {
+				if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") continue;
+				throw error;
+			}
+		} finally {
+			await fs.unlink(staged);
 		}
 	}
 }

@@ -31,6 +31,7 @@ import { parseConfiguredThinkingLevel } from "../../thinking/levels";
 import { isTinyLocalModelKey } from "../../tiny/models";
 import { tinyTitleClient } from "../../tiny/title-client";
 import { resolveReadPath } from "../../tools/path-utils";
+import { parseCommandArgs } from "../../utils/command-args";
 import { vocalizer } from "../../tts/vocalizer";
 import { collapsesPaste } from "../../ui/composer/attachments";
 import { enabledMagicKeywords, magicKeywordDecorator } from "../../ui/composer/magic-keywords";
@@ -182,7 +183,6 @@ const DETACHED_DRAFT_COMMANDS = new Set([
 	"vibe",
 	"goal",
 	"goal-autopilot",
-	"team",
 	"collab2",
 	"guided-goal",
 	"tan",
@@ -531,7 +531,7 @@ export class InputController {
 		}
 		// An open completion popup takes Esc first (#1655), and Vim takes it to leave Insert or
 		// Visual mode; only then is Esc the interrupt.
-		if (km.matches(key, "app.interrupt") && !this.ctx.composer.completing() && !this.#vimHoldsEscape()) {
+		if (km.matches(key, "app.interrupt") && !this.ctx.composer.completionVisible() && !this.#vimHoldsEscape()) {
 			this.handleInterrupt();
 			return true;
 		}
@@ -1147,9 +1147,10 @@ export class InputController {
 		text: string,
 		images: ImageContent[] | undefined,
 		imageLinks: (string | undefined)[] | undefined,
+		loopNEntry?: true,
 	): void {
 		const queuedImages = images?.length ? [...images] : undefined;
-		this.ctx.queueCompactionMessage(text, "steer", queuedImages, imageLinks && { imageLinks });
+		this.ctx.queueCompactionMessage(text, "steer", queuedImages, { imageLinks, loopNEntry });
 	}
 
 	setupEditorSubmitHandler(): void {
@@ -1235,8 +1236,7 @@ export class InputController {
 				this.ctx.composer.pendingImageLinks.length > 0 ? [...this.ctx.composer.pendingImageLinks] : undefined;
 			let hasInputImages = (inputImages?.length ?? 0) > 0;
 			const submittedImages = inputImages;
-			const originalMode = parseSlashCommand(text)?.name;
-			const detachedBeforeHooks = originalMode === "team" || originalMode === "collab2";
+			const detachedBeforeHooks = parseSlashCommand(text)?.name === "collab2";
 			if (detachedBeforeHooks) this.#dropSubmittedPending(submittedImages);
 
 			// Input hooks pass in submission order with the follow-up key's (see `#submissionHookOrder`):
@@ -1248,21 +1248,14 @@ export class InputController {
 				await earlier;
 				// A startup-deferred extension's input hook must see the first submission.
 				if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
-				if (originalMode !== "collab2" && runner?.hasHandlers("input")) {
-					try {
-						const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
-						if (!input) {
-							if (!detachedBeforeHooks) this.#dropSubmittedPending(submittedImages);
-							return;
-						}
-						({ text, images: inputImages, imageLinks: inputImageLinks } = input);
-						hasInputImages = (inputImages?.length ?? 0) > 0;
-					} catch (error) {
-						if (!detachedBeforeHooks) throw error;
-						restoreDetachedDraft(this.ctx.composer, text, inputImages, inputImageLinks);
-						this.ctx.showError(error instanceof Error ? error.message : String(error));
+				if (!detachedBeforeHooks && runner?.hasHandlers("input")) {
+					const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
+					if (!input) {
+						this.#dropSubmittedPending(submittedImages);
 						return;
 					}
+					({ text, images: inputImages, imageLinks: inputImageLinks } = input);
+					hasInputImages = (inputImages?.length ?? 0) > 0;
 				}
 			} finally {
 				hooksDone.resolve();
@@ -1352,10 +1345,10 @@ export class InputController {
 					return;
 				}
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-				this.#clearDraft(text);
 				// No local render: the prompt comes back from the host as a
 				// collab-prompt event/entry and renders with the author badge.
-				this.ctx.collabGuest.sendPrompt(text, images);
+				if (this.ctx.collabGuest.sendPrompt(text, images)) this.#clearDraft(text);
+				else this.ctx.showStatus("Collab could not send the prompt — draft kept");
 				return;
 			}
 
@@ -1444,7 +1437,7 @@ export class InputController {
 				// plain /loop body can be a local command and must pass the usual filter.
 				if (loopNEntry) this.ctx.setLoopPrompt(text);
 				else if (submittedMode === "loop") this.ctx.captureLoopPromptOnAdmission(text)?.();
-				this.#queueCompactionSteer(text, inputImages, inputImageLinks);
+				this.#queueCompactionSteer(text, inputImages, inputImageLinks, loopNEntry ? true : undefined);
 				return;
 			}
 
@@ -2355,6 +2348,8 @@ export class InputController {
 				// Collab2 claims the operation before its first await. A later stop
 				// or leave must reach that owner while the operation is pending.
 				if (commandName === "collab2") admitted();
+				// Reloading tools does not own the conversation's input queue.
+				if (commandName === "mcp" && parseCommandArgs(text)[1]?.toLowerCase() === "reload") admitted();
 				// Foreground /compact now owns admission; later submissions belong in its
 				// visible, retractable queue rather than waiting for it to finish here.
 				if (commandName === "compact" && this.ctx.session.isCompacting) admitted();

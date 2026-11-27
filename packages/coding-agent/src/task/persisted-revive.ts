@@ -47,7 +47,6 @@ import {
 	createSubagentSettings,
 	followMCPTools,
 	replayRevivedAgentStart,
-	restoreSpecExecutorDelegation,
 	softRequestBudgetFor,
 	subagentLspWritethroughSettings,
 	subagentRetryFallbackRole,
@@ -511,7 +510,6 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 	// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
 	// the original run didn't carry. Unknown/missing names are ignored.
 	await session.setActiveToolsByName([...init.tools, ...session.getMountedToolCommandNames()]);
-	restoreSpecExecutorDelegation(reopened, init, entries);
 	// The yield tool's schema carries the last batch's items; the replayed prefix must match it.
 	if (init.workPoolYieldItems) await session.setWorkPoolYieldItems(init.workPoolYieldItems);
 	// Wire the extension runtime exactly as the live executor does. Without

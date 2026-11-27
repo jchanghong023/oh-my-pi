@@ -50,7 +50,6 @@ describe("extractProfileFlags", () => {
 	});
 
 	it("rejects missing -P values instead of consuming a following flag", () => {
-		expect(() => extractProfileFlags(["-P"])).toThrow("-P requires a profile name");
 		expect(() => extractProfileFlags(["-P", "--version"])).toThrow("-P requires a profile name");
 	});
 

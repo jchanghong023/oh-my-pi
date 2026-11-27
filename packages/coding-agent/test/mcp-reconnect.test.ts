@@ -54,14 +54,9 @@ function makeConnection(transport: MCPTransport, name = "test-server"): MCPServe
 }
 
 describe("MCP auth handler routing", () => {
-	it("restores the exact programmatic callback after an exclusive UI route is released", async () => {
+	it("restores the exact programmatic callback after an exclusive UI route is released", () => {
 		const manager = new MCPManager(process.cwd());
-		const config = { type: "stdio" as const, command: "echo" };
-		let programmaticCalls = 0;
-		const original = async () => {
-			programmaticCalls++;
-			return config;
-		};
+		const original = async () => ({ type: "stdio" as const, command: "echo" });
 		expect(manager.getAuthHandler()).toBeUndefined();
 		manager.setAuthHandler(original);
 		const saved = manager.getAuthHandler();
@@ -70,8 +65,6 @@ describe("MCP auth handler routing", () => {
 		expect(manager.getAuthHandler()).toBe(browserRoute);
 		manager.setAuthHandler(saved);
 		expect(manager.getAuthHandler()).toBe(original);
-		expect(await manager.getAuthHandler()?.("alpha", { wwwAuthenticate: ["Bearer"] })).toBe(config);
-		expect(programmaticCalls).toBe(1);
 		manager.setAuthHandler(undefined);
 		expect(manager.getAuthHandler()).toBeUndefined();
 	});

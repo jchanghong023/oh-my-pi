@@ -121,13 +121,21 @@ async fn cancelled_mixed_stopped_pipeline_reaps_members_and_cleanup_descendant()
 			"{marker} cleanup must finish before cancellation returns"
 		);
 	}
-	for pid in pids {
-		// SAFETY: signal zero only probes the fixture's positive PID; even a
-		// zombie still exists and must fail this fully-reaped assertion.
-		let exists = unsafe { libc::kill(pid, 0) };
-		let error = std::io::Error::last_os_error();
-		assert_eq!(exists, -1, "owned process {pid} survived cancellation");
-		assert_eq!(error.raw_os_error(), Some(libc::ESRCH), "process {pid}: {error}");
-	}
+	tokio::time::timeout(Duration::from_secs(2), async {
+		for pid in pids {
+			loop {
+				// SAFETY: signal zero only probes the fixture's positive
+				// PID, which remains visible even as a zombie until reaped.
+				if unsafe { libc::kill(pid, 0) } == -1 {
+					let error = std::io::Error::last_os_error();
+					assert_eq!(error.raw_os_error(), Some(libc::ESRCH), "process {pid}: {error}");
+					break;
+				}
+				tokio::time::sleep(Duration::from_millis(10)).await;
+			}
+		}
+	})
+	.await
+	.expect("owned processes must be reaped after cancellation");
 	cleanup.1 = false;
 }

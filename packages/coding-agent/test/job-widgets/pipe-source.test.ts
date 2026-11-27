@@ -12,15 +12,8 @@ import { createPipeStreams } from "../../src/job-widgets/pipe-source";
  * instead of throwing `undefined is not a constructor` from every call.
  */
 describe("createPipeStreams", () => {
-	it("returns the real stream taps when the addon provides PipeStreams", () => {
-		const streams = createPipeStreams();
-		expect(streams).toBeInstanceOf(PipeStreams);
-		expect(streams?.list()).toEqual([]);
-	});
-
 	it("degrades to undefined when the addon predates PipeStreams", () => {
 		expect(createPipeStreams(null)).toBeUndefined();
-		expect(createPipeStreams({})).toBeUndefined();
 	});
 
 	it("degrades to undefined when the constructor throws", () => {

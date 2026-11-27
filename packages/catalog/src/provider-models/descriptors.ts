@@ -208,7 +208,7 @@ function isKnownProvider(id: string): id is KnownProvider {
  */
 export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = Object.values(providerEntries()).flatMap(entry => {
 	const createModelManagerOptions = isKnownProvider(entry.id) ? MODEL_MANAGER_FACTORIES[entry.id] : undefined;
-	if (!createModelManagerOptions || entry.defaultModel === undefined) return [];
+	if (!createModelManagerOptions) return [];
 	const discovery = entry.discovery;
 	return [
 		{

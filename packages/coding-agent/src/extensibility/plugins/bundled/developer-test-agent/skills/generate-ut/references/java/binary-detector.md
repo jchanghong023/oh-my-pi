@@ -14,7 +14,7 @@
 
 ```bash
 # 使用 node -e 调用 main 函数
-node -e "const { main } = require(process.argv[1]); main({packages: ['com.huawei.*'], m2Repo: '~/.m2/repository', settings: '~/.m2/settings.xml', projectDir: '/path/to/project', depsDir: '/path/to/project/.dtagent/deps', m2Params: '-Dpackage.type=vm'}).then(() => console.log('Done')).catch(e => console.error(e));" "{SKILL_DIR}/scripts/java/decompile.js"
+node -e "const { main } = require(process.argv[1]); main({packages: ['com.huawei.*'], projectDir: '/path/to/project', m2Params: '-Dpackage.type=vm'}).catch(e => { console.error(e.message); process.exitCode = 1; });" "{SKILL_DIR}/scripts/java/decompile.js"
 ```
 
 ### 参数说明
@@ -22,19 +22,19 @@ node -e "const { main } = require(process.argv[1]); main({packages: ['com.huawei
 | 参数 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
 | `packages` | 需要反编译的包名数组 | 必填 | 是 |
-| `m2Repo` | Maven 本地仓库路径 | `~/.m2/repository` | 否 |
-| `settings` | Maven settings.xml 配置文件路径 | `~/.m2/settings.xml` | 否 |
+| `m2Repo` | 显式指定扫描的 Maven 本地仓库 | `-Dmaven.repo.local` → settings.xml 的 `localRepository` → `~/.m2/repository` | 否 |
+| `settings` | 自定义 Maven settings.xml 的路径（文件必须存在） | 使用默认设置，即使 `~/.m2/settings.xml` 不存在也可运行 | 否 |
 | `projectDir` | 项目目录 | 必填 | 是 |
 | `depsDir` | 反编译输出目录 | `{projectDir}/.dtagent/deps` | 否 |
-| `m2Params` | Maven VM 参数 | 无 | 否 |
+| `m2Params` | Maven CLI 属性（如 `-Dpackage.type=vm`）；参数含空格时用 argv 数组 | 无 | 否 |
 
 ### 反编译前参数确认
 
-执行反编译前，必须确认以下参数（用户未提供时，向主代理返回缺失信息及待询问题，由主代理询问后再继续）：
+执行反编译前 MUST 确认可选覆盖项；未指定时使用默认值。缺少必填包名时，由主代理向用户询问后再继续。
 
-- Maven settings.xml 路径（默认 `~/.m2/settings.xml`）
-- Maven 本地仓库路径（默认 `~/.m2/repository`）
-- Maven VM 参数（如 `-Dpackage.type=vm`）
+- 自定义 Maven settings.xml 路径（仅在需要时提供）
+- Maven 本地仓库路径（仅在需要覆盖 Maven 配置时提供）
+- Maven CLI 属性（如 `-Dpackage.type=vm`）
 - 需要反编译的包名（多个用逗号分隔，如 `com.huawei.*,com.alibaba.*`）
 
 ## 查询脚本

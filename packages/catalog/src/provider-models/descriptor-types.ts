@@ -26,7 +26,7 @@ export interface ProviderDescriptor {
 	providerId: string;
 	createModelManagerOptions(config: ModelManagerConfig): ModelManagerOptions<Api>;
 	/** Preferred model ID when no explicit selection is made. */
-	defaultModel: string;
+	defaultModel?: string;
 	/** When true, the runtime creates a model manager even without a valid API key (e.g. ollama). */
 	allowUnauthenticated?: boolean;
 	/** When true, successful runtime discovery replaces bundled provider models instead of merging fallback-only IDs. */

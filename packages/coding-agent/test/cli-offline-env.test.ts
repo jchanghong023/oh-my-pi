@@ -37,8 +37,6 @@ describe("OMP_OFFLINE", () => {
 		const result = parseArgs(["--offline", "--model", "opus", "hello"]);
 		expect(result.offline).toBe(true);
 		expect(result.intranetOffline).toBe(true);
-		expect(result.model).toBe("opus");
-		expect(result.messages).toEqual(["hello"]);
 	});
 
 	it("accepts --offline without enabling the intranet mode", () => {

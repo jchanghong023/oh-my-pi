@@ -544,8 +544,8 @@ export class WaitTool implements AgentTool<typeof waitSchema, CoordinationDetail
 					});
 				};
 				const changed = () => {
-					// A worker may receive an in-flight notification after it unsubscribed.
-					if (watching && !progressTimer) progressTimer = setTimeout(emitProgress, PROGRESS_COALESCE_MS);
+					if (!watching) return;
+					if (!progressTimer) progressTimer = setTimeout(emitProgress, PROGRESS_COALESCE_MS);
 				};
 				unsubscribers.push(manager.onJobsChanged(changed, watchedIds));
 				if (manager.widgets) unsubscribers.push(manager.widgets.subscribe(changed));

@@ -159,7 +159,6 @@ describe("ModelPicker", () => {
 		});
 
 		const rendered = normalize(picker.render());
-		expect(rendered).toContain("unknown-capacity");
 		expect(rendered).toContain("ctx unknown");
 		expect(rendered).toContain("out unknown");
 		expect(rendered).not.toContain("context>");

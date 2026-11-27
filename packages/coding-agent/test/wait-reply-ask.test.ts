@@ -93,7 +93,7 @@ describe("a reply wait on an agent in `ask`", () => {
 							type: "toolCall",
 							name: "ask",
 							arguments: {
-								html: '<form><p>Go on?</p><label><input type="radio" name="go" value="Yes"> Yes</label><label><input type="radio" name="go" value="No"> No</label></form>',
+								html: '<form><p>Go on?</p><label><input type="radio" name="go" value="yes"> Yes</label><label><input type="radio" name="go" value="no"> No</label></form>',
 							},
 						},
 					],

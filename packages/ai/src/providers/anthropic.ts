@@ -915,8 +915,7 @@ export interface AnthropicOptions extends StreamOptions {
 export type AnthropicClientOptionsArgs = {
 	model: Model<"anthropic-messages">;
 	apiKey: string;
-	/** @internal Explicit headers are the only credentials; do not synthesize a gateway bearer. */
-	headerOnlyAuth?: boolean;
+	requestAuth?: StreamOptions["requestAuth"];
 	extraBetas?: string[];
 	stream?: boolean;
 	interleavedThinking?: boolean;
@@ -2401,7 +2400,7 @@ const streamAnthropicOnce = (
 				clientArgs = {
 					model,
 					apiKey,
-					headerOnlyAuth: options?.requestAuth !== undefined && !apiKey,
+					requestAuth: options?.requestAuth,
 					extraBetas,
 					stream: true,
 					interleavedThinking: options?.interleavedThinking ?? true,
@@ -4451,7 +4450,11 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	// `AnthropicMessagesClient` already arms its own DEFAULT_TIMEOUT_MS timer
 	// per request, so the native ceiling can only short-circuit slow-prefill
 	// streams before the configured watchdog gets to govern them.
-	const fetchOptions: AnthropicFetchOptions = { ...tlsFetchOptions, timeout: false };
+	const fetchOptions: AnthropicFetchOptions = {
+		...tlsFetchOptions,
+		timeout: false,
+		...(args.requestAuth !== undefined ? { redirect: "error" } : {}),
+	};
 	// Compression sits beneath the cch rewriter, which must hash the uncompressed
 	// body. Catalog rules scope it to verified hosts (official API, Copilot), so
 	// proxies pass through.
@@ -4524,7 +4527,21 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		getUmansWebSearchHeader(model, mergeHeaders(model.headers, headers)),
 		headers,
 		dynamicHeaders,
+		args.requestAuth?.headers,
 	);
+	const explicitAuthHeaders = args.requestAuth?.headers;
+	const headerOnlyAuth = args.requestAuth !== undefined && !apiKey;
+	if (args.requestAuth !== undefined) {
+		for (const name in mergedRequestHeaders) {
+			const lower = name.toLowerCase();
+			if (
+				(lower === "authorization" || lower === "x-api-key") &&
+				getHeaderCaseInsensitive(explicitAuthHeaders, name) === undefined
+			) {
+				delete mergedRequestHeaders[name];
+			}
+		}
+	}
 	// `anthropic-beta` is an enforced key, so most endpoints drop a caller's
 	// value outright — but `allowAnthropicHeaderOverrides` lets it replace our
 	// built beta header wholesale, which would put a cache beta back on a
@@ -4546,6 +4563,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		modelHeaders: requestModelHeaders,
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
 		allowAnthropicHeaderOverrides: model.compat.allowAnthropicHeaderOverrides,
+		headerOnlyAuth,
 		claudeCodeSessionId: sessionId,
 		claudeCodeBetas: oauthToken
 			? buildClaudeCodeBetas({
@@ -4566,12 +4584,13 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	});
 
 	if (model.provider === "cloudflare-ai-gateway") {
-		if (args.headerOnlyAuth) {
-			// The gateway header builder synthesizes a bearer even with no API key.
-			// Keep an explicit header as supplied, including differently cased names.
-			const authorization = getHeaderCaseInsensitive(requestModelHeaders, "cf-aig-authorization");
-			if (authorization === undefined) delete defaultHeaders["cf-aig-authorization"];
-			else defaultHeaders["cf-aig-authorization"] = authorization;
+		if (args.requestAuth !== undefined) {
+			for (const name in defaultHeaders) {
+				if (name.toLowerCase() === "cf-aig-authorization") delete defaultHeaders[name];
+			}
+			const authorization = getHeaderCaseInsensitive(mergeHeaders(explicitAuthHeaders), "cf-aig-authorization");
+			if (authorization !== undefined) defaultHeaders["cf-aig-authorization"] = authorization;
+			else if (apiKey) defaultHeaders["cf-aig-authorization"] = `Bearer ${apiKey}`;
 		}
 		return {
 			isOAuthToken: false,
@@ -4622,8 +4641,8 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 
 	return {
 		isOAuthToken: oauthToken,
-		apiKey: oauthToken || shouldSuppressClientApiKey ? null : apiKey,
-		authToken: oauthToken ? apiKey : undefined,
+		apiKey: oauthToken || shouldSuppressClientApiKey || headerOnlyAuth ? null : apiKey,
+		authToken: oauthToken && !headerOnlyAuth ? apiKey : undefined,
 		baseURL: baseUrl,
 		maxRetries: 5,
 		maxRetryDelayMs,

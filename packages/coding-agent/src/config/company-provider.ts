@@ -112,9 +112,11 @@ async function readStartupConfig(): Promise<CompanySnapshot> {
 		) {
 			throw new Error("Invalid endpoint");
 		}
-		const baseUrl = endpoint.href.replace(/\/+$/, "").replace(/\/v1$/, "");
+		// The Anthropic transport handles the final chat `/v1` itself.
+		const baseUrl = endpoint.href.replace(/\/+$/, "");
+		const embeddingBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
 		// Non-enumerable credentials keep accidental config/debug serialization safe.
-		const config = Object.defineProperty({ baseUrl, embeddingBaseUrl: `${baseUrl}/v1` }, "token", {
+		const config = Object.defineProperty({ baseUrl, embeddingBaseUrl }, "token", {
 			value: token.trim(),
 			enumerable: false,
 		});

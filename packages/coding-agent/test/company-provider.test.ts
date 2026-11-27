@@ -175,11 +175,10 @@ describe("company provider startup snapshot", () => {
 		);
 		expect(result.gatedConfigUndefined).toBe(true);
 		expect(result.gatedErrorUndefined).toBe(true);
-		expect(result.available).toBe(true);
 		expect(result.unchanged).toBe(true);
 		expect(result.workerMatches).toBe(true);
 		expect(result.inheritedMatches).toBe(true);
-		expect(result.baseUrl).toBe("http://internal.invalid/gateway");
+		expect(result.baseUrl).toBe("http://internal.invalid/gateway/v1");
 		expect(result.embeddingBaseUrl).toBe("http://internal.invalid/gateway/v1");
 		expect(result.tokenMatches).toBe(true);
 		expect(result.serialized).not.toContain("fixture-secret");
@@ -187,8 +186,6 @@ describe("company provider startup snapshot", () => {
 
 	test("does not recover a missing startup file until the next process", () => {
 		const result = runSnapshotProbe(undefined);
-		expect(result.gatedConfigUndefined).toBe(true);
-		expect(result.gatedErrorUndefined).toBe(true);
 		expect(result.available).toBe(false);
 		expect(result.unchanged).toBe(true);
 		expect(result.inheritedMatches).toBe(true);
@@ -198,8 +195,6 @@ describe("company provider startup snapshot", () => {
 
 	test("caches malformed JSON failure without exposing its contents", () => {
 		const result = runSnapshotProbe('{"env":{"ANTHROPIC_AUTH_TOKEN":"fixture-secret"');
-		expect(result.gatedConfigUndefined).toBe(true);
-		expect(result.gatedErrorUndefined).toBe(true);
 		expect(result.available).toBe(false);
 		expect(result.unchanged).toBe(true);
 		expect(result.inheritedMatches).toBe(true);
@@ -272,7 +267,6 @@ describe("company provider startup snapshot", () => {
 			}),
 			true,
 		);
-		expect(result.available).toBe(true);
 		expect(result.tokenMatches).toBe(true);
 		expect(result.baseUrl).toBe("http://relocated.invalid/gateway");
 	});

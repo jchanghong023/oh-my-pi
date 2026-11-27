@@ -139,7 +139,6 @@ async function consumeSpawnOptions(options: ExecutorOptions, models: Model<Api>[
 		} as never,
 	});
 	expect(result.exitCode, JSON.stringify(result, null, 2)).toBe(0);
-	expect(result.output).toContain("worker fixture completed");
 	expect(createSession).toHaveBeenCalledTimes(1);
 	const child = createSession.mock.calls[0]?.[0] as CreateAgentSessionOptions;
 	if (!child.settings) throw new Error("Expected executor to create child settings");

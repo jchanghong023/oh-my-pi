@@ -44,15 +44,10 @@ import { owningSessionId } from "../tools/session-id";
 import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
 import { trackLateCleanup } from "../utils/late-cleanup";
+import { getBundledAgent } from "./agents";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { renderStepPrompts } from "./steps";
-import {
-	type ExecutorOptions,
-	runSubprocess,
-	specExecutorDelegateTools,
-	type SubagentToolResult,
-	usesYield,
-} from "./executor";
+import { type ExecutorOptions, runSubprocess, type SubagentToolResult, usesYield } from "./executor";
 import {
 	applyEligibleNestedPatches,
 	type IsolationContext,
@@ -209,6 +204,8 @@ export interface StructuredSubagentRequest {
 
 /** A normalized preflight result, reusable by tests and adapters. */
 export interface EffectiveSubagentPolicy {
+	/** Explicit bundled selector, preserved when a workpool revalidates its initial worker. */
+	bundledAgentSelector?: string;
 	discovery: DiscoveryResult;
 	agentName: string;
 	agent: AgentDefinition;
@@ -327,12 +324,17 @@ function resolveSchema(
 	return { schema: undefined, source: "none", mode, outputSchemaOverridesAgent: false };
 }
 
-function createPlanModeAgent(agent: AgentDefinition): AgentDefinition {
-	const tools = [...PLAN_MODE_TOOLS, ...(agent.tools ?? []).filter(tool => tool === "ast_grep")];
+function createPlanModeAgent(agent: AgentDefinition, request: StructuredSubagentRequest): AgentDefinition {
+	const fixedAgentTools = agent.restrictToolNames === true || request.agentDefinition?.tools !== undefined;
+	const tools: string[] = [...PLAN_MODE_TOOLS, ...(agent.tools ?? []).filter(tool => tool === "ast_grep")];
 	return {
 		...agent,
 		systemPrompt: `${planModeSubagentPrompt}\n\n${agent.systemPrompt}`,
-		tools,
+		tools: tools.filter(
+			tool =>
+				(!fixedAgentTools || agent.tools?.includes(tool)) &&
+				(!request.session.restrictToolNames || request.session.isToolActive?.(tool)),
+		),
 		spawns: undefined,
 		prewalk: undefined,
 	};
@@ -482,6 +484,7 @@ function discoverAgentsShared(cwd: string, extensionRoots?: EffectiveExtensionRo
 		isProviderEnabled("claude-plugins"),
 		isUserSourceEnabled("claude-plugins"),
 		isUserSourceEnabled("claude"),
+		process.env.CLAUDE_CONFIG_DIR?.trim(),
 	].join(",");
 	const key = `${path.resolve(cwd)}\0${policy}\0${JSON.stringify(extensionRoots ?? null)}`;
 	const existing = inflightDiscovery.get(key);
@@ -509,7 +512,10 @@ export async function resolveEffectiveSubagentPolicy(
 		includeParents: request.perCallModel !== undefined,
 	});
 	const spawnPolicy = resolveSpawnPolicy(request.session.getSessionSpawns());
-	const agentName = request.agentDefinition?.name ?? (request.agent?.trim() || spawnPolicy.defaultAgent);
+	const agentSelection = request.agent?.trim() || spawnPolicy.defaultAgent;
+	const bundled = request.agentDefinition === undefined && agentSelection.startsWith("bundled:");
+	const agentName =
+		request.agentDefinition?.name ?? (bundled ? agentSelection.slice("bundled:".length) : agentSelection);
 	const planMode = request.session.getPlanModeState?.()?.enabled === true;
 	assertPlanControlsAllowed(request, planMode);
 	const denial = spawnDenial(request.session, agentName, request.blockedAgent);
@@ -518,7 +524,7 @@ export async function resolveEffectiveSubagentPolicy(
 	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
 	const sessionAgents = request.session.getSessionAgents?.() ?? [];
 	const agents = [...discovery.agents, ...sessionAgents];
-	const agent = request.agentDefinition ?? getAgent(agents, agentName);
+	const agent = request.agentDefinition ?? (bundled ? getBundledAgent(agentName) : getAgent(agents, agentName));
 	if (!agent) {
 		const available =
 			agents
@@ -528,7 +534,7 @@ export async function resolveEffectiveSubagentPolicy(
 		const searched = discovery.searchedDirs?.map(dir => shortenPath(dir)).join(", ") || "none";
 		throw new StructuredSubagentError(
 			"preflight",
-			`Unknown agent "${agentName}". Available: ${available}. Searched: ${searched}`,
+			`Unknown agent "${agentSelection}". Available: ${available}. Searched: ${searched}`,
 		);
 	}
 	const disabledAgents = cfgTaskDisabledAgents.get(request.session.settings);
@@ -541,7 +547,7 @@ export async function resolveEffectiveSubagentPolicy(
 			`Agent "${agentName}" is disabled in settings. Enable it via /agents, or use a different agent type.${enabled.length > 0 ? ` Available: ${enabled.join(", ")}` : ""}`,
 		);
 	}
-	const effectiveAgent = planMode ? createPlanModeAgent(agent) : agent;
+	const effectiveAgent = planMode ? createPlanModeAgent(agent, request) : agent;
 	// An agent declaring `structured: true` keeps its result contract when the caller opts out (`task.structured` off).
 	const schema = resolveSchema(
 		request,
@@ -619,6 +625,7 @@ export async function resolveEffectiveSubagentPolicy(
 	return {
 		discovery,
 		agentName,
+		...(bundled ? { bundledAgentSelector: agentSelection } : {}),
 		agent,
 		effectiveAgent,
 		modelOverride,
@@ -756,15 +763,6 @@ function buildExecutorOptions(
 	const restrictToolNames =
 		policy.planMode || session.restrictToolNames === true || policy.effectiveAgent.restrictToolNames === true;
 	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
-	const delegateTools =
-		restrictToolNames &&
-		!policy.planMode &&
-		request.invocationKind === "task" &&
-		policy.agent.source === "bundled" &&
-		policy.agent.name === "task" &&
-		policy.effectiveAgent.tools === undefined
-			? specExecutorDelegateTools(session)
-			: undefined;
 	return {
 		cwd: session.cwd,
 		costGate: session.costGate,
@@ -774,7 +772,7 @@ function buildExecutorOptions(
 		onPayload: session.onPayload,
 		onResponse: session.onResponse,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
-		agent: delegateTools ? { ...policy.effectiveAgent, tools: delegateTools } : policy.effectiveAgent,
+		agent: policy.effectiveAgent,
 		...spawnPrompts(request, policy.structured),
 		assignment: request.assignment.trim(),
 		context: request.context?.trim() || undefined,
@@ -1019,12 +1017,17 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	// Admission precedes policy resolution and any child resource acquisition.
 	const hooks = request.session.subagentHooks;
 	const spawnOverrides = await hooks?.beforeSpawn(request);
-	let result: StructuredSubagentResult;
+	let settlementAttempted = false;
+	const settle = async (result: SingleResult | undefined): Promise<void> => {
+		if (settlementAttempted) return;
+		settlementAttempted = true;
+		await hooks?.onSettled?.(request, result);
+	};
 	try {
-		result = await runAdmittedSubagent(request, spawnOverrides);
+		return await runAdmittedSubagent(request, spawnOverrides, settle);
 	} catch (error) {
 		try {
-			await hooks?.onSettled?.(request, error instanceof StructuredSubagentError ? error.result : undefined);
+			await settle(error instanceof StructuredSubagentError ? error.result : undefined);
 		} catch {
 			// Do not replace the original invocation failure.
 		}
@@ -1037,13 +1040,12 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		}
 		throw error;
 	}
-	await hooks?.onSettled?.(request, result.result);
-	return result;
 }
 
 async function runAdmittedSubagent(
 	request: StructuredSubagentRequest,
 	spawnOverrides: NativeSpawnOverrides | void,
+	settle: (result: SingleResult) => Promise<void>,
 ): Promise<StructuredSubagentResult> {
 	const policy = await applySpawnHook(request, await resolveEffectiveSubagentPolicy(request));
 	if (spawnOverrides?.applyChanges !== undefined) policy.applyChanges = spawnOverrides.applyChanges;
@@ -1060,8 +1062,13 @@ async function runAdmittedSubagent(
 	let settled: SingleResult | undefined;
 	let retainSalvagedArtifact = false;
 	let artifactsFinalized = false;
-	let sharedObservationPending = false;
-	let cleanupAfterSharedObservation: (() => Promise<void>) | undefined;
+	let observationPending = false;
+	let cleanupAfterObservation: (() => Promise<void>) | undefined;
+	const finishObservation = async (): Promise<void> => {
+		observationPending = false;
+		await cleanupAfterObservation?.();
+		cleanupAfterObservation = undefined;
+	};
 	const finalizeArtifacts = async (initializationFailed = false): Promise<void> => {
 		if (!lease.temporary || artifactsFinalized) return;
 		artifactsFinalized = true;
@@ -1076,10 +1083,10 @@ async function runAdmittedSubagent(
 			lease.unregister?.();
 		};
 		const cleanupArtifacts = async (): Promise<void> => {
-			if (sharedObservationPending) {
+			if (observationPending) {
 				// Even a retained handle's caller may request cleanup before the
 				// kept-alive child is released. The observer still owns the bytes.
-				cleanupAfterSharedObservation = removeArtifacts;
+				cleanupAfterObservation = removeArtifacts;
 				return;
 			}
 			await removeArtifacts();
@@ -1122,10 +1129,14 @@ async function runAdmittedSubagent(
 		}
 		let sharedResult: SingleResult | undefined;
 		let sharedReleaseStarted = false;
+		let sharedBeforeCaptureDone = false;
 		const observeSharedResult = async (result: SingleResult): Promise<void> => {
 			await deferredCleanup;
 			if (spawnFailed) return;
-			await hooks?.beforeCapture?.(request, result);
+			if (!sharedBeforeCaptureDone) {
+				await hooks?.beforeCapture?.(request, result);
+				sharedBeforeCaptureDone = true;
+			}
 			await hooks?.afterResult?.(request, result);
 		};
 		if (!policy.isIsolated && (hooks?.beforeCapture || hooks?.afterResult)) {
@@ -1133,12 +1144,8 @@ async function runAdmittedSubagent(
 			baseOptions.onRelease = async () => {
 				sharedReleaseStarted = true;
 				await release?.();
-				if (sharedResult && sharedObservationPending) {
-					await observeSharedResult(sharedResult);
-					sharedObservationPending = false;
-				}
-				await cleanupAfterSharedObservation?.();
-				cleanupAfterSharedObservation = undefined;
+				if (sharedResult && observationPending) await observeSharedResult(sharedResult);
+				await finishObservation();
 			};
 		}
 		baseOptions.onCleanupDeferred = completion => {
@@ -1177,11 +1184,12 @@ async function runAdmittedSubagent(
 				settled = result;
 				sharedResult = result;
 				if (hooks?.beforeCapture || hooks?.afterResult) {
-					sharedObservationPending =
+					observationPending =
 						!sharedReleaseStarted && baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(id);
-					if (!sharedObservationPending) await observeSharedResult(result);
+					if (!observationPending) await observeSharedResult(result);
 				}
 			} else {
+				let isolatedObservationDone = false;
 				result = await runIsolatedSubprocess({
 					baseOptions,
 					context: isolationContext,
@@ -1192,6 +1200,7 @@ async function runAdmittedSubagent(
 					),
 					agentId: id,
 					mergeMode: policy.mergeMode,
+					captureWhileAlive: policy.applyChanges,
 					artifactsDir: lease.artifactsDir,
 					description: trimToUndefined(request.identity?.label),
 					buildCommitMessage: makeIsolationCommitMessage(request.session),
@@ -1208,12 +1217,22 @@ async function runAdmittedSubagent(
 								if (!spawnFailed) await hooks.beforeCapture!(request, result);
 							}
 						: undefined,
-					onAfterResult: hooks?.afterResult
-						? async result => {
-								if (!spawnFailed) await hooks.afterResult!(request, result);
-							}
-						: undefined,
+					onAfterResult:
+						hooks?.beforeCapture || hooks?.afterResult
+							? async result => {
+									if (!isolatedObservationDone) {
+										if (!spawnFailed) await hooks.afterResult?.(request, result);
+										isolatedObservationDone = true;
+									}
+									await finishObservation();
+								}
+							: undefined,
 				});
+				observationPending =
+					!!(hooks?.beforeCapture || hooks?.afterResult) &&
+					!isolatedObservationDone &&
+					baseOptions.keepAlive !== false &&
+					AgentLifecycleManager.global().has(id);
 			}
 		} finally {
 			releaseHold?.();
@@ -1277,6 +1296,16 @@ async function runAdmittedSubagent(
 			await finalizeArtifacts(true);
 			delete result.outputPath;
 			delete result.outputMeta;
+		}
+		try {
+			await settle(result);
+		} catch (error) {
+			retainSalvagedArtifact = true;
+			throw new StructuredSubagentError(
+				"execution",
+				`Subagent settlement failed: ${error instanceof Error ? error.message : String(error)}${describeSalvagedWork(result)}`,
+				{ cause: error, result },
+			);
 		}
 		return {
 			result,

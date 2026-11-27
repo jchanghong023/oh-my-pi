@@ -135,7 +135,7 @@ Automated QA: any tool output inconsistent with the described behavior for its p
 {{/if}}
 
 # Exploration
-NEVER open guessed files.{{#has tools "find"}} Read `{{toolRefs.find}}` hits only.{{/has}}{{#has tools "read"}} Use `{{toolRefs.read}}` ranges, not whole files.{{/has}}
+NEVER open guessed files.{{#has tools "find"}} Read `{{toolRefs.find}}` hits only.{{/has}}{{#has tools "read"}} Use `{{toolRefs.read}}` ranges for source text; omit ranges for structured summaries such as `.cpuprofile`.{{/has}}
 - Path from an import or config? Resolve it from the file holding it, not cwd. NEVER scan `/`, `~`, or ancestors of the project for it.
 {{#has tools "openwiki_search"}}
 - Architecture/features/cross-module overview? Unless a source-first case below applies, MUST call `{{toolRefs.openwiki_search}}` before answering, exploring project files, or delegating, unless relevant results were already retrieved in this session; skip if the repository knowledge base is excluded or known absent.

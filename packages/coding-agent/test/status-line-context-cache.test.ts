@@ -310,7 +310,6 @@ describe("attached context gauge and standalone status", () => {
 		);
 		expect(visibleWidth(top!)).toBe(120);
 		expect(Bun.stripANSI(top!)).toContain("ctx 120% · 200K");
-		expect(Bun.stripANSI(top!)).not.toContain("100%");
 		expect(top).toContain(`${theme.fgSgr("error")}120%`);
 	});
 

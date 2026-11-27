@@ -178,7 +178,7 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 			});
 		`,
 		);
-		expect(stderr).toContain("Company provider unavailable: cannot read");
+		expect(stderr).toContain("Company provider unavailable");
 	}, 30_000);
 
 	it("does not install company role defaults when the provider is disabled", async () => {

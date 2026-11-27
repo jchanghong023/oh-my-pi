@@ -576,6 +576,7 @@ export interface SessionMaintenanceHost {
 		source: string;
 		delayMs?: number;
 		generation?: number;
+		requireFreshTurn?: boolean;
 		shouldContinue?: () => boolean;
 		onSkip?: (
 			reason:
@@ -1786,7 +1787,10 @@ export class SessionMaintenance {
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
 			let goalRestorePreview: { notice: CustomMessage | undefined } | undefined;
 			if (snapcompactReady) {
-				const maxFrames = this.#computeSnapcompactMaxFrames(preparation, effectiveSettings, 0);
+				const notice = this.#host.previewGoalAutoOrchestrateContext();
+				goalRestorePreview = { notice };
+				const noticeTokens = notice ? this.#countProjectedMessages([notice]) : 0;
+				const maxFrames = this.#computeSnapcompactMaxFrames(preparation, effectiveSettings, 0, noticeTokens);
 				if (maxFrames < 1) {
 					logger.warn("Snapcompact skipped: kept history alone exceeds the context budget", {
 						model: this.#model?.id,
@@ -1807,7 +1811,7 @@ export class SessionMaintenance {
 							includeThinking: snapcompactIncludeThinking,
 						},
 						effectiveSettings,
-						0,
+						noticeTokens,
 					);
 					snapcompactResult = rendered.result;
 					const framePayloadBytes = rendered.framePayloadBytes;
@@ -1825,9 +1829,6 @@ export class SessionMaintenance {
 						ctxWindow > 0
 							? ctxWindow - effectiveReserveTokens(ctxWindow, effectiveSettings)
 							: Number.POSITIVE_INFINITY;
-					const notice = this.#host.previewGoalAutoOrchestrateContext();
-					goalRestorePreview = { notice };
-					const noticeTokens = notice ? this.#countProjectedMessages([notice]) : 0;
 					const projected = this.#projectSnapcompactContextTokens(preparation, snapcompactResult) + noticeTokens;
 					// No-reduction decision runs in the encrypted-reasoning-excluded domain
 					// on both sides: opaque replay signatures (thinkingSignature /
@@ -2450,6 +2451,7 @@ export class SessionMaintenance {
 					delayMs: 100,
 					generation,
 					onSkip: options.onRetryUnavailable,
+					requireFreshTurn: options.onRetryUnavailable !== undefined,
 				});
 				return COMPACTION_CHECK_CONTINUATION;
 			}
@@ -3900,6 +3902,7 @@ export class SessionMaintenance {
 							delayMs: 100,
 							generation,
 							onSkip: restore,
+							requireFreshTurn: true,
 						});
 						return Promise.resolve(COMPACTION_CHECK_CONTINUATION);
 					});
@@ -4353,7 +4356,11 @@ export class SessionMaintenance {
 			manager.getSessionId() === sessionId && !this.#host.isDisposed() && !this.#host.isSessionTransitioning();
 		let restored = false;
 		const restore = () => {
-			if (restored || !canRestore() || this.#host.agent.state.isStreaming) return;
+			if (restored || !canRestore()) return;
+			if (this.#host.agent.state.isStreaming) {
+				void this.#host.agent.waitForIdle().then(restore);
+				return;
+			}
 			if (recoveryLeaf !== null && !manager.getBranchView().some(entry => entry.id === recoveryLeaf)) return;
 			restored = true;
 			// An unmodified journal can select the original branch again on reload.
@@ -4902,6 +4909,7 @@ export class SessionMaintenance {
 		preparation: CompactionPreparation,
 		settings: EngineCompactionSettings,
 		pendingTokens: number,
+		standingTokens: number,
 	): number {
 		const ctxWindow = this.#model?.contextWindow ?? 0;
 		const shape = snapcompact.resolveShape(this.#model, cfgSnapcompactShape.get(this.#host.settings));
@@ -4914,7 +4922,7 @@ export class SessionMaintenance {
 		}
 		const reserve = effectiveReserveTokens(ctxWindow, settings);
 		const nonMessageTokens = this.#estimateRequestOverheadTokens();
-		const baseTokens = nonMessageTokens + this.#tokenizer.countMessages(preparation.recentMessages);
+		const baseTokens = nonMessageTokens + this.#tokenizer.countMessages(preparation.recentMessages) + standingTokens;
 		const totalBudget = ctxWindow - reserve;
 		// Skip iff there is no headroom whatsoever; a text-only archive costs
 		// far less than the cap reserve below, so any positive residual is
@@ -4952,6 +4960,7 @@ export class SessionMaintenance {
 			nonMessageTokens +
 			this.#tokenizer.countMessages(preparation.recentMessages, { excludeEncryptedReasoning: true }) +
 			pendingTokens +
+			standingTokens +
 			capReserve;
 		const roomBudget = Math.min(
 			SNAPCOMPACT_ARCHIVE_SHARE * (thresholdTokens - fixedTokens),
@@ -6530,6 +6539,7 @@ export class SessionMaintenance {
 							delayMs: 100,
 							generation,
 							onSkip: options.onRetryUnavailable,
+							requireFreshTurn: options.onRetryUnavailable !== undefined,
 						});
 						continuationScheduled = true;
 					} else if (frameRescueCreatedHeadroom) {
@@ -6704,7 +6714,15 @@ export class SessionMaintenance {
 					snapcompactBlocker = `snapcompact disabled: unsupported characters for selected snapcompact font (${percent}%); trying the next preferred compaction method.`;
 				} else {
 					const pendingTokens = options.pendingContextTokens ?? 0;
-					const maxFrames = this.#computeSnapcompactMaxFrames(preparation, effectiveSettings, pendingTokens);
+					const notice = this.#host.previewGoalAutoOrchestrateContext();
+					goalRestorePreview = { notice };
+					const noticeTokens = notice ? this.#countProjectedMessages([notice]) : 0;
+					const maxFrames = this.#computeSnapcompactMaxFrames(
+						preparation,
+						effectiveSettings,
+						pendingTokens,
+						noticeTokens,
+					);
 					if (maxFrames < 1) {
 						logger.warn("Snapcompact skipped: kept history alone exceeds the context budget", {
 							model: this.#model?.id,
@@ -6736,7 +6754,7 @@ export class SessionMaintenance {
 								includeThinking: snapcompactIncludeThinking,
 							},
 							effectiveSettings,
-							pendingTokens,
+							pendingTokens + noticeTokens,
 						);
 						snapcompactResult = rendered.result;
 						const framePayloadBytes = rendered.framePayloadBytes;
@@ -6757,9 +6775,6 @@ export class SessionMaintenance {
 								ctxWindow > 0
 									? ctxWindow - effectiveReserveTokens(ctxWindow, effectiveSettings)
 									: Number.POSITIVE_INFINITY;
-							const notice = this.#host.previewGoalAutoOrchestrateContext();
-							goalRestorePreview = { notice };
-							const noticeTokens = notice ? this.#countProjectedMessages([notice]) : 0;
 							const projected =
 								this.#projectSnapcompactContextTokens(preparation, snapcompactResult) + noticeTokens;
 							// Reduction check in the encrypted-reasoning-excluded domain so opaque
@@ -7587,6 +7602,7 @@ export class SessionMaintenance {
 				delayMs: 100,
 				generation: args.generation,
 				onSkip: args.onRetryUnavailable,
+				requireFreshTurn: args.onRetryUnavailable !== undefined,
 			});
 			continuationScheduled = true;
 		} else {
@@ -7740,6 +7756,7 @@ export class SessionMaintenance {
 					delayMs: 100,
 					generation,
 					onSkip: onRetryUnavailable,
+					requireFreshTurn: onRetryUnavailable !== undefined,
 				});
 				continuationScheduled = true;
 			} else {

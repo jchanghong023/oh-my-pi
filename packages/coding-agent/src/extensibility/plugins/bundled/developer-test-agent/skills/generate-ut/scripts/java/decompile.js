@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync, spawn } = require('child_process');
+const { createHash } = require('crypto');
 
 function getSkillDir() {
   return path.dirname(require.resolve('./decompile.js'));
@@ -71,13 +72,18 @@ function parseJarPath(jarPath, expectedClassifier) {
   return { groupId, artifactId, version };
 }
 
+function mavenArgs(m2Params) {
+  return Array.isArray(m2Params) ? m2Params : (m2Params?.match(/\S+/g) || []);
+}
+
 function parseMavenParams(m2Params) {
-  const params = {};
-  if (!m2Params) return params;
-  const regex = /-D([^=]+)=([^\s]+)/g;
-  let match;
-  while ((match = regex.exec(m2Params)) !== null) {
-    params[match[1]] = match[2];
+  const params = Object.create(null);
+  const args = mavenArgs(m2Params);
+  for (let i = 0; i < args.length; i++) {
+    if (!args[i].startsWith('-D')) continue;
+    const property = args[i] === '-D' ? args[++i] : args[i].slice(2);
+    const equal = property?.indexOf('=') ?? -1;
+    if (equal > 0) params[property.slice(0, equal)] = property.slice(equal + 1);
   }
   return params;
 }
@@ -89,6 +95,32 @@ function resolveVariable(variable, mavenParams) {
   return variable;
 }
 
+function resolveMavenRepo(projectDir, m2Repo, m2Params, settings) {
+  if (m2Repo) return resolveInputPath(m2Repo);
+  const override = parseMavenParams(m2Params)['maven.repo.local'];
+  if (override) return resolveInputPath(override, projectDir);
+
+  if (settings && fs.existsSync(settings)) {
+    const xml = fs.readFileSync(settings, 'utf-8').replace(/<!--[\s\S]*?-->/g, '');
+    const localRepo = /<localRepository>\s*([^<]+?)\s*<\/localRepository>/.exec(xml)?.[1];
+    if (localRepo) {
+      const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+      const repo = localRepo
+        .replace(/&(amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);/g, (_, entity) =>
+          entity[0] === '#'
+            ? String.fromCodePoint(Number(entity[1] === 'x' ? `0${entity.slice(1)}` : entity.slice(1)))
+            : entities[entity])
+        .replace(/\$\{([^}]+)\}/g, (expression, name) =>
+          name === 'user.home' ? os.homedir()
+            : name.startsWith('env.') ? (process.env[name.slice(4)] ?? expression)
+            : expression);
+      return resolveInputPath(repo, projectDir);
+    }
+  }
+
+  return resolveInputPath('~/.m2/repository');
+}
+
 function runMvnDependencyTree(projectDir, m2Params, settings) {
   return new Promise((resolve, reject) => {
     const args = ['dependency:tree'];
@@ -97,9 +129,7 @@ function runMvnDependencyTree(projectDir, m2Params, settings) {
       args.push('-s', settings);
     }
 
-    if (m2Params) {
-      args.push(...(m2Params.match(/\S+/g) || []));
-    }
+    args.push(...mavenArgs(m2Params));
 
     const spawnOpts = { cwd: projectDir, stdio: ['ignore', 'pipe', 'pipe'] };
     let child;
@@ -169,10 +199,10 @@ function parseDependencyTree(content, mavenParams) {
   const lines = content.split('\n');
   
   for (const line of lines) {
-    let match = line.match(/([\w.-]+):([\w.-]+):(\w+):([^:]+):([\w.-]+):(\w+)/);
+    let match = line.match(/([\w.-]+):([\w.-]+):([\w-]+):([\w.-]+|\$\{[^}]+\}):([\w.-]+):(\w+)/);
     if (match) {
       const [, groupId, artifactId, type, classifier, version, scope] = match;
-      if (type === 'jar') {
+      if (type === 'jar' || type === 'test-jar') {
         const isVariableClassifier = classifier.startsWith('${') && classifier.endsWith('}');
         let resolvedClassifier;
         if (isVariableClassifier) {
@@ -186,11 +216,11 @@ function parseDependencyTree(content, mavenParams) {
       continue;
     }
     
-    match = line.match(/([\w.-]+):([\w.-]+):(\w+):([\w.-]+):(\w+)/);
+    match = line.match(/([\w.-]+):([\w.-]+):([\w-]+):([\w.-]+):(\w+)/);
     if (match) {
       const [, groupId, artifactId, type, version, scope] = match;
-      if (type === 'jar') {
-        deps.push({ groupId, artifactId, version, scope });
+      if (type === 'jar' || type === 'test-jar') {
+        deps.push({ groupId, artifactId, version, scope, classifier: type === 'test-jar' ? 'tests' : undefined });
       }
     }
   }
@@ -328,37 +358,39 @@ function generateIndex(depsDir, jarOutputDirs) {
   return index;
 }
 
+async function hashJar(jarPath) {
+  const hash = createHash('sha256');
+  for await (const chunk of fs.createReadStream(jarPath)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
 // 主函数
 async function main(args) {
   const { packages, projectDir: inputProjectDir, m2Params } = args;
-  const m2Repo = resolveInputPath(args.m2Repo || '~/.m2/repository');
-  
   console.log('开始反编译二方件...');
   console.log(`包名范围: ${packages.join(', ')}`);
-  console.log(`Maven 仓库: ${m2Repo}`);
   console.log('');
   
   if (!inputProjectDir) {
-    console.log('错误: 需要提供 projectDir 参数（项目目录路径）');
-    return;
+    throw new Error('需要提供 projectDir 参数（项目目录路径）');
   }
   
   const projectDir = resolveInputPath(inputProjectDir);
   if (!fs.existsSync(projectDir)) {
-    console.log(`错误: 项目目录不存在: ${projectDir}`);
-    return;
+    throw new Error(`项目目录不存在: ${projectDir}`);
   }
   
   const pomPath = path.join(projectDir, 'pom.xml');
   if (!fs.existsSync(pomPath)) {
-    console.log(`错误: 项目目录中没有 pom.xml: ${projectDir}`);
-    return;
+    throw new Error(`项目目录中没有 pom.xml: ${projectDir}`);
   }
   
   const depsDir = args.depsDir ? resolveInputPath(args.depsDir) : path.join(projectDir, '.dtagent', 'deps');
   const settingsPath = resolveInputPath(args.settings || '~/.m2/settings.xml', projectDir);
   // Maven permits an absent default settings file, but not an absent explicit -s file.
   const settings = (args.settings || fs.existsSync(settingsPath)) ? settingsPath : undefined;
+  const m2Repo = resolveMavenRepo(projectDir, args.m2Repo, m2Params, settings);
+  console.log(`Maven 仓库: ${m2Repo}`);
 
   if (!fs.existsSync(depsDir)) {
     fs.mkdirSync(depsDir, { recursive: true });
@@ -368,9 +400,7 @@ async function main(args) {
   const pomResult = await getDepsFromPom(projectDir, packages, m2Repo, m2Params, settings);
 
   if (pomResult.failed) {
-    console.log(`警告: mvn dependency:tree 执行失败: ${pomResult.error}`);
-    console.log('跳过反编译，避免扫描本地仓库产生大量无用文件');
-    return;
+    throw new Error(`mvn dependency:tree 执行失败: ${pomResult.error}`);
   }
 
   const filteredDeps = pomResult.deps;
@@ -402,7 +432,9 @@ async function main(args) {
     const dep = jars[i];
     const classifierSuffix = dep.classifier ? `-${dep.classifier}` : '';
     const jarName = `${dep.artifactId}-${dep.version}${classifierSuffix}`;
-    const jarOutputDir = path.join(depsDir, jarName);
+    const jarOutputDir = path.join(depsDir, [
+      dep.groupId, dep.artifactId, dep.version, dep.classifier || ''
+    ].map(part => encodeURIComponent(part).replace(/\*/g, '%2A')).join('@'));
     
     console.log(`[${i + 1}/${jars.length}] 反编译 ${jarName}.jar...`);
     
@@ -413,23 +445,26 @@ async function main(args) {
         versions = JSON.parse(fs.readFileSync(versionsPath, 'utf-8'));
       }
       
-      const key = `${dep.groupId}:${dep.artifactId}`;
-      const currentVersion = dep.classifier ? `${dep.version}-${dep.classifier}` : dep.version;
-      if (versions[key]?.version === currentVersion &&
+      const key = `${dep.groupId}:${dep.artifactId}:${dep.classifier || ''}`;
+      const jarHash = dep.version.endsWith('-SNAPSHOT') ? await hashJar(dep.jarPath) : undefined;
+      if (versions[key]?.version === dep.version && versions[key].jarPath === dep.jarPath &&
+          versions[key].jarHash === jarHash &&
           fs.statSync(jarOutputDir, { throwIfNoEntry: false })?.isDirectory()) {
-        console.log(`  跳过 (版本未变化)`);
+        console.log('  跳过 (缓存未变化)');
         skipped++;
         jarOutputDirs.add(jarOutputDir);
         continue;
       }
       
+      fs.rmSync(jarOutputDir, { recursive: true, force: true });
       await decompileJar(dep.jarPath, jarOutputDir, cfrPath);
       
       versions[key] = {
         groupId: dep.groupId,
         artifactId: dep.artifactId,
-        version: currentVersion,
+        version: dep.version,
         jarPath: dep.jarPath,
+        jarHash,
         decompiledAt: new Date().toISOString()
       };
       fs.writeFileSync(versionsPath, JSON.stringify(versions, null, 2));

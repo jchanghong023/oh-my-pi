@@ -254,9 +254,8 @@ describe("parseChangelog", () => {
 		const latest = entries[0];
 		const previous = entries[1];
 
-		// A release with no user-facing coding-agent changes gets no changelog
-		// section (scripts/release.ts skips empty [Unreleased]), so the newest
-		// section may lag VERSION — but it must never be ahead of it.
+		// The latest published version may have no user-facing changes, so the
+		// newest changelog section may lag VERSION but must never be ahead.
 		expect(latest).toBeDefined();
 		const latestVersion = `${latest?.major}.${latest?.minor}.${latest?.patch}`;
 		expect(latest?.content).toContain(`## [${latestVersion}]`);

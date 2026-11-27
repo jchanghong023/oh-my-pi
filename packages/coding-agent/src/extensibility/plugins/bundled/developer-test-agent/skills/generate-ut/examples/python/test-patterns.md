@@ -362,26 +362,27 @@ def test_timestamp_boundary(mock_now):
 
 **Primary approach** (bypasses .coveragerc issues):
 
-> `$PYTHON` is the interpreter resolved in Environment Setup (SKILL.md); replace `{SKILL_DIR}` with the baseDir returned when loading `generate-ut`.
+> `$PYTHON` is the project interpreter selected in [generation-rules.md](../../references/python/generation-rules.md); replace `{SKILL_DIR}` with the baseDir returned when loading `generate-ut`. Use that reference's coverage commands on Windows.
 
 ```bash
+COV_DIR=$(mktemp -d) || exit 1
 # Step 1: Run tests with coverage
-$PYTHON -m coverage run --rcfile=NUL -m pytest <test_file> -v
+"$PYTHON" -m coverage run --rcfile=/dev/null --data-file="$COV_DIR/.coverage" -m pytest "<test_file>" -v
 
 # Step 2: Generate JSON report
-$PYTHON -m coverage json -o coverage.json --rcfile=NUL
+"$PYTHON" -m coverage json --rcfile=/dev/null --data-file="$COV_DIR/.coverage" -o "$COV_DIR/coverage.json"
 
 # Step 3: Parse with function-specific script
-$PYTHON "{SKILL_DIR}/scripts/python/parse_coverage.py" coverage.json <func> <start> <end> <source_path>
+"$PYTHON" "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" "<func>" "<start>" "<end>" "<source_path>"
 ```
 
 **Fallback** (if primary fails):
 
 ```bash
-$PYTHON -m pytest <test_file> --cov=<source_module> --cov-report=term-missing --cov-report=json -v
+COVERAGE_FILE="$COV_DIR/.coverage" "$PYTHON" -m pytest "<test_file>" "--cov=<source_module>" --cov-report=term-missing "--cov-report=json:$COV_DIR/coverage.json" -v
 ```
 
-Do NOT modify the project's `.coveragerc` directly.
+After measurement, remove only `$COV_DIR`. NEVER modify the project's `.coveragerc` or `.coverage`.
 
 ## Pattern 10: Logging Call Verification
 

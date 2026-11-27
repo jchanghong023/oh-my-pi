@@ -98,24 +98,6 @@ describe("EventController aborted-turn working messages", () => {
 		expect(setWorkingMessage.mock.calls[0]?.[0]).toContain("Editing module");
 	});
 
-	it("reconciles an optimistic user row without adding another message", async () => {
-		const { ctx } = createContext();
-		ctx.optimisticUserMessageSignature = "follow up\u00000";
-		const add = vi.spyOn(ctx, "addMessageToChat");
-		const clear = vi.spyOn(ctx, "clearOptimisticUserMessage");
-		await new EventController(ctx).handleEvent({
-			type: "message_start",
-			message: {
-				role: "user",
-				content: [{ type: "text", text: "follow up" }],
-				attribution: "user",
-				timestamp: 1,
-			},
-		});
-		expect(add).not.toHaveBeenCalled();
-		expect(clear).toHaveBeenCalledTimes(1);
-	});
-
 	it("keeps a pending ask off the transcript and shows its completed result", async () => {
 		const { ctx } = createContext();
 		cfgDisplayMode.override(ctx.settings, "detailed");

@@ -116,14 +116,17 @@ fn signal_all(mut procs: Vec<ProcInfo>, sig: Signal) -> io::Result<Vec<ProcInfo>
 /// Send `sig` to `p` if the pid still names the process that was scanned.
 /// `Ok(false)` when it has exited or the pid now names another process.
 pub fn signal_pinned(p: &ProcInfo, sig: Signal) -> io::Result<bool> {
-	sys::signal_pinned(p, i32::from(sig.number(Platform::current())), false)
+	sys::signal_pinned(p, i32::from(sig.number(Platform::current())))
 }
 
-/// Signal a scanned group member using a raw signal number. If a pidfd
-/// cannot be opened, use a start-time recheck rather than a group broadcast.
+/// Signal a scanned group member using a raw signal number. Unavailable
+/// pidfd transport falls back to a fresh identity check, not a group broadcast.
 pub(crate) fn signal_group_member(p: &ProcInfo, sig: i32) -> io::Result<bool> {
-	sys::signal_pinned(p, sig, true)
+	sys::signal_pinned(p, sig)
 }
+
+#[cfg(target_os = "linux")]
+pub(crate) use sys::kill_checked;
 
 /// `roots` and every process descended from them in `table`, a snapshot of
 /// the process table.
@@ -174,10 +177,30 @@ pub(crate) fn family_where(
 	}
 	while let Some(i) = queue.pop() {
 		let leader = &table[i];
-		let linked = [&by_parent, &by_group, &by_session]
+		let children = by_parent.get(&leader.pid);
+		let group = by_group.get(&leader.pid).filter(|_| leader.pgid == leader.pid);
+		let session = by_session.get(&leader.pid).filter(|_| leader.sid == leader.pid);
+		// The scan is not atomic. A leader's PID, PGID or SID may
+		// have been reused by the time the scan found other processes.
+		if ![children, group, session]
 			.into_iter()
-			.filter_map(|index| index.get(&leader.pid))
-			.flatten();
+			.flatten()
+			.flatten()
+			.any(|&j| !taken[j])
+		{
+			continue;
+		}
+		let Some(current) = info(leader.pid).filter(|p| p.start == leader.start) else {
+			continue;
+		};
+		let linked = [
+			children,
+			group.filter(|_| current.pgid == leader.pgid),
+			session.filter(|_| current.sid == leader.sid),
+		]
+		.into_iter()
+		.flatten()
+		.flatten();
 		for &j in linked {
 			if !taken[j] && table[j].pid != me && table[j].start >= leader.start {
 				taken[j] = true;
@@ -203,10 +226,10 @@ pub(crate) fn family_where(
 pub fn signal_each<'a>(procs: impl IntoIterator<Item = &'a ProcInfo>, sig: i32) -> usize {
 	let mut sent = 0;
 	for p in procs.into_iter().filter(|p| p.state != ProcState::Zombie) {
-		if matches!(sys::signal_pinned(p, sig, false), Ok(true)) {
+		if matches!(sys::signal_pinned(p, sig), Ok(true)) {
 			sent += 1;
 			if p.state == ProcState::Stopped {
-				let _ = sys::signal_pinned(p, libc::SIGCONT, false);
+				let _ = sys::signal_pinned(p, libc::SIGCONT);
 			}
 		}
 	}
@@ -242,68 +265,78 @@ fn parse_stat(pid: i32, line: &[u8]) -> Option<ProcInfo> {
 	fn num<T: std::str::FromStr>(f: &[u8]) -> Option<T> {
 		std::str::from_utf8(f).ok()?.parse().ok()
 	}
-	let (comm, fields) = split_stat(line)?;
-	let fields: Vec<&[u8]> = fields.take(20).collect();
-	let state = match fields.first()?.first()? {
+	let (comm, mut fields) = split_stat(line)?;
+	let state = match fields.next()?.first()? {
 		b'R' => ProcState::Running,
 		b'S' | b'D' => ProcState::Sleeping,
 		b'T' | b't' => ProcState::Stopped,
 		b'Z' => ProcState::Zombie,
 		_ => ProcState::Other,
 	};
-	Some(ProcInfo {
-		pid,
-		ppid: num(fields.get(1)?)?,
-		pgid: num(fields.get(2)?)?,
-		sid: num(fields.get(3)?)?,
-		state,
-		name: BString::from(comm),
-		start: num(fields.get(19)?)?,
-	})
+	let ppid = num(fields.next()?)?;
+	let pgid = num(fields.next()?)?;
+	let sid = num(fields.next()?)?;
+	let start = num(fields.nth(15)?)?;
+	Some(ProcInfo { pid, ppid, pgid, sid, state, name: BString::from(comm), start })
 }
 
 #[cfg(target_os = "linux")]
 mod sys {
 	use std::{
-		fs,
-		io::{self, Read},
-		os::fd::{AsRawFd, FromRawFd, OwnedFd},
+		fs, io,
+		os::fd::{AsFd, FromRawFd, OwnedFd},
 	};
 
-	use super::{ProcInfo, parse_stat};
+	use omp_builtins::proc_sys as linux;
+
+	use super::{ProcInfo, parse_stat, split_stat};
 
 	pub fn list() -> io::Result<Vec<ProcInfo>> {
+		linux::reserve_proc_fd();
+		let entries = match fs::read_dir("/proc") {
+			Ok(entries) => entries,
+			Err(error) if linux::fd_limit(&error) => return list_with_reserve(),
+			Err(error) => return Err(error),
+		};
+		match read_infos(proc_pids(entries)) {
+			Err(error) if linux::fd_limit(&error) => list_with_reserve(),
+			result => result,
+		}
+	}
+
+	fn list_with_reserve() -> io::Result<Vec<ProcInfo>> {
+		// Close the directory first: one reserve slot can then serve both
+		// directory enumeration and per-process stat reads.
+		let pids: Vec<_> =
+			linux::with_proc_fd(|| Ok(proc_pids(fs::read_dir("/proc")?).collect()))?;
+		read_infos(pids)
+	}
+
+	fn proc_pids(entries: fs::ReadDir) -> impl Iterator<Item = i32> {
+		entries
+			.flatten()
+			.filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+	}
+
+	fn read_infos(pids: impl IntoIterator<Item = i32>) -> io::Result<Vec<ProcInfo>> {
 		let mut out = Vec::new();
-		for entry in fs::read_dir("/proc")? {
-			let Ok(entry) = entry else { continue };
-			let Some(pid) = entry
-				.file_name()
-				.to_str()
-				.and_then(|n| n.parse::<i32>().ok())
-			else {
-				continue;
-			};
-			// The process may exit between readdir and the read.
-			if let Some(p) = info(pid) {
-				out.push(p);
+		for pid in pids {
+			match read_info(pid) {
+				Ok(Some(p)) => out.push(p),
+				Err(error) if linux::fd_limit(&error) => return Err(error),
+				// The process may exit between readdir and the read.
+				_ => {},
 			}
 		}
 		Ok(out)
 	}
 
 	pub fn info(pid: i32) -> Option<ProcInfo> {
-		let mut file = fs::File::open(format!("/proc/{pid}/stat")).ok()?;
-		// The kernel hands over the whole line in one read when it fits (52
-		// numbers and a name of at most 64 bytes do); `fs::read` grows from
-		// 32 bytes a read at a time (a spawn reads its child's).
-		let mut buf = [0; 1024];
-		let n = file.read(&mut buf).ok()?;
-		if n < buf.len() {
-			return parse_stat(pid, &buf[..n]);
-		}
-		let mut line = buf.to_vec();
-		file.read_to_end(&mut line).ok()?;
-		parse_stat(pid, &line)
+		read_info(pid).ok().flatten()
+	}
+
+	fn read_info(pid: i32) -> io::Result<Option<ProcInfo>> {
+		linux::read_proc_stat(pid, |stat| parse_stat(pid, stat))
 	}
 
 	pub fn now() -> io::Result<u64> {
@@ -329,43 +362,60 @@ mod sys {
 		Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
 	}
 
-	pub fn signal_pinned(p: &ProcInfo, sig: i32, allow_unpinned: bool) -> io::Result<bool> {
-		let pidfd = match pidfd_open(p.pid) {
-			Ok(fd) => Some(fd),
-			Err(e) if e.raw_os_error() == Some(libc::ESRCH) => return Ok(false),
-			// Old kernels lack pidfds. Group cleanup also needs to work
-			// when pidfd_open is blocked or otherwise unavailable.
-			Err(e) if allow_unpinned || e.raw_os_error() == Some(libc::ENOSYS) => None,
-			Err(e) => return Err(e),
-		};
-		// Check that the PID still names the scanned identity. When
-		// available, the pidfd keeps delivery bound to that process.
-		if info(p.pid).is_none_or(|now| now.start != p.start) {
+	pub fn signal_pinned(p: &ProcInfo, sig: i32) -> io::Result<bool> {
+		if p.pid <= 0 {
 			return Ok(false);
 		}
-		let rc = match &pidfd {
-			// SAFETY: the pidfd is open for the call; a null siginfo makes the
-			// kernel fill in what kill(2) would.
-			Some(fd) => unsafe {
-				libc::syscall(
-					libc::SYS_pidfd_send_signal,
-					fd.as_raw_fd(),
-					sig,
-					std::ptr::null::<libc::siginfo_t>(),
-					0,
-				) as i32
+		let pidfd = match pidfd_open(p.pid) {
+			Ok(fd) => fd,
+			Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return Ok(false),
+			Err(error) if linux::pidfd_signal_unavailable(&error) || linux::fd_limit(&error) => {
+				return kill_checked(p.pid, p.start, sig);
 			},
-			// SAFETY: plain syscall without pointer arguments.
-			None => unsafe { libc::kill(p.pid, sig) },
+			Err(error) => return Err(error),
 		};
-		if rc == 0 {
-			return Ok(true);
+		match same_identity(p.pid, p.start) {
+			Ok(false) => return Ok(false),
+			Ok(true) => {},
+			Err(error) if linux::fd_limit(&error) => {
+				drop(pidfd);
+				return kill_checked(p.pid, p.start, sig);
+			},
+			Err(error) => return Err(error),
 		}
-		let e = io::Error::last_os_error();
-		if e.raw_os_error() == Some(libc::ESRCH) {
-			Ok(false)
+		match linux::try_pidfd_send_signal(pidfd.as_fd(), sig) {
+			Ok(()) => Ok(true),
+			Err(error) if error.raw_os_error() == Some(libc::ESRCH) => Ok(false),
+			Err(error) if linux::pidfd_signal_unavailable(&error) => {
+				drop(pidfd);
+				kill_checked(p.pid, p.start, sig)
+			},
+			Err(error) => Err(error),
+		}
+	}
+
+	fn same_identity(pid: i32, start: u64) -> io::Result<bool> {
+		match linux::read_proc_stat(pid, |stat| {
+			let field = split_stat(stat)?.1.nth(19)?;
+			std::str::from_utf8(field).ok()?.parse::<u64>().ok()
+		}) {
+			Ok(now) => Ok(now == Some(start)),
+			Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+			Err(error) => Err(error),
+		}
+	}
+
+	pub(crate) fn kill_checked(pid: i32, start: u64, sig: i32) -> io::Result<bool> {
+		if pid <= 0 || !same_identity(pid, start)? {
+			return Ok(false);
+		}
+		// SAFETY: plain syscall without pointer arguments. A numeric signal
+		// cannot be atomic with the identity check, unlike pidfd delivery.
+		if unsafe { libc::kill(pid, sig) } == 0 {
+			Ok(true)
 		} else {
-			Err(e)
+			let error = io::Error::last_os_error();
+			if error.raw_os_error() == Some(libc::ESRCH) { Ok(false) } else { Err(error) }
 		}
 	}
 }
@@ -457,8 +507,8 @@ mod sys {
 		Ok(since.as_micros() as u64)
 	}
 
-	pub fn signal_pinned(p: &ProcInfo, sig: i32, _allow_unpinned: bool) -> io::Result<bool> {
-		if info(p.pid).is_none_or(|now| now.start != p.start) {
+	pub fn signal_pinned(p: &ProcInfo, sig: i32) -> io::Result<bool> {
+		if p.pid <= 0 || info(p.pid).is_none_or(|now| now.start != p.start) {
 			return Ok(false);
 		}
 		// SAFETY: plain syscall without pointer arguments.
@@ -480,9 +530,9 @@ mod tests {
 
 	#[test]
 	fn stat_lines_with_hostile_command_names_parse() {
-		let line = b"4242 (a) b (c) R 1 4242 4242 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0\n";
+		let line = b"4242 (a\xff) b (c) R 1 4242 4242 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0\n";
 		let p = parse_stat(4242, line).unwrap();
-		assert_eq!(p.name, "a) b (c");
+		assert_eq!(p.name, BString::from(b"a\xff) b (c"));
 		assert_eq!((p.ppid, p.pgid, p.sid), (1, 4242, 4242));
 		assert_eq!(p.state, ProcState::Running);
 		assert_eq!(p.start, 987654);

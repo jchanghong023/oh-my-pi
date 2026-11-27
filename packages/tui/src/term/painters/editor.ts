@@ -307,12 +307,16 @@ export function setTerminalCompletionLayout(
 	} else holder[kCompletionLayout] = { cx, rowsFromCaret };
 }
 
-/** Whether the terminal can display a completion row without hiding the caret. */
-export function hasTerminalCompletionRoom(node: UiNode): boolean {
+/** Completion rows the terminal can show without hiding the caret. */
+export function terminalCompletionRows(node: UiNode): number {
 	const layout = (node as CompletionLayoutHolder)[kCompletionLayout];
-	if (!layout || !layout.cx.focused(node)) return true;
+	if (!layout || !layout.cx.focused(node)) return Infinity;
 	const height = layout.cx.viewportHeight;
-	return height === undefined || height > layout.rowsFromCaret;
+	return height === undefined ? Infinity : Math.max(0, height - layout.rowsFromCaret);
+}
+
+export function hasTerminalCompletionRoom(node: UiNode): boolean {
+	return terminalCompletionRows(node) > 0;
 }
 
 // ─── Props ──────────────────────────────────────────────────────────────────

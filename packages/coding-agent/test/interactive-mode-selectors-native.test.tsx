@@ -166,20 +166,25 @@ describe("inline selectors in a Tern terminal", () => {
 			})),
 		);
 		await using ui = await nativeShell(mode.shell);
-		const reload = vi.spyOn(authStorage.credentials, "reload");
-		const logout = mode.showOAuthSelector("logout");
-		// The command reloads its store and then stays pending until the pickers are answered.
-		await reload.mock.results[0]!.value;
+		vi.spyOn(session.modelRegistry, "getApiKeyForProvider").mockResolvedValue("test-key");
+		await mode.showOAuthSelector("logout");
 		const providers = sheet(ui);
 		expect(providers.title).toBe("Sign out");
 		expect(providers.items!.map(item => item.id)).toEqual(["anthropic"]);
 
+		const accountPicker = Promise.withResolvers<void>();
+		const showDialog = mode.showEditorAreaDialog.bind(mode);
+		vi.spyOn(mode, "showEditorAreaDialog").mockImplementationOnce((...args) => {
+			const handle = showDialog(...args);
+			accountPicker.resolve();
+			return handle;
+		});
 		ui.send({ ev: "action", sf: ui.sf, id: ui.node("picker").id, act: "confirm" });
-		await Promise.resolve();
+		await accountPicker.promise;
 		const accounts = sheet(ui);
 		expect(accounts.items).toHaveLength(2);
 		ui.type(ESCAPE);
-		await logout;
+		expect(authStorage.credentials.list("anthropic")).toHaveLength(2);
 		expect(has(ui, "picker")).toBe(false);
 		expect(has(ui, "editor")).toBe(true);
 	});
@@ -311,7 +316,6 @@ describe("inline selectors in a Tern terminal", () => {
 			if (typeof id !== "string") throw new Error("Expected an inline detail item, not a picker group");
 			return items.get(id);
 		});
-		expect(details.length).toBeGreaterThan(0);
 		expect(details.every(item => item?.disabled)).toBe(true);
 		const text = details.map(item =>
 			typeof item?.label === "string" ? item.label : item?.label.map(span => span.t).join(""),

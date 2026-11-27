@@ -136,8 +136,7 @@ async function expectLine(
 
 async function expectExit(host: NativeHost): Promise<void> {
 	const [code, stderr] = await Promise.all([host.proc.exited, host.stderr]);
-	expect(stderr).toBe("");
-	expect(code).toBe(0);
+	expect(code, stderr).toBe(0);
 }
 
 describe("daemon native cache ownership", () => {

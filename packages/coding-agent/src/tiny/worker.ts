@@ -8,7 +8,7 @@
  * never runs (issue #1606).
  */
 import * as path from "node:path";
-import { errorMessage, getTinyModelsCacheDir, logger, setProcessName } from "@oh-my-pi/pi-utils";
+import { errorMessage, getAgentExecutableCacheDir, logger, setProcessName } from "@oh-my-pi/pi-utils";
 import { claimWorkerStdout } from "../daemon/modules/speech-frames";
 import { startParentWatchdog } from "../subprocess/parent-watchdog";
 import type {
@@ -72,7 +72,7 @@ interface ReplyTransport {
 
 function getTinyTitleRuntimeDir(): string {
 	return path.join(
-		path.dirname(getTinyModelsCacheDir()),
+		getAgentExecutableCacheDir(),
 		"tiny-title-runtime",
 		`transformers-${TRANSFORMERS_VERSION.replace(/[^A-Za-z0-9._-]/g, "_")}`,
 	);

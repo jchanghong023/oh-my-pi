@@ -1022,7 +1022,7 @@ describe("Coding Agent Tools", () => {
 			const testFile = path.join(testDir, "large-file.txt");
 			const lines = Array.from({ length: 3500 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
-			const defaultLimit = 300;
+			const defaultLimit = cfgReadDefaultLimit.get(session.settings);
 
 			const result = await readTool.execute("test-call-9", { path: testFile });
 

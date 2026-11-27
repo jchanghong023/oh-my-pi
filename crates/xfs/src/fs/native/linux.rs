@@ -126,6 +126,7 @@ pub(super) fn list(
 	dir: RawFd,
 	detail: Detail,
 	_children: u32,
+	strict: bool,
 	out: &mut Listing,
 ) -> io::Result<()> {
 	let buf = aligned_buf(&mut s.buf, LIST_BUF);
@@ -183,8 +184,10 @@ pub(super) fn list(
 						Ok(Some((file_type, size, mtime))) => {
 							out.push(name, file_type, size, Some(mtime), 0);
 						},
+						Err(err) if err.kind() == io::ErrorKind::NotFound => {},
 						Err(err)
-							if listed == Some(FileType::Dir)
+							if !strict
+								&& listed == Some(FileType::Dir)
 								&& err.kind() == io::ErrorKind::PermissionDenied =>
 						{
 							// A readable but non-searchable parent can list this name.
@@ -192,11 +195,12 @@ pub(super) fn list(
 							out.push(name, FileType::Dir, None, None, 0);
 						},
 						Err(err)
-							if listed == Some(FileType::Dir)
+							if strict
+								|| listed == Some(FileType::Dir)
 								|| (dt == libc::DT_UNKNOWN && err.kind() == io::ErrorKind::PermissionDenied) =>
 						{
-							// A known directory, or an entry that might be one, could not
-							// be inspected. Report it without discarding the readable siblings.
+							// Keep reporting failures for directories in ordinary walks;
+							// strict walks also report failures inspecting other entries.
 							incomplete.get_or_insert(err);
 						},
 						_ => {},

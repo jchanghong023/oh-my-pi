@@ -14,7 +14,6 @@ import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { cleanupTempHome } from "./helpers/temp-home-cleanup";
 import { createExtensionDashboardRuntime } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/dashboard-runtime";
-import { restoreEnvValue } from "./helpers/settings-test-state";
 
 import { cfgAutolearnEnabled } from "@oh-my-pi/pi-coding-agent/autolearn/settings";
 import { cfgSkillsCustomDirectories } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
@@ -298,18 +297,17 @@ This skill is added after session creation.
 	});
 
 	// The dashboard's existing settings toggle must asynchronously update execution and command metadata.
-	it("refreshes shared skill execution and command metadata after dashboard disable and re-enable", async () => {
-		const previousShared = process.env.OMP_SKILLS_DIR;
-		const shared = path.join(tempDir, "shared-root");
-		const file = path.join(shared, "dashboard-shared", "SKILL.md");
+	it("refreshes configured skill execution and command metadata after dashboard disable and re-enable", async () => {
+		const customDir = path.join(tempDir, "dashboard-skills");
+		const file = path.join(customDir, "dashboard-configured", "SKILL.md");
 		const authored =
-			"---\nname: dashboard-shared\ndescription: Live shared skill\n---\nShared body stays read-only\n";
+			"---\nname: dashboard-configured\ndescription: Dashboard skill\n---\nSkill body stays read-only\n";
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, authored);
-		restoreEnvValue("OMP_SKILLS_DIR", shared);
 		let session: AgentSession | undefined;
 		try {
 			const settings = createIsolatedSkillsSettings();
+			cfgSkillsCustomDirectories.set(settings, [customDir]);
 			({ session } = await createSession({
 				cwd: tempDir,
 				agentDir: tempDir,
@@ -321,47 +319,42 @@ This skill is added after session creation.
 			const dashboard = createExtensionDashboardRuntime({ cwd: tempDir, settings });
 			const read = active.getToolByName("read");
 			if (!read) throw new Error("Expected the session's actual read tool");
-			expect(active.skills.find(skill => skill.name === "dashboard-shared")).toMatchObject({
-				filePath: file,
-				_source: { providerName: "Shared" },
-			});
-			const before = await read.execute("read-enabled-shared", { path: "skill://dashboard-shared" });
+			const before = await read.execute("read-enabled-configured", { path: "skill://dashboard-configured" });
 			expect(before.content).toEqual(
 				expect.arrayContaining([
-					expect.objectContaining({ type: "text", text: expect.stringContaining("Shared body stays read-only") }),
+					expect.objectContaining({ type: "text", text: expect.stringContaining("Skill body stays read-only") }),
 				]),
 			);
 			const waitForPresence = (present: boolean, mutate: () => void) => {
 				const changed = Promise.withResolvers<void>();
 				const unsubscribe = active.subscribeCommandMetadataChanged(() => {
-					if (active.skills.some(skill => skill.name === "dashboard-shared") === present) changed.resolve();
+					if (active.skills.some(skill => skill.name === "dashboard-configured") === present) changed.resolve();
 				});
 				mutate();
 				return changed.promise.finally(unsubscribe);
 			};
-			await waitForPresence(false, () => dashboard.setDisabledExtensions(["skill:dashboard-shared"]));
-			expect(active.agent.state.systemPrompt.join("\n")).not.toContain("dashboard-shared");
-			await expect(read.execute("read-disabled-shared", { path: "skill://dashboard-shared" })).rejects.toThrow(
-				/Unknown skill/,
-			);
+			await waitForPresence(false, () => dashboard.setDisabledExtensions(["skill:dashboard-configured"]));
+			expect(active.agent.state.systemPrompt.join("\n")).not.toContain("dashboard-configured");
+			await expect(
+				read.execute("read-disabled-configured", { path: "skill://dashboard-configured" }),
+			).rejects.toThrow(/Unknown skill/);
 			const disabled = await dashboard.loadExtensions(dashboard.getDisabledExtensions());
-			expect(disabled.find(row => row.id === "skill:dashboard-shared")).toMatchObject({
+			expect(disabled.find(row => row.id === "skill:dashboard-configured")).toMatchObject({
 				state: "disabled",
-				source: { providerName: "Shared" },
+				source: { providerName: "Custom" },
 			});
 			await waitForPresence(true, () => dashboard.setDisabledExtensions([]));
-			expect(active.agent.state.systemPrompt.join("\n")).toContain("dashboard-shared");
-			const restored = await read.execute("read-reenabled-shared", { path: "skill://dashboard-shared" });
+			expect(active.agent.state.systemPrompt.join("\n")).toContain("dashboard-configured");
+			const restored = await read.execute("read-reenabled-configured", { path: "skill://dashboard-configured" });
 			expect(restored.content).toEqual(
 				expect.arrayContaining([
-					expect.objectContaining({ type: "text", text: expect.stringContaining("Shared body stays read-only") }),
+					expect.objectContaining({ type: "text", text: expect.stringContaining("Skill body stays read-only") }),
 				]),
 			);
 			expect(fs.readFileSync(file, "utf8")).toBe(authored);
 			expect(fs.readdirSync(path.dirname(file))).toEqual(["SKILL.md"]);
 		} finally {
 			await session?.dispose();
-			restoreEnvValue("OMP_SKILLS_DIR", previousShared);
 		}
 	});
 

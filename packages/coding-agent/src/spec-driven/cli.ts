@@ -27,12 +27,7 @@ export async function runResourceCommand(
 		const { runOpenSpec, runSuperpowersScript } = await import("./resources");
 		const result =
 			name === "openspec"
-				? await runOpenSpec(
-						argv,
-						cwd,
-						controller.signal,
-						process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY ? "terminal" : "capture",
-					)
+				? await runOpenSpec(argv, cwd, controller.signal, "terminal")
 				: await runSuperpowersScript(script, argv.slice(1), cwd, controller.signal, "stream");
 		if (result.stdout) process.stdout.write(result.stdout);
 		if (result.stderr) process.stderr.write(result.stderr);

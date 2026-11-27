@@ -90,7 +90,12 @@ import type {
 	ThinkingBudgets,
 	ToolChoice,
 } from "./types";
-import { getHeaderCaseInsensitive, hasRequestAuthMaterial, resolveCacheRetention } from "./utils";
+import {
+	getHeaderCaseInsensitive,
+	hasRequestAuthMaterial,
+	resolveCacheRetention,
+	resolveRequestAuthBearer,
+} from "./utils";
 import { AssistantMessageEventStream } from "./utils/event-stream";
 import { applyGlyphCodec } from "./utils/glyph-codec";
 import { wrapLeakedThinkingStream } from "./utils/leaked-thinking-stream";
@@ -502,7 +507,7 @@ function streamDispatch<TApi extends Api>(
 	if (model.provider === "gitlab-duo" || model.api === "gitlab-duo-agent") {
 		const apiKey =
 			requestOptions.requestAuth !== undefined
-				? requestOptions.requestAuth.apiKey
+				? resolveRequestAuthBearer(requestOptions.requestAuth)
 				: requestOptions.apiKey || getEnvApiKey(model.provider);
 		if (!apiKey) {
 			throw new AIError.MissingApiKeyError(model.provider);
@@ -905,10 +910,10 @@ function streamSimpleRequest<TApi extends Api>(
 		withTransportFetch(model, withExplicitRequestAuth(model.provider, (options || {}) as SimpleStreamOptions)),
 	);
 
-	// CodeAgent owns its credential refresh and does not use generic rotation.
-	// For other providers, select and retry credentials for the requested tier.
+	// Direct CodeAgent owns credential refresh; a pi-native gateway does not
+	// use the local provider handler, so resolve its key as for other gateways.
 	const apiKeyResolver =
-		model.provider !== "codeagent" && isApiKeyResolver(requestOptions.apiKey)
+		(model.provider !== "codeagent" || model.transport === "pi-native") && isApiKeyResolver(requestOptions.apiKey)
 			? withRequestServiceTier(requestOptions.apiKey, requestOptions.serviceTier)
 			: undefined;
 	if (apiKeyResolver) {
@@ -1164,7 +1169,9 @@ function streamSimpleDispatch<TApi extends Api>(
 	// key reaches this point.
 	const apiKey =
 		requestOptions.requestAuth !== undefined
-			? requestOptions.requestAuth.apiKey
+			? model.provider === "gitlab-duo" || model.api === "gitlab-duo-agent"
+				? resolveRequestAuthBearer(requestOptions.requestAuth)
+				: requestOptions.requestAuth.apiKey
 			: (typeof requestOptions?.apiKey === "string" ? requestOptions.apiKey : undefined) ||
 				getEnvApiKey(model.provider);
 	if (!apiKey && !hasRequestAuthMaterial(requestOptions.requestAuth)) {

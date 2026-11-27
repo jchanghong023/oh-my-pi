@@ -16,6 +16,72 @@ import sys
 import re
 import os
 
+GO_BRACE_TOKEN = re.compile(r"""//[^\n]*|/\*[\s\S]*?\*/|`[^`]*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[{}]""")
+
+
+def go_block_end(source, opening):
+    """Return the offset just after a Go block or literal, ignoring braces in comments and strings."""
+    depth = 0
+    for token in GO_BRACE_TOKEN.finditer(source, opening):
+        if token[0] == '{':
+            depth += 1
+        elif token[0] == '}':
+            depth -= 1
+            if depth == 0:
+                return token.end()
+    return len(source)
+
+
+def integration_only(content):
+    header = re.split(r'(?m)^package\b', content, maxsplit=1)[0]
+    modern = re.search(r'(?m)^//go:build[ \t]+(.+)$', header)
+    if modern:
+        # Recognize a required top-level conjunct without treating an OR arm as a requirement.
+        expr = modern[1].strip()
+        depth = 0
+        start = 0
+        conjuncts = []
+        for operator in re.finditer(r'\(|\)|&&|\|\|', expr):
+            if operator[0] == '(':
+                depth += 1
+            elif operator[0] == ')':
+                depth -= 1
+            elif depth == 0:
+                if operator[0] == '||':
+                    return False
+                conjuncts.append(expr[start:operator.start()].strip())
+                start = operator.end()
+        return 'integration' in conjuncts or expr[start:].strip() == 'integration'
+    legacy = re.findall(r'(?m)^//[ \t]+\+build[ \t]+(.+)$', header)
+    return any(all('integration' in option.split(',') for option in line.split()) for line in legacy)
+
+
+def isolated_connection(content, call):
+    if call[0] == 'net.Dial(':
+        # A listener address proves isolation only for the dial using it, not for other calls.
+        preceding = re.split(r'(?m)^func\b', content[:call.start()])[-1]
+        listeners = re.findall(
+            r'\b(\w+)\s*,\s*\w+\s*:?=\s*net\.Listen\(\s*"tcp[46]?"\s*,\s*"(?:127\.0\.0\.1|\[::1\]|localhost):0"\s*\)',
+            preceding,
+        )
+        for listener in listeners:
+            address = rf'{re.escape(listener)}\s*\.\s*Addr\(\)\s*\.\s*String\(\)'
+            aliases = re.findall(rf'\b(\w+)\s*:?=\s*{address}', preceding)
+            if aliases:
+                address = '|'.join([address, *map(re.escape, aliases)])
+            if re.match(rf'\s*"tcp[46]?"\s*,\s*(?:{address})\s*,?\s*\)', content[call.end():]):
+                return True
+    elif call[0] == 'http.Client{':
+        body = content[call.end():go_block_end(content, call.end() - 1) - 1]
+        transport = re.search(r'(?:^|,)\s*Transport:\s*(?:&\s*)?([\w.]+)\s*(\{)?', body)
+        if not transport or transport[1] in {'nil', 'http.DefaultTransport'}:
+            return False
+        if transport[1] == 'http.Transport' and transport[2]:
+            return bool(re.search(r'\bDial(?:TLS)?Context\s*:', body[transport.end():]))
+        return True
+    return False
+
+
 def check_test_quality(test_file_path):
     """Validate test file quality."""
     
@@ -35,10 +101,20 @@ def check_test_quality(test_file_path):
     test_functions = re.findall(r'func Test(\w+)\(\w+ \*testing\.T\)', content)
     
     # Find mock struct definitions
-    mock_structs = re.findall(r'type mock(\w+) struct', content, re.IGNORECASE)
-    
-    # Find mock injection patterns (L2/2 field assignment)
-    injection_patterns = re.findall(r'(\w+)\.\w+ = mock\w+', content)
+    mock_definitions = list(re.finditer(r'\btype\s+mock(\w+)\s+struct\s*\{', content, re.IGNORECASE))
+    mock_structs = [definition[1] for definition in mock_definitions]
+
+    # Recognize mock/fake values wired via assignment, named fields or constructor arguments.
+    mock_factory = r'(?:&?\s*(?:\w+\.)?(?:mock|fake)\w*\s*\{|(?:\w+\.)?new(?:Mock|Fake)\w*\s*\()'
+    mock_reference = r'(?:mock|fake)\w+\b'
+    mock_bindings = re.findall(rf'\b(\w+)\s*:?=\s*{mock_factory}', content, re.IGNORECASE)
+    if mock_bindings:
+        mock_reference += rf'|(?:{"|".join(map(re.escape, set(mock_bindings)))})\b'
+    injection_patterns = re.findall(
+        rf'\b\w+\.\w+\s*=\s*(?:{mock_factory}|{mock_reference})|'
+        rf'[(,:]\s*(?:{mock_factory}|(?:{mock_reference})(?=\s*[,)\}}]))',
+        content, re.IGNORECASE,
+    )
     
     # Identify standard-library httptest constructors for both L4 and infrastructure checks.
     imports = re.findall(r'(?m)^[ \t]*import\b[ \t]*(?:\(([^)]*)\)|([^\r\n]+))', content)
@@ -71,7 +147,14 @@ def check_test_quality(test_file_path):
         warnings.append(f"WARNING: Mock structs ({len(mock_structs)}) exceed field-injection patterns ({len(injection_patterns)}), but L4 fake-server patterns detected ({len(tier0_patterns)}). Verify the L4 server is wired into the client BEFORE each target call.")
     
     # Check 2: Boolean flags instead of int callCount
-    boolean_fields = re.findall(r'(called|used|done|executed|processed)\s+bool', content, re.IGNORECASE)
+    boolean_fields = []
+    for definition in mock_definitions:
+        body = content[definition.end():go_block_end(content, definition.end() - 1) - 1]
+        boolean_fields.extend(re.findall(
+            r'(?:^|[;\n])[ \t]*(?:\w+[ \t]*,[ \t]*)*'
+            r'(called|used|done|executed|processed)\b(?:[ \t]*,[ \t]*\w+)*[ \t]+bool\b',
+            body, re.IGNORECASE,
+        ))
     if boolean_fields:
         errors.append(f"CRITICAL: Boolean flags found instead of int callCount fields: {boolean_fields}. Use int counters for observable verification.")
     
@@ -156,11 +239,11 @@ def check_test_quality(test_file_path):
     infra_connection_patterns = [
         match[0] for match in re.finditer(
             r'New\w*Client\(|New\w*Server\(|sql\.Open\(|net\.Dial\(|http\.Client\{', content
-        ) if match.start() not in httptest_servers
+        ) if match.start() not in httptest_servers and not isolated_connection(content, match)
     ]
     
     # Determine if this is an integration test file (has build tag)
-    is_integration_file = re.search(r'//go:build integration|// +build integration', content)
+    is_integration_file = integration_only(content)
     
     if infra_connection_patterns and not is_integration_file:
         errors.append(
@@ -267,13 +350,14 @@ def check_test_quality(test_file_path):
     
     # Pre-compute test function line ranges for analysis
     test_func_ranges = []
+    offset = 0
     for i, line in enumerate(lines):
-        if re.match(r'func Test\w+\(\w+ \*testing\.T\)', line):
-            start = i
-            end = start + 1
-            while end < len(lines) and not (end > start and re.match(r'^func ', lines[end])):
-                end += 1
-            test_func_ranges.append((start, end, line))
+        declaration = re.match(r'func Test\w+\(\w+ \*testing\.T\)\s*\{', line)
+        if declaration:
+            body_end = go_block_end(content, offset + declaration.end() - 1)
+            end = i + content.count('\n', offset, body_end) + 1
+            test_func_ranges.append((i, end, line))
+        offset += len(line) + 1
     
     gomonkey_import = bool(re.search(r'"github\.com/agiledragon/gomonkey(?:/v2)?"', content))
     gomonkey_patch_call = re.compile(r'\bgomonkey\.Apply(?:PrivateMethod|Method|Func)\(')
@@ -283,9 +367,12 @@ def check_test_quality(test_file_path):
         for start, end, func_line in test_func_ranges:
             func_body = '\n'.join(lines[start:end])
             if gomonkey_patch_call.search(func_body):
-                # Check for supplementation reason comment in the function body or 3 lines above
-                comment_area = '\n'.join(lines[max(0, start - 3):end])
-                if not re.search(r'Supplementation reason:', comment_area, re.IGNORECASE):
+                # Include adjacent leading comments, never the preceding function's body.
+                first_comment = start
+                while first_comment > 0 and lines[first_comment - 1].lstrip().startswith('//'):
+                    first_comment -= 1
+                comment_area = '\n'.join(lines[first_comment:end])
+                if not re.search(r'(?m)^[ \t]*//[ \t]*Supplementation reason:', comment_area, re.IGNORECASE):
                     func_name_match = re.search(r'func (Test\w+)', func_line)
                     func_name = func_name_match.group(1) if func_name_match else "unknown"
                     gomonkey_tests_without_reason.append(func_name)

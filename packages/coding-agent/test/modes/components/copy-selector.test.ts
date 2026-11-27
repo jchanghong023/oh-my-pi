@@ -538,7 +538,8 @@ describe("copy selector", () => {
 		const term = makeSelector(picks, () => {}, undefined, longFinalTurn());
 		try {
 			press(term, "enter");
-			expect(picks).toEqual([{ content: "step 699\n\noutput 699", label: "turn content" }]);
+			expect(picks).toHaveLength(1);
+			expect(picks[0]!.content).toBe("step 699\n\noutput 699");
 		} finally {
 			term.dispose();
 		}

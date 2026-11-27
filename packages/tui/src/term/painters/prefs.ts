@@ -679,7 +679,7 @@ function paintWindow(node: UiNode, cx: PaintContext): Block {
 	const props = prefsProps(node);
 	const term = props.term;
 	const width = cx.width;
-	const height = Math.max(14, cx.height ?? DEFAULT_HEIGHT);
+	const height = Math.max(1, cx.height ?? DEFAULT_HEIGHT);
 	const inner = Math.max(1, width - 4);
 	const searching = isSearching(props);
 	const children = node.children();
@@ -694,11 +694,14 @@ function paintWindow(node: UiNode, cx: PaintContext): Block {
 		inner,
 		nodeState(node, PREFS_TAB_HOVER, () => undefined as string | undefined)(),
 	);
-	const preview = previewNode && !searching ? cx.paint(previewNode, inner).rows : undefined;
-	const previewRows = preview ? ["", theme.fg("muted", "Preview:"), ...preview] : [];
 	const fixed = 1 + strip.rows.length + 1 + (searching ? 1 : 0) + 3;
-	const contentRows = Math.max(7, height - fixed - previewRows.length);
-	const maxVisible = Math.max(3, contentRows - 4);
+	const room = Math.max(0, height - fixed);
+	const previewBudget = room - 7 - 2;
+	const preview =
+		previewNode && !searching && previewBudget > 0 ? cx.paint(previewNode, inner).rows.slice(0, previewBudget) : undefined;
+	const previewRows = preview?.length ? ["", theme.fg("muted", "Preview:"), ...preview] : [];
+	const contentRows = room - previewRows.length;
+	const maxVisible = Math.max(1, contentRows - 4);
 
 	const items = prefsItems(props, term, theme);
 	const runs = searching ? [] : prefsRuns(items, props);

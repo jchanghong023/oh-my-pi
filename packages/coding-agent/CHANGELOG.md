@@ -12,7 +12,7 @@
 - OpenWiki's read-only queries use Bash tool commands when `tools.commands` is enabled and Bash is available; otherwise they remain top-level tools.
 - Plan approval, ACP sessions, and ordinary Goal use upstream behavior again. Fork-specific unattended orchestration remains available through `/goal-autopilot`.
 - `/goal-autopilot` handles local approval prompts without waiting, lets native forms time out after 60 seconds, and asks the model to verify deliverables before closing the goal.
-- Removed Plan-specific verification blocks and `spec_verify`; specification executors delegate approved checks through native tasks.
+- Removed Plan-specific verification blocks and `spec_verify`.
 - RPC and ACP command inventories omit names their builtin dispatcher would intercept.
 - Compact mode shows the original tool diffs in completion order instead of merging writes. The preview and `Ctrl+O` controls are unchanged.
 - AST Edit is available in intranet mode; missing language grammars no longer fall back to a public download.
@@ -20,6 +20,8 @@
 - Offline mode defaults terminal program status (OSC 7501) to off so incompatible terminals do not insert status text into the composer. Explicit settings still take precedence.
 
 ### Changed
+
+- Fork installers and manual OMP updates use only CNB. OMP no longer checks for updates at startup, and manual OMP updates are unavailable offline.
 
 - Built-in TUI navigation, settings, pickers, prompts, and status labels use English again. The startup tips, Tip and New badges, and font reminder remain in Chinese. User, model, and tool content and the default dictation language are unchanged.
 - JavaScript Eval and archive queries are enabled by default again, binary analysis defaults to automatic backend selection, and offline sessions honor `fetch.enabled` for URL reads.
@@ -63,13 +65,11 @@
 ### Fixed
 
 - The shared Windows daemon no longer keeps RPC clients' output pipes open after the client exits.
-- Specification subagents now follow the native task assignment instead of asking for artifacts from the retired workbench.
 - A stale skill list no longer denies `skill://` reads before the current list can resolve a more specific match.
 - Collab guests queue follow-ups on the host and keep their draft when the transport refuses the message.
 - Collab guests see live model and tool activity, Output, and per-turn Diff in compact mode.
 - ACP, RPC, and print mode reject `/todoloop:` locally rather than forwarding it as a model prompt.
 - `/crawl` directory suggestions preserve tabs and other whitespace in the selected path.
-- Team searches exclude protected paths even when accessed through a skill resource.
 - TodoLoop uses the bundled read-only scout for preparation and settles attempts even when presentation callbacks fail.
 - OpenWiki honors the live tool setting for advisors and explicitly granted sessions, and reuses an equivalent page model for planning.
 - Source containers prepare OpenWiki visual resources when the vendored source is present.
@@ -84,7 +84,7 @@
 - Ctrl+T preselects the active routed model, expanded compact diffs leave composer completion keys alone, and collapsed diffs no longer hide receipts they did not display.
 - Git status remains visible with older development native addons, and structured Bash results preserve extra shell output and notices.
 - MCP servers honor `alwaysLoad` in Eval mode and native plugin configs, and dynamic OAuth registration uses the configured client name.
-- `/team` reports registration rejections with retry guidance without marking the command as failed; `/todoloop` accepts Markdown shortcut links, and `/dt` uses its bundled stages by default.
+- `/todoloop` accepts Markdown shortcut links, and `/dt` uses its bundled stages by default.
 - Cancelling `/sketch` no longer leaves unattached images; Superpowers foreground scripts stream output and stop their child processes on cancellation.
 - OpenWiki rejects missing option values without writing a telemetry file, and source containers can print OMP notices without OpenWiki resources.
 - CNB checks out the pinned OpenWiki sources after a fast-forward, Windows SDK archives are ZIP files, and packaged HTML exports use the viewer from their own build.
@@ -92,7 +92,6 @@
 - Withdrawing a queued `/compact` restores its draft attachments as well as its text.
 - Failed browser recording finalization leaves no partial recording at the original destination.
 - An already reviewed Goal Autopilot request can complete through local approval even when the final response exhausts the budget.
-- Team configuration writes report the effective member list and apply the same validation to temporary and saved values.
 - Goal Autopilot preserves the first notification across a stopped queue, respects follow-up timing, and restores only the active goal after compaction.
 - Queued `/sketch` attachments stay local during compaction. Queued input can be withdrawn, and a second `/compact` waits for earlier prompts.
 - Dictation's release-to-submit mode no longer treats standalone punctuation as a second word.
@@ -100,7 +99,7 @@
 - Live user-run Bash and Python output stays visible when the transcript rebuilds after a display change.
 - `omp update --check` reports the version of the binary the updater would replace and no longer suggests updating managed Homebrew installs.
 - `/wt` creates new worktrees outside the source checkout even when invoked from a subdirectory, and the session picker keeps distinct worktree histories separate.
-- Shared skills keep their configured priority, and `/skills` reports results even when a subagent transcript is open.
+- `/skills` reports results even when a subagent transcript is open.
 - The browser leaves borrowed tabs untouched after a worker crash and still releases owned resources when recording cannot be saved.
 - Form timeouts return only saved annotations in ordinary sessions; Goal Autopilot requires an effective recommendation and a valid response.
 - Native model and tree pickers preserve distinct model routes, inline tool details, and regular branch navigation.
@@ -167,6 +166,9 @@
 - Fixed `bash.patterns` approval false positives on benign flags (`go test -race`, `rg -e`, `jq -c`, quoted commit messages with `-e`/`-c`, ANSI-C `$'...'` strings) by parsing commands with omp's native Bash/Zsh parser and a command-aware argument guard ([#20686](https://github.com/can1357/oh-my-pi/pull/20686) by [@asuffield](https://github.com/asuffield))
 
 ### Removed
+
+- Removed `/team`, `/team configure`, and `OMP_SKILLS_DIR`. Ordinary skills, subagents, and background tasks are unchanged.
+- OpenSpec uses its upstream workflows and normal skill discovery without the fork's specification subagents.
 
 - Removed unused `parse*Args`/`print*Help` exports from `@oh-my-pi/pi-coding-agent/cli/{config,grep,plugin,setup,shell,web-search,update}-cli`; the subcommands parse flags through `src/commands/*` ([#20526](https://github.com/can1357/oh-my-pi/pull/20526))
 - Fixed an empty toast with only a checkmark appearing in Tern each time dictation finished transcribing.

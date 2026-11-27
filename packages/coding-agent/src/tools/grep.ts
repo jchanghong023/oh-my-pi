@@ -1,5 +1,5 @@
 import type { GrepToolDetails } from "./details/grep";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
@@ -61,7 +61,6 @@ import {
 	approvalRootCandidates,
 	searchApprovalCacheTargets,
 } from "./search-approval-targets";
-import { createTeamSearchTargetCheck } from "./team-read-isolation";
 import { type LineRange, parseLineRanges, selectorLineRanges } from "./line-ranges";
 import { isReadableUrlPath, splitPathAndSel } from "./details/read";
 import { toPathList } from "../utils/render-utils";
@@ -281,7 +280,16 @@ function mergeRangesInto(map: Map<string, LineRange[]>, absKey: string, ranges: 
 /** Keep router URL identity; normalize native path separators for local matches. */
 function matchPathKey(router: InternalUrlRouter, base: string, matchPath: string): string {
 	const resolved = resolveSearchResultPath(base, matchPath);
-	return router.canHandle(resolved) ? resolved : path.resolve(resolved);
+	return router.canHandle(resolved) || hasPosixParentSegment(resolved) ? resolved : path.resolve(resolved);
+}
+
+/** On POSIX a symlink followed by `..` can change which file the path names. */
+function hasPosixParentSegment(target: string): boolean {
+	return path.sep === "/" && path.isAbsolute(target) && /(?:^|\/)\.\.(?:\/|$)/.test(target);
+}
+
+function resolveGrepParentSegments(target: string): Promise<string> | string {
+	return hasPosixParentSegment(target) ? realpath(target).catch(() => target) : target;
 }
 
 /**
@@ -300,7 +308,6 @@ function matchPathKey(router: InternalUrlRouter, base: string, matchPath: string
 async function resolveArchiveSearchPaths(
 	pathSpecs: readonly GrepPathSpec[],
 	cwd: string,
-	assertTarget?: (target: string) => Promise<void>,
 ): Promise<{
 	resolvedPaths: string[];
 	displayMap: Map<string, string>;
@@ -325,7 +332,6 @@ async function resolveArchiveSearchPaths(
 		if (!member) continue;
 
 		const archiveAbs = resolveReadPath(member.archivePath, cwd);
-		await assertTarget?.(archiveAbs);
 		members.push({ idx, entry, archiveAbs, subPath: member.subPath });
 	}
 
@@ -691,17 +697,14 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			const scopedPaths = toPathList(rawPath);
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const resolveContext = sessionResolveContext(this.session, { signal });
-			const assertTarget = await createTeamSearchTargetCheck(this.session, resolveContext);
 			// Internal URLs resolve inside the native search, bounded by the tier this call was approved at.
 			const urlFilesystem = new InternalUrlFilesystem({
 				context: resolveContext,
 				tier: resolveToolTier(this, params),
-				assertReadBacking: assertTarget,
 			});
 			const expandedEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd, {
 				exclusionParts: true,
 				mixedLocalPaths: urlFilesystem,
-				assertTarget,
 			});
 			// `!glob` entries exclude; the rest are what to search (all of cwd when only exclusions were given).
 			// A file or folder whose name really starts with `!` is still searched.
@@ -737,7 +740,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				displaySet: archiveDisplaySet,
 				unreadable: archiveUnreadable,
 				cleanup: cleanupArchiveScratch,
-			} = await resolveArchiveSearchPaths(pathSpecs, this.session.cwd, assertTarget);
+			} = await resolveArchiveSearchPaths(pathSpecs, this.session.cwd);
 			try {
 				const rangesByAbsPath = new Map<string, LineRange[]>();
 
@@ -763,7 +766,6 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					cwd: this.session.cwd,
 					internalUrlAction: "search",
 					filesystem: urlFilesystem,
-					assertTarget,
 					resolveExternalUrl: materializeExternalUrlForSearch,
 					trackImmutableSources: true,
 					surfaceExactFilePaths: true,
@@ -790,8 +792,11 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						// Non-archive entry; ensure the cleaned path resolves to a regular file.
 						const absKey = router.canHandle(resolved)
 							? resolved
-							: path.resolve(resolveReadPath(resolved, this.session.cwd));
-						await assertTarget?.(absKey);
+							: matchPathKey(
+									router,
+									this.session.cwd,
+									await resolveGrepParentSegments(resolveReadPath(resolved, this.session.cwd)),
+								);
 						const stats = await urlFilesystem.stat(absKey).catch(() => null);
 						if (!stats) {
 							throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
@@ -892,17 +897,29 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 								},
 								undefined,
 							);
+							const resultBase = hasPosixParentSegment(target.basePath)
+								? await resolveGrepParentSegments(target.basePath)
+								: target.basePath;
 							skippedOversizedCount += targetResult.skippedOversized ?? 0;
 							for (const binaryPath of targetResult.binaryMatches ?? []) {
-								const absolute = resolveSearchResultPath(target.basePath, binaryPath);
-								binaryMatches.push(relativeSearchResultPath(searchPath, absolute));
+								const absolute =
+									binaryPath === target.basePath
+										? resultBase
+										: resolveSearchResultPath(resultBase, binaryPath);
+								binaryMatches.push(
+									hasPosixParentSegment(absolute) ? absolute : relativeSearchResultPath(searchPath, absolute),
+								);
 							}
 							limitReached = limitReached || Boolean(targetResult.limitReached);
 							totalCapReached ||= targetResult.matches.length >= nativeMaxCount;
 							totalMatches += targetResult.totalMatches;
 							filesSearched += targetResult.filesSearched;
 							for (const match of targetResult.matches) {
-								const absolute = matchPathKey(router, target.basePath, match.path);
+								const absolute = matchPathKey(
+									router,
+									resultBase,
+									match.path === target.basePath ? resultBase : match.path,
+								);
 								// Overlapping targets (a directory plus a file nested
 								// inside it) surface the same physical line twice;
 								// keep the first occurrence.
@@ -912,7 +929,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 									continue;
 								}
 								seenMatchKeys.add(matchKey);
-								matches.push({ ...match, path: relativeSearchResultPath(searchPath, absolute) });
+								matches.push({
+									...match,
+									path: hasPosixParentSegment(absolute)
+										? absolute
+										: relativeSearchResultPath(searchPath, absolute),
+								});
 							}
 						}
 						result = {
@@ -1037,9 +1059,13 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				// ranges to the renderer, which hides the continuation rows they exclude.
 				const rangesByMatch = new Map<GrepMatch, LineRange[]>();
 				if (rangesByAbsPath.size > 0) {
+					const singlePathKey =
+						!exactFilePaths && !multiTargets && hasPosixParentSegment(searchPath)
+							? await resolveGrepParentSegments(searchPath)
+							: undefined;
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
-						const ranges = rangesByAbsPath.get(matchPathKey(router, searchPath, match.path));
+						const ranges = rangesByAbsPath.get(singlePathKey ?? matchPathKey(router, searchPath, match.path));
 						if (!ranges) {
 							// Path has no line-range constraint (e.g. a peer entry without `:N-M`).
 							filteredMatches.push(match);
@@ -1074,9 +1100,9 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				}
 
 				const formatPath = (filePath: string): string =>
-					archiveDisplaySet.has(filePath)
+					archiveDisplaySet.has(filePath) || hasPosixParentSegment(filePath)
 						? filePath
-						: formatResultPath(filePath, isDirectory, searchPath, this.session.cwd);
+						: formatResultPath(filePath, isMultiScope, searchPath, this.session.cwd);
 
 				// Single-file scopes can't paginate — there is one file by definition.
 				const canPaginate = isMultiScope;
@@ -1192,9 +1218,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						? `Skipped ${skippedOversizedCount} unreadable large file(s); target them directly with \`read\``
 						: undefined;
 				// Binary files are skipped unless named; native lists only those whose content matches.
-				const binaryMatchPaths = binaryMatches.map(filePath =>
-					formatResultPath(filePath, true, searchPath, this.session.cwd),
-				);
+				const binaryMatchPaths = binaryMatches.map(formatPath);
 				const binaryMatchNote =
 					binaryMatchPaths.length > 0
 						? `Binary files also match (name one as \`path\` to search it as text): ${formatCappedFiles(binaryMatchPaths)}`

@@ -169,10 +169,59 @@ fn procargs2_strings(buffer: &[u8]) -> Option<(usize, impl Iterator<Item = &[u8]
 #[cfg(target_os = "linux")]
 pub mod sys {
 	use std::{
-		fs,
+		fs::{self, File},
+		io::{self, Read},
 		os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
-		str::{FromStr, SplitWhitespace},
+		str::{FromStr, SplitAsciiWhitespace},
+		sync::{Mutex, OnceLock},
 	};
+
+	// One emergency slot for procfs identity checks when another part of
+	// the application has filled the descriptor table.
+	static PROC_RESERVE: OnceLock<Mutex<Option<File>>> = OnceLock::new();
+
+	/// Arm the procfs reserve before process cleanup needs it.
+	pub fn reserve_proc_fd() {
+		PROC_RESERVE.get_or_init(|| Mutex::new(File::open("/proc").ok()));
+	}
+
+	/// True when opening an additional descriptor exhausted a file limit.
+	pub fn fd_limit(error: &io::Error) -> bool {
+		matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
+	}
+
+	/// Retry a self-contained procfs read when the descriptor table is full.
+	/// The operation must close its descriptors before returning.
+	pub fn with_proc_fd<T>(mut read: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+		let result = read();
+		if !result.as_ref().is_err_and(fd_limit) {
+			return result;
+		}
+		let Some(mut slot) = PROC_RESERVE.get().and_then(|reserve| reserve.lock().ok()) else {
+			return result;
+		};
+		drop(slot.take());
+		let result = read();
+		*slot = File::open("/proc").ok();
+		result
+	}
+
+	/// Read a Linux stat record without decoding its potentially non-UTF-8 comm.
+	pub fn read_proc_stat<T>(pid: i32, parse: impl Fn(&[u8]) -> T) -> io::Result<T> {
+		let path = format!("/proc/{pid}/stat");
+		with_proc_fd(|| {
+			let mut file = File::open(&path)?;
+			// A complete kernel record normally fits in a single read.
+			let mut buf = [0; 1024];
+			let n = file.read(&mut buf)?;
+			if n < buf.len() {
+				return Ok(parse(&buf[..n]));
+			}
+			let mut line = buf.to_vec();
+			file.read_to_end(&mut line)?;
+			Ok(parse(&line))
+		})
+	}
 
 	/// Every pid `/proc` lists.
 	pub fn pids() -> impl Iterator<Item = i32> {
@@ -196,31 +245,45 @@ pub mod sys {
 
 	/// Sends `signal` through `pidfd`, which can never reach a recycled pid.
 	pub fn pidfd_send_signal(pidfd: BorrowedFd<'_>, signal: i32) -> bool {
+		try_pidfd_send_signal(pidfd, signal).is_ok()
+	}
+
+	/// Like [`pidfd_send_signal`], preserving the OS error for cleanup fallback.
+	pub fn try_pidfd_send_signal(pidfd: BorrowedFd<'_>, signal: i32) -> io::Result<()> {
 		// SAFETY: pidfd is open for the call. A null siginfo makes the kernel
 		// fill in what kill(2) would, and zero flags is the default behavior.
-		unsafe {
+		let rc = unsafe {
 			libc::syscall(
 				libc::SYS_pidfd_send_signal,
 				pidfd.as_raw_fd(),
 				signal,
 				std::ptr::null::<libc::siginfo_t>(),
 				0,
-			) == 0
-		}
+			)
+		};
+		if rc == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+	}
+
+	/// The fd was opened but its signal transport may be unavailable.
+	pub fn pidfd_signal_unavailable(error: &io::Error) -> bool {
+		matches!(
+			error.raw_os_error(),
+			Some(libc::ENOSYS | libc::EPERM | libc::EACCES | libc::EOPNOTSUPP)
+		)
 	}
 
 	/// The fields of a `/proc/<pid>/stat` line from `state` (field 3) on. The
 	/// command name before them may itself contain spaces and parentheses, so
 	/// the split starts after the *last* `)`.
-	pub(crate) fn stat_fields(stat: &str) -> Option<SplitWhitespace<'_>> {
-		Some(stat[stat.rfind(')')? + 1..].split_whitespace())
+	pub(crate) fn stat_fields(stat: &[u8]) -> Option<SplitAsciiWhitespace<'_>> {
+		let suffix = &stat[stat.iter().rposition(|&b| b == b')')? + 1..];
+		Some(std::str::from_utf8(suffix).ok()?.split_ascii_whitespace())
 	}
 
 	fn stat_field<T: FromStr>(pid: i32, index: usize) -> Option<T> {
-		stat_fields(&fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)?
-			.nth(index)?
-			.parse()
+		read_proc_stat(pid, |stat| stat_fields(stat)?.nth(index)?.parse().ok())
 			.ok()
+			.flatten()
 	}
 
 	/// Start time in clock ticks since boot (`starttime`, field 22). Together
@@ -506,7 +569,7 @@ mod proc_snapshot {
 		};
 		entries
 			.flatten()
-			.filter_map(|entry| parse_stat(&fs::read_to_string(entry.path().join("stat")).ok()?))
+			.filter_map(|entry| parse_stat(&fs::read(entry.path().join("stat")).ok()?))
 			.map(|stat| {
 				let seconds = |value: u64| ticks.map(|ticks| Duration::from_secs_f64(value as f64 / ticks));
 				// A thread started within the current clock tick has no elapsed time
@@ -534,11 +597,13 @@ mod proc_snapshot {
 	}
 
 	fn read_stat(pid: i32) -> Option<Stat> {
-		parse_stat(&fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+		sys::read_proc_stat(pid, parse_stat).ok().flatten()
 	}
 
-	fn parse_stat(content: &str) -> Option<Stat> {
-		let comm = content[content.find('(')? + 1..content.rfind(')')?].to_string();
+	fn parse_stat(content: &[u8]) -> Option<Stat> {
+		let open = content.iter().position(|&b| b == b'(')?;
+		let close = content.iter().rposition(|&b| b == b')')?;
+		let comm = String::from_utf8_lossy(content.get(open + 1..close)?).into_owned();
 		let fields: Vec<&str> = sys::stat_fields(content)?.collect();
 		Some(Stat {
 			comm,

@@ -13,6 +13,7 @@ import workspacesDescription from "../prompts/tools/openwiki-list-workspaces.md"
 import wikisDescription from "../prompts/tools/openwiki-list-wikis.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { BUILTIN_TOOL_HELP, type OpenWikiQueryName } from "./builtin-names";
+import { resolveArtifactSpillThreshold } from "./output-meta";
 import { cfgOpenWikiToolsEnabled } from "./settings";
 import { ToolError } from "./tool-errors";
 
@@ -66,7 +67,7 @@ async function runQuery(session: ToolSession, query: Query, signal?: AbortSignal
 	const { resolveRepositoryRoot } = vendor;
 	const root = await resolveRepositoryRoot(path.resolve(session.cwd));
 	signal?.throwIfAborted();
-	if (query.kind === "search" || query.kind === "read") {
+	if (query.kind === "search" || (query.kind === "read" && !query.params.wiki)) {
 		const wiki = await stat(path.join(root, "openwiki")).catch((error: NodeJS.ErrnoException) => {
 			if (error.code !== "ENOENT") throw error;
 			return undefined;
@@ -101,9 +102,11 @@ async function runQuery(session: ToolSession, query: Query, signal?: AbortSignal
 		}
 	}
 	signal?.throwIfAborted();
+	const text = JSON.stringify(result);
+	const completePage = Buffer.byteLength(text) <= resolveArtifactSpillThreshold(session.settings);
 	return {
-		content: [{ type: "text" as const, text: JSON.stringify(result) }],
-		details: { meta: { completePage: true } },
+		content: [{ type: "text" as const, text }],
+		details: { meta: { completePage } },
 	};
 }
 

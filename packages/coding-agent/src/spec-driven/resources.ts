@@ -1,9 +1,10 @@
 import * as crypto from "node:crypto";
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { extractArchive } from "@oh-my-pi/pi-utils/ar";
-import { getDocumentConversionCacheDir } from "@oh-my-pi/pi-utils/dirs";
+import { getAgentExecutableCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { terminateOwnedSubprocess } from "@oh-my-pi/pi-utils/subprocess";
@@ -11,7 +12,7 @@ import { offlineFromEnv } from "../cli/args";
 import { DEFAULT_NPM_REGISTRY } from "../cli/npm-registry";
 import type { Skill } from "../extensibility/skills";
 import bundledArchive from "./resource-archive";
-import { specDrivenSourceFingerprint } from "./resource-fingerprint";
+import { specDrivenOpenSpecInputs, specDrivenSourceFingerprint } from "./resource-fingerprint";
 import { isPathInside, resolveSpecDrivenResourcePath } from "./resource-path";
 
 export { resolveSpecDrivenResourcePath };
@@ -103,12 +104,33 @@ export function ensureSpecDrivenResources(): Promise<SpecDrivenResources> {
 	return extraction;
 }
 
+async function hasExtractedFiles(
+	root: string,
+	files: SpecDrivenResourceManifest["files"],
+	prefix?: string,
+): Promise<boolean> {
+	for (const file of files) {
+		if (prefix !== undefined && !file.path.startsWith(prefix)) continue;
+		try {
+			const target = await resolveSpecDrivenResourcePath(root, file.path);
+			if (!(await fs.stat(target)).isFile()) return false;
+		} catch (error) {
+			if (isEnoent(error)) return false;
+			throw error;
+		}
+	}
+	return true;
+}
+
 async function extractResources(): Promise<SpecDrivenResources> {
 	const compiled = process.env.PI_COMPILED === "true" || process.env.PI_BUNDLED === "true";
+	const packageRoot = path.resolve(import.meta.dir, "../..");
 	// Source and SDK imports use the same archive as npm and binary builds.
 	let bytes: Uint8Array;
+	let expectedFingerprint: string | undefined;
 	if (compiled) {
 		if (!bundledArchive) throw new Error("Bundled resource archive asset is missing");
+		expectedFingerprint = bundledArchive.sourceFingerprint;
 		const assetPath =
 			path.isAbsolute(bundledArchive.path) || path.win32.isAbsolute(bundledArchive.path)
 				? bundledArchive.path
@@ -120,7 +142,6 @@ async function extractResources(): Promise<SpecDrivenResources> {
 			);
 		}
 	} else {
-		const packageRoot = path.resolve(import.meta.dir, "../..");
 		const archivePath = path.join(packageRoot, "dist/spec-driven-resources.tar.gz");
 		try {
 			bytes = await Bun.file(archivePath).bytes();
@@ -130,6 +151,12 @@ async function extractResources(): Promise<SpecDrivenResources> {
 				`OpenSpec runtime resources are not prepared (${archivePath}). From ${packageRoot}, run bun run gen:spec-driven-resources. Resources are never installed or built automatically at runtime.`,
 				{ cause: error },
 			);
+		}
+		if (
+			existsSync(path.resolve(packageRoot, "../../.git")) ||
+			existsSync(path.resolve(packageRoot, specDrivenOpenSpecInputs.directory, specDrivenOpenSpecInputs.packageManifest))
+		) {
+			expectedFingerprint = await specDrivenSourceFingerprint(packageRoot);
 		}
 	}
 	const archiveFiles = await new Bun.Archive(bytes).files().catch(error => {
@@ -147,8 +174,11 @@ async function extractResources(): Promise<SpecDrivenResources> {
 			"Unsupported spec-driven resource archive; run bun run gen:spec-driven-resources to prepare it again.",
 		);
 	}
-	const expectedFingerprint = compiled ? bundledArchive?.sourceFingerprint : await specDrivenSourceFingerprint();
-	if (!expectedFingerprint || manifest.sourceFingerprint !== expectedFingerprint) {
+	if (
+		typeof manifest.sourceFingerprint !== "string" ||
+		!/^[a-f0-9]{64}$/.test(manifest.sourceFingerprint) ||
+		(expectedFingerprint !== undefined && manifest.sourceFingerprint !== expectedFingerprint)
+	) {
 		throw new Error("Stale spec-driven resource archive; run bun run gen:spec-driven-resources to prepare it again.");
 	}
 	if (!Array.isArray(manifest.files) || !Array.isArray(manifest.skills)) {
@@ -187,14 +217,18 @@ async function extractResources(): Promise<SpecDrivenResources> {
 		}
 	}
 	const digest = crypto.createHash("md5").update(JSON.stringify(manifest)).digest("hex");
-	const cache = path.join(path.dirname(getDocumentConversionCacheDir()), "spec-driven");
+	const cache = path.join(getAgentExecutableCacheDir(), "spec-driven");
 	const root = path.join(cache, digest);
 	await fs.mkdir(cache, { recursive: true });
 	await withFileLock(
 		`${cache}.update`,
 		async () => {
 			const complete = path.join(root, ".omp-complete");
-			if ((await Bun.file(complete).exists()) && (await Bun.file(complete).text()) === digest) return;
+			const marker = await fs.readFile(complete, "utf8").catch(error => {
+				if (isEnoent(error)) return undefined;
+				throw error;
+			});
+			if (marker === digest && (await hasExtractedFiles(root, manifest.files))) return;
 			const temporary = await fs.mkdtemp(path.join(path.dirname(cache), ".spec-driven-"));
 			try {
 				await extractArchive({ bytes, format: "tar.gz" }, temporary);
@@ -219,11 +253,12 @@ async function extractResources(): Promise<SpecDrivenResources> {
 		},
 		{ retries: 600, retryDelayMs: 100 },
 	);
+	const canonicalRoot = await fs.realpath(root);
 	return {
-		root,
-		openspecRoot: path.join(root, "openspec"),
-		superpowersRoot: path.join(root, "superpowers"),
-		jchRoot: path.join(root, "jch"),
+		root: canonicalRoot,
+		openspecRoot: path.join(canonicalRoot, "openspec"),
+		superpowersRoot: path.join(canonicalRoot, "superpowers"),
+		jchRoot: path.join(canonicalRoot, "jch"),
 		manifest,
 	};
 }
@@ -319,7 +354,12 @@ export async function runOpenSpec(
 	signal?: AbortSignal,
 	io: SpecDrivenProcessIO = "capture",
 ): Promise<SpecDrivenProcessResult> {
-	const resources = await ensureSpecDrivenResources();
+	const previous = extraction;
+	let resources = await ensureSpecDrivenResources();
+	if (previous && !(await hasExtractedFiles(resources.root, resources.manifest.files, "openspec/"))) {
+		if (previous === extraction) extraction = undefined;
+		resources = await ensureSpecDrivenResources();
+	}
 	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "bin/openspec.js");
 	const extraEnv: Record<string, string> = { BUN_BE_BUN: "1", OMP_OPENSPEC_REGISTRY_ORIGIN: "" };
 	if (offlineFromEnv()) {

@@ -66,7 +66,6 @@ describe("compact tool parameter summaries", () => {
 			args: { metric: 12.5, status: "keep", description: "baseline" },
 			visible: ["keep", "baseline"],
 		},
-		{ name: "yield", args: { key: 1, data: { result: "PRIVATE_PAYLOAD" } }, visible: ["1"] },
 	])("projects $name operation and target", ({ name, args, visible }) => {
 		const summary = summarizeCompactTool(name, args);
 		const text = `${summary.detail} ${summary.command ?? ""}`;
@@ -181,7 +180,6 @@ describe("compact tool parameter summaries", () => {
 	// Tools with no public short target remain identity-only; their payloads are never summaries.
 	it.each([
 		{ name: "think", args: { thoughts: "PRIVATE_THOUGHTS" } },
-		{ name: "yield", args: { data: "PRIVATE_PAYLOAD", error: "PRIVATE_ERROR" } },
 		{ name: "retain", args: { items: [{ content: "PRIVATE_MEMORY" }] } },
 		{ name: "learn", args: { memory: "PRIVATE_MEMORY" } },
 		{ name: "update_notes", args: { body: "PRIVATE_NOTE" } },

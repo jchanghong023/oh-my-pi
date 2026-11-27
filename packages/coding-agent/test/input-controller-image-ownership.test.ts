@@ -190,9 +190,8 @@ describe("guarded image path paste ownership", () => {
 			});
 			const prompt = ctx.shell.overlays.show(() => jsx("col", {}));
 			const attachImage = vi.fn();
-			const setText = vi.fn();
 			const paste = spyOn(ctx.shell, "paste");
-			target.set({ node: prompt.node, attachImage, setText });
+			target.set({ node: prompt.node, attachImage, setText: () => {} });
 			expect(ctx.shell.focused()).toBe(prompt.node);
 			const gate = pausePromptDimensions();
 			let current = true;
@@ -210,7 +209,6 @@ describe("guarded image path paste ownership", () => {
 				await pending;
 				expectUntouched(ctx);
 				expect(attachImage).not.toHaveBeenCalled();
-				expect(setText).not.toHaveBeenCalled();
 				expect(paste).not.toHaveBeenCalled();
 			} finally {
 				gate.release();

@@ -8,10 +8,8 @@ import * as path from "node:path";
 export interface LocalProtocolOptions {
 	getArtifactsDir?: () => string | null;
 	getSessionId?: () => string | null;
-	/** False isolates peer agent/history URLs and filesystem read/search scopes. */
+	/** False isolates peer agent and history URLs. */
 	allowCrossAgentReads?: boolean;
-	/** Live protected artifact directories and exact files, such as the initiating session's transcript. */
-	getReadIsolationRoots?: () => readonly string[];
 }
 
 const WINDOWS_LOCAL_ROOT_MAX_CHARS = 180;

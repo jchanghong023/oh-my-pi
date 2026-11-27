@@ -458,10 +458,13 @@ class FormBuilder {
 
 	#control(control: Element, wrapping: FormSpan[] | undefined): void {
 		this.#flush(false);
+		const tag = control.localName;
+		const type = tag === "input" ? (control.getAttribute("type") ?? "text").toLowerCase() : tag;
+		const disabled = control.hasAttribute("disabled");
+		if (disabled && type !== "radio" && type !== "checkbox") return;
 		const label = wrapping && wrapping.length > 0 ? wrapping : this.#detachedLabel(control);
 		const name = control.getAttribute("name") ?? "";
 		const required = control.hasAttribute("required");
-		const tag = control.localName;
 		if (tag === "select") {
 			const multi = control.hasAttribute("multiple");
 			const optionElements = control.querySelectorAll("option");
@@ -471,7 +474,7 @@ class FormBuilder {
 					value: option.getAttribute("value") ?? text,
 					label: [{ text }],
 					checked: option.hasAttribute("selected"),
-					disabled: option.hasAttribute("disabled"),
+					disabled: option.hasAttribute("disabled") || option.closest("optgroup[disabled]") != null,
 				};
 			});
 			const firstOption = options[0];
@@ -511,7 +514,6 @@ class FormBuilder {
 			});
 			return;
 		}
-		const type = (control.getAttribute("type") ?? "text").toLowerCase();
 		if (IGNORED_INPUTS[type]) return;
 		const value = control.getAttribute("value");
 		if (type === "hidden") {
@@ -523,13 +525,13 @@ class FormBuilder {
 				value: value ?? "on",
 				label: label.length > 0 ? label : [{ text: value ?? name }],
 				checked: control.hasAttribute("checked"),
-				disabled: control.hasAttribute("disabled"),
+				disabled,
 			};
 			const key = `${type}\0${name}`;
 			const group = this.#groups.get(key);
 			if (group) {
 				group.field.options.push(option);
-				group.field.required ||= required;
+				group.field.required ||= required && !disabled;
 				if (group.section === this.#section && this.#section.blocks.at(-1) !== group.block) {
 					group.block.optionsEnd = this.#section.blocks.length;
 				}
@@ -543,7 +545,7 @@ class FormBuilder {
 				other: false,
 				label: [],
 				options: [option],
-				required,
+				required: required && !disabled,
 			};
 			this.#groups.set(key, { field, section: this.#section, block: this.#addField(field) });
 			return;

@@ -57,7 +57,7 @@ export interface OAuthSelectorSheet {
 export interface OAuthSelectorProps {
 	readonly mode: "login" | "logout";
 	readonly auth: OAuthSelectorAuthSource;
-	/** Login catalogue, or a logout catalogue already filtered to stored credentials. */
+	/** The catalogue (default: every registered OAuth provider). */
 	readonly providers?: readonly OAuthProviderInfo[];
 	/** Login entries to hide (by id or by the provider they store credentials under). */
 	readonly disabledProviders?: readonly string[];
@@ -105,9 +105,7 @@ export function OAuthSelector(props: OAuthSelectorProps): JSXNode {
 	const login = props.mode === "login";
 	const auth = props.auth;
 	const revision = (): number => props.authRevision?.() ?? 0;
-	const storedCatalogue = login ? undefined : props.providers;
-	const hasAuth = (id: string): boolean =>
-		login ? auth.keys.source(id) !== undefined : storedCatalogue !== undefined || auth.credentials.has(id);
+	const hasAuth = (id: string): boolean => (login ? auth.keys.source(id) !== undefined : auth.credentials.has(id));
 	const sourceLabel = (id: string): string | undefined => {
 		const origin = auth.keys.source(id);
 		if (!origin) return undefined;
@@ -116,7 +114,7 @@ export function OAuthSelector(props: OAuthSelectorProps): JSXNode {
 	const catalogue = props.providers ?? getOAuthProviders();
 	const providers = computed(() => {
 		revision();
-		if (!login) return storedCatalogue ?? catalogue.filter(provider => hasAuth(provider.id));
+		if (!login) return catalogue.filter(provider => hasAuth(provider.id));
 		const disabled = new Set(props.disabledProviders ?? []);
 		// An alias login (`openai-codex-device` ⇒ `openai-codex`) hides with the provider it authenticates.
 		return catalogue.filter(
@@ -201,9 +199,7 @@ export function OAuthSelector(props: OAuthSelectorProps): JSXNode {
 						: "muted";
 		const source = sourceLabel(provider.id);
 		const detail = !source
-			? storedCatalogue
-				? "Stored credentials"
-				: "Not configured"
+			? "Not configured"
 			: origin?.kind === "oauth"
 				? `Signed in · ${source}`
 				: `API key · ${source}`;

@@ -501,11 +501,8 @@ impl Filters {
 	/// `curr_dir`). Anchored per-directory rules and `/`-modifier rules match against it.
 	pub(crate) fn set_curr_dir(&mut self, dir: &[u8]) {
 		let mut d = dir.to_vec();
-		// The filter engine uses a single synthetic leading slash even for a
-		// Windows UNC path; local file opens restore its UNC prefix.
-		if cfg!(windows) && d.starts_with(b"//") {
-			d.remove(0);
-		}
+		// A UNC name needs both slashes: one anchors the rule and the other
+		// distinguishes the share path from a volume-root-relative name.
 		while d.len() > 1 && d.last() == Some(&b'/') {
 			d.pop();
 		}
@@ -1306,7 +1303,7 @@ impl Filters {
 		if !self.parent_dirscan && name.first() != Some(&b'/') && !name.contains(&b'/') {
 			return Some(name.to_vec());
 		}
-		let cleaned = paths::clean_fname(name, true);
+		let cleaned = clean_filter_name(name);
 		if cleaned.first() == Some(&b'/') {
 			return Some(cleaned);
 		}
@@ -1316,7 +1313,7 @@ impl Filters {
 			self.error_msg(&[&b"merge-file name overflows: "[..], &shown, b"\n"].concat());
 			return None;
 		}
-		Some(paths::clean_fname(&[dir, &cleaned].concat(), true))
+		Some(clean_filter_name(&[dir, &cleaned].concat()))
 	}
 
 	/// Reads a rule file (merge file, `--*-from` file, per-directory file).
@@ -1473,6 +1470,9 @@ impl Filters {
 
 	fn relative_to_curr<'p>(&self, path: &'p [u8]) -> Option<&'p [u8]> {
 		if self.curr_dir == b"/" {
+			if cfg!(windows) && path.starts_with(b"//") {
+				return None;
+			}
 			return path.strip_prefix(b"/");
 		}
 		path.strip_prefix(self.curr_dir.as_slice())?.strip_prefix(b"/")
@@ -1511,13 +1511,15 @@ impl Filters {
 			dir.to_vec()
 		} else {
 			let mut buf = self.curr_dir.clone();
-			buf.push(b'/');
+			if !buf.ends_with(b"/") {
+				buf.push(b'/');
+			}
 			if buf.len() + dir.len() < MAXPATHLEN {
 				buf.extend_from_slice(dir);
 			}
 			buf
 		};
-		let mut d = paths::clean_fname(&joined, true);
+		let mut d = clean_filter_name(&joined);
 		if d.len() > 1 && d.ends_with(b"/.") {
 			d.truncate(d.len() - 2);
 		}
@@ -1635,13 +1637,17 @@ impl Filters {
 			slot.pattern = name.clone();
 		}
 		let dir_part: &[u8] = if cut == 0 { b"/" } else { &full[..cut] };
-		let mut parent = paths::clean_fname(dir_part, true);
+		let mut parent = clean_filter_name(dir_part);
 		if parent.len() != 1 && parent.len() < MAXPATHLEN - 1 {
 			parent.push(b'/');
 		}
 		let dirbuf = self.dirbuf.clone();
 		let common = parent.iter().zip(dirbuf.iter()).take_while(|(a, b)| a == b).count();
 		let mut y = if common < parent.len() { dirbuf.len() } else { common };
+		if dirbuf.starts_with(b"//") && let Some(root) = paths::volume_root_len(&dirbuf) {
+			// There are no merge-file directories above a UNC share's root.
+			y = y.max(root);
+		}
 		self.parent_dirscan = true;
 		let mut result = Ok(());
 		while y < dirbuf.len() {
@@ -1889,6 +1895,11 @@ fn rule_prefix(rflags: u32, pat: &[u8], xfer: Option<XferCtx>) -> Option<Vec<u8>
 		op.push(b' ');
 	}
 	Some(op)
+}
+
+/// Clean filter paths without collapsing the two slashes of a Windows UNC prefix.
+fn clean_filter_name(name: &[u8]) -> Vec<u8> {
+	paths::clean_local_fname_flags(name, paths::CFN_COLLAPSE_DOT_DOT_DIRS).unwrap_or_else(|p| p)
 }
 
 /// The filesystem spelling of an absolute filter name. [`Filters::set_curr_dir`]

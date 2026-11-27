@@ -207,6 +207,13 @@ export function formatModelStringWithRouting(model: Model<Api>): string {
 	return upstream ? `${selector}@${upstream}` : selector;
 }
 
+const PINNED_PICKER_PREFIX = "pin:";
+
+/** A non-persistent picker identity, distinct from an identical-looking literal model ID. */
+export function formatPinnedPickerSelector(model: Pick<Model, "provider" | "id">, upstream: string): string {
+	return PINNED_PICKER_PREFIX + encodeURIComponent(JSON.stringify([model.provider, model.id, upstream]));
+}
+
 /** Restore a canonical model identity without interpreting any part of its id as a thinking selector. */
 export function resolveExactModelIdentity(
 	identity: string,
@@ -1398,7 +1405,7 @@ function resolveNestedRolePatterns(
 	value: string | string[],
 	roleDefaults: ResolvedRolePattern[],
 	settings: RoleLookup | undefined,
-	visited: Set<string>,
+	visited: Map<string, RoleLookup | undefined>,
 	automatic = false,
 ): ResolvedRolePattern[] {
 	const resolved: ResolvedRolePattern[] = [];
@@ -1414,13 +1421,18 @@ function resolveNestedRolePatterns(
 			continue;
 		}
 		if (visited.has(aliasRole)) {
+			// Do not re-enter aliases already traversed in the child, or insert
+			// automatic priorities ahead of the owner's remaining selectors.
+			if (visited.get(aliasRole) !== settings) continue;
 			// A stamped subagent advisor may point through a custom alias back to
 			// the advisor it replaced. Expand that reference in the owner's view,
 			// retaining both its configured candidates and automatic provenance.
-			if (aliasRole === "advisor" && visited.size > 1 && visited.values().next().value === "advisor") {
+			if (aliasRole === "advisor" && visited.size > 1 && visited.keys().next().value === "advisor") {
 				const owner = settings?.overlayParent?.();
 				if (owner && owner.getModelRole("advisor") !== settings?.getModelRole("advisor")) {
-					const inherited = resolveConfiguredRolePattern(pattern, owner);
+					const ownerVisited = new Map(visited);
+					ownerVisited.delete(aliasRole);
+					const inherited = resolveConfiguredRolePattern(pattern, owner, ownerVisited);
 					if (inherited) resolved.push(...inherited);
 					continue;
 				}
@@ -1434,7 +1446,7 @@ function resolveNestedRolePatterns(
 			continue;
 		}
 
-		const recursed = resolveConfiguredRolePattern(pattern, settings, new Set(visited));
+		const recursed = resolveConfiguredRolePattern(pattern, settings, new Map(visited));
 		if (recursed) resolved.push(...recursed);
 	}
 	return resolved;
@@ -1445,7 +1457,7 @@ function resolveDefaultInheritedPatterns(
 	configuredDefault: string | undefined,
 	roleDefaults: ResolvedRolePattern[],
 	settings: RoleLookup | undefined,
-	visited: Set<string>,
+	visited: Map<string, RoleLookup | undefined>,
 ): ResolvedRolePattern[] {
 	if (!shouldInheritDefaultBeforePriority(role) || !configuredDefault) return [];
 	return resolveNestedRolePatterns(configuredDefault, roleDefaults, settings, visited);
@@ -1454,7 +1466,7 @@ function resolveDefaultInheritedPatterns(
 function resolveConfiguredRolePattern(
 	value: string,
 	settings?: RoleLookup,
-	visited: Set<string> = new Set(),
+	visited: Map<string, RoleLookup | undefined> = new Map(),
 	automatic = false,
 ): ResolvedRolePattern[] | undefined {
 	const normalized = value.trim();
@@ -1468,7 +1480,7 @@ function resolveConfiguredRolePattern(
 	const role = getModelRoleAlias(aliasCandidate, settings);
 	if (!role) return [{ pattern: normalized, automatic }];
 	if (visited.has(role)) return undefined;
-	visited.add(role);
+	visited.set(role, settings);
 
 	const configured = settings?.getModelRole(role)?.trim();
 	const configuredDefault = settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim();
@@ -1483,7 +1495,7 @@ function resolveConfiguredRolePattern(
 		!configuredFallback ||
 		(configuredFallback.configuredOnly && !settings?.getModelRole(configuredFallback.role)?.trim())
 			? undefined
-			: resolveConfiguredRolePattern(formatModelRoleAlias(configuredFallback.role), settings, new Set(visited));
+			: resolveConfiguredRolePattern(formatModelRoleAlias(configuredFallback.role), settings, new Map(visited));
 	const resolved = configured
 		? resolveNestedRolePatterns(configured, roleDefaults, settings, visited)
 		: fallbackPatterns
@@ -1705,7 +1717,15 @@ export function resolveAgentAdvisorRolePattern(pattern: string, settings?: Model
 			settings?.getModelRole("advisor")?.trim() ||
 			(fallback && settings?.getModelRole(fallback.role)?.trim() ? formatModelRoleAlias(fallback.role) : undefined);
 		if (!configured) return resolved;
-		return normalizeModelPatternList(configured).map(value => (level ? `${value}:${level}` : value));
+		return normalizeModelPatternList(configured).map(value => {
+			if (!level) return value;
+			const aliasPrefixLength = modelRoleAliasPrefixLength(value);
+			const base =
+				aliasPrefixLength === undefined
+					? value
+					: splitThinkingSuffix(value, aliasPrefixLength, MAX_THINKING_SUFFIX_OPTIONS).base;
+			return `${base}:${level}`;
+		});
 	});
 	return expanded.length > 0 ? expanded.join(",") : pattern;
 }
@@ -1788,6 +1808,28 @@ export function resolveModelRoleValue(
 		automatic?: boolean;
 	},
 ): ResolvedModelRoleValue {
+	// A session picker can select a route whose display spelling also names a
+	// literal catalog ID. Its internal row key carries the components separately.
+	if (roleValue?.startsWith(`${PINNED_PICKER_PREFIX}%5B`)) {
+		const unresolved = { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning: undefined };
+		try {
+			const parts: unknown = JSON.parse(decodeURIComponent(roleValue.slice(PINNED_PICKER_PREFIX.length)));
+			if (!Array.isArray(parts) || parts.length !== 3 || !parts.every(value => typeof value === "string"))
+				return unresolved;
+			const [provider, id, upstream] = parts as [string, string, string];
+			if (!upstream) return unresolved;
+			let base: Model<Api> | undefined;
+			for (const model of availableModels) {
+				if (model.provider !== provider || model.id !== id || !supportsUpstreamRouting(model)) continue;
+				if (!base || routeRank(model, upstream) > routeRank(base, upstream)) base = model;
+			}
+			if (base && (!isAllowList(availableModels) || routeRank(base, upstream) > 0))
+				return { ...unresolved, model: applyUpstreamRouting(base, upstream) };
+		} catch {
+			// An incomplete or invalid encoded selection does not match a catalog row.
+		}
+		return unresolved;
+	}
 	const { roleLookup, settings } = options ?? {};
 	const lookup: RoleLookup | undefined =
 		roleLookup && settings

@@ -347,25 +347,22 @@ describe("P2-21 Python Eval runtime scope", () => {
 		},
 	);
 
-	test.each(["missing", "incompatible"] as const)(
-		"does not fall back from a %s explicit interpreter to working offline candidates",
-		async failure => {
-			const explicitPython = path.join(cwd, "explicit-python");
-			const probe = vi.spyOn(runtimeProbe, "probeCandidates").mockResolvedValue({
-				ok: false,
-				aborted: false,
-				failures: [`${explicitPython} (${failure === "missing" ? "ENOENT" : "exit code 1"})`],
-			});
+	test("does not fall back from a missing explicit interpreter to working offline candidates", async () => {
+		const explicitPython = path.join(cwd, "explicit-python");
+		const probe = vi.spyOn(runtimeProbe, "probeCandidates").mockResolvedValue({
+			ok: false,
+			aborted: false,
+			failures: [`${explicitPython} (ENOENT)`],
+		});
 
-			const result = await checkPythonKernelAvailability(cwd, explicitPython, { forceProbe: true });
+		const result = await checkPythonKernelAvailability(cwd, explicitPython, { forceProbe: true });
 
-			expect(result).toMatchObject({ ok: false, pythonPath: explicitPython });
-			expect(probe).toHaveBeenCalledTimes(1);
-			const candidates = probe.mock.calls[0][0];
-			expect(candidates.map(candidate => candidate.command[0])).toEqual([explicitPython]);
-			expect(candidates[0].env).toEqual(env);
-		},
-	);
+		expect(result).toMatchObject({ ok: false, pythonPath: explicitPython });
+		expect(probe).toHaveBeenCalledTimes(1);
+		const candidates = probe.mock.calls[0][0];
+		expect(candidates.map(candidate => candidate.command[0])).toEqual([explicitPython]);
+		expect(candidates[0].env).toEqual(env);
+	});
 
 	test.skipIf(!hostPython).each(["available", "too-old"] as const)(
 		"probes past business Python 3.6 and requires offline Python 3.11+: %s",

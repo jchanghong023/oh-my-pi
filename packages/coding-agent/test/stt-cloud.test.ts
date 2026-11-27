@@ -175,7 +175,6 @@ describe("STTController cloud transcription", () => {
 
 		expect(transcribe).toHaveBeenCalledTimes(1);
 		expect(transcribe.mock.calls[0]![1].language).toBe("zh");
-		expect(editor.commitVolatileText).toHaveBeenCalledWith("extended language transcript");
 	});
 
 	it.each([

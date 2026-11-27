@@ -47,6 +47,7 @@ import {
 	lastWrapWidth,
 	layoutText,
 	rowOf,
+	terminalCompletionRows,
 } from "@oh-my-pi/pi-tui/term/painters/editor";
 import { lineStart, nextBoundary } from "@oh-my-pi/pi-tui/term/widgets/editor";
 import { flattenLine, stripControl } from "@oh-my-pi/pi-tui/text/sanitize";
@@ -497,7 +498,7 @@ export class Composer {
 		return this.#cursor;
 	}
 
-	/** Changes when the draft is discarded, sent or replaced through history, not while it is edited. */
+	/** Changes when the draft is discarded, sent or replaced, not while it is edited. */
 	get draftGeneration(): number {
 		return this.#draftGeneration;
 	}
@@ -512,8 +513,14 @@ export class Composer {
 		return this.#completion() !== null;
 	}
 
+	/** Whether completion currently takes up space and can receive selection keys. */
+	completionVisible(): boolean {
+		return this.completing() && hasTerminalCompletionRoom(this.field);
+	}
+
 	/** Replace the draft (caret at its end; a new undo step). */
 	setText(text: string): void {
+		if (text !== this.#text()) this.#draftGeneration++;
 		this.#recalledState = false;
 		this.#vimBrowse = null;
 		this.#vimEdits.clear();
@@ -1592,20 +1599,21 @@ export class Composer {
 		const tab = bindings.matches(key, "tui.input.tab");
 		const right = bindings.matches(key, "tui.editor.cursorRight");
 		const open = this.#completion();
-		if (open && bindings.matches(key, "tui.select.cancel")) {
+		const completionRows = open ? terminalCompletionRows(this.field) : 0;
+		if (open && completionRows > 0 && bindings.matches(key, "tui.select.cancel")) {
 			this.#closeCompletion();
 			return true;
 		}
 		// A short terminal only hides the popup; edits and caret moves invalidate it as usual.
-		if (open && hasTerminalCompletionRoom(this.field)) {
+		if (open && completionRows > 0) {
 			const count = open.items.length;
 			let selected: number;
 			if (bindings.matches(key, "tui.select.up")) selected = (open.selected + count - 1) % count;
 			else if (bindings.matches(key, "tui.select.down")) selected = (open.selected + 1) % count;
 			else if (bindings.matches(key, "tui.select.pageUp"))
-				selected = Math.max(0, open.selected - this.#autocompleteMaxVisible());
+				selected = Math.max(0, open.selected - Math.min(completionRows, this.#autocompleteMaxVisible()));
 			else if (bindings.matches(key, "tui.select.pageDown"))
-				selected = Math.min(count - 1, open.selected + this.#autocompleteMaxVisible());
+				selected = Math.min(count - 1, open.selected + Math.min(completionRows, this.#autocompleteMaxVisible()));
 			else {
 				if (submit || key.raw === "\n") {
 					this.#accept(open, "enter");

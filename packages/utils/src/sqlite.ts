@@ -610,7 +610,7 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 	let after = Number.MIN_SAFE_INTEGER;
 	let afterIsReadable = false;
 	let damaged = 0;
-	let inPayloadDamage = false;
+	let inDamage = false;
 	let rowidSeek: Statement<{ salvage_rowid: number }, [number]> | undefined;
 	while (after < Number.MAX_SAFE_INTEGER) {
 		const row = probe(seek, after);
@@ -619,16 +619,14 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 			keep(row);
 			after = row.salvage_rowid;
 			afterIsReadable = true;
-			inPayloadDamage = false;
+			inDamage = false;
 			continue;
 		}
 		rowidSeek ??= db.query<{ salvage_rowid: number }, [number]>(`SELECT rowid AS salvage_rowid ${seekClause}`);
 		const unreadable = probe(rowidSeek, after);
-		// Adjacent unreadable payloads are one damaged region. Keep checking each
-		// rowid so a readable island still ends it, and bound damaged page skips
-		// separately when the rowid itself cannot be read.
-		if ((!unreadable || !inPayloadDamage) && ++damaged > SALVAGE_MAX_DAMAGED_REGIONS) break;
-		inPayloadDamage = Boolean(unreadable);
+		// A readable row, not a page boundary, separates damaged regions.
+		if (!inDamage && ++damaged > SALVAGE_MAX_DAMAGED_REGIONS) break;
+		inDamage = true;
 		if (unreadable) {
 			after = unreadable.salvage_rowid;
 			afterIsReadable = false;
@@ -640,6 +638,7 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 		if (afterIsReadable && nextBoundary === after + 1) {
 			nextBoundary = readSalvageBoundary(db, table, nextBoundary);
 		}
+		if (nextBoundary !== undefined && nextBoundary <= after) nextBoundary = undefined;
 		let clear = nextBoundary ?? Number.MAX_SAFE_INTEGER;
 		if (nextBoundary === undefined) {
 			// End-of-table counts as clear: readable rows may still lie below it.
@@ -657,7 +656,10 @@ export function readSalvageableRows<T extends object>(db: Database, table: strin
 		}
 		// A strict-greater-than seek from clear would otherwise skip clear itself.
 		const boundary = probe(exact, after, clear);
-		if (boundary) keep(boundary);
+		if (boundary) {
+			keep(boundary);
+			inDamage = false;
+		}
 		afterIsReadable = Boolean(boundary);
 		after = clear;
 	}

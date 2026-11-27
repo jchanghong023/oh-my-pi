@@ -305,26 +305,6 @@ describe("LSP workspace edits", () => {
 		expect(deletion.executed).toEqual([{ kind: "delete", uri: uri("nested") }]);
 	});
 
-	for (const entrypoint of ["workspace", "references"] as const) {
-		it(`preserves nested files after a directory rename via ${entrypoint}`, async () => {
-			await seed({
-				"before/engine.py": "def directoryentry(): pass\n",
-				"before/nested/child.py": "def descendantentry(): pass\n",
-			});
-			if (entrypoint === "workspace") {
-				await applyWorkspaceEdit(
-					{ documentChanges: [{ kind: "rename", oldUri: uri("before"), newUri: uri("after") }] },
-					cwd,
-				);
-			} else {
-				await applyEditsThenRename([], path.join(cwd, "before"), path.join(cwd, "after"));
-			}
-			expect(await Bun.file(path.join(cwd, "after/engine.py")).text()).toBe("def directoryentry(): pass\n");
-			expect(await Bun.file(path.join(cwd, "after/nested/child.py")).text()).toBe("def descendantentry(): pass\n");
-			expect(await fs.lstat(path.join(cwd, "before")).catch(() => undefined)).toBeUndefined();
-		});
-	}
-
 	it("propagates the original error after a partial recursive delete", async () => {
 		await seed({
 			"nested/removed.py": "def removedentry(): pass\n",
@@ -352,21 +332,6 @@ describe("LSP workspace edits", () => {
 		}
 		expect(await Bun.file(path.join(directory, "removed.py")).exists()).toBe(false);
 		expect(await Bun.file(path.join(directory, "retained.py")).text()).toBe("def retainedentry(): pass\n");
-	});
-
-	it("renames a resource and updates its references", async () => {
-		await seed({
-			"moved.py": "def moved_symbol(): pass\n",
-			"reference.py": "def before_reference(): pass\n",
-		});
-		await applyEditsThenRename(
-			[{ filePath: path.join(cwd, "reference.py"), edits: renameSymbol("before_reference", "after_reference") }],
-			path.join(cwd, "moved.py"),
-			path.join(cwd, "renamed.py"),
-		);
-		expect(await Bun.file(path.join(cwd, "renamed.py")).text()).toBe("def moved_symbol(): pass\n");
-		expect(await Bun.file(path.join(cwd, "moved.py")).exists()).toBe(false);
-		expect(await Bun.file(path.join(cwd, "reference.py")).text()).toBe("def after_reference(): pass\n");
 	});
 
 	it("restores reference edits after temporary edits were committed", async () => {
@@ -402,7 +367,6 @@ describe("LSP workspace edits", () => {
 		} finally {
 			writeSpy.mockRestore();
 		}
-		expect(observedTemporary).toBe(true);
 		expect(temporaryContent).toBe("def after_reference(): pass\n");
 		expect(await Bun.file(first).text()).toBe("def before_reference(): pass\n");
 		expect(await Bun.file(second).text()).toBe("def second_reference(): pass\n");

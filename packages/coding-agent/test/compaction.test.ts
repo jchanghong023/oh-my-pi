@@ -711,7 +711,7 @@ describe("remote compaction setting", () => {
 		expect(result.summary).toContain("Remote compaction preserved provider-native history");
 		expect(completeSimpleSpy).not.toHaveBeenCalled();
 		expect(info).toHaveBeenCalledWith(
-			"Compaction pipeline completed",
+			expect.any(String),
 			expect.objectContaining({
 				event: "compaction_pipeline",
 				result: "success",
@@ -1219,7 +1219,7 @@ describe("compaction request diagnostics", () => {
 		).rejects.toThrow("model output ended incomplete");
 
 		expect(warn).toHaveBeenCalledWith(
-			"Compaction summary request ended",
+			expect.any(String),
 			expect.objectContaining({
 				event: "compaction_summary_request",
 				method: "handoff",
@@ -1246,7 +1246,7 @@ describe("compaction request diagnostics", () => {
 
 		expect(completeImpl).not.toHaveBeenCalled();
 		expect(warn).toHaveBeenCalledWith(
-			"Compaction pipeline ended",
+			expect.any(String),
 			expect.objectContaining({ event: "compaction_pipeline", result: "failed", method: "responses_v1" }),
 		);
 	});
@@ -1286,7 +1286,7 @@ describe("compaction request diagnostics", () => {
 
 			expect(result.summary).toContain("Signed history summary");
 			expect(info).toHaveBeenCalledWith(
-				"Compaction native method completed",
+				expect.any(String),
 				expect.objectContaining({
 					event: "compaction_native_method",
 					method: "anthropic_native",

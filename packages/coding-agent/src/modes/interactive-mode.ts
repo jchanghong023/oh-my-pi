@@ -286,7 +286,6 @@ import type {
 	RenderInitialMessagesOptions,
 	RenderSessionContextOptions,
 	ResumeSessionOptions,
-	SelectOnlyModelSelectorOptions,
 	ShowStatusOptions,
 	SubmittedUserInput,
 	YieldCompaction,
@@ -734,6 +733,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	set toolOutputExpanded(expanded: boolean) {
 		this.#display.toolOutputExpanded.set(expanded);
+	}
+	get compactTodoExpanded(): boolean {
+		return this.#compactTodoExpanded;
 	}
 	get hideToolActivity(): boolean {
 		return this.#display.hideToolActivity();
@@ -3093,6 +3095,22 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopPrompt = prompt;
 		this.loopModePaused = false;
 		this.#syncLoopModeStatus();
+	}
+
+	/** Let an async dispatch stop only the loop that commissioned it. */
+	captureLoopPause(text: string): (() => void) | undefined {
+		if (!this.loopNActive || this.loopPrompt !== text) return undefined;
+		const generation = this.#loopPromptGeneration;
+		const sessionId = this.sessionManager.getSessionId();
+		return () => {
+			if (
+				generation === this.#loopPromptGeneration &&
+				sessionId === this.sessionManager.getSessionId() &&
+				this.loopPrompt === text
+			) {
+				this.pauseLoop();
+			}
+		};
 	}
 
 	/**
@@ -8049,10 +8067,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#working.applyPending();
 	}
 
-	showNewVersionNotification(newVersion: string): void {
-		this.#uiHelpers.showNewVersionNotification(newVersion);
-	}
-
 	/**
 	 * Add this launch's release notes below the welcome header. Startup calls it
 	 * after the first session-bound frame; quiet startup and hidden mode show nothing.
@@ -8627,7 +8641,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.#selectorController.showGitTui(revision);
 	}
 
-	showModelSelector(options?: { temporaryOnly?: boolean; selectOnly?: SelectOnlyModelSelectorOptions }): void {
+	showModelSelector(options?: { temporaryOnly?: boolean }): void {
 		this.#selectorController.showModelSelector(options);
 	}
 

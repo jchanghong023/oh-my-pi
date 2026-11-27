@@ -270,7 +270,7 @@ export type WorkerOutbound =
 	| ({ type: "result"; id: string } & RunOutcome)
 	| { type: "tool-call"; id: string; runId: string; name: string; args: unknown }
 	| { type: "log"; level: "debug" | "warn" | "error"; msg: string; meta?: Record<string, unknown> }
-	| { type: "closed" };
+	| { type: "closed"; pageClosed?: boolean };
 
 export interface Transport {
 	send(msg: WorkerOutbound | WorkerInbound, transferList?: Transferable[]): void;

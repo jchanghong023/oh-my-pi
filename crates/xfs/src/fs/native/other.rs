@@ -13,7 +13,7 @@ use super::{
 	is_dot_or_dot_dot,
 	unix::{Scratch, nanos, openat_plain, type_of_mode},
 };
-use crate::fs::{Detail, FileInfo, FileType, Listing, Stamp};
+use crate::fs::{Detail, FileInfo, FileType, IncompleteListing, Listing, Stamp};
 
 pub(super) const WORKERS: usize = 4;
 
@@ -28,6 +28,7 @@ pub(super) fn list(
 	dir: RawFd,
 	detail: Detail,
 	_children: u32,
+	strict: bool,
 	out: &mut Listing,
 ) -> io::Result<()> {
 	// SAFETY: duplicating a descriptor this call borrows.
@@ -47,6 +48,7 @@ pub(super) fn list(
 	// SAFETY: `stream` is a valid directory stream; the duplicate shares the
 	// original's offset, so rewind before reading.
 	unsafe { libc::rewinddir(stream) };
+	let mut incomplete = None;
 	loop {
 		// SAFETY: `stream` is a valid directory stream.
 		let entry = unsafe { libc::readdir(stream) };
@@ -59,8 +61,14 @@ pub(super) fn list(
 		if name.is_empty() || is_dot_or_dot_dot(name) {
 			continue;
 		}
-		let Ok(st) = fstatat(dir, cname.as_ptr(), libc::AT_SYMLINK_NOFOLLOW) else {
-			continue;
+		let st = match fstatat(dir, cname.as_ptr(), libc::AT_SYMLINK_NOFOLLOW) {
+			Ok(st) => st,
+			Err(error) => {
+				if strict && error.kind() != io::ErrorKind::NotFound {
+					incomplete.get_or_insert(error);
+				}
+				continue;
+			},
 		};
 		let Some(file_type) = type_of_mode(st.st_mode) else {
 			continue;
@@ -76,7 +84,10 @@ pub(super) fn list(
 	}
 	// SAFETY: `stream` is valid and closed exactly once (closing `dup`).
 	unsafe { libc::closedir(stream) };
-	Ok(())
+	match incomplete {
+		Some(error) => Err(io::Error::new(error.kind(), IncompleteListing(error))),
+		None => Ok(()),
+	}
 }
 
 fn fstatat(dir: RawFd, path: *const c_char, flags: c_int) -> io::Result<libc::stat> {

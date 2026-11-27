@@ -353,8 +353,8 @@ pub struct OwnedPatchPathResult {
 	pub path:           String,
 	/// `applied`, `unchanged`, or `failed`.
 	pub status:         String,
-	/// Actual raw byte digest, or absent.
-	pub actual_version: Option<String>,
+	/// `Some(Some(digest))` when present, `Some(None)` when absent, `None` if unreadable.
+	pub actual_version: Option<Option<String>>,
 }
 
 /// Guarded patches deliberately report partial work rather than atomicity.

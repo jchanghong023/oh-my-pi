@@ -11,6 +11,8 @@ const windowsName = "omp-windows-x64.exe";
 const linuxName = "omp-linux-x64";
 const windowsSdkName = "omp-sdk-win32-x64.zip";
 const linuxSdkName = "omp-sdk-linux-x64.zip";
+const versionPattern =
+	/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 async function safeGit(wsl: string, linux: boolean, args: string[]): Promise<string> {
 	const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
@@ -98,7 +100,7 @@ function options(): { repo?: string; tag?: string } {
 		const arg = args[i];
 		if (arg === "--help") {
 			console.log(
-				"Usage: bun run cnb [--repo owner/repository] [--tag tag]\nDefaults to CNB repository jchanghong/bin and existing release tag omp. Requires clean tracking branches on Windows and Ubuntu-24.04 WSL (/root/oh-my-pi), initialized vendor/openwiki submodules, Linux zip, and official @cnbcool/cnb-cli login. Both worktrees are fast-forward pulled and must have the same commit. Builds and uploads both binaries and both SDK ZIPs without tests; matching attachments are always overwritten.",
+				"Usage: bun run cnb [--repo owner/repository] [--tag tag]\nDefaults to CNB repository jchanghong/bin and existing release tag omp. Requires clean tracking branches on Windows and Ubuntu-24.04 WSL (/root/oh-my-pi), initialized vendor/openwiki submodules, Linux zip, and official @cnbcool/cnb-cli login. Both worktrees are fast-forward pulled and must have the same commit. Both binaries embed the CNB target and RELEASE_VERSION (defaults to packages/utils/package.json). Builds without tests, overwrites both binaries and both SDK ZIPs, then updates the release title.",
 			);
 			process.exit(0);
 		}
@@ -168,15 +170,26 @@ async function cnb(args: string[]): Promise<unknown> {
 	}
 }
 
-type Release = { id: string; tag_name?: string };
+type Release = { id: string; name: string; tag_name?: string };
 async function getRelease(repo: string, tag: string): Promise<Release> {
 	const value = await cnb(["releases", "get-release-by-tag", "--repo", repo, "--tag", tag, "--verbose"]);
 	if (!value || typeof value !== "object")
 		throw new Error("CNB release not found or response invalid; create the release separately first.");
 	const release = value as Release;
-	if (typeof release.id !== "string" || !release.id || (release.tag_name && release.tag_name !== tag))
-		throw new Error("CNB release response lacks a valid ID or tag; refusing to publish.");
+	if (
+		typeof release.id !== "string" ||
+		!release.id ||
+		typeof release.name !== "string" ||
+		(release.tag_name && release.tag_name !== tag)
+	)
+		throw new Error("CNB release response lacks a valid ID, title or tag; refusing to publish.");
 	return release;
+}
+
+function releaseTitle(name: string, tag: string, version: string): string {
+	const label = `v${version}`;
+	if (!name || name === tag || versionPattern.test(name.replace(/^v/, ""))) return label;
+	return `${name.replace(/ \[omp:v[0-9A-Za-z.+-]+\]$/, "")} [omp:${label}]`;
 }
 
 async function upload(repo: string, release: Release, file: string, name: string, size: number): Promise<void> {
@@ -272,13 +285,19 @@ async function main(): Promise<void> {
 	let temp: string | undefined;
 	try {
 		const commit = await timed("Git synchronization", () => pullBoth(wsl));
+		// Read the compiler's fallback from disk after pulling the pinned source on both hosts.
+		const rawVersion: unknown =
+			process.env.RELEASE_VERSION || (await Bun.file(path.join(root, "packages/utils/package.json")).json()).version;
+		const releaseVersion = typeof rawVersion === "string" ? rawVersion.replace(/^v/, "") : "";
+		if (!versionPattern.test(releaseVersion)) throw new Error("CNB release version must be a semantic version.");
+		const tagVersion = tag.replace(/^v/, "");
+		if (versionPattern.test(tagVersion) && tagVersion !== releaseVersion)
+			throw new Error(`Versioned CNB tag ${tag} does not match binary version v${releaseVersion}.`);
+		const updateRepository = `${repo}@${tag}`;
 		const release = await getRelease(repo, tag);
 		temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cnb-"));
 		const linuxOut = path.join(temp, linuxName);
 		const linuxSdkOut = path.join(temp, linuxSdkName);
-		// Pin empty values too: a WSL-only dotenv file must not alter cache identity.
-		const releaseVersion = process.env.RELEASE_VERSION ?? "";
-		const updateRepository = process.env.UPDATE_REPOSITORY ?? "";
 		const cacheKey = (target: string) =>
 			createHash("sha256")
 				.update(
@@ -395,6 +414,18 @@ async function main(): Promise<void> {
 		const uploadFailure = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
 		if (uploadFailure) throw uploadFailure.reason;
 		console.log("Both CNB binaries and both SDK ZIPs uploaded and confirmed.");
+		await cnb([
+			"releases",
+			"patch-release",
+			"--repo",
+			repo,
+			"--release-id",
+			release.id,
+			"--name",
+			releaseTitle(release.name, tag, releaseVersion),
+			"--verbose",
+		]);
+		console.log(`Updated CNB release title for ${tag} (v${releaseVersion}).`);
 	} finally {
 		console.log(`CNB total elapsed: ${((performance.now() - started) / 1000).toFixed(1)}s`);
 		try {

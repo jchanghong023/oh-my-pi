@@ -107,8 +107,7 @@ import { type CostCapRefusal, CostCapError, type CostGateApi } from "../session/
 import { INTERRUPTED_TURN_ERROR } from "../session/exit-diagnostics";
 import { SKILL_PROMPT_MESSAGE_TYPE, usageContextTokens } from "../session/messages";
 import type { CompletionJournal } from "../session/model-usage-journal";
-import type { FileEntry } from "../session/session-entries";
-import { hasConversationalHistory, type PersistedSessionInit, SessionManager } from "../session/session-manager";
+import { hasConversationalHistory, SessionManager } from "../session/session-manager";
 import { truncateTail } from "../tools/streaming-output";
 import { type WorkspaceModeState, WORKSPACE_MODE_STATE_TYPE } from "../workspace-mode";
 import {
@@ -136,7 +135,6 @@ import { runFollowUpTurnOnHome, runSubprocessPlaced } from "../thread/executor-r
 import { existingSubagentWorkerPool, subagentWorkerPool } from "../thread/subagent-worker";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { WorkspaceTree } from "../workspace-tree";
-import { getBundledAgent } from "./agents";
 import { isCompletionProbeEnabled, startCompletionProbe } from "./completion-probe";
 import { appendToolResult, createTaskWidgetInputs, TOOLS_SOURCE_LABEL } from "./widget-inputs";
 import { TextTap } from "../job-widgets/text-tap";
@@ -158,7 +156,7 @@ import {
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "./types";
-import type { NativeSubagentHooks } from "./types";
+import type { NativeSubagentHooks, NativeSubagentOverrides } from "./types";
 import type { StructuredSubagentRequest } from "./structured-subagent";
 import {
 	type AgentProgress,
@@ -322,37 +320,6 @@ export function subagentRetryFallbackRole(id: string): string {
 interface SubagentRetryFallbackCandidate {
 	model: Model<Api>;
 	selector: string;
-}
-
-const SPEC_EXECUTOR_AGENT = "spec-executor";
-const SPEC_EXECUTOR_DELEGATION_ENTRY = "task:native-spec-executor";
-
-/** Scope trusted native spec executors to the bounded tools of their default task delegate. */
-const specExecutorDelegationScopes = new WeakSet<object>();
-
-export function specExecutorDelegateTools(session: ToolSession): string[] | undefined {
-	if (!session.sessionManager || !specExecutorDelegationScopes.has(session.sessionManager)) return;
-	if (session.isToolActive?.("task") !== true) return;
-	return [
-		"bash",
-		...["read", "find", "grep", "glob", "write", "edit", "wait"].filter(name => session.isToolActive?.(name)),
-	];
-}
-
-/** Restore only the delegation stamped by the native spawn, not a same-named transcript. */
-export function restoreSpecExecutorDelegation(
-	sessionManager: SessionManager,
-	init: PersistedSessionInit,
-	entries: readonly FileEntry[],
-): void {
-	if (init.agent !== SPEC_EXECUTOR_AGENT || init.restrictToolNames !== true || !init.tools.includes("task")) return;
-	const native = getBundledAgent(SPEC_EXECUTOR_AGENT);
-	const nativeTools = native?.tools;
-	if (!nativeTools || init.spawns !== native?.spawns || !init.tools.every(name => nativeTools.includes(name))) return;
-	const stamp = entries.findLast(
-		entry => entry.type === "custom" && entry.customType === SPEC_EXECUTOR_DELEGATION_ENTRY,
-	);
-	if (stamp?.type === "custom" && stamp.data === true) specExecutorDelegationScopes.add(sessionManager);
 }
 
 function resolveSubagentRetryFallbackCandidates(
@@ -619,10 +586,6 @@ export interface ExecutorOptions extends NativeChildSessionHooks {
 	subagentRequest?: StructuredSubagentRequest;
 	/** Observe initial setup failure without changing the host hook used again on warm revival. */
 	onInitialSpawnFailed?: () => void;
-	/** Observe the actual child before autoload/dispatch; cleanup runs before deferred shutdown. */
-	onSessionCreated?: (session: AgentSession) => void | (() => void);
-	/** Preserve required source material; oversized context must fail rather than auto-compact. */
-	disableAutoCompaction?: boolean;
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
 	/** Receives each tool call the subagent finishes, with its result text; feeds the task job's widget. */
@@ -734,6 +697,8 @@ export interface ExecutorOptions extends NativeChildSessionHooks {
 	retainRecord?: boolean;
 	/** Internal ownership handoff for cleanup that outlives the visible Task result. */
 	onCleanupDeferred?: (completion: Promise<void>) => void;
+	/** Observes the actual retention result when it outlives the visible Task result. */
+	onRecordRetentionDeferred?: (completion: Promise<void>) => void;
 	/** Releases resources retained for a kept-alive agent when its lifecycle ends. */
 	onRelease?: () => Promise<void>;
 	/**
@@ -4047,6 +4012,7 @@ export async function finalizeSubagentLifecycle(args: {
 	reviveSession: AgentReviver | null;
 	cleanupDeadlineAt?: number;
 	onCleanupDeferred?: (completion: Promise<void>) => void;
+	onRecordRetentionDeferred?: (completion: Promise<void>) => void;
 	onRelease?: () => Promise<void>;
 }): Promise<string | undefined> {
 	const registry = AgentRegistry.global();
@@ -4113,6 +4079,7 @@ export async function finalizeSubagentLifecycle(args: {
 			);
 		} catch {
 			args.onCleanupDeferred?.(retention);
+			args.onRecordRetentionDeferred?.(retention);
 			return;
 		}
 	}
@@ -4510,8 +4477,6 @@ interface SubagentSessionSpec {
 	prompt: SubagentPromptInputs;
 	hooks?: NativeSubagentHooks;
 	request?: StructuredSubagentRequest;
-	onSessionCreated?: ExecutorOptions["onSessionCreated"];
-	specExecutorDelegation?: boolean;
 }
 
 /** Launch-only session inputs: a revived session restores these from its transcript or goes without. */
@@ -4606,7 +4571,7 @@ async function configureNativeSubagentSession(
 	options: CreateAgentSessionOptions,
 ): Promise<{
 	options: CreateAgentSessionOptions;
-	onSessionCreated?: (session: AgentSession) => void | (() => void);
+	onSessionCreated?: NativeSubagentOverrides["onSessionCreated"];
 }> {
 	if (!spec.hooks || !spec.request) return { options };
 	const resolvedOptions = { ...options, cwd: options.sessionManager?.getCwd() ?? options.cwd };
@@ -4852,7 +4817,7 @@ async function reviveAdmittedSubagent(
 					: undefined,
 			};
 			let configuredOptions = sessionOptions;
-			let observeSession: ExecutorOptions["onSessionCreated"];
+			let observeSession: NativeSubagentOverrides["onSessionCreated"];
 			if (capture.spec.hooks) {
 				const configured = await configureNativeSubagentSession(capture.spec, sessionOptions);
 				configuredOptions = configured.options;
@@ -4872,8 +4837,6 @@ async function reviveAdmittedSubagent(
 			({ session: revived } = await sessionPromise);
 			const disposeObserver = observeSession?.(revived);
 			if (disposeObserver) revived.addDisposer(disposeObserver);
-			const disposeOriginalObserver = capture.spec.onSessionCreated?.(revived);
-			if (disposeOriginalObserver) revived.addDisposer(disposeOriginalObserver);
 		} catch (error) {
 			mcpFollower?.dispose();
 			// Observer setup can fail after SDK attachment; dispose the session and
@@ -4887,7 +4850,6 @@ async function reviveAdmittedSubagent(
 			await cleanup.catch(() => {});
 			throw error;
 		}
-		if (capture.spec.specExecutorDelegation) specExecutorDelegationScopes.add(reopened);
 		mcpFollower?.bind(revived);
 		trackSubagentSettings(revived, capture);
 		trackSubagentPendingCandidate(revived, capture);
@@ -4931,13 +4893,12 @@ async function reviveAdmittedSubagent(
 export async function runSubprocess(options: ExecutorOptions): Promise<SingleResult> {
 	const pool = isMainThread() && options.settings ? subagentWorkerPool(options.settings) : undefined;
 	// Keep realm-local native callbacks on their owning thread.
-	// Read-isolated Team runs also need synchronous local-protocol getters that the worker codec does not bridge.
+	// Isolated local-protocol reads require synchronous session getters the worker codec does not bridge.
 	if (
 		pool &&
 		(hasNativeChildSessionHooks(options) ||
 			options.subagentHooks ||
 			options.subagentRequest ||
-			options.onSessionCreated ||
 			options.localProtocolOptions?.allowCrossAgentReads === false)
 	) {
 		const endMainRun = pool.beginMainRun();
@@ -5055,9 +5016,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 		settings,
 		{
 			...compactionThresholdSettings(options.compactionThresholdOverride),
-			...(options.disableAutoCompaction
-				? { "compaction.enabled": false, "compaction.midTurnEnabled": false }
-				: undefined),
 			...subagentLspWritethroughSettings(settings),
 			...(agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined),
 			// Isolated runs must not expose roots outside the worktree.
@@ -5077,9 +5035,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	const { softRequestBudget, softRequestBudgetNotice } = softRequestBudgetFor(agent.name, settings);
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
-	const restrictToolNames =
-		options.restrictToolNames === true ||
-		(agent.source === "bundled" && ["spec-requirements", "spec-planner", SPEC_EXECUTOR_AGENT].includes(agent.name));
+	const restrictToolNames = options.restrictToolNames === true;
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
 
 	// Add tools if specified. Unstructured runs never get `yield`, even when
@@ -5554,8 +5510,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			const sessionSpec: SubagentSessionSpec = {
 				hooks: options.subagentHooks,
 				request: options.subagentRequest,
-				onSessionCreated: options.subagentHooks ? options.onSessionCreated : undefined,
-				specExecutorDelegation: agent.source === "bundled" && agent.name === SPEC_EXECUTOR_AGENT,
 				options: {
 					cwd: effectiveCwd,
 					costGate: options.costGate,
@@ -5726,7 +5680,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					},
 				);
 				let configuredOptions = sessionOptions;
-				let observeSession: ExecutorOptions["onSessionCreated"];
+				let observeSession: NativeSubagentOverrides["onSessionCreated"];
 				if (sessionSpec.hooks) {
 					checkAbort();
 					// Install the abort race before invoking host code that can cancel synchronously.
@@ -5756,7 +5710,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				acquiredSession = session;
 				unclaimedSessionManager = undefined;
 				sessionPromise = undefined;
-				if (sessionSpec.specExecutorDelegation) specExecutorDelegationScopes.add(sessionManager);
 				// Keep the transcript empty until the SDK records the child's initial configuration.
 				if (workspaceModeSnapshot) {
 					sessionManager.appendCustomEntry(WORKSPACE_MODE_STATE_TYPE, workspaceModeSnapshot);
@@ -5947,11 +5900,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					hasNativeChildSessionHooks(session.nativeChildCapabilities) ||
 					undefined,
 			});
-			if (sessionFile && agent.name === SPEC_EXECUTOR_AGENT) {
-				// Persist provenance from the native definition, independently of the
-				// agent's name and prompt, which a project definition can duplicate.
-				sessionManager.appendCustomEntry(SPEC_EXECUTOR_DELEGATION_ENTRY, sessionSpec.specExecutorDelegation);
-			}
 
 			abortSignal.addEventListener(
 				"abort",
@@ -5965,17 +5913,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			// and may not observe the already-fired abort event. Mirror it manually.
 			if (abortSignal.aborted) {
 				void monitor.abortActiveSession();
-			}
-			const disposeOriginalObserver = options.onSessionCreated?.(session);
-			if (disposeOriginalObserver) {
-				const disposeConfiguredObserver = disposeSessionObserver;
-				disposeSessionObserver = () => {
-					try {
-						disposeOriginalObserver();
-					} finally {
-						disposeConfiguredObserver?.();
-					}
-				};
 			}
 
 			const configuredAllowedToolNames = configuredRestrictToolNames
@@ -6027,10 +5964,6 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 						{ args: "" },
 						"autoload",
 						session,
-						{
-							scope: sessionManager,
-							getSessionBranch: () => sessionManager.getBranch(),
-						},
 					);
 					await session.sendCustomMessage(
 						{
@@ -6190,6 +6123,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					reviveSession,
 					cleanupDeadlineAt,
 					onRelease: options.onRelease,
+					onRecordRetentionDeferred: options.onRecordRetentionDeferred,
 					onCleanupDeferred: completion => {
 						deferredSessionShutdown = completion;
 						deferCleanup(completion);

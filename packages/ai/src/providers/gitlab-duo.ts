@@ -4,6 +4,7 @@ import { getGitLabDuoModels, resolveGitLabDuoModelIdentity } from "@oh-my-pi/pi-
 import * as AIError from "../error";
 import { ANTHROPIC_THINKING, mapAnthropicToolChoice } from "../stream";
 import type { Api, Context, FetchImpl, Model, ModelSpec, SimpleStreamOptions } from "../types";
+import { getHeaderCaseInsensitive } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { createProviderErrorMessage } from "./error-message";
 import type { OpenAICompletionsOptions } from "./openai-completions";
@@ -29,6 +30,7 @@ const directAccessCache = new Map<string, DirectAccessToken>();
 async function getDirectAccessToken(
 	gitlabAccessToken: string,
 	fetchImpl: FetchImpl = fetch,
+	explicitAuth = false,
 ): Promise<DirectAccessToken> {
 	const cached = directAccessCache.get(gitlabAccessToken);
 	if (cached && cached.expiresAt > Date.now()) {
@@ -41,6 +43,7 @@ async function getDirectAccessToken(
 			Authorization: `Bearer ${gitlabAccessToken}`,
 			"Content-Type": "application/json",
 		},
+		redirect: explicitAuth ? "error" : undefined,
 		body: JSON.stringify({
 			feature_flags: { DuoAgentPlatformNext: true },
 		}),
@@ -117,10 +120,19 @@ export function streamGitLabDuo(
 				throw new AIError.ConfigurationError(`Missing GitLab Duo API route for model: ${model.id}`);
 			}
 
-			const directAccess = await getDirectAccessToken(apiKey, options.fetch);
+			const directAccess = await getDirectAccessToken(apiKey, options.fetch, options.requestAuth !== undefined);
+			let callerHeaders = options.headers;
+			if (callerHeaders && getHeaderCaseInsensitive(options.requestAuth?.headers, "Authorization") !== undefined) {
+				// Authorization in requestAuth is the GitLab access token, not the
+				// short-lived credential for the separate inference origin.
+				callerHeaders = { ...callerHeaders };
+				for (const name in callerHeaders) {
+					if (name.toLowerCase() === "authorization") delete callerHeaders[name];
+				}
+			}
 			const headers = {
 				...directAccess.headers,
-				...options.headers,
+				...callerHeaders,
 			};
 
 			// This wrapper dispatches directly to the routed provider and bypasses

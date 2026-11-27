@@ -57,11 +57,6 @@ import type {
 	UrlCompletion,
 } from "./types";
 
-/** Optional validation of the local backing selected for a read, not of MCP resources. */
-export interface SkillReadContext extends ResolveContext {
-	assertSkillReadTarget?: (path: string) => Promise<void>;
-}
-
 /** No loaded skill owns the URL's name; the only miss an MCP server may fill. */
 class UnknownSkillError extends Error {}
 
@@ -333,14 +328,9 @@ async function locateSkillTarget(
 }
 
 /** The file or directory resource at a located target; a target removed since it was located rejects with ENOENT. */
-async function readSkillTarget(
-	url: InternalUrl,
-	target: LocatedSkillTarget,
-	context?: SkillReadContext,
-): Promise<InternalResource> {
+async function readSkillTarget(url: InternalUrl, target: LocatedSkillTarget): Promise<InternalResource> {
 	const { skill, path: targetPath, stats } = target;
 	if (!stats) throw new Error(`File not found: ${targetPath}`);
-	if (context?.assertSkillReadTarget) await context.assertSkillReadTarget(targetPath);
 
 	if (stats.isDirectory()) {
 		return buildDirectoryResource(url.href, targetPath);
@@ -385,7 +375,7 @@ export class SkillProtocolHandler implements ProtocolHandler {
 		return host.skillUriAccess ? skillDoc.trim() : undefined;
 	}
 
-	async resolve(url: InternalUrl, context?: SkillReadContext): Promise<InternalResource<string | Buffer>> {
+	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource<string | Buffer>> {
 		let target: LocatedSkillTarget;
 		try {
 			target = await locateSkillTarget(url, context, false);
@@ -423,13 +413,13 @@ export class SkillProtocolHandler implements ProtocolHandler {
 		}
 
 		try {
-			return await readSkillTarget(url, target, context);
+			return await readSkillTarget(url, target);
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
 			// The target was removed after it was located: an upgrade published the plugin's new
 			// version and deleted the old directory between the check and the read. Locate it again,
 			// which now finds the old skill gone and rediscovers it.
-			return readSkillTarget(url, await locateSkillTarget(url, context, false), context);
+			return readSkillTarget(url, await locateSkillTarget(url, context, false));
 		}
 	}
 

@@ -436,8 +436,8 @@ export function reservedTopLevelWordMessage(argv: readonly string[]): string | u
 
 export type ResolvedCliArgv = { argv: string[]; cwd?: string } | { error: string };
 
-/** Only cwd and bootstrap globals can precede a resource command. */
-function hasResourcePrefix(argv: readonly string[], end: number): boolean {
+/** Only cwd and bootstrap globals can precede a resource command or OpenWiki. */
+function hasCommandOnlyPrefix(argv: readonly string[], end: number): boolean {
 	for (let index = 0; index < end; index += 1) {
 		const arg = argv[index];
 		if (arg === "--cwd" || arg === "--profile" || arg === "-P" || arg === "--alias") {
@@ -462,10 +462,9 @@ export function leadingSubcommandIndex(argv: readonly string[]): number {
 		if (arg === "--") return -1;
 		if (!arg.startsWith("-")) {
 			if (!isSubcommand(arg)) return -1;
-			return isResourceCommand(arg) && !hasResourcePrefix(argv, index) ? -1 : index;
+			return (isResourceCommand(arg) || arg === "openwiki") && !hasCommandOnlyPrefix(argv, index) ? -1 : index;
 		}
 		const next = argv[index + 1];
-		if (arg === PROFILE_BOOTSTRAP_BOUNDARY_ARG && next === "openwiki") return index + 1;
 		if (flagConsumesValue(arg, next)) index += 1;
 	}
 	return -1;

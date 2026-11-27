@@ -45,9 +45,13 @@ export class TodoLoopNative {
 	}
 
 	cancel(id: string): void {
-		runEvalCancel({ item: { kind: "agent", id } }, { session: this.session });
 		const manager = this.session.asyncJobManager;
 		if (!manager) throw new Error("TodoLoop: async job manager is unavailable");
+		// Native wait may already have consumed and evicted a settled root.
+		// Its descendants remain owned even when the root handle is gone.
+		if (manager.getJob(id)?.status === "running") {
+			runEvalCancel({ item: { kind: "agent", id } }, { session: this.session });
+		}
 		const owned = new Set([id]);
 		for (;;) {
 			const size = owned.size;

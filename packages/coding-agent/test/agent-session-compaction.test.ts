@@ -365,8 +365,6 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 				expect(events.filter(event => event.type === "manual_compaction_end")).toHaveLength(1);
 				const start = events.find(event => event.type === "manual_compaction_start");
 				const end = events.find(event => event.type === "manual_compaction_end");
-				expect(start?.type).toBe("manual_compaction_start");
-				expect(end?.type).toBe("manual_compaction_end");
 				if (start?.type !== "manual_compaction_start" || end?.type !== "manual_compaction_end") {
 					throw new Error("Missing manual compaction lifecycle");
 				}
@@ -408,7 +406,6 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 			await fixture.session.prompt("current request");
 			await fixture.session.waitForIdle();
 			const live = fixture.manager.getBranch().findLast(entry => entry.type === "compaction");
-			expect(live?.type).toBe("compaction");
 			if (live?.type !== "compaction") throw new Error("Missing automatic compaction");
 			expect(live.origin).toBe("auto");
 			// Public append callers without provenance remain unknown, as do old journals.
@@ -423,7 +420,6 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 				origin: "auto",
 			});
 			const legacy = entries.find(entry => entry.id === legacyId);
-			expect(legacy?.type).toBe("compaction");
 			if (legacy?.type !== "compaction") throw new Error("Missing legacy compaction");
 			expect(legacy.origin).toBeUndefined();
 		} finally {

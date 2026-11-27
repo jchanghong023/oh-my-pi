@@ -5,30 +5,10 @@ import type { SessionEntry } from "../session/session-entries";
 
 export const SPEC_DRIVEN_SKILL_PROVIDER = "spec-driven";
 
-/** Skills that retain their existing native-phase access without an exact grant. */
-function hasNativePhaseAccess(name: string): boolean {
-	return name === "systematic-debugging" || name === "verification-before-completion" || name === "writing-skills";
-}
-
-type InvocationSkill = Pick<Skill, "name"> & Partial<Pick<Skill, "source" | "_source" | "filePath">>;
-
-function requiresNativeGrant(skill: InvocationSkill): boolean {
-	const bundled =
-		skill.source === "bundled-superpowers" ||
-		(skill._source?.provider === SPEC_DRIVEN_SKILL_PROVIDER && skill._source.pluginName === "superpowers");
-	return bundled && !hasNativePhaseAccess(skill.name.split("/").at(-1)!);
-}
-
-function checkPhase(skill: Pick<Skill, "name">, state?: ScopeState): void {
-	if (state?.policy && !state.policy.allowedSkills.includes(skill.name)) {
-		throw new SkillAccessDeniedError(skill.name, `not allowed during ${state.policy.phase}`);
-	}
-}
-
-function hasExactGrant(skill: InvocationSkill, state?: ScopeState): boolean {
-	if (!state || !skill.filePath) return false;
+function hasExactGrant(skill: Skill, grants?: ReadonlySet<Readonly<Skill>>): boolean {
+	if (!grants) return false;
 	const filePath = path.resolve(skill.filePath);
-	for (const grant of state.grants) if (grant.name === skill.name && grant.filePath === filePath) return true;
+	for (const grant of grants) if (grant.name === skill.name && grant.filePath === filePath) return true;
 	return false;
 }
 
@@ -45,93 +25,27 @@ export interface SkillAccessContext {
 	getSessionBranch?: () => readonly SessionEntry[];
 }
 
-export interface SpecSkillPhasePolicy {
-	phase: string;
-	/** Resolved catalog names permitted for single-skill invocation during this phase. */
-	allowedSkills: readonly string[];
-}
+const grantsByScope = new WeakMap<object, Set<Readonly<Skill>>>();
 
-interface ScopeState {
-	policy?: SpecSkillPhasePolicy;
-	grants: Set<Readonly<Skill>>;
-}
-const executionVisible = Symbol("spec-execution-visible");
-type ExecutionVisibleSkill = Skill & { [executionVisible]?: true };
-const executionScopes = new WeakMap<object, Set<string>>();
-const executionKey = (skill: Pick<Skill, "name" | "filePath">): string =>
-	JSON.stringify([skill.name, path.resolve(skill.filePath)]);
-
-/** Make a pinned resource discoverable without removing its read-access requirement. */
-export function exposeSpecExecutionSkill(skill: Skill): Skill {
-	return { ...skill, hide: false, [executionVisible]: true } as ExecutionVisibleSkill;
-}
-
-/** Bind exact catalog identities; only controller-exposed clones consume execution access. */
-export function grantSpecExecutionSkills(scope: object, skills: readonly Skill[]): () => void {
-	const resources = new Set(skills.map(executionKey));
-	executionScopes.set(scope, resources);
-	return () => {
-		if (executionScopes.get(scope) === resources) executionScopes.delete(scope);
-	};
-}
-
-/** Descendants inherit only their actual parent's execution identities, never its catalog. */
-export function inheritSpecExecutionSkills(parentScope: object, childScope: object): () => void {
-	const resources = new Set(executionScopes.get(parentScope));
-	executionScopes.set(childScope, resources);
-	return () => {
-		if (executionScopes.get(childScope) === resources) executionScopes.delete(childScope);
-	};
-}
-
-function hasExecutionAccess(skill: ExecutionVisibleSkill, context?: SkillAccessContext): boolean {
-	return (
-		skill[executionVisible] === true &&
-		!!context?.scope &&
-		(executionScopes.get(context.scope)?.has(executionKey(skill)) ?? false)
-	);
-}
-
-const scopes = new WeakMap<object, ScopeState>();
-
-function stateFor(scope: object): ScopeState {
-	let state = scopes.get(scope);
-	if (!state) {
-		state = { grants: new Set() };
-		scopes.set(scope, state);
-	}
-	return state;
-}
-
-/** Binding replacement invalidates old grants; disposing an old binding cannot clear its replacement. */
-export function bindSpecSkillPolicy(scope: object, policy: SpecSkillPhasePolicy): () => void {
-	const state: ScopeState = { policy: { ...policy, allowedSkills: [...policy.allowedSkills] }, grants: new Set() };
-	scopes.set(scope, state);
-	return () => {
-		if (scopes.get(scope) === state) scopes.delete(scope);
-	};
-}
-
-export function clearSpecSkillAccess(scope: object): void {
-	scopes.delete(scope);
-}
-
-/** Native controller capability, not a model tool. Bind task grants to their owning session's disposal. */
+/** Authorize access to the exact bundled skill admitted for autoload in this session. */
 export function grantSpecSkillAccess(scope: object, skill: Skill): () => void {
-	const state = stateFor(scope);
-	checkPhase(skill, state);
+	let grants = grantsByScope.get(scope);
+	if (!grants) {
+		grants = new Set();
+		grantsByScope.set(scope, grants);
+	}
 	const grant = { ...skill, filePath: path.resolve(skill.filePath) };
-	state.grants.add(grant);
+	grants.add(grant);
 	return () => {
-		state.grants.delete(grant);
+		grants.delete(grant);
 	};
 }
 
 /** Program autoload addresses its exact resource even when an ordinary user skill owns the bare name. */
 export function getGrantedSpecSkill(name: string, context?: SkillAccessContext): Readonly<Skill> | undefined {
-	const state = context?.scope ? scopes.get(context.scope) : undefined;
-	if (!state) return undefined;
-	for (const grant of state.grants) {
+	const grants = context?.scope ? grantsByScope.get(context.scope) : undefined;
+	if (!grants) return undefined;
+	for (const grant of grants) {
 		if (grant.name === name) return grant;
 	}
 	return undefined;
@@ -147,21 +61,12 @@ export function skillAccessContext(context?: ResolveContext): SkillAccessContext
 
 export function isExplicitOnlySkill(skill: Pick<Skill, "source" | "_source" | "hide">): boolean {
 	return (
-		(skill.hide === true || (skill as ExecutionVisibleSkill)[executionVisible] === true) &&
+		skill.hide === true &&
 		(skill._source?.provider === SPEC_DRIVEN_SKILL_PROVIDER ||
 			skill.source === "bundled-openspec" ||
 			skill.source === "bundled-superpowers" ||
 			skill.source === "bundled-jch")
 	);
-}
-
-/** Run before reading/injecting any skill, including ordinary single-skill commands. */
-export function checkSkillInvocation(skill: InvocationSkill, context?: SkillAccessContext): void {
-	const state = context?.scope ? scopes.get(context.scope) : undefined;
-	checkPhase(skill, state);
-	if (state?.policy && requiresNativeGrant(skill) && !hasExactGrant(skill, state)) {
-		throw new SkillAccessDeniedError(skill.name, "exact resource grant required during native phase");
-	}
 }
 
 function hasBranchInvocation(skill: Skill, context?: SkillAccessContext): boolean {
@@ -181,10 +86,9 @@ function hasBranchInvocation(skill: Skill, context?: SkillAccessContext): boolea
 
 /** Hidden user skills retain ordinary URI semantics; only hidden pinned resources require provenance. */
 export function checkSkillReadAccess(skill: Skill, context?: SkillAccessContext): void {
-	checkSkillInvocation(skill, context);
 	if (!isExplicitOnlySkill(skill)) return;
-	const state = context?.scope ? scopes.get(context.scope) : undefined;
-	if (hasExactGrant(skill, state) || hasExecutionAccess(skill, context)) return;
+	const grants = context?.scope ? grantsByScope.get(context.scope) : undefined;
+	if (hasExactGrant(skill, grants)) return;
 	if (hasBranchInvocation(skill, context)) return;
 	throw new SkillAccessDeniedError(skill.name, "explicit current-session invocation required");
 }

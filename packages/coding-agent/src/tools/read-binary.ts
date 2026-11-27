@@ -14,7 +14,6 @@ import { acquireDatabase } from "../disasm/client";
 import { readBinaryMetadata } from "../disasm/metadata";
 import type { ToolSession } from "../sdk";
 import { formatPathRelativeToCwd, resolveReadPath } from "./path-utils";
-import { assertTeamReadTarget } from "./team-read-isolation";
 import { buildInMemorySelectorResult } from "./read-format";
 import type { ParsedSelector } from "./read-selector";
 
@@ -84,7 +83,6 @@ export async function resolveBinaryViewPath(session: ToolSession, readPath: stri
 	for (let i = readPath.lastIndexOf(":"); i > 0; i = readPath.lastIndexOf(":", i - 1)) {
 		const absolutePath = resolveReadPath(readPath.slice(0, i), session.cwd);
 		if (!(await isFile(absolutePath))) continue;
-		await assertTeamReadTarget(session, absolutePath);
 		if (databaseOwner(absolutePath) || (await isExecutableFile(absolutePath))) {
 			return { backend, absolutePath, ...splitSliceView(readPath.slice(i + 1)) };
 		}

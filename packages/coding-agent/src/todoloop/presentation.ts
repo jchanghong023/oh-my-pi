@@ -56,10 +56,10 @@ function cardDetails(event: TodoLoopAttemptEvent): TaskToolDetails {
 	if (event.type === "end" && results.length === 0) {
 		for (const entry of progress) {
 			entry.status =
-				event.error || event.status === "failed"
-					? "failed"
-					: event.status === "cancelled"
-						? "aborted"
+				event.status === "cancelled"
+					? "aborted"
+					: event.error || event.status === "failed"
+						? "failed"
 						: "completed";
 		}
 	}
@@ -136,6 +136,7 @@ interface TodoLoopViewRecords {
 	id: string;
 	generation: number;
 	pending: TodoLoopViewRecord[];
+	active: Set<TodoLoopViewRecord>;
 	widget?: { key: string; draw: () => JSXNode; visible: boolean };
 }
 
@@ -174,6 +175,7 @@ function getViewRecords(ctx: InteractiveModeContext): TodoLoopViewRecords {
 		id: ctx.session.sessionId,
 		generation: ctx.session.sessionGeneration,
 		pending: [],
+		active: new Set(),
 	};
 	recordsByContext.set(ctx, records);
 	return records;
@@ -202,7 +204,15 @@ export function presentTodoLoopCheck(
 export function suspendTodoLoopView(ctx: InteractiveModeContext): void {
 	suspendedViews.add(ctx);
 	const records = recordsByContext.get(ctx);
-	if (records) syncWidget(ctx, records);
+	if (!records) return;
+	const suspended = [];
+	for (const entry of records.active) {
+		if (!entry.block) continue;
+		entry.block = undefined;
+		suspended.push(entry);
+	}
+	records.pending.unshift(...suspended);
+	syncWidget(ctx, records);
 }
 
 /** Resume the dock and deliver output that never reached the transcript. */
@@ -309,7 +319,9 @@ export class TodoLoopPresentation {
 			card.setArgsComplete();
 			const ctx = this.#ctx;
 			let globalExpanded = ctx.toolOutputExpanded;
-			card.setExpanded(this.#lastCard?.state().expanded ?? (!ctx.hideToolActivity && globalExpanded));
+			card.setExpanded(ctx.hideToolActivity
+				? (ctx.compactTodoExpanded ?? this.#lastCard?.state().expanded ?? false)
+				: (this.#lastCard?.state().expanded ?? globalExpanded));
 			this.#lastCard = card;
 			card.setExecutionStarted();
 			attempt = {
@@ -332,6 +344,7 @@ export class TodoLoopPresentation {
 					return ToolBlock({ call: card });
 				},
 			};
+			this.#records.active.add(attempt);
 			appendRecord(this.#ctx, this.#records, attempt);
 			this.#attempts.set(event.id, attempt);
 		}
@@ -346,13 +359,14 @@ export class TodoLoopPresentation {
 			{
 				content: [{ type: "text", text: attemptText(snapshot, taskDetails) }],
 				details: taskDetails,
-				isError: Boolean(event.error) || event.status === "failed",
+				isError: event.status !== "cancelled" && (Boolean(event.error) || event.status === "failed"),
 			},
 			event.type !== "end",
 		);
 		if (event.type === "end") {
 			card.seal();
 			attempt.live = false;
+			this.#records.active.delete(attempt);
 			if (block && canPresent(this.#ctx, this.#records)) this.#ctx.shell.transcript.settle(block);
 			this.#liveDetails.delete(event.id);
 		}

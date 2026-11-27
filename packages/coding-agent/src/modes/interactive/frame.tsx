@@ -54,7 +54,6 @@ import {
 import { actionKey, activeKeyStyle, formatTooltipKey } from "../../ui/keys/hints";
 import { holdSettle, type Shell, Shell as ShellClass, type TranscriptBlock, ViewList } from "../../ui/shell";
 import { type ComposerBarAction, type ComposerBarRoutes, composerFacts } from "../../ui/status/composer-facts";
-import { effectiveStatusSettings } from "../../ui/status/segments";
 import { createStatusLine, shapePlacement } from "../../ui/status/status-line";
 import type { ComposerTerm } from "../../ui/styles/composer/frame";
 import { composerShape, type StatusAttachment } from "../../ui/styles/composer/shapes";
@@ -120,12 +119,6 @@ export class AppFrame {
 	/** A dialog shown in the composer's place (extension prompts, approvals); the composer while undefined. */
 	readonly editorArea: Signal<UiNode | undefined> = signal(undefined);
 	readonly #statusLine: Signal<StatusLineView | undefined> = signal(undefined);
-	readonly #statusHasSubagents = computed(() => {
-		const settings = this.#statusLine()?.settings();
-		if (!settings) return false;
-		const { leftSegments, rightSegments } = effectiveStatusSettings(settings);
-		return leftSegments.includes("subagents") || rightSegments.includes("subagents");
-	});
 	#barRoutes: ReadonlyMap<string, (value?: string) => void> | undefined;
 	/** Shortest gap between terminal frames, ms (`1000 / tui.maxFps`). */
 	readonly frameInterval: Signal<number> = signal(16);
@@ -559,14 +552,7 @@ export class AppFrame {
 				{() => (this.shell.native() ? undefined : this.#statusPanel())}
 			</col>
 		));
-		dock
-			.slot("pills")
-			.set(() => (
-				<HudPills
-					model={hud.pills}
-					composerShowsAgentCount={() => !this.editorArea() && this.#statusHasSubagents()}
-				/>
-			));
+		dock.slot("pills").set(() => <HudPills model={hud.pills} />);
 		dock.slot("tray").set(() => <Tray model={hud.tray} />);
 	}
 }

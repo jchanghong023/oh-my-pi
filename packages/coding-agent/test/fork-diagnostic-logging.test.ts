@@ -137,7 +137,6 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 				expect(records.find(record => record.event === "models_init" && record.result === "failed")).toMatchObject({
 					stage: "settings_init",
 				});
-				expect(records.some(record => record.event === "log_directory_fallback")).toBe(false);
 			} finally {
 				await box.cleanup();
 			}

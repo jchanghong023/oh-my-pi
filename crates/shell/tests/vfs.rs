@@ -365,7 +365,18 @@ async fn command_running_utilities_dispatch_builtins_that_open_urls() {
 async fn find_exec_preserves_non_utf8_filename_bytes() {
 	let directory = tempfile::tempdir().expect("isolated native directory");
 	let name = std::ffi::OsStr::from_bytes(b"non-utf8-\xff");
-	fs::write(directory.path().join(name), b"content").expect("non-UTF-8 file");
+	match fs::write(directory.path().join(name), b"content") {
+		Ok(()) => {},
+		Err(error)
+			if cfg!(target_os = "macos")
+				&& matches!(error.raw_os_error(), Some(libc::EILSEQ | libc::EINVAL)) =>
+		{
+			// APFS cannot create this fixture; the test still runs on Unix
+			// filesystems that preserve arbitrary filename bytes.
+			return;
+		},
+		Err(error) => panic!("write non-UTF-8 file: {error}"),
+	}
 	let (sinks, stdout, stderr) = stream_sinks();
 	let result = execute_shell_streams(
 		script_options(

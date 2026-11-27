@@ -2,17 +2,25 @@
 
 ## 覆盖率数据获取
 
+`$PYTHON` 为项目解释器：Windows 选 `.venv/Scripts/python.exe`，Linux/macOS 选 `.venv/bin/python`。Bash 用 `"$PYTHON"`，PowerShell 用 `& $PYTHON`。
+
+按 `skill://bundled-developer-test-agent/generate-ut/references/python/generation-rules.md` 的覆盖率测量与清理规则创建和清理 `$COV_DIR`。
+
 ### 使用coverage.py
 
+`$RCFILE` 在 Windows 用 `NUL`，在 Linux/macOS 用 `/dev/null`。
+
 ```bash
-.venv/Scripts/python.exe -m coverage run --rcfile=NUL -m pytest <test_file> -v
-.venv/Scripts/python.exe -m coverage json -o coverage.json --rcfile=NUL
+"$PYTHON" -m coverage run --rcfile="$RCFILE" --data-file="$COV_DIR/.coverage" -m pytest "<test_file>" -v
+"$PYTHON" -m coverage json --rcfile="$RCFILE" --data-file="$COV_DIR/.coverage" -o "$COV_DIR/coverage.json"
 ```
 
 ### 使用pytest-cov
 
+PowerShell 中仅对此次调用设置 `COVERAGE_FILE` 为 `$COV_DIR/.coverage`。
+
 ```bash
-.venv/Scripts/python.exe -m pytest <test_file> --cov=<source_module> --cov-report=term-missing -v
+COVERAGE_FILE="$COV_DIR/.coverage" "$PYTHON" -m pytest "<test_file>" "--cov=<source_module>" --cov-report=term-missing -v
 ```
 
 ### 覆盖率指标

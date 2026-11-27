@@ -1653,11 +1653,18 @@ pub enum Target {
 	SearchNative(NativeRef),
 	/// Prefer an executable on PATH, or run this callout.
 	SearchTool(ToolRef),
+	/// Search PATH because an in-process command rejected the raw operands.
+	SearchRejectedRaw,
+	/// No PATH executable could stand in for the rejecting builtin.
+	RejectedRaw,
 }
 
 impl Target {
 	pub const fn is_path_search(&self) -> bool {
-		matches!(self, Self::Search | Self::SearchNative(_) | Self::SearchTool(_))
+		matches!(
+			self,
+			Self::Search | Self::SearchNative(_) | Self::SearchTool(_) | Self::SearchRejectedRaw
+		)
 	}
 
 	pub const fn search_fallback(&self) -> Option<Self> {
@@ -1679,9 +1686,12 @@ impl Target {
 			Self::External(_) | Self::Script(_) | Self::Interp(_) | Self::Refused { .. } => {
 				ResolvedKind::External
 			},
-			Self::Search | Self::SearchNative(_) | Self::SearchTool(_) | Self::NotFound => {
-				ResolvedKind::NotFound
-			},
+			Self::Search
+			| Self::SearchNative(_)
+			| Self::SearchTool(_)
+			| Self::SearchRejectedRaw
+			| Self::NotFound
+			| Self::RejectedRaw => ResolvedKind::NotFound,
 		}
 	}
 }

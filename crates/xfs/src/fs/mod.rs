@@ -527,7 +527,7 @@ pub fn is_not_regular(err: &io::Error) -> bool {
 	err.get_ref().is_some_and(|inner| inner.is::<NotRegular>())
 }
 
-/// A listing omitted an entry of unknown type but kept the entries it could read.
+/// A listing omitted an entry it could not inspect but kept the entries it could read.
 #[derive(Debug)]
 pub(crate) struct IncompleteListing(io::Error);
 
@@ -547,6 +547,11 @@ impl std::error::Error for IncompleteListing {
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		Some(&self.0)
 	}
+}
+
+/// Whether following a link failed because its target path does not exist.
+pub(crate) fn is_dangling_link(error: &io::Error) -> bool {
+	matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory)
 }
 
 /// Per-thread filesystem operations. Slices returned by a method stay valid
@@ -598,21 +603,25 @@ impl Session {
 	/// position (no rewind syscall), so list each [`Dir`] once; open it again
 	/// to list it again.
 	pub async fn list(&mut self, dir: &Dir, detail: Detail, children: u32) -> io::Result<&Listing> {
-		list_with(&mut self.imp, dir, detail, children, &mut self.listing).await?;
+		list_with(&mut self.imp, dir, detail, children, false, &mut self.listing).await?;
 		Ok(&self.listing)
 	}
 
 	/// [`Self::list`] into a caller-owned listing (cleared first), so callers
 	/// can keep it while using the session again. [`IncompleteListing`] leaves
 	/// the readable entries in `out`.
+	/// With `strict`, per-entry metadata errors other than vanished entries
+	/// are reported too, even if a non-strict listing can skip the entry or
+	/// use the directory index's metadata.
 	pub(crate) async fn list_into(
 		&mut self,
 		dir: &Dir,
 		detail: Detail,
 		children: u32,
+		strict: bool,
 		out: &mut Listing,
 	) -> io::Result<()> {
-		list_with(&mut self.imp, dir, detail, children, out).await
+		list_with(&mut self.imp, dir, detail, children, strict, out).await
 	}
 
 	/// Opens the regular file `name` (one component) in `dir`, following
@@ -749,12 +758,15 @@ async fn list_with(
 	dir: &Dir,
 	detail: Detail,
 	children: u32,
+	strict: bool,
 	out: &mut Listing,
 ) -> io::Result<()> {
 	out.clear();
 	match (imp, &dir.repr) {
-		(Imp::Native(s), DirRepr::Native(h)) => native::list(s, h, detail, children, out),
-		(Imp::Provider(fs), DirRepr::Provider(path)) => provider::list(fs, path, detail, out).await,
+		(Imp::Native(s), DirRepr::Native(h)) => native::list(s, h, detail, children, strict, out),
+		(Imp::Provider(fs), DirRepr::Provider(path)) => {
+			provider::list(fs, path, detail, strict, out).await
+		},
 		_ => Err(foreign_dir()),
 	}
 }

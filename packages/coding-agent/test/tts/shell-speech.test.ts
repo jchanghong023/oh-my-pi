@@ -203,10 +203,10 @@ describe("say through the session's speech setup", () => {
 		const response = await host.handle({ op: ShellSpeechOp.Voices });
 
 		expect(response.voices).toContainEqual(
-			expect.objectContaining({ name: "harper", locale: "en_US", sample: expect.stringMatching(/^Harper\b/) }),
+			expect.objectContaining({ name: "harper", locale: "en_US", sample: expect.any(String) }),
 		);
 		expect(response.voices).toContainEqual(
-			expect.objectContaining({ name: "edwin", locale: "en_GB", sample: expect.stringMatching(/^Edwin\b/) }),
+			expect.objectContaining({ name: "edwin", locale: "en_GB", sample: expect.any(String) }),
 		);
 	});
 

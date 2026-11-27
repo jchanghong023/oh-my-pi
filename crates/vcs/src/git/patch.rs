@@ -41,6 +41,8 @@ use crate::{
 	},
 };
 
+use owned_fs::{Observation, OwnedRoot, PinnedPath};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FileEntry {
 	id:            gix::ObjectId,
@@ -113,14 +115,12 @@ impl ApplyFailure {
 	}
 }
 
-pub(super) fn guard_owned_path(repo: &GitRepo, path: &str) -> Result<PathBuf> {
+fn validate_owned_path(path: &str) -> Result<()> {
 	validate_repo_path(path).map_err(ApplyFailure::into_error)?;
 	if path.contains('\\') || path.contains('\0') {
 		return Err(Error::backend("git owned patch", "noncanonical patch path"));
 	}
-	let mut components = Path::new(path).components().peekable();
-	let mut absolute = repo.root().to_owned();
-	while let Some(component) = components.next() {
+	for component in Path::new(path).components() {
 		let Component::Normal(name) = component else {
 			return Err(Error::backend("git owned patch", "noncanonical patch path"));
 		};
@@ -134,7 +134,26 @@ pub(super) fn guard_owned_path(repo: &GitRepo, path: &str) -> Result<PathBuf> {
 		if name_text.eq_ignore_ascii_case(".git") {
 			return Err(Error::backend("git owned patch", "patch cannot write Git metadata"));
 		}
+	}
+	Ok(())
+}
+
+pub(super) fn guard_owned_path(repo: &GitRepo, path: &str) -> Result<PathBuf> {
+	validate_owned_path(path)?;
+	#[cfg(windows)]
+	let protected = owned_fs::protected_ids(repo)?;
+	let mut components = Path::new(path).iter().peekable();
+	let mut absolute = repo.root().to_owned();
+	while let Some(name) = components.next() {
 		absolute.push(name);
+		#[cfg(windows)]
+		match owned_fs::path_identity(&absolute) {
+			Ok(id) if protected.contains(&id) => {
+				return Err(Error::backend("git owned patch", "patch cannot write Git metadata"));
+			},
+			Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err.into()),
+			_ => {},
+		}
 		if components.peek().is_some() {
 			match fs::symlink_metadata(&absolute) {
 				Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
@@ -148,144 +167,33 @@ pub(super) fn guard_owned_path(repo: &GitRepo, path: &str) -> Result<PathBuf> {
 	Ok(absolute)
 }
 
-#[cfg(unix)]
-fn owned_file_identity(path: &Path) -> io::Result<(u64, u64)> {
-	use std::os::unix::fs::MetadataExt;
-
-	let metadata = fs::symlink_metadata(path)?;
-	Ok((metadata.dev(), metadata.ino()))
-}
-
-#[cfg(windows)]
-fn owned_file_identity(path: &Path) -> io::Result<(u64, u64)> {
-	use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
-
-	use windows_sys::Win32::Storage::FileSystem::{
-		BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-		FILE_READ_ATTRIBUTES, GetFileInformationByHandle,
-	};
-
-	let file = fs::OpenOptions::new()
-		.access_mode(FILE_READ_ATTRIBUTES)
-		.custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-		.open(path)?;
-	let mut info = BY_HANDLE_FILE_INFORMATION::default();
-	// SAFETY: The file handle is live and `info` is writable.
-	if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) } == 0 {
-		return Err(io::Error::last_os_error());
-	}
-	Ok((
-		u64::from(info.dwVolumeSerialNumber),
-		(u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
-	))
-}
-
-fn reject_owned_rename_alias(
-	repo: &GitRepo,
-	source: Option<&str>,
-	target: Option<&str>,
-) -> Result<()> {
-	let (Some(source), Some(target)) = (source, target) else {
-		return Ok(());
-	};
-	if source == target {
-		return Ok(());
-	}
-	let source_path = guard_owned_path(repo, source)?;
-	let target_path = guard_owned_path(repo, target)?;
-	let identity = |path: &Path| match owned_file_identity(path) {
-		Ok(id) => Ok(Some(id)),
-		Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-		Err(err) => Err(err),
-	};
-	let Some(source_id) = identity(&source_path)? else {
-		return Ok(());
-	};
-	if identity(&target_path)? != Some(source_id) {
-		return Ok(());
-	}
-	let (Some(source_parent), Some(target_parent)) = (source_path.parent(), target_path.parent())
-	else {
-		return Ok(());
-	};
-	if source_parent != target_parent
-		&& owned_file_identity(source_parent)? != owned_file_identity(target_parent)?
-	{
-		return Ok(());
-	}
-
-	// A shared file ID is not enough: two hard links can be distinct
-	// directory entries even when their names differ only by case.
-	let source_name = source_path.file_name();
-	let target_name = target_path.file_name();
-	if source_name != target_name {
-		let (mut has_source, mut has_target) = (false, false);
-		for entry in fs::read_dir(source_parent)? {
-			let name = entry?.file_name();
-			has_source |= Some(name.as_os_str()) == source_name;
-			has_target |= Some(name.as_os_str()) == target_name;
-			if has_source && has_target {
-				return Ok(());
-			}
-		}
-	}
-	Err(Error::backend(
-		"git owned patch",
-		format!("rename paths alias the same directory entry: {source} -> {target}"),
-	))
-}
-
-fn owned_raw_version(repo: &GitRepo, path: &str) -> Result<Option<String>> {
-	let absolute = guard_owned_path(repo, path)?;
-	let metadata = match fs::symlink_metadata(&absolute) {
-		Ok(metadata) => metadata,
-		Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-		Err(err) => return Err(err.into()),
-	};
-	if metadata.file_type().is_symlink() {
-		let target = fs::read_link(&absolute)?;
-		#[cfg(unix)]
-		{
-			use std::os::unix::ffi::OsStrExt;
-			raw_sha256(target.as_os_str().as_bytes()).map(Some)
-		}
-		#[cfg(not(unix))]
-		{
-			raw_sha256(
-				target
-					.to_str()
-					.ok_or_else(|| Error::backend("git owned patch", "non-UTF8 symlink target"))?
-					.as_bytes(),
-			)
-			.map(Some)
-		}
-	} else if metadata.is_file() {
-		super::mutate::sha256_file(&absolute).map(Some)
-	} else {
-		Err(Error::backend("git owned patch", format!("not a regular file or symlink: {path}")))
-	}
-}
-
-fn owned_mode_matches(
-	repo: &GitRepo,
+fn register_owned_entry(
+	root: &OwnedRoot,
 	path: &str,
-	exists: bool,
+	entries: &mut BTreeSet<owned_fs::EntryKey>,
+) -> Result<()> {
+	validate_owned_path(path)?;
+	if !entries.insert(PinnedPath::open(root, Path::new(path))?.entry_key()?) {
+		return Err(Error::backend(
+			"git owned patch",
+			format!("patch paths alias the same directory entry: {path}"),
+		));
+	}
+	Ok(())
+}
+
+fn owned_observation(root: &OwnedRoot, path: &str) -> Result<Option<Observation>> {
+	PinnedPath::open(root, Path::new(path))?.observe()
+}
+
+fn owned_is_after(
+	observed: Option<&Observation>,
+	expected: &OwnedPatchExpectation,
+	is_target: bool,
 	mode: Option<Mode>,
-) -> Result<bool> {
-	let absolute = guard_owned_path(repo, path)?;
-	let metadata = match fs::symlink_metadata(absolute) {
-		Ok(metadata) => metadata,
-		Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(!exists),
-		Err(err) => return Err(err.into()),
-	};
-	let actual = if metadata.file_type().is_symlink() {
-		Mode::SYMLINK
-	} else if metadata.is_file() {
-		worktree_file_mode(&metadata, Mode::FILE)
-	} else {
-		return Ok(false);
-	};
-	Ok(owned_fs::mode_matches(Some(actual), exists, mode))
+) -> bool {
+	observed.map(|entry| &entry.version) == expected.after_version.as_ref()
+		&& owned_fs::mode_matches(observed.map(|entry| entry.mode), is_target, mode)
 }
 
 /// Only this isolated repository observes the stricter filter exit policy.
@@ -348,33 +256,35 @@ fn owned_entry_bytes(
 	}
 }
 
+type OwnedDestination<'a> = (PinnedPath<'a>, Option<Observation>);
+
 fn owned_patch_destinations<'a>(
-	root: &'a fs::File,
+	root: &'a OwnedRoot,
 	paths: [Option<&'a str>; 2],
 	target: Option<&str>,
 	mode: Option<Mode>,
 	expected: &BTreeMap<&str, &OwnedPatchExpectation>,
-) -> Result<([Option<owned_fs::PinnedPath<'a>>; 2], bool)> {
+) -> Result<([Option<OwnedDestination<'a>>; 2], [bool; 2])> {
 	let mut destinations = [None, None];
-	let mut already_done = true;
+	let mut done = [true, true];
+	let mut target_mode = mode;
 	for (position, path) in paths.into_iter().enumerate() {
 		let Some(path) = path else { continue };
-		let destination = owned_fs::PinnedPath::open(root, Path::new(path))?;
+		let destination = PinnedPath::open(root, Path::new(path))?;
 		let observed = destination.observe()?;
-		let actual = observed.as_ref().map(|(version, _)| version);
-		let is_after = actual == expected[path].after_version.as_ref()
-			&& owned_fs::mode_matches(
-				observed.as_ref().map(|(_, mode)| *mode),
-				Some(path) == target,
-				mode,
-			);
-		if !is_after && actual != expected[path].before_version.as_ref() {
+		let is_target = Some(path) == target;
+		if position == 0 && !is_target {
+			target_mode = target_mode.or_else(|| observed.as_ref().map(|entry| entry.mode));
+		}
+		done[position] = owned_is_after(observed.as_ref(), expected[path], is_target, target_mode);
+		if !done[position]
+			&& observed.as_ref().map(|entry| &entry.version) != expected[path].before_version.as_ref()
+		{
 			return Err(Error::backend("git owned patch", format!("preimage changed: {path}")));
 		}
-		already_done &= is_after;
-		destinations[position] = Some(destination);
+		destinations[position] = Some((destination, observed));
 	}
-	Ok((destinations, already_done))
+	Ok((destinations, done))
 }
 
 impl GitRepo {
@@ -394,7 +304,8 @@ impl GitRepo {
 			return write_index_map_at(&repo, &state, options.index_path.as_deref(), lock);
 		}
 		let mut filter = apply_filter(&repo, &patches, options.reverse)?;
-		let mut state = patch_worktree_map(self, &repo, &mut filter, &patches, options.reverse)?;
+		let index = index_map(&repo)?;
+		let mut state = patch_worktree_map(self, &repo, &mut filter, &index, &patches, options.reverse)?;
 		apply_patches_to_map(&repo, &mut state, &patches, options)?;
 		write_patch_worktree(self, &repo, &mut filter, &patches, options.reverse, &state)
 	}
@@ -411,30 +322,31 @@ impl GitRepo {
 			return Ok(OwnedPatchPreview { expected: Vec::new() });
 		}
 		let patches = parse_patch(patch_text).map_err(ApplyFailure::into_error)?;
-		let repo = owned_repository(self)?;
-		let mut filter = apply_filter(&repo, &patches, options.reverse)?;
-		let mut expected = Vec::with_capacity(patches.len());
-		let mut touched = BTreeSet::new();
+		let root = OwnedRoot::open(self)?;
+		let mut entries = BTreeSet::new();
 		for patch in &patches {
 			let (source, target, ..) = patch_sides(patch, options.reverse);
-			reject_owned_rename_alias(self, source, target)?;
+			for path in [source, target.filter(|target| Some(*target) != source)].into_iter().flatten() {
+				register_owned_entry(&root, path, &mut entries)?;
+			}
+		}
+		let repo = owned_repository(self)?;
+		let mut filter = apply_filter(&repo, &patches, options.reverse)?;
+		let index = index_map(&repo)?;
+		let mut expected = Vec::with_capacity(patches.len());
+		for patch in &patches {
+			let (source, target, ..) = patch_sides(patch, options.reverse);
 			let paths = [source, target.filter(|target| Some(*target) != source)];
 			let start = expected.len();
 			for path in paths.into_iter().flatten() {
-				if !touched.insert(path) {
-					return Err(Error::backend(
-						"git owned patch preview",
-						"a path appears in multiple patch entries",
-					));
-				}
 				expected.push(OwnedPatchExpectation {
 					path:           path.to_owned(),
-					before_version: owned_raw_version(self, path)?,
+					before_version: owned_observation(&root, path)?.map(|entry| entry.version),
 					after_version:  None,
 				});
 			}
 			let one = std::slice::from_ref(patch);
-			let mut state = patch_worktree_map(self, &repo, &mut filter, one, options.reverse)?;
+			let mut state = patch_worktree_map(self, &repo, &mut filter, &index, one, options.reverse)?;
 			apply_patches_to_map(&repo, &mut state, one, &ApplyOptions {
 				reverse: options.reverse,
 				..ApplyOptions::default()
@@ -442,7 +354,7 @@ impl GitRepo {
 			for item in &mut expected[start..] {
 				let bytes = owned_entry_bytes(&repo, &mut filter, &item.path, state.get(&item.path))?;
 				item.after_version = bytes.as_deref().map(raw_sha256).transpose()?;
-				if owned_raw_version(self, &item.path)? != item.before_version {
+				if owned_observation(&root, &item.path)?.map(|entry| entry.version) != item.before_version {
 					return Err(Error::backend(
 						"git owned patch preview",
 						format!("preimage changed during preview: {}", item.path),
@@ -468,7 +380,7 @@ impl GitRepo {
 		};
 		let mut expected = BTreeMap::new();
 		for item in &options.expected {
-			guard_owned_path(self, &item.path)?;
+			validate_owned_path(&item.path)?;
 			for version in [&item.before_version, &item.after_version]
 				.into_iter()
 				.flatten()
@@ -500,8 +412,6 @@ impl GitRepo {
 					));
 				}
 			}
-			// Reject aliases across the whole patch before writing any entry.
-			reject_owned_rename_alias(self, old, new)?;
 		}
 		if touched.len() != expected.len() {
 			return Err(Error::backend(
@@ -509,8 +419,6 @@ impl GitRepo {
 				"ownership guard contains a path outside this patch",
 			));
 		}
-		let repo = owned_repository(self)?;
-		let mut filter = apply_filter(&repo, &patches, options.reverse)?;
 		let mut output = OwnedPatchResult {
 			paths:      Vec::with_capacity(expected.len()),
 			complete:   true,
@@ -519,10 +427,14 @@ impl GitRepo {
 		if patches.is_empty() {
 			return Ok(output);
 		}
-		// Discovery may intentionally retain the caller's spelling of a
-		// checkout root reached through a symlink. Resolve just that root;
-		// pinned traversal still rejects links inside the worktree.
-		let root = owned_fs::open_root(&fs::canonicalize(self.root())?)?;
+		let root = OwnedRoot::open(self)?;
+		let mut entries = BTreeSet::new();
+		for path in touched {
+			register_owned_entry(&root, path, &mut entries)?;
+		}
+		let repo = owned_repository(self)?;
+		let mut filter = apply_filter(&repo, &patches, options.reverse)?;
+		let index = index_map(&repo)?;
 		// Preview computes every postimage against the unmodified worktree.
 		// Prepare against that same view before a patch can change attributes
 		// used by a later entry. Per-entry preparation failures remain partial.
@@ -530,21 +442,28 @@ impl GitRepo {
 		let mut spool = None;
 		let prepared: Vec<_> = patches
 			.iter()
-			.map(|patch| -> Result<Option<_>> {
+			.map(|patch| -> Result<_> {
 				let (source, target, source_mode, target_mode) = patch_sides(patch, options.reverse);
 				let paths = [source, target.filter(|target| Some(*target) != source)];
-				let (_, already_done) = owned_patch_destinations(
+				let (_, done) = owned_patch_destinations(
 					&root,
 					paths,
 					target,
 					target_mode.or(source_mode),
 					&expected,
 				)?;
-				if already_done {
-					return Ok(None);
+				// Trust the approved raw bytes and mode of a completed target;
+				// earlier entries may already have changed its checkout filters.
+				let partial_rename = source.zip(paths[1]).is_some_and(|(source, target)| {
+					done[1]
+						&& expected[source].after_version.is_none()
+						&& expected[target].after_version.is_some()
+				});
+				if done == [true, true] || partial_rename {
+					return Ok([None, None]);
 				}
 				let one = std::slice::from_ref(patch);
-				let mut state = patch_worktree_map(self, &repo, &mut filter, one, options.reverse)?;
+				let mut state = patch_worktree_map(self, &repo, &mut filter, &index, one, options.reverse)?;
 				apply_patches_to_map(&repo, &mut state, one, &ApplyOptions {
 					reverse: options.reverse,
 					..ApplyOptions::default()
@@ -582,7 +501,7 @@ impl GitRepo {
 						postimages[position] = Some((offset, bytes.len(), entry.mode));
 					}
 				}
-				Ok(Some(postimages))
+				Ok(postimages)
 			})
 			// The clean preimage and patched blob are only needed for this entry.
 			.inspect(|_| drop(repo.objects.reset_object_memory()))
@@ -592,14 +511,13 @@ impl GitRepo {
 
 		let mut diagnostics = Vec::new();
 		let mut bytes = Vec::new();
+		let mut attempted = BTreeSet::new();
+		let mut publication_entries = BTreeSet::new();
 		for (patch, postimages) in patches.iter().zip(prepared) {
 			let (source, target, source_mode, target_mode) = patch_sides(patch, options.reverse);
 			let paths = [source, target.filter(|target| Some(*target) != source)];
-			let mut attempted = [None, None];
 			let attempt = (|| -> Result<()> {
-				let Some(postimages) = postimages? else {
-					return Ok(());
-				};
+				let postimages = postimages?;
 				let (mut destinations, _) = owned_patch_destinations(
 					&root,
 					paths,
@@ -607,46 +525,59 @@ impl GitRepo {
 					target_mode.or(source_mode),
 					&expected,
 				)?;
-				reject_owned_rename_alias(self, source, target)?;
+				for (path, destination) in paths.into_iter().zip(&destinations) {
+					if let (Some(path), Some((destination, _))) = (path, destination)
+						&& !publication_entries.insert(destination.entry_key()?)
+					{
+						return Err(Error::backend(
+							"git owned patch",
+							format!("patch paths now alias the same directory entry: {path}"),
+						));
+					}
+				}
+				let target_mode = target_mode.or(source_mode).or_else(|| {
+					paths[1]?;
+					destinations[0].as_ref()?.1.as_ref().map(|entry| entry.mode)
+				});
 				// Materialize a rename target before deleting its source. A
 				// partial rename can then resume from the retained source and
 				// already-matching target without overwriting either blindly.
 				for position in (0..paths.len()).rev() {
-					let (Some(path), Some(destination)) = (paths[position], &mut destinations[position])
+					let (Some(path), Some((destination, observed))) =
+						(paths[position], &mut destinations[position])
 					else {
 						continue;
 					};
 					let postimage = postimages[position];
-					let mode = postimage.map(|(_, _, mode)| mode);
-					let observed = destination.observe()?;
-					let actual = observed.as_ref().map(|(version, _)| version);
-					let actual_mode = observed.as_ref().map(|(_, mode)| *mode);
-					if actual == expected[path].after_version.as_ref()
-						&& owned_fs::mode_matches(actual_mode, mode.is_some(), mode)
-					{
+					let mode = postimage.map(|(_, _, mode)| mode).or(target_mode);
+					let is_target = Some(path) == target;
+					if owned_is_after(observed.as_ref(), expected[path], is_target, mode) {
 						continue;
 					}
-					if actual != expected[path].before_version.as_ref() {
-						return Err(Error::backend(
-							"git owned patch",
-							format!("preimage changed before write: {path}"),
-						));
-					}
-					if let Some((offset, len, _)) = postimage {
+					if let Some((offset, len, mode)) = postimage {
 						let file = spool.as_mut().expect("prepared postimages have a spool");
 						file.seek(io::SeekFrom::Start(offset))?;
 						bytes.resize(len, 0);
 						file.read_exact(&mut bytes)?;
+						attempted.insert(path);
+						destination.replace(&bytes, mode, observed.as_ref())?;
+					} else if is_target {
+						return Err(Error::backend("git owned patch", format!("confirmed target changed: {path}")));
+					} else if let Some(before) = observed {
+						// Before dropping a rename source, verify the current target
+						// again, including when it was retained from an earlier attempt.
+						if let Some(target) = target {
+							let mode = postimages[1].map(|(_, _, mode)| mode).or(target_mode);
+							let target_observed = owned_observation(&root, target)?;
+							if !owned_is_after(target_observed.as_ref(), expected[target], true, mode) {
+								return Err(Error::backend("git owned patch", format!("confirmed target changed: {target}")));
+							}
+						}
+						attempted.insert(path);
+						destination.remove(before)?;
 					}
-					attempted[position] = Some(path);
-					if let Some(mode) = mode {
-						destination.replace(&bytes, mode)?;
-					} else {
-						destination.remove()?;
-					}
-					if owned_raw_version(self, path)? != expected[path].after_version
-						|| !owned_mode_matches(self, path, mode.is_some(), mode)?
-					{
+					let observed = owned_observation(&root, path)?;
+					if !owned_is_after(observed.as_ref(), expected[path], is_target, mode) {
 						return Err(Error::backend(
 							"git owned patch",
 							format!("postimage changed after write: {path}"),
@@ -659,23 +590,29 @@ impl GitRepo {
 				output.complete = false;
 				diagnostics.push(err.to_string());
 			}
+		}
+		// Recompute entry keys now that additions may have acquired aliases.
+		publication_entries.clear();
+		for patch in &patches {
+			let (source, target, source_mode, target_mode) = patch_sides(patch, options.reverse);
+			let paths = [source, target.filter(|target| Some(*target) != source)];
 			for path in paths.into_iter().flatten() {
-				let observed = owned_raw_version(self, path);
-				let (actual_version, status) = match observed {
-					Ok(actual) => {
-						let mode_ok = owned_mode_matches(
-							self,
-							path,
+				let distinct = match register_owned_entry(&root, path, &mut publication_entries) {
+					Ok(()) => true,
+					Err(err) => {
+						diagnostics.push(format!("{path}: {err}"));
+						false
+					},
+				};
+				let (actual_version, status) = match owned_observation(&root, path) {
+					Ok(observed) => {
+						let status = if distinct && owned_is_after(
+							observed.as_ref(),
+							expected[path],
 							Some(path) == target,
-							if Some(path) == target {
-								target_mode.or(source_mode)
-							} else {
-								None
-							},
-						)
-						.unwrap_or(false);
-						let status = if actual == expected[path].after_version && mode_ok {
-							if attempted.contains(&Some(path)) {
+							target_mode.or(source_mode),
+						) {
+							if attempted.contains(path) {
 								"applied"
 							} else {
 								"unchanged"
@@ -683,7 +620,7 @@ impl GitRepo {
 						} else {
 							"failed"
 						};
-						(actual, status)
+						(Some(observed.map(|entry| entry.version)), status)
 					},
 					Err(err) => {
 						diagnostics.push(format!("{path}: {err}"));
@@ -717,7 +654,8 @@ impl GitRepo {
 			index_map_at(&repo, options.index_path.as_deref())?
 		} else {
 			let mut filter = apply_filter(&repo, &patches, options.reverse)?;
-			patch_worktree_map(self, &repo, &mut filter, &patches, options.reverse)?
+			let index = index_map(&repo)?;
+			patch_worktree_map(self, &repo, &mut filter, &index, &patches, options.reverse)?
 		};
 		match apply_patches_to_map(&repo, &mut state, &patches, options) {
 			Ok(()) => Ok(true),
@@ -2315,10 +2253,10 @@ fn patch_worktree_map(
 	repo: &GitRepo,
 	gix_repo: &gix::Repository,
 	filter: &mut WorktreeFilter<'_>,
+	index: &BTreeMap<String, FileEntry>,
 	patches: &[FilePatch],
 	reverse: bool,
 ) -> Result<BTreeMap<String, FileEntry>> {
-	let index = index_map(gix_repo)?;
 	let mut state = BTreeMap::new();
 	for patch in patches {
 		let (source, target, source_mode, target_mode) = patch_sides(patch, reverse);

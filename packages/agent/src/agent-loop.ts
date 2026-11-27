@@ -1578,6 +1578,12 @@ async function runLoopBody(
 				let message: AssistantMessage;
 				let inputsEmitted = false;
 				let requestScope: unknown;
+				const liveSteering = preparedProviderCall.liveSteering;
+				if (liveSteering) {
+					liveSteering.onAccepted = messages => {
+						requestScope = currentContext.captureToolRequestScope?.(messages) ?? requestScope;
+					};
+				}
 				try {
 					if (agentPauseGate.paused) await waitForProcessPause(config, signal);
 					message = await streamAssistantResponse(

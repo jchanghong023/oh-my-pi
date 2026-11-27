@@ -496,7 +496,8 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 	readonly #watchedJobs = new Set<string>();
 	readonly #consumedJobResults = new Set<string>();
 	readonly #evictionTimers = new Map<string, NodeJS.Timeout>();
-	readonly #strictRetainedArtifactsCleanups = new WeakMap<AsyncJob, Promise<void>>();
+	/** Scheduled or failed cleanup can outlive the job row and still belongs to its owner. */
+	readonly #retainedArtifactsCleanups = new Map<AsyncJob, Promise<void> | undefined>();
 	readonly #evicted = new Map<string, EvictedJob>();
 	readonly #releasedForegroundJobs = new Set<string>();
 	#nextAutoId = 1;
@@ -1236,21 +1237,14 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 
 	async #disposeRetainedArtifacts(deadline: number, ownerId?: string): Promise<void> {
 		const cleanups: Promise<void>[] = [];
-		for (const job of this.#jobs.values()) {
-			if (ownerId !== undefined && job.ownerId !== ownerId) continue;
-			const cleanup = job.retainedArtifactsCleanup;
-			if (!cleanup) continue;
-			let pending = this.#strictRetainedArtifactsCleanups.get(job);
-			if (!pending) {
-				pending = Promise.resolve()
-					.then(cleanup)
-					.then(() => {
-						job.retainedArtifactsCleanup = undefined;
-					})
-					.finally(() => this.#strictRetainedArtifactsCleanups.delete(job));
-				this.#strictRetainedArtifactsCleanups.set(job, pending);
-			}
-			cleanups.push(pending);
+		const collect = (job: AsyncJob): void => {
+			if (ownerId !== undefined && job.ownerId !== ownerId) return;
+			const pending = this.#cleanRetainedArtifacts(job);
+			if (pending) cleanups.push(pending);
+		};
+		for (const job of this.#jobs.values()) collect(job);
+		for (const job of this.#retainedArtifactsCleanups.keys()) {
+			if (this.#jobs.get(job.id) !== job) collect(job);
 		}
 		if (cleanups.length === 0) return;
 		const results = Promise.allSettled(cleanups);
@@ -1338,6 +1332,27 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		return candidate;
 	}
 
+	#cleanRetainedArtifacts(job: AsyncJob): Promise<void> | undefined {
+		const cleanup = job.retainedArtifactsCleanup;
+		if (!cleanup) return;
+		const existing = this.#retainedArtifactsCleanups.get(job);
+		if (existing) return existing;
+		const pending = Promise.resolve()
+			.then(cleanup)
+			.then(
+				() => {
+					job.retainedArtifactsCleanup = undefined;
+					this.#retainedArtifactsCleanups.delete(job);
+				},
+				error => {
+					this.#retainedArtifactsCleanups.set(job, undefined);
+					throw error;
+				},
+			);
+		this.#retainedArtifactsCleanups.set(job, pending);
+		return pending;
+	}
+
 	/**
 	 * Fire a retained temporary artifacts cleanup exactly once, deferred
 	 * until this job's `async-result` delivery has settled (delivered,
@@ -1359,9 +1374,8 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 	 * eviction or manager teardown.
 	 */
 	#runRetainedArtifactsCleanup(job: AsyncJob, options?: { bypassGrace?: boolean }): void {
-		const cleanup = job.retainedArtifactsCleanup;
-		if (!cleanup || this.#strictRetainedArtifactsCleanups.has(job)) return;
-		job.retainedArtifactsCleanup = undefined;
+		if (!job.retainedArtifactsCleanup || this.#retainedArtifactsCleanups.has(job)) return;
+		this.#retainedArtifactsCleanups.set(job, undefined);
 		const jobId = job.id;
 		const bypassGrace = options?.bypassGrace === true;
 		void this.#waitForJobDeliverySettledBounded(jobId)
@@ -1370,7 +1384,12 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 					? Bun.sleep(this.#retainedArtifactsCleanupGraceMs)
 					: undefined,
 			)
-			.then(cleanup)
+			.then(() => {
+				if (this.#strictDisposal || (job.ownerId !== undefined && this.#strictDisposalOwners.has(job.ownerId))) {
+					return;
+				}
+				return this.#cleanRetainedArtifacts(job);
+			})
 			.catch(error => {
 				logger.warn("Async job retained artifacts cleanup failed", {
 					jobId,

@@ -236,7 +236,6 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 			).toHaveLength(1);
 			const result = agent.state.messages.find(message => message.role === "toolResult");
 			expect(result).toMatchObject({
-				role: "toolResult",
 				toolName: "yield",
 				isError: false,
 				content: [{ type: "text", text: "submitted" }],

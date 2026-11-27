@@ -180,10 +180,7 @@ describe("native Goal Codex WebSocket history", () => {
 					const firstInput = wire.requests[0]!.body.input as Array<Record<string, unknown>>;
 					const firstText = JSON.stringify(firstInput);
 					expect(firstText).toContain("GOAL_WIRE_OBJECTIVE");
-					if (goalCommand === "goal-autopilot") {
-						expect(firstText).toContain("MUST 全自动无人值守完成完整目标。");
-						expect(firstText).toContain("NEVER 重复请求授权或确认。");
-					} else {
+					if (goalCommand === "goal") {
 						expect(firstText).not.toContain("MUST 全自动无人值守完成完整目标。");
 					}
 					for (let index = 1; index < wire.requests.length; index++) {

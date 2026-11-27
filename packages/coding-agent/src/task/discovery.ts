@@ -21,7 +21,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
-import { isProviderEnabled } from "../capability";
+import { isProviderEnabled, isUserSourceEnabled } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
 import { pluginUsesClaudeModelDialect } from "../discovery/agent-plugin-format";
@@ -145,10 +145,12 @@ export async function discoverAgents(
 		orderedDirs.push({ dir: path.join(root.path, "agents"), source: root.level });
 	}
 
-	// The shared registry gate excludes foreign Claude roots unless opted in,
-	// while OMP installs and `--plugin-dir` roots remain available.
+	// An explicit Claude config path opts in just as it does for Claude's other user sources.
+	const includeClaude =
+		isUserSourceEnabled("claude-plugins") ||
+		(Boolean(process.env.CLAUDE_CONFIG_DIR?.trim()) && isUserSourceEnabled("claude"));
 	const { roots: pluginRoots } = isProviderEnabled("claude-plugins")
-		? await listClaudePluginRoots(home, resolvedCwd)
+		? await listClaudePluginRoots(home, resolvedCwd, { includeClaude })
 		: { roots: [] };
 	const sortedPluginRoots = [...pluginRoots].sort((a, b) => {
 		if (a.scope === b.scope) return 0;

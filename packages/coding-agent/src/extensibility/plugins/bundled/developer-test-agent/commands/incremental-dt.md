@@ -19,10 +19,10 @@ description: '基于本地 Git 变更（本地变更或分支对比），自动�
 调用方式：
 
 ```json
-{"questions":[{"id":"analysis-mode","question":"请选择增量分析模式：","header":"分析模式","options":[{"label":"本地变更分析","description":"未 commit 的修改（git diff HEAD），使用 class-level 覆盖率"},{"label":"本地分支对比","description":"已 commit 的变更（git diff {base}...HEAD），使用 incremental 覆盖率；base 默认 origin/当前分支名"}]}]}
+{"html":"<form><fieldset><legend>请选择增量分析模式</legend><label><input type=\"radio\" name=\"analysis-mode\" value=\"local\" required> 本地变更（未提交，类级覆盖率）</label><label><input type=\"radio\" name=\"analysis-mode\" value=\"branch\"> 分支对比（已提交，增量覆盖率）</label></fieldset></form>"}
 ```
 
-选择本地分支对比时，从上述命令输入使用 `--base` 指定值；未指定时获取当前 Git 分支名并使用 `origin/当前分支名`。未选择有效模式或取消时不执行分析。
+`analysis-mode` 返回 `local`（本地变更）或 `branch`（分支对比）。分支对比使用输入中的 `--base`，未指定则使用 `origin/当前分支名`。未选择有效模式或取消时不执行分析。
 
 用户选择后，确定后续步骤的执行参数：
 
@@ -30,6 +30,8 @@ description: '基于本地 Git 变更（本地变更或分支对比），自动�
 |---------|---------|----------|----------|
 | 1（本地变更） | `git diff HEAD` | class-level | `git diff HEAD` |
 | 2（分支对比） | `git diff {base}...HEAD` | incremental，目标分支: {base} | `git diff {base}...HEAD` |
+
+用 `git rev-parse --show-toplevel` 获取 `repoRoot`，后续 Git 查询都以该根目录为基准。下文的 `q(...)` 表示 MUST 将完整值编码为单个 Bash 参数：外层加单引号，内部单引号替换为 `'\''`。
 
 ### 2. 获取变更文件
 
@@ -39,10 +41,10 @@ description: '基于本地 Git 变更（本地变更或分支对比），自动�
 
 ```bash
 # 获取所有未提交的变更文件（含变更类型）
-git diff HEAD --diff-filter=ACDMRT --name-status -- "*.java"
+git -C q(repoRoot) diff -M HEAD --diff-filter=ACDMRT --name-status -z -- "*.java"
 
 # 获取未跟踪的新 Java 文件（尚未 git add）
-git ls-files --others --exclude-standard -- "*.java"
+git -C q(repoRoot) ls-files -z --others --exclude-standard -- "*.java"
 ```
 
 过滤规则：
@@ -80,8 +82,10 @@ git ls-files --others --exclude-standard -- "*.java"
 
 #### 2.2 本地分支对比模式
 
+MUST 先用 `git -C q(repoRoot) status --porcelain --untracked-files=normal` 检查工作树。查询失败或输出非空则停止；请用户先提交或移出未提交工作，NEVER 自动 stash、checkout 或丢弃改动。用 `git -C q(repoRoot) rev-parse --verify --end-of-options q(ref)` 分别解析 `HEAD^{commit}` 和 `{base}^{commit}`，记为 `headCommit` 和 `baseCommit`。任一解析失败则停止；`baseRange` 使用完整的 `{baseCommit}...{headCommit}`。
+
 ```bash
-git diff --diff-filter=ACDMRT --name-status {base}...HEAD -- "*.java"
+git -C q(repoRoot) diff -M --diff-filter=ACDMRT --name-status -z q(baseRange) -- "*.java"
 ```
 
 过滤规则同上。
@@ -94,7 +98,7 @@ git diff --diff-filter=ACDMRT --name-status {base}...HEAD -- "*.java"
 
 ### 3. 分析变更详情
 
-步骤2已通过 `--name-status` 获取文件名和变更类型，本步骤对 **M 类型文件**进一步解析变更方法。
+步骤 2 的文件列表按 NUL 分隔解析。`R<相似度>` 项含旧路径和新路径；以新路径作为任务文件，保留两条路径用于获取重命名补丁。
 
 变更类型处理规则：
 
@@ -102,17 +106,20 @@ git diff --diff-filter=ACDMRT --name-status {base}...HEAD -- "*.java"
 |---------|------|---------|
 | 新增 | A | 全量生成测试，无需解析变更方法 |
 | 修改 | M | 需进一步获取 diff 内容，解析变更方法 |
+| 重命名 | R | 解析旧、新路径之间的内容变化；纯重命名不建任务。若新路径首次成为纳入范围的业务 Java 文件，按 A 处理 |
 | 删除 | D | 跳过，不创建任务 |
 
-对 **M 类型文件**，逐个获取 diff 内容解析变更方法：
+对 M 使用当前路径，对 R 同时使用旧、新路径，按字面路径从仓库根获取补丁。NEVER 使用 `-w`；空白可能改变 Java 字符串或文本块的行为。
 
 ```bash
 # 本地变更模式
-git diff HEAD -w -- "{filename}"
+git -C q(repoRoot) --literal-pathspecs diff -M HEAD -- q(filename)
 
 # 分支对比模式
-git diff {base}...HEAD -- "{filename}"
+git -C q(repoRoot) --literal-pathspecs diff -M q(baseRange) -- q(filename)
 ```
+
+R 项在上述命令的 `--` 后传入 `q(oldFilename) q(filename)`，不能只传新路径。
 
 从 diff 输出中解析变更方法：
 - `+methodName()` — 新增方法，标记为 `+methodName`
@@ -147,7 +154,7 @@ git diff {base}...HEAD -- "{filename}"
 
 **判断流程**：
 1. 从文件路径提取类名，检查是否符合跳过规则的命名特征
-2. 若符合命名特征，使用 `read` 读取文件内容进一步检查内容特征
+2. 若符合命名特征，使用 `read` 从 `repoRoot` 下的实际文件路径进一步检查内容特征
 3. 若确认无业务逻辑，将该文件从变更列表中移除，记入跳过列表
 
 **过滤输出**：
@@ -169,10 +176,10 @@ git diff {base}...HEAD -- "{filename}"
 
 ### 5. 创建任务队列
 
-按文件顺序建立本地队列，保存每个文件的变更详情及下方对应模式的完整 prompt。为每个文件生成唯一待办文本 `为 {filename} 生成增量测试`，使用 `todo` 的 `init` 和 `items` 一次初始化；列表为空时不创建待办。
+按文件顺序建立本地队列，保存每个文件的变更详情及下方对应模式的完整 prompt。为每个文件生成待办文本 `为 {filename} 生成增量测试`，使用 `todo` 的 `append`、本次运行的新 `phase` 和 `items` 添加队列，保留已有待办；标题重复时加本次运行后缀。列表为空时不创建待办。
 
 ```json
-{"op":"init","items":["为 src/OrderService.java 生成增量测试"]}
+{"op":"append","phase":"增量 DT","items":["为 src/OrderService.java 生成增量测试"]}
 ```
 
 实际调用时将 `items` 替换为全部待办文本，并逐字保留以供后续 `todo` 操作使用。**prompt 中只传入当前变更文件的变更详情，不允许传入多个变更文件的详情信息。**
@@ -184,7 +191,7 @@ git diff {base}...HEAD -- "{filename}"
 ```
 【变更测试生成】
 
-业务类: {filename}
+业务类: {sourcePath}
 变更类型: {changeType}
 变更方法: {methods}
 覆盖率模式: class-level
@@ -200,7 +207,9 @@ git diff {base}...HEAD -- "{filename}"
 ```
 【变更测试生成】
 
-业务类: {filename}
+业务类: {sourcePath}
+仓库根目录: {repoRoot}
+预期提交: {headCommit}
 变更类型: {changeType}
 变更方法: {methods}
 覆盖率模式: incremental
@@ -216,8 +225,8 @@ git diff {base}...HEAD -- "{filename}"
 
 | 变量 | 来源 | 说明 |
 |------|------|------|
-| `{filename}` | 步骤3分析结果 | 变更文件的相对路径 |
-| `{changeType}` | 步骤3分析结果 | 变更类型：A（新增）或 M（修改） |
+| `{sourcePath}` | `repoRoot` 和步骤 3 的文件路径 | 当前业务文件的绝对路径；统计和待办仍使用仓库根相对路径 |
+| `{changeType}` | 步骤 3 分析结果 | A（新增）、M（修改）或 R（重命名且存在业务修改） |
 | `{methods}` | 步骤3分析结果 | 变更方法列表，逗号分隔 |
 | `{ClassName}` | 从 filename 推导 | 去掉路径和 .java 后缀的类名 |
 | `{base}` | 用户传入的 --base 参数 | 基准分支名称（仅 incremental 模式） |
@@ -227,7 +236,7 @@ git diff {base}...HEAD -- "{filename}"
 | changeType | 生成策略 |
 |------------|---------|
 | A（新增） | 全量生成测试：为该类所有 public 方法生成测试用例 |
-| M（修改） | 增量生成测试：仅为变更方法（新增方法或修改方法）生成或补充测试用例 |
+| M（修改）或 R（重命名且存在业务修改） | 增量生成测试：仅为变更方法（新增方法或修改方法）生成或补充测试用例 |
 
 #### methods 格式
 
@@ -237,7 +246,11 @@ git diff {base}...HEAD -- "{filename}"
 
 ### 6. 串行执行任务
 
-按队列顺序逐个执行，每次只启动一个 `task`；若工具异步返回，等待该子 Agent 完成并接收结果后，才可启动下一个。不得并行或使用 Team 模式。
+按队列顺序逐个执行，每次只启动一个 `task`；若工具异步返回，等待该子 Agent 完成并接收结果后，才可启动下一个。
+
+分支对比模式下，每次委托前 MUST 确认仓库的 `HEAD` 仍是 `headCommit`，且 `git -C q(repoRoot) --literal-pathspecs diff --quiet HEAD -- q(filename)` 成功。发现差异或检查错误则停止，不能对不一致的源码生成测试。委托 MUST 使用 `isolated: false`；子代理在读取前复查提交和目标源码，只允许修改测试。
+
+先用 `todo` 的 `view` 检查待办；若其他任务正进行，NEVER 用 `start` 改动其状态，直接派发当前任务，结束后仍用实际标题标记 `done`。
 
 对当前文件，将下例中的路径、待办文本和 `task` 内容替换为实际值，`task` 内容使用上面对应模式的完整 prompt：
 
@@ -246,7 +259,7 @@ git diff {base}...HEAD -- "{filename}"
 ```
 
 ```json
-{"context":"按当前文件变更与用户约束串行执行增量单元测试任务，保持原有语言路由和覆盖率规则。","tasks":[{"agent":"developer-test-agent","task":"【变更测试生成】\n业务类: src/OrderService.java\n变更类型: M\n变更方法: +createOrder\n覆盖率模式: class-level\n覆盖率阈值: 80%\n目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。","solutionSpace":"按指定变更和覆盖率规则生成单元测试"}]}
+{"context":"按当前文件变更与用户约束串行执行增量单元测试任务，保持原有语言路由和覆盖率规则。","tasks":[{"agent":"developer-test-agent","isolated":false,"task":"<当前文件对应模式的完整 prompt>","solutionSpace":"按指定变更和覆盖率规则生成单元测试"}]}
 ```
 
 若子 Agent 返回缺失信息和待询问题，主 Agent 必须使用 `ask` 向用户收集答案，再将答案和当前文件任务重新委托给 `developer-test-agent`；不得猜测或将澄清请求视为完成。继续等待该文件处理结束后再执行下一个文件。
@@ -344,4 +357,4 @@ git diff {base}...HEAD -- "{filename}"
 8. 已存在测试文件时，优先使用内置 `improve-coverage` 分析覆盖率，若已达标则跳过测试生成
 9. 执行时必须询问用户选择分析模式（本地变更 / 本地分支对比），不得跳过交互
 10. 本地变更模式下，必须同时检查 `git diff HEAD` 和 `git ls-files --others`，向用户展示未提交变更和未跟踪的新文件，提示添加遗漏的新文件
-11. **禁止使用 Team 模式**：仅使用 `todo` 跟踪任务，使用 `task` 逐个串行调度
+11. 仅使用 `todo` 跟踪任务，使用 `task` 逐个串行调度

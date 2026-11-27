@@ -453,7 +453,7 @@ export class CollabGuestLink {
 					}
 				});
 		};
-		socket.onClose = (reason, willReconnect) => {
+		const onClose = (reason: string, willReconnect: boolean): void => {
 			this.#clearWelcomeTimer();
 			this.#clearSnapshotProgressTimer();
 			this.#flushPendingTranscripts();
@@ -468,6 +468,10 @@ export class CollabGuestLink {
 			}
 			this.#ctx.showStatus(`Collab session ended (${reason})`);
 			this.#restoreAfterDisconnect();
+		};
+		socket.onClose = (reason, willReconnect) => {
+			if (numberedRoom) void this.#applyChain.then(() => onClose(reason, willReconnect));
+			else onClose(reason, willReconnect);
 		};
 		try {
 			socket.connect();
@@ -497,6 +501,7 @@ export class CollabGuestLink {
 
 	sendPrompt(text: string, images?: ImageContent[], mode?: "followUp"): boolean {
 		if (this.#rejectReadOnly()) return false;
+		if (!this.#welcomed) return false;
 		return (
 			this.#socket?.send({
 				t: "prompt",

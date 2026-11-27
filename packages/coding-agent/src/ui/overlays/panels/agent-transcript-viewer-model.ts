@@ -603,7 +603,7 @@ export class AgentTranscriptViewerModel {
 
 	/** Esc: clear a non-empty draft, else close. */
 	escape(): void {
-		if (this.draft.text.trim() !== "") {
+		if (this.sendable && this.draft.text.trim() !== "") {
 			this.draft = { text: "", cursor: 0 };
 			this.touch();
 			return;

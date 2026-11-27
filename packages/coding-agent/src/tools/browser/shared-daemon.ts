@@ -22,7 +22,7 @@ import {
 	sanitizeText,
 	withTimeout,
 } from "@oh-my-pi/pi-utils";
-import { daemonClient } from "../../daemon/client";
+import { daemonClient, DaemonRejectedError } from "../../daemon/client";
 import { canonicalProjectDir } from "../../daemon/paths";
 import { type DaemonClient, type OpenRequest, projectScope } from "../../daemon/protocol";
 import { workerEnvFromParent } from "../../subprocess/worker-client";
@@ -352,6 +352,34 @@ export interface SharedBrowserHealthDeps {
 type SharedBrowserHealthScope = SharedTargetScope &
 	({ generation?: string; unitId?: never } | { generation: string; unitId: string });
 
+/** Describe the original broker-owned process or a replacement admitted after its exit. */
+export async function describeSharedBrowserGeneration(
+	client: DaemonClient,
+	scope: SharedTargetScope,
+	unitId: string,
+	signal: AbortSignal,
+): Promise<UnitSnapshot | undefined> {
+	try {
+		const { unit } = await client.request({ op: "describe", unit: unitId }, signal);
+		return unit.id === unitId ? unit : undefined;
+	} catch (error) {
+		// Transport failure proves nothing. Require a broker rejection and the exact scoped replacement.
+		const unknown = `Unknown unit ${unitId}`;
+		if (
+			!(error instanceof DaemonRejectedError) ||
+			(error.message !== unknown && !error.message.startsWith(`${unknown}. Available: `))
+		) {
+			throw error;
+		}
+		const replacement = await describeUnit(
+			client,
+			{ kind: "proc", scope: projectScope(scope.projectDir), key: scope.daemonName },
+			signal,
+		);
+		return replacement?.id !== unitId ? replacement : undefined;
+	}
+}
+
 /** In-flight checks for the same unit and generation guard share one stop round. */
 const reachabilityChecks = new Map<string, Promise<boolean>>();
 
@@ -407,11 +435,14 @@ async function checkSharedBrowserReachable(
 	try {
 		const client = deps.client ?? (await daemonClient());
 		const identity: UnitIdentity = { kind: "proc", scope: projectScope(scope.projectDir), key: scope.daemonName };
-		const existing = await describeUnit(client, scope.unitId ?? identity, signal);
-		if (!existing || (scope.unitId !== undefined && existing.id !== scope.unitId)) return false;
-		// An explicit shared-browser restart confirms the old process stopped and
-		// relaunches under the same proc ID. A name-only lookup cannot prove that
-		// the lease's process was replaced, so don't inspect or probe that endpoint.
+		const existing =
+			scope.unitId === undefined
+				? await describeUnit(client, identity, signal)
+				: await describeSharedBrowserGeneration(client, scope, scope.unitId, signal);
+		if (!existing) return false;
+		// Both an explicit restart and replacement stop the original process first.
+		// Never probe or stop the replacement's endpoint here.
+		if (scope.unitId !== undefined && existing.id !== scope.unitId) return true;
 		if (scope.generation !== undefined && scope.generation !== existing.generation) return scope.unitId !== undefined;
 		if (!isLiveUnit(existing)) return scope.generation !== undefined;
 		const wsEndpoint = wsEndpointOf(existing);

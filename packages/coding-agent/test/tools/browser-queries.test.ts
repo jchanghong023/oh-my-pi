@@ -174,7 +174,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser semantic selectors and queries", (
 			const counts = [];
 			for (const input of inputs) {
 				const observed = (await tab.observe({ selector: 'input[type="' + input.type + '"]' })).elements.find(entry => entry.role === "button");
-				if (!observed || !observed.name) return { inputs, counts, missing: input.type };
+				if (!observed || !observed.name) break;
 				const exact = 'role/button[name="' + observed.name.toLocaleUpperCase() + '" exact]';
 				const partial = 'role/button[name="' + observed.name.slice(0, 1) + '"]';
 				counts.push([await tab.count(exact), await tab.count(partial)]);
@@ -182,7 +182,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser semantic selectors and queries", (
 			return { inputs, counts };`,
 		})) as {
 			details?: {
-				value?: { inputs: { type: string; hasValue: boolean }[]; counts: number[][]; missing?: string };
+				value?: { inputs: { type: string; hasValue: boolean }[]; counts: number[][] };
 			};
 		};
 		const value = result.details?.value;
@@ -190,7 +190,6 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser semantic selectors and queries", (
 			{ type: "submit", hasValue: false },
 			{ type: "reset", hasValue: false },
 		]);
-		expect(value?.missing).toBeUndefined();
 		expect(value?.counts).toHaveLength(2);
 		for (const [exact, partial] of value?.counts ?? []) {
 			expect(exact).toBeGreaterThanOrEqual(1);

@@ -104,11 +104,16 @@ export type CompactionQueuedMessage = {
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
 	draftDetached?: boolean;
+	/** First LoopN item is a prompt, even when its text looks like a local command. */
+	loopNEntry?: true;
 	/** Original conversation for follow-up-key builtins held during compaction. */
 	followUp?: ConversationPosition;
 };
 
-export type CompactionQueueOptions = Pick<CompactionQueuedMessage, "imageLinks" | "draftDetached" | "followUp"> & {
+export type CompactionQueueOptions = Pick<
+	CompactionQueuedMessage,
+	"imageLinks" | "draftDetached" | "followUp" | "loopNEntry"
+> & {
 	preserveDraft?: boolean;
 };
 
@@ -152,13 +157,6 @@ export type SubmittedUserInput = {
 	cancelled: boolean;
 	started: boolean;
 };
-
-export interface SelectOnlyModelSelectorOptions {
-	onSelect: (selector: string) => void | Promise<void>;
-	currentSelector?: string;
-	getCandidates?: (query: string) => readonly Model[];
-	onCancel?: () => void;
-}
 
 export interface GoalCommandOptions {
 	autoOrchestrate?: boolean;
@@ -646,6 +644,8 @@ export interface InteractiveModeContext {
 	 * scrollback is rebuilt (`shell.host?.replayHistory()`). No walking blocks to push it.
 	 */
 	toolOutputExpanded: boolean;
+	/** Compact display's independent expansion control for TodoLoop cards. */
+	readonly compactTodoExpanded?: boolean;
 	/** Tool activity hidden (reactive, see {@link toolOutputExpanded}). */
 	hideToolActivity: boolean;
 	todoExpanded: boolean;
@@ -826,7 +826,6 @@ export interface InteractiveModeContext {
 	showPinnedError(message: string): void;
 	clearPinnedError(): void;
 	showWarning(message: string, options?: { hideWithToolActivity?: boolean }): void;
-	showNewVersionNotification(newVersion: string): void;
 	clearEditor(): void;
 	updatePendingMessagesDisplay(): void;
 	queueCompactionMessage(
@@ -1042,7 +1041,7 @@ export interface InteractiveModeContext {
 	showAgentsDashboard(): void;
 	/** Open the fullscreen git UI, optionally pinned to a revision (`/git <rev>`). */
 	showGitUi(revision?: string): void;
-	showModelSelector(options?: { temporaryOnly?: boolean; selectOnly?: SelectOnlyModelSelectorOptions }): void;
+	showModelSelector(options?: { temporaryOnly?: boolean }): void;
 	/** Session-only switch to an already-resolved model (`/switch <selector>`); compacts first when over context. */
 	switchSessionModel(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void>;
 	showPluginSelector(mode?: "install" | "uninstall"): Promise<void>;

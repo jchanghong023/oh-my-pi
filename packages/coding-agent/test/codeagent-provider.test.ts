@@ -51,7 +51,7 @@ async function httpProbe(
 		},
 	});
 	const cache = new CodeAgentTokenCache(readToken);
-	const model = { ...getCodeAgentModels()[0]!, baseUrl: server.url.origin };
+	const model = getCodeAgentModels()[0]!;
 	const results = [];
 	const events: AssistantMessageEvent[][] = [];
 	try {
@@ -60,7 +60,10 @@ async function httpProbe(
 				model,
 				context,
 				{
-					fetch,
+					fetch: (input, init) => {
+						const url = new URL(input instanceof Request ? input.url : input);
+						return fetch(new URL(url.pathname + url.search, server.url), init);
+					},
 					apiKey: "synthetic-unwanted-key",
 					headers: { Authorization: "Bearer synthetic-unwanted-key" },
 					...options,
@@ -271,7 +274,6 @@ describe("CodeAgent hot credential refresh", () => {
 			expect(result.stopReason).toBe("error");
 			expect(AIError.is(result.errorId, AIError.Flag.Timeout)).toBe(true);
 			expect(AIError.is(result.errorId, AIError.Flag.Abort)).toBe(false);
-			expect(result.errorMessage).not.toContain("cancelled");
 			expect(result.errorMessage).not.toContain("synthetic-timeout-token");
 			expect(probe.headers).toHaveLength(1);
 			expect(reads).toBe(2);

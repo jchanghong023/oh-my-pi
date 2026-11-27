@@ -59,7 +59,7 @@ Testing strategies for complex Python patterns that require non-obvious mock str
 1. **Always use `side_effect` lists** to ensure the loop terminates. A single exception as `side_effect` causes infinite loops.
 2. **Verify loop iteration count**: Use `call_count` on mocked methods to verify the expected number of iterations.
 3. **Test the termination condition**: Verify the specific exception type that breaks the loop is handled correctly.
-4. **Add `--timeout=10` to pytest invocations** as a safety net against infinite loops in tests.
+4. **Bound test execution**: Use `--timeout=10` only if pytest lists it in `--help`; otherwise set a shell tool timeout.
 
 ## 4. Generator Function Testing
 

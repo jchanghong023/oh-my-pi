@@ -11,8 +11,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
 
-const modes: ApprovalMode[] = ["always-ask", "always-ask-cached", "write", "yolo", "guarded"];
-
 afterEach(() => {
 	clearOmpExtensionCliRoots();
 	logger.endTiming();
@@ -60,21 +58,17 @@ describe("approval launch contract", () => {
 		}
 	});
 
-	it.each(["sometimes", "", "YOLO", "guarded "])(
-		"rejects the invalid CLI mode %j and lists all supported values",
-		invalid => {
-			const parsed = parseArgs([`--approval-mode=${invalid}`]);
-			expect(parsed.approvalMode).toBeUndefined();
-			let stderr = "";
-			expect(
-				reportInvalidFlagValues(parsed, text => {
-					stderr += text;
-				}),
-			).toBe(true);
-			expect(stderr).toContain(`Invalid --approval-mode value: ${JSON.stringify(invalid)}`);
-			for (const mode of modes) expect(stderr).toContain(mode);
-		},
-	);
+	it.each(["", "YOLO", "guarded "])("rejects the invalid CLI mode %j", invalid => {
+		const parsed = parseArgs([`--approval-mode=${invalid}`]);
+		expect(parsed.approvalMode).toBeUndefined();
+		let stderr = "";
+		expect(
+			reportInvalidFlagValues(parsed, text => {
+				stderr += text;
+			}),
+		).toBe(true);
+		expect(stderr).toContain(`Invalid --approval-mode value: ${JSON.stringify(invalid)}`);
+	});
 
 	it("falls back from a damaged saved mode to yolo without rewriting the configuration", async () => {
 		using root = TempDir.createSync("@approval-invalid-mode-");

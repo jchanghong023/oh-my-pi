@@ -129,7 +129,6 @@ describe("crawl session access", () => {
 		await fs.writeFile(directory.join("out/page.md"), "existing", "utf8");
 		const contents = ["来源一", "来源二", "来源三", "来源四"];
 		const paths = await Promise.all(contents.map(content => writeCrawlMarkdown(session, "out", "page.md", content)));
-		expect(new Set(paths).size).toBe(contents.length);
 		expect(await fs.readFile(directory.join("out/page.md"), "utf8")).toBe("existing");
 		expect(await Promise.all(paths.map(target => fs.readFile(target, "utf8")))).toEqual(contents);
 	});

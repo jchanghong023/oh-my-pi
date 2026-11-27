@@ -5533,7 +5533,8 @@ export interface VcsOwnedPatchOptions {
 export interface VcsOwnedPatchPathResult {
   path: string
   status: "applied" | "unchanged" | "failed"
-  actualVersion: string | null
+  /** Raw digest, `null` when absent, or omitted when it could not be read. */
+  actualVersion?: string | null
 }
 
 /** Raw-byte guards prepared without index/worktree writes. */

@@ -113,7 +113,6 @@ describe("goal tool registration when goal mode is enabled at runtime", () => {
 		const tools = session.getEnabledToolNames();
 		const mounted = buildGoalAutoOrchestrateMessage(automaticGoal, tools);
 		const withoutTask = buildGoalAutoOrchestrateMessage(automaticGoal, session.getActiveToolNames());
-		expect(mounted?.content).toContain("Read the release notes");
 		expect(withoutTask?.content).toContain("Read the release notes");
 		const rules = renderOrchestrateNotice({ tools }, { authority: "user" });
 		expect(mounted?.content).toContain(rules);

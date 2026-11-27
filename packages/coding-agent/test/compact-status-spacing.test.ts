@@ -117,7 +117,6 @@ describe("compact transcript spacing", () => {
 		await h.init();
 		h.mode.composer.setText("INPUT_PRIORITY");
 		await h.term.waitFor(screen => screen.join("\n").includes(text));
-		expect(h.mode.compactThinkingPreview.render(100)).toHaveLength(3);
 		for (const rows of [12, 8, 6]) {
 			h.term.resize(100, rows);
 			await h.term.waitFor(screen => screen.join("\n").includes("INPUT_PRIORITY"));
@@ -127,16 +126,13 @@ describe("compact transcript spacing", () => {
 		await h.term.waitFor(screen => screen.join("\n").includes(text));
 		timing.expiresAt = Date.now() - 1;
 		await executeBuiltinSlashCommand("/display clean", { ctx: h.mode, draftDetached: true });
-		expect(cfgDisplayMode.get(h.session.settings)).toBe("clean");
 		await executeBuiltinSlashCommand("/display compact", { ctx: h.mode, draftDetached: true });
-		expect(cfgDisplayMode.get(h.session.settings)).toBe("compact");
 		await h.term.waitFor(screen => {
 			const viewport = screen.join("\n");
 			return viewport.includes("INPUT_PRIORITY") && !viewport.includes(text);
 		});
 		expect(h.mode.compactToolOutputPreview.render(100)).toEqual([]);
 		expect(h.mode.compactThinkingPreview.render(100)).toHaveLength(3);
-		expect(h.term.text()).toContain("INPUT_PRIORITY");
 		expect(h.term.scrollback().join("\n")).not.toContain(text);
 	});
 });

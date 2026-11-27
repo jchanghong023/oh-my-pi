@@ -41,7 +41,7 @@ mod platform {
 	#[derive(Clone)]
 	enum Identity {
 		PidFd { fd: Arc<OwnedFd>, start_time: u64 },
-		Child(Arc<Tracker>),
+		Child { tracker: Arc<Tracker>, start_time: Option<u64> },
 	}
 
 	impl Process {
@@ -49,14 +49,23 @@ mod platform {
 			if pid <= 0 {
 				return None;
 			}
-			let pidfd = sys::open_pidfd(pid)?;
+			sys::reserve_proc_fd();
 			let start_time = sys::start_time(pid)?;
+			let pidfd = sys::open_pidfd(pid)?;
+			if sys::start_time(pid) != Some(start_time) {
+				return None;
+			}
 			Some(Self { pid, identity: Identity::PidFd { fd: Arc::new(pidfd), start_time } })
 		}
 
 		pub(super) fn from_child(pid: i32, tracker: &Arc<Tracker>) -> Self {
-			Self::from_pid(pid)
-				.unwrap_or_else(|| Self { pid, identity: Identity::Child(Arc::clone(tracker)) })
+			Self::from_pid(pid).unwrap_or_else(|| Self {
+				pid,
+				identity: Identity::Child {
+					tracker: Arc::clone(tracker),
+					start_time: sys::start_time(pid),
+				},
+			})
 		}
 
 		pub const fn pid(&self) -> i32 {
@@ -116,7 +125,7 @@ mod platform {
 				}
 			}
 			// A waiter-backed root may have been reaped during the procfs walk.
-			if matches!(&self.identity, Identity::Child(_)) && !self.live_identity() {
+			if matches!(&self.identity, Identity::Child { .. }) && !self.live_identity() {
 				return Vec::new();
 			}
 			out
@@ -145,7 +154,7 @@ mod platform {
 					sys::parent_pid(self.pid)
 				},
 				Identity::PidFd { .. } => None,
-				Identity::Child(tracker) => {
+				Identity::Child { tracker, .. } => {
 					let life = tracker.lock();
 					if life.has_exited() {
 						None
@@ -185,7 +194,7 @@ mod platform {
 		pub fn kill(&self, signal: i32) -> bool {
 			match &self.identity {
 				Identity::PidFd { fd, .. } => sys::pidfd_send_signal(fd.as_fd(), signal),
-				Identity::Child(tracker) => {
+				Identity::Child { tracker, .. } => {
 					let life = tracker.lock();
 					// SAFETY: kill takes scalar arguments; reaping can release the
 					// PID only after the waiter records exit under this lock.
@@ -194,26 +203,36 @@ mod platform {
 			}
 		}
 
-		pub fn group_id(&self) -> Option<i32> {
-			let group_id = || {
-				// SAFETY: getpgid takes a PID by value and does not access memory.
-				let pgid = unsafe { libc::getpgid(self.pid) };
-				(pgid > 0).then_some(pgid)
+		pub(super) fn kill_for_cleanup(&self, signal: i32) -> bool {
+			let Identity::PidFd { fd, start_time } = &self.identity else {
+				return self.kill(signal);
 			};
-			match &self.identity {
-				Identity::PidFd { .. } if self.status() == ProcessStatus::Running => group_id(),
-				Identity::PidFd { .. } => None,
-				Identity::Child(tracker) => {
-					let life = tracker.lock();
-					if life.has_exited() { None } else { group_id() }
+			match sys::try_pidfd_send_signal(fd.as_fd(), signal) {
+				Ok(()) => true,
+				Err(err) if sys::pidfd_signal_unavailable(&err) => {
+					self.status() == ProcessStatus::Running
+						&& matches!(crate::sys::proc::kill_checked(self.pid, *start_time, signal), Ok(true))
 				},
+				Err(_) => false,
+			}
+		}
+
+		pub fn group_id(&self) -> Option<i32> {
+			let info = crate::sys::proc::info(self.pid)?;
+			(self.matches_start(info.start) && info.pgid > 0).then_some(info.pgid)
+		}
+
+		pub(super) fn matches_start(&self, start: u64) -> bool {
+			match &self.identity {
+				Identity::PidFd { start_time, .. } => *start_time == start,
+				Identity::Child { start_time, .. } => *start_time == Some(start),
 			}
 		}
 
 		pub fn status(&self) -> ProcessStatus {
 			let fd = match &self.identity {
 				Identity::PidFd { fd, .. } => fd,
-				Identity::Child(tracker) => {
+				Identity::Child { tracker, .. } => {
 					return if tracker.lock().has_exited() {
 						ProcessStatus::Exited
 					} else {
@@ -284,11 +303,11 @@ mod platform {
 			}
 		}
 
-		fn live_identity(&self) -> bool {
+		pub(super) fn live_identity(&self) -> bool {
 			self.status() == ProcessStatus::Running
 				&& match &self.identity {
 					Identity::PidFd { start_time, .. } => sys::start_time(self.pid) == Some(*start_time),
-					Identity::Child(_) => true,
+					Identity::Child { .. } => true,
 				}
 		}
 	}
@@ -403,6 +422,10 @@ mod platform {
 			i32::try_from(info.pbi_pgid).ok().filter(|pgid| *pgid > 0)
 		}
 
+		pub(super) const fn matches_start(&self, start: u64) -> bool {
+			self.start_tvsec.saturating_mul(1_000_000).saturating_add(self.start_tvusec) == start
+		}
+
 		/// Walk the descendant tree in post-order (leaves first), de-duplicating
 		/// by PID so concurrent reparenting cannot trap us in a cycle.
 		pub fn descendants(&self) -> Vec<Self> {
@@ -453,7 +476,7 @@ mod platform {
 		}
 
 		pub fn status(&self) -> ProcessStatus {
-			if self.live_bsdinfo().is_some() {
+			if self.live_bsdinfo().is_some_and(|info| info.pbi_status != 5 /* SZOMB */) {
 				ProcessStatus::Running
 			} else {
 				ProcessStatus::Exited
@@ -815,11 +838,17 @@ impl Process {
 		self.inner.executable_name()
 	}
 
-	/// Send `signal` to this process only, through its pinned identity, so it
-	/// never reaches a process that reused the pid after this one was reaped.
+	/// Send `signal` to this process only, through its pinned identity.
 	/// On Windows the process is terminated whatever `signal` is.
 	pub fn signal(&self, signal: i32) -> bool {
 		self.inner.kill(signal)
+	}
+
+	fn signal_for_cleanup(&self, signal: i32) -> bool {
+		#[cfg(target_os = "linux")]
+		return self.inner.kill_for_cleanup(signal);
+		#[cfg(not(target_os = "linux"))]
+		self.signal(signal)
 	}
 
 	/// Signal the command itself, not its measurement helper.
@@ -831,14 +860,14 @@ impl Process {
 				sys::proc::{self, ProcState},
 			};
 
-			let Some(operand) =
-				Self::from_pid(pid).filter(|operand| operand.ppid() == Some(self.pid()))
-			else {
+			let Some(operand) = proc::info(pid).filter(|operand| operand.ppid == self.pid()) else {
 				return false;
 			};
-			// The helper forks exactly once. Check its pinned identity after
-			// the parentage lookup; the operand's pidfd prevents later reuse.
-			if self.status() != ProcessStatus::Running || !operand.signal(signal) {
+			// The helper forks exactly once. Check its identity after the
+			// parentage lookup, then deliver to the snapshotted operand.
+			if !self.inner.live_identity()
+				|| !matches!(proc::signal_group_member(&operand, signal), Ok(true))
+			{
 				return false;
 			}
 			// The VM's regular stop check sees the helper, not its operand.
@@ -847,13 +876,13 @@ impl Process {
 					.ok()
 					.and_then(|n| Signal::from_number(n, Platform::current()))
 					.is_some_and(|sig| sig.default_action() == DefaultAction::Terminate)
-				&& proc::info(pid).is_some_and(|info| info.state == ProcState::Stopped)
+				&& operand.state == ProcState::Stopped
 			{
-				let _ = operand.signal(libc::SIGCONT);
+				let _ = proc::signal_group_member(&operand, libc::SIGCONT);
 			}
 			return true;
 		}
-		self.signal(signal)
+		self.signal_for_cleanup(signal)
 	}
 
 	/// Send `signal` to this process and its descendants, children first.
@@ -1008,16 +1037,47 @@ impl Process {
 		timeout_ms: u32,
 		ct: CancelToken,
 	) -> Result<bool> {
+		#[cfg(unix)]
+		if group {
+			let mut targets = TerminationTargets::new();
+			if let Some(pgid) = self.group_id() {
+				targets.add_pgid(pgid);
+			}
+			targets.add_process(self.clone());
+			targets.signal(TERM_SIGNAL);
+			if graceful_ms >= 0
+				&& wait_for_exit_with(
+					self,
+					false,
+					|| targets.family_exited(),
+					Some(Duration::from_millis(graceful_ms as u64)),
+					ct.clone(),
+				)
+				.await?
+			{
+				return Ok(true);
+			}
+			targets.signal(KILL_SIGNAL);
+			return wait_for_exit_with(
+				self,
+				false,
+				|| targets.family_exited(),
+				Some(Duration::from_millis(u64::from(timeout_ms))),
+				ct,
+			)
+			.await;
+		}
 		if self.status() != ProcessStatus::Running {
 			return Ok(true);
 		}
 
-		let process_group = if group { self.group_id() } else { None };
+		#[cfg(not(unix))]
+		let _ = group;
 		let protected = host_protected_pids();
 
 		// Capture the entire wave before sending any signal.
 		let mut descendants = self.signalable_descendants(&protected);
-		self.signal_termination_wave(&descendants, process_group, TERM_SIGNAL, &protected);
+		self.signal_termination_wave(&descendants, None, TERM_SIGNAL, &protected);
 
 		// Optional grace wait. A negative `graceful_ms` skips the wait entirely
 		// (we still emit the polite signal so cleanup handlers can run before
@@ -1045,7 +1105,7 @@ impl Process {
 			}));
 		}
 		descendants = current;
-		self.signal_termination_wave(&descendants, process_group, KILL_SIGNAL, &protected);
+		self.signal_termination_wave(&descendants, None, KILL_SIGNAL, &protected);
 
 		wait_for_exit(self, &descendants, Some(Duration::from_millis(u64::from(timeout_ms))), ct)
 			.await
@@ -1102,21 +1162,32 @@ async fn wait_for_exit(
 	timeout: Option<Duration>,
 	ct: CancelToken,
 ) -> Result<bool> {
+	wait_for_exit_with(
+		root,
+		descendants.is_empty(),
+		|| descendants.iter().all(|process| process.status() != ProcessStatus::Running),
+		timeout,
+		ct,
+	)
+	.await
+}
+
+async fn wait_for_exit_with(
+	root: &Process,
+	root_only: bool,
+	mut descendants_exited: impl FnMut() -> bool,
+	timeout: Option<Duration>,
+	ct: CancelToken,
+) -> Result<bool> {
 	ct.heartbeat()?;
-	if root.status() != ProcessStatus::Running
-		&& descendants
-			.iter()
-			.all(|process| process.status() != ProcessStatus::Running)
-	{
+	if root.status() != ProcessStatus::Running && descendants_exited() {
 		return Ok(true);
 	}
 
 	// A lone process is awaited through the OS exit notification. Polling woke
 	// every waiter 20 times a second, and IPC workers wait on their parent for
 	// their whole life. Trees still poll: their membership changes.
-	if descendants.is_empty()
-		&& let Some(result) = wait_for_root_exit(root, timeout, &ct).await
-	{
+	if root_only && let Some(result) = wait_for_root_exit(root, timeout, &ct).await {
 		return result;
 	}
 
@@ -1132,11 +1203,7 @@ async fn wait_for_exit(
 		tokio::time::sleep(sleep_for).await;
 		elapsed += sleep_for;
 
-		if root.status() != ProcessStatus::Running
-			&& descendants
-				.iter()
-				.all(|process| process.status() != ProcessStatus::Running)
-		{
+		if root.status() != ProcessStatus::Running && descendants_exited() {
 			return Ok(true);
 		}
 	}
@@ -1235,6 +1302,9 @@ pub struct TerminationTargets {
 	/// stopped inferior, a `setsid` daemon) still gets the KILL.
 	#[cfg(unix)]
 	family:    Vec<crate::sys::proc::ProcInfo>,
+	/// Raw PID is usable only until the owning PTY waiter can reap the child.
+	#[cfg(unix)]
+	owned_child: Option<i32>,
 }
 
 impl TerminationTargets {
@@ -1253,19 +1323,42 @@ impl TerminationTargets {
 		}
 	}
 
-	/// Seed a group and its family from a spawned leader when its pidfd is
-	/// unavailable. Call before the child can be reaped.
-	#[cfg(target_os = "linux")]
-	pub fn add_owned_group_leader(&mut self, pid: i32) {
-		if pid > 0
-			&& !is_self_process_group(pid)
+	/// Set the PTY's verified, unreaped child. The caller must serialize
+	/// signals with `release_owned_child` and call it before any reap.
+	#[cfg(unix)]
+	pub fn set_owned_child(&mut self, pid: i32) {
+		assert!(pid > 0 && pid != std::process::id() as i32);
+		self.owned_child = Some(pid);
+		#[cfg(target_os = "linux")]
+		omp_builtins::proc_sys::reserve_proc_fd();
+		if !is_self_process_group(pid)
 			&& let Some(leader) = crate::sys::proc::info(pid)
-			&& leader.ppid == std::process::id() as i32
 			&& leader.pgid == pid
 		{
 			self.add_pgid(pid);
 			self.family.push(leader);
 		}
+	}
+
+	/// Preserve the last group snapshot before allowing a PTY waiter to
+	/// release its child's PID. `waitable` means exit was observed without
+	/// consuming the wait status, so the raw child PID is still owned.
+	#[cfg(unix)]
+	pub fn release_owned_child(&mut self, waitable: bool) {
+		if waitable && self.owned_child.is_some() {
+			self.capture_family();
+		}
+		self.owned_child = None;
+	}
+
+	/// Signal just the PTY child, while the caller prevents it being reaped.
+	#[cfg(unix)]
+	pub fn signal_owned_child(&self, signal: i32) -> bool {
+		self.owned_child.is_some_and(|pid| {
+			// SAFETY: scalar arguments; the waiter cannot reap until the
+			// caller releases this PID under the same lock.
+			unsafe { libc::kill(pid, signal) == 0 }
+		})
 	}
 
 	/// Record a pid. Duplicates are ignored. If the pid is alive, opens
@@ -1298,6 +1391,10 @@ impl TerminationTargets {
 	/// True when no targets have been recorded.
 	#[must_use]
 	pub const fn is_empty(&self) -> bool {
+		#[cfg(unix)]
+		if self.owned_child.is_some() || !self.family.is_empty() {
+			return false;
+		}
 		self.pgids.is_empty() && self.processes.is_empty()
 	}
 
@@ -1332,7 +1429,6 @@ impl TerminationTargets {
 			// Unrecorded PIDs must be handled by their owning ExtProc, not
 			// reopened here: a native PID could be a measurement helper.
 			failed:     owned.filter(|pid| !self.seen_pids.contains(pid)).collect(),
-			roots_only: true,
 			family:     Vec::new(),
 		};
 		self.deliver_roots(signal, |pid| {
@@ -1368,8 +1464,6 @@ impl TerminationTargets {
 		SignalWave {
 			failed,
 			family: self.family,
-			#[cfg(target_os = "linux")]
-			roots_only: false,
 		}
 	}
 
@@ -1387,8 +1481,8 @@ impl TerminationTargets {
 
 		if !self.is_empty() {
 			if let Ok(table) = read_table() {
-				self.refresh_family(&table);
-			} else if self.family.is_empty() {
+				self.refresh_family(&table, protected);
+			} else if self.family.is_empty() && self.owned_child.is_none() {
 				let _ =
 					signal_trees(&self.processes, single, &self.pgids, signal, protected, on_failure);
 				return;
@@ -1401,6 +1495,9 @@ impl TerminationTargets {
 			.filter(|p| !protected.contains(&p.pid()))
 			.map(Process::pid)
 			.collect();
+		if let Some(pid) = self.owned_child.filter(|pid| !protected.contains(pid)) {
+			seen.insert(pid);
+		}
 		let mut stopped = HashSet::new();
 		for member in &self.family {
 			if member.state == ProcState::Zombie || protected.contains(&member.pid) {
@@ -1425,28 +1522,66 @@ impl TerminationTargets {
 			if !seen.remove(&pid) {
 				continue;
 			}
-			if !process.signal(signal) {
+			if !process.signal_for_cleanup(signal) {
 				on_failure(pid);
 			} else if stopped.contains(&pid) {
-				let _ = process.signal(libc::SIGCONT);
+				let _ = process.signal_for_cleanup(libc::SIGCONT);
 			}
+		}
+		if let Some(pid) = self.owned_child.filter(|pid| seen.contains(pid))
+			&& self.signal_owned_child(signal)
+			&& stopped.contains(&pid)
+		{
+			self.signal_owned_child(libc::SIGCONT);
 		}
 	}
 
-	/// Keep surviving identities from the preceding wave, and re-expand them
-	/// alongside the still-live roots and members of the recorded groups.
 	#[cfg(unix)]
-	fn refresh_family(&mut self, table: &[crate::sys::proc::ProcInfo]) {
+	fn capture_family(&mut self) -> bool {
+		if self.is_empty() {
+			return true;
+		}
+		let Ok(table) = crate::sys::proc::list() else {
+			return false;
+		};
+		self.refresh_family(&table, &host_protected_pids());
+		true
+	}
+
+	#[cfg(unix)]
+	fn family_exited(&mut self) -> bool {
+		use crate::sys::proc::{self, ProcState};
+
+		let alive = |p: &proc::ProcInfo| {
+			proc::info(p.pid)
+				.is_some_and(|now| now.start == p.start && now.state != ProcState::Zombie)
+		};
+		if self.family.iter().any(alive) {
+			return false;
+		}
+		// The unreaped leader can still anchor a group that acquired new
+		// members during the grace period, even after every known member died.
+		self.capture_family() && !self.family.iter().any(alive)
+	}
+
+	/// Expand the current wave from identity-matched roots and survivors,
+	/// including leaders that have exited but have not been reaped.
+	#[cfg(unix)]
+	fn refresh_family(
+		&mut self,
+		table: &[crate::sys::proc::ProcInfo],
+		protected: &HashSet<i32>,
+	) {
 		use crate::sys::proc;
 
-		// A pinned root still alive after the scan named the same process
-		// during the scan.
-		let roots: HashSet<_> = self
-			.processes
-			.iter()
-			.filter(|p| p.status() == ProcessStatus::Running)
-			.map(Process::pid)
-			.collect();
+		let roots: HashMap<_, _> = self.processes.iter().map(|p| (p.pid(), p)).collect();
+		let is_root = |p: &proc::ProcInfo| {
+			!protected.contains(&p.pid)
+				&& (self.owned_child == Some(p.pid)
+					|| roots
+						.get(&p.pid)
+						.is_some_and(|root| root.inner.matches_start(p.start)))
+		};
 		let retained: HashMap<_, _> = self
 			.family
 			.iter()
@@ -1455,12 +1590,15 @@ impl TerminationTargets {
 		let groups = anchored_groups(
 			table,
 			|id| self.pgids.contains(&id),
-			|p| roots.contains(&p.pid) || retained.get(&(p.pid, p.start)) == Some(&p.pgid),
+			|p| {
+				is_root(p)
+					|| (!protected.contains(&p.pid)
+						&& retained.get(&(p.pid, p.start)) == Some(&p.pgid))
+			},
 		);
 		self.family = proc::family_where(table, |p| {
-			groups.contains(&p.pgid)
-				|| roots.contains(&p.pid)
-				|| retained.contains_key(&(p.pid, p.start))
+			!protected.contains(&p.pid)
+				&& (groups.contains(&p.pgid) || is_root(p) || retained.contains_key(&(p.pid, p.start)))
 		});
 	}
 }
@@ -1474,9 +1612,6 @@ pub struct SignalWave {
 	/// The family before signalling, including members TERM may orphan.
 	#[cfg(unix)]
 	pub(crate) family:     Vec<crate::sys::proc::ProcInfo>,
-	/// Linux measured children must keep later abandonment single-process.
-	#[cfg(target_os = "linux")]
-	pub(crate) roots_only: bool,
 }
 
 /// Snapshot a complete wave before delivering anything: a TERM handler may
@@ -1532,7 +1667,7 @@ fn signal_snapshot<'a>(
 	let _ = (groups, seen, protected);
 	let mut signaled = 0;
 	for process in processes {
-		if process.inner.kill(signal) {
+		if process.signal_for_cleanup(signal) {
 			signaled += 1;
 		} else {
 			on_failure(process.pid());
@@ -1541,8 +1676,8 @@ fn signal_snapshot<'a>(
 	signaled
 }
 
-/// A numeric PGID can be reused. Expand it only with a live root or a
-/// member identified in the previous wave.
+/// A numeric PGID can be reused. Expand it only with an identity-matched
+/// root (possibly unreaped) or a member identified in the previous wave.
 #[cfg(unix)]
 fn anchored_groups(
 	table: &[crate::sys::proc::ProcInfo],
@@ -1580,11 +1715,12 @@ fn signal_group_only_members<'a>(
 	let Ok(snapshot) = proc::list() else {
 		return;
 	};
-	let roots: HashSet<_> = processes
-		.filter(|p| p.status() == ProcessStatus::Running)
-		.map(Process::pid)
-		.collect();
-	let groups = anchored_groups(&snapshot, |id| groups.contains(&id), |p| roots.contains(&p.pid));
+	let roots: HashMap<_, _> = processes.map(|p| (p.pid(), p)).collect();
+	let groups = anchored_groups(
+		&snapshot,
+		|id| groups.contains(&id),
+		|p| roots.get(&p.pid).is_some_and(|root| root.inner.matches_start(p.start)),
+	);
 	for member in snapshot {
 		if groups.contains(&member.pgid)
 			&& member.state != ProcState::Zombie

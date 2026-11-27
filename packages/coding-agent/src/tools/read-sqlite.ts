@@ -34,7 +34,6 @@ import {
 import { throwIfAborted } from "./tool-errors";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
-import { assertTeamReadTarget } from "./team-read-isolation";
 
 interface ResolvedSqliteReadPath {
 	absolutePath: string;
@@ -52,7 +51,6 @@ export async function resolveSqliteReadPath(
 	let rejectedPaths: Set<string> | undefined;
 	const probe = async (absolutePath: string): Promise<boolean> => {
 		if (rejectedPaths?.has(absolutePath)) return false;
-		await assertTeamReadTarget(session, absolutePath);
 		if (await isSqliteFile(absolutePath)) return true;
 		(rejectedPaths ??= new Set()).add(absolutePath);
 		return false;

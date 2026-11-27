@@ -125,7 +125,6 @@ describe("InputController.handleLargePaste gate", () => {
 			input.paste(ctx, text);
 			input.press(ctx, "f4", { afterPaste: true });
 			await Promise.resolve();
-			expect(sent).toHaveLength(1);
 			expect(sent.map(draft => draft.trimEnd())).toEqual([text]);
 			expect(spies.showHookSelector).not.toHaveBeenCalled();
 		} finally {

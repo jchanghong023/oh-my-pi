@@ -909,7 +909,9 @@ export class RemoteAgentSession implements AgentViewSession {
 		try {
 			await this.#command("dispose", options, deferClose !== undefined);
 		} catch (error) {
-			deferClose?.(() => this.#onClose?.(`dispose failed: ${String(error)}`));
+			const close = () => this.#onClose?.(`dispose failed: ${String(error)}`);
+			if (deferClose) deferClose(close);
+			else if (!options?.strict) close();
 			// Best-effort callers outside the lifecycle already tolerate a dead
 			// worker; the lifecycle must not count a lost reply as a successful dispose.
 			if (options?.strict || deferClose || !(error instanceof RpcClosedError)) throw error;
@@ -922,7 +924,11 @@ export class RemoteAgentSession implements AgentViewSession {
 	/** Bridge only: merge a state patch from the publisher. */
 	applyPatch(patch: Partial<SessionMirrorState>): void {
 		if (this.#closed !== undefined) return;
-		if (patch.sessionId !== undefined && patch.sessionId !== this.#state.sessionId) {
+		if (
+			(patch.sessionId !== undefined && patch.sessionId !== this.#state.sessionId) ||
+			(patch.liveToolOutputGeneration !== undefined &&
+				patch.liveToolOutputGeneration !== this.#state.liveToolOutputGeneration)
+		) {
 			this.#liveToolOutput.clear();
 			this.#turnToolDiffs = undefined;
 		}

@@ -26,7 +26,6 @@ import {
 	type AfterToolCallContext,
 	type AfterToolCallResult,
 	type Agent,
-	type AgentContext,
 	AgentBusyError,
 	type AgentEvent,
 	type AgentMessage,
@@ -203,7 +202,6 @@ import {
 	type SkillRediscoveryHost,
 	type SkillWarning,
 } from "../extensibility/skills";
-import { checkSkillInvocation } from "../spec-driven/skill-policy";
 import { expandSlashCommand, type FileSlashCommand, loadSlashCommands } from "../extensibility/slash-commands";
 import { normalizeToolEventInput, resolveToolEventInput } from "../extensibility/tool-event-input";
 import { GoalAutopilotCompletionRequest, GoalRuntime } from "../goals/runtime";
@@ -567,7 +565,6 @@ import {
 import { classifyTitleDrift } from "./title-drift-classifier";
 import {
 	cleanupEmptyMoveSession,
-	copySessionArtifacts,
 	extractSessionInit,
 	type PersistedSessionInit,
 	type SessionManager,
@@ -948,6 +945,8 @@ type AgentContinueSkipReason =
 type ScheduledAgentContinueOptions = {
 	source: string;
 	queuedOnly?: boolean;
+	/** This request must own its next turn; do not coalesce onto an overlapping run. */
+	requireFreshTurn?: boolean;
 	delayMs?: number;
 	generation?: number;
 	shouldContinue?: () => boolean;
@@ -1250,6 +1249,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#eventListeners: LocalAgentSessionEventListener[] = [];
 	#activeToolExecutionUpdates = new Map<string, Extract<LocalAgentSessionEvent, { type: "tool_execution_update" }>>();
 	readonly #liveToolOutput = new LiveToolOutputState();
+	#liveToolOutputGeneration = 0;
 	#modelStage: ModelStage | null = null;
 	readonly #latestTurnToolDiffs = new LatestTurnToolDiffs();
 	/** Guest view activity is independent of the local loop and its run-state subscribers. */
@@ -2671,8 +2671,16 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		});
 		this.agent.prepareQueuedMessages = this.#prepareQueuedUserMessages;
 		this.#detachUsageBeforeModelCall = this.agent.addBeforeModelCallHook(async (signal, context) => {
-			if (this.#goalModeState?.autoOrchestrate)
-				context.captureToolRequestScope ??= () => this.#captureAutopilotRequest(context, signal);
+			if (this.#agentKind === "main") {
+				context.captureToolRequestScope ??= acceptedSteering => {
+					if (
+						acceptedSteering &&
+						!acceptedSteering.some(message => this.#currentGoalAutoOrchestrateInitialSource(message))
+					)
+						return undefined;
+					return this.#captureAutopilotRequest(acceptedSteering ?? context.messages, signal);
+				};
+			}
 			if (!cfgRetryUsageAwareFallback.get(this.settings)) return;
 			// Usage/account health applies to registry credentials, not the host's
 			// already-admitted request for this exact model.
@@ -2715,7 +2723,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				this.#tools.restoreBaseSystemPrompt(prompt, this.#tools.systemPromptSources);
 				this.agent.setSystemPrompt(prompt);
 			},
-			refreshBaseSystemPrompt: () => this.#tools.refreshBaseSystemPrompt(),
+			refreshBaseSystemPrompt: () => this.#tools.refreshBaseSystemPrompt(undefined, "settings"),
 			replaceMemoryTools: tools => this.#tools.replaceMemoryTools(tools),
 		};
 		this.#memory = new SessionMemory(memoryHost, {
@@ -6098,6 +6106,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		onStart?: () => void,
 	): Promise<AgentContinueOutcome> {
 		try {
+			if (request.options.requireFreshTurn && this.agent.state.isStreaming) {
+				await this.agent.waitForIdle();
+				await this.#drainInFlightEventHandlers();
+				return { status: "skipped", reason: "session-unavailable" };
+			}
 			// During an automatic-retry saga the primary model's selector cooldown
 			// can expire while a chain-tail fallback is still mid-backoff. Restoring
 			// the primary then would reset the retry budget and re-enter a model
@@ -6145,6 +6158,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					});
 					await this.agent.waitForIdle();
 					await this.#drainInFlightEventHandlers();
+					if (request.options.requireFreshTurn) return { status: "skipped", reason: "session-unavailable" };
 					if (signal.aborted || this.#isDisposed || this.#abortInProgress || this.isCompacting) {
 						return { status: "skipped", reason: "session-unavailable" };
 					}
@@ -6204,6 +6218,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						const active = this.#activeAgentContinue;
 						if (!active) break;
 						if (!active.turnEnded) {
+							if (options.requireFreshTurn) {
+								await active.promise;
+								this.#skipAgentContinue("session-unavailable", request);
+								return;
+							}
 							active.coalescedSources.add(options.source);
 							logger.debug("agent.continue coalesced after scheduling", {
 								source: options.source,
@@ -6850,6 +6869,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#liveToolOutput.snapshot();
 	}
 
+	get liveToolOutputGeneration(): number {
+		return this.#liveToolOutputGeneration;
+	}
+
 	get modelStage(): ModelStage | null {
 		return this.#modelStage;
 	}
@@ -7473,6 +7496,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#cancelTodoLoop(true);
 		this.#isDisposed = true;
 		this.#abortCustomCommands("Session disposed");
+		this.#promptSetupAbortController?.abort("Session disposed");
 		if (!options?.strict) for (const dispose of this.#disposers.splice(0)) dispose();
 		if (this.#runActive) this.#closeRun();
 		this.#modelDiscoveryAbortController.abort();
@@ -9491,6 +9515,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// survive to be replayed by a focus rebuild in the reset session (#10447).
 		this.#activeToolExecutionUpdates.clear();
 		this.#liveToolOutput.clear();
+		this.#liveToolOutputGeneration++;
 		this.#latestTurnToolDiffs.start(this.sessionId);
 	}
 
@@ -9788,19 +9813,22 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const run = this.#autopilotRun;
 		const currentRun = run?.goalId === goalId && run.sessionGeneration === sessionGeneration;
 		if (source === "restored" && currentRun) return;
-		const alreadyAdmitted =
-			currentRun ||
-			this.sessionManager
-				.getBranchView()
-				.some(
-					entry =>
-						entry.type === "custom" &&
-						entry.customType === GOAL_AUTOPILOT_ADMISSION_ENTRY &&
-						entry.data === goalId,
-				);
-		if (alreadyAdmitted) {
+		const hasReceipt = this.sessionManager
+			.getBranchView()
+			.some(
+				entry =>
+					entry.type === "custom" && entry.customType === GOAL_AUTOPILOT_ADMISSION_ENTRY && entry.data === goalId,
+			);
+		if (currentRun || hasReceipt) {
 			// Resuming creates a new run; no response from the earlier run is current.
 			this.#autopilotRun = { goalId, sessionGeneration };
+			this.#autopilotAdmission = hasReceipt
+				? undefined
+				: {
+						run: this.#autopilotRun,
+						promptGeneration: this.#promptGeneration,
+						awaitingResponse: false,
+					};
 			this.#autopilotResumeSource = undefined;
 		} else if (source === "explicit") {
 			this.#autopilotResumeSource = { goalId, sessionGeneration };
@@ -9821,7 +9849,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#captureAutopilotRequest(
-		context: AgentContext,
+		messages: readonly AgentMessage[],
 		signal?: AbortSignal,
 	): GoalAutopilotRequest | GoalAutopilotCompletionRequest | undefined {
 		const state = this.#goalModeState;
@@ -9839,7 +9867,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const sessionGeneration = this.#sessionGeneration;
 		if (this.#autopilotRun?.goalId !== goalId || this.#autopilotRun.sessionGeneration !== sessionGeneration) {
 			if (state.goal.status !== "active") return;
-			if (!context.messages.some(message => this.#currentGoalAutoOrchestrateInitialSource(message))) return;
+			if (!messages.some(message => this.#currentGoalAutoOrchestrateInitialSource(message))) return;
 			this.#autopilotResumeSource = undefined;
 			this.#autopilotRun = { goalId, sessionGeneration };
 			this.#autopilotAdmission = {
@@ -10044,10 +10072,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return typeof details.args === "string" ? details.args : fallback;
 	}
 
-	#createMagicKeywordNotices(text: string, goalAutoOrchestrateInitialId?: string): CustomMessage[] {
-		const timestamp = Date.now();
+	#beginTurnBudget(text: string): void {
 		const turnBudget = parseTurnBudget(text);
 		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
+	}
+
+	#createMagicKeywordNotices(
+		text: string,
+		goalAutoOrchestrateInitialId?: string,
+		beginTurnBudget = true,
+	): CustomMessage[] {
+		const timestamp = Date.now();
+		if (beginTurnBudget) this.#beginTurnBudget(text);
 		const keywordNotices: CustomMessage[] = [];
 		const goalState = this.#goalModeState;
 		const sourceGoalId =
@@ -10642,10 +10678,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					: this.#tools.takeSessionAgentNotice();
 			queuedNotices = sessionAgentNotice ? [...keywordNotices, sessionAgentNotice] : keywordNotices;
 		} else if (message.customType === COLLAB_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
-			// A collab-forwarded guest prompt is user-identity text: apply the same
-			// magic-keyword notices (and turn-budget parsing) as the local #prompt
-			// path, which sees its text through #createMagicKeywordNotices too.
-			keywordNotices = this.#createMagicKeywordNotices(textContent, options?.goalAutoOrchestrateInitialId);
+			// A guest prompt carries user keyword notices, but its budget belongs
+			// to the turn that actually consumes the prompt.
+			keywordNotices = this.#createMagicKeywordNotices(textContent, goalAutoOrchestrateInitialId, false);
 			queuedNotices = keywordNotices;
 		}
 
@@ -10747,10 +10782,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const workspaceMessage = first ? await this.#buildWorkspaceModeMessage() : undefined;
 		const text: string[] = [];
 		const images: ImageContent[] = [];
+		let collabFollowUpText: string | undefined;
 		for (const message of userMessages) {
 			if (!("content" in message)) continue;
+			const isCollabFollowUp =
+				queue === "followUp" && message.role === "custom" && message.customType === COLLAB_PROMPT_MESSAGE_TYPE;
 			if (typeof message.content === "string") {
 				text.push(message.content);
+				if (isCollabFollowUp) collabFollowUpText = message.content;
 				continue;
 			}
 			const parts: string[] = [];
@@ -10758,7 +10797,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				if (part.type === "text") parts.push(part.text);
 				else if (part.type === "image") images.push(part);
 			}
-			text.push(parts.join(""));
+			const messageText = parts.join("");
+			text.push(messageText);
+			if (isCollabFollowUp) collabFollowUpText = messageText;
 		}
 		const promptText = text.join("\n\n");
 		const preparationImages = images.length > 0 ? images : undefined;
@@ -10768,7 +10809,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			: queue === "followUp" && userMessages.some(message => this.#isUserTask(message))
 				? this.#prepareQueuedUserTask(first, promptText, preparationImages, signal)
 				: this.#prepareAgentStart(first, promptText, preparationImages, this.#promptGeneration, signal, "queued");
-		const relaxed = preparation ? this.#commitOnDelivery(preparation, messages, promptText) : undefined;
+		const relaxed = preparation
+			? this.#commitOnDelivery(preparation, messages, promptText, collabFollowUpText)
+			: undefined;
 		if (!hasInitialSource && !workspaceMessage && !resumeMessage) return relaxed;
 		const generation = this.#promptGeneration;
 		const sessionGeneration = this.#sessionGeneration;
@@ -10817,6 +10860,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		pending: Promise<QueuedMessagePreparation>,
 		messages: readonly AgentMessage[],
 		promptText: string,
+		collabFollowUpText?: string,
 	): Promise<QueuedMessagePreparation> {
 		const referenced = referencedModelAgents(promptText);
 		const preparation = await pending;
@@ -10824,6 +10868,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			commit: () => {
 				const additional = preparation.commit();
 				if (additional === undefined) return undefined;
+				if (collabFollowUpText !== undefined) this.#beginTurnBudget(collabFollowUpText);
 				this.#models.applyChillax(promptText);
 				if (referenced.size === 0) return additional;
 				const notice = this.#tools.takeSessionAgentNotice(
@@ -11383,6 +11428,13 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						// client-owned run goes live (never on a busy-retry that
 						// waits behind an autonomous run) — wake steers parked on
 						// the dispatch so they admit into the run they targeted.
+						if (
+							message.role === "custom" &&
+							message.customType === COLLAB_PROMPT_MESSAGE_TYPE &&
+							message.attribution === "user"
+						) {
+							this.#beginTurnBudget(expandedText);
+						}
 						this.#wakeDispatchLiveWaiters();
 						options?.followUpBatch?.release();
 					});
@@ -12565,16 +12617,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	/** Append a displayable context message and drain persistence without starting a model turn. */
-	async appendCustomMessage<T = unknown>(
-		message: CustomMessagePayload<T>,
-		options?: { signal?: AbortSignal; waitForIdle?: boolean },
-	): Promise<void> {
+	async appendCustomMessage<T = unknown>(message: CustomMessagePayload<T>): Promise<void> {
 		return this.#admitSubmission(async () => {
 			const generation = this.#sessionGeneration;
 			const manager = this.sessionManager;
 			const sessionId = manager.getSessionId();
 			const assertCurrent = (): void => {
-				options?.signal?.throwIfAborted();
 				if (
 					this.#isDisposed ||
 					this.isSessionTransitioning ||
@@ -12590,8 +12638,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const normalized = await this.#normalizeAgentMessageImages(appMessage);
 			for (;;) {
 				assertCurrent();
-				if (options?.waitForIdle === false || !this.isStreaming) break;
-				await untilAborted(options?.signal, () => this.waitForIdle());
+				if (!this.isStreaming) break;
+				await this.waitForIdle();
 			}
 			manager.appendCustomMessageEntry(
 				normalized.customType,
@@ -12603,7 +12651,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				normalized.excludeFromContext,
 			);
 			this.agent.appendMessage(normalized);
-			// A first /team result has no assistant turn to open the lazy transcript gate.
+			// A first custom message may have no assistant turn to open the lazy transcript gate.
 			await manager.ensureOnDisk();
 			await manager.flush();
 			assertCurrent();
@@ -13248,10 +13296,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		skill: Pick<Skill, "name" | "filePath" | "baseDir">,
 		input: SkillPromptInput,
 	): Promise<BuiltSkillPromptMessage> {
-		const loaded = await loadSkillPrompt(skill, this, {
-			scope: this.sessionManager,
-			getSessionBranch: () => this.sessionManager.getBranch(),
-		});
+		const loaded = await loadSkillPrompt(skill, this);
 		return this.renderUserSkillPrompt(loaded.skill, input, loaded.body);
 	}
 
@@ -13261,10 +13306,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		input: SkillPromptInput,
 		body: string,
 	): BuiltSkillPromptMessage {
-		checkSkillInvocation(skill, {
-			scope: this.sessionManager,
-			getSessionBranch: () => this.sessionManager.getBranch(),
-		});
 		return renderSkillPromptMessage(skill, input, body, "user", {
 			expandUserArgs: args => this.#modelMentions.expandMentions(args),
 		});
@@ -14363,7 +14404,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// under a fresh id, so the work already produced is still this session's.
 			this.#recovery.reanchorServedAttribution(previousSessionId);
 
-			await copySessionArtifacts(forkResult.oldSessionFile, forkResult.newSessionFile);
+			await this.sessionManager.copySessionArtifacts(forkResult.oldSessionFile, forkResult.newSessionFile);
 
 			// Update agent session ID
 			this.#freshProviderSessionId = undefined;

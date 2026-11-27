@@ -5,8 +5,10 @@
 # Ninja; macOS dev hosts need `brew install ninja`.
 [env]
 CMAKE_GENERATOR = "Ninja"
-# Keep bundled Opus on the same static/dynamic CRT as Rust on Windows.
+# Keep bundled Opus on the same static/dynamic CRT as Rust; the fallback
+# toolchain also forwards Cargo's target-specific compiler settings to CMake.
 CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_msvc = { value = ".cargo/windows-msvc.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_aarch64_pc_windows_msvc = { value = ".cargo/windows-msvc.cmake", relative = true }
 # Tree-sitter links wasmtime-c-api statically; its headers otherwise declare
 # dllimport on MSVC, producing invalid indirect calls in Windows WASM parsing.
 # Dependency headers contain UTF-8 comments; MSVC's locale code page can swallow

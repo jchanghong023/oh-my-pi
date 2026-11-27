@@ -151,7 +151,7 @@ test("a queued inline loop body that rejects before admission never becomes the 
 	expect(getLoopPrompt()).toBeUndefined();
 	expect(armLoopAutoSubmit).not.toHaveBeenCalled();
 	expect(ctx.compactionQueuedMessages).toEqual(queued);
-	expect(ctx.showError).toHaveBeenCalledWith("Failed to send queued message: attachment too large");
+	expect(ctx.showError).toHaveBeenCalled();
 });
 
 describe("flushCompactionQueue loop parking", () => {

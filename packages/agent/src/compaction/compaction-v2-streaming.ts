@@ -16,6 +16,7 @@ import type {
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { mergeHeaders } from "@oh-my-pi/pi-ai/providers/anthropic-headers";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
 import {
 	applyCodexResponsesLiteShape,
@@ -32,7 +33,7 @@ import {
 	parseAzureDeploymentNameMap,
 	resolveOpenAIRequestSetup,
 } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import { getHeaderCaseInsensitive, resolveRequestAuthBearer } from "@oh-my-pi/pi-ai/utils";
+import { getHeaderCaseInsensitive } from "@oh-my-pi/pi-ai/utils";
 import { captureOpenAIHttpError } from "@oh-my-pi/pi-ai/utils/openai-http";
 import { withResolvedHeaders } from "@oh-my-pi/pi-ai/utils/model-headers";
 import type { CatalogPolicyInputs } from "@oh-my-pi/pi-catalog/types";
@@ -324,14 +325,15 @@ export async function requestCompactionV2Streaming(
 			});
 			try {
 				model = await withResolvedHeaders(model, signal);
-				if (options?.requestAuth !== undefined) apiKey = options.requestAuth.apiKey?.trim() ?? "";
+				const requestAuth = normalizeCompactionRequestAuth(options?.requestAuth);
+				if (requestAuth !== undefined) apiKey = requestAuth.apiKey?.trim() ?? "";
 				let fetchImpl: FetchImpl = options?.fetch ?? globalThis.fetch;
 				if (isBedrockOpenAIUrl(model.baseUrl)) {
 					({
 						model,
 						apiKey,
 						fetch: fetchImpl,
-					} = await prepareBedrockCompactionRequest(model, apiKey, options?.fetch, signal, options?.requestAuth));
+					} = await prepareBedrockCompactionRequest(model, apiKey, options?.fetch, signal, requestAuth));
 				}
 				const endpoint = getCompactionV2Endpoint(model);
 				if (!endpoint) {
@@ -370,7 +372,7 @@ export async function requestCompactionV2Streaming(
 							timeoutSignal,
 							{
 								codexMetadata,
-								requestAuth: options?.requestAuth,
+								requestAuth,
 								providerSessionState: options?.providerSessionState,
 								codexCompaction: options?.codexCompaction,
 								preferWebsockets: options?.preferWebsockets,
@@ -513,20 +515,44 @@ async function attemptCompactionV2Streaming(
 	return collectCompactionV2Output(response, request);
 }
 
+export function normalizeCompactionRequestAuth(
+	auth: SimpleStreamOptions["requestAuth"],
+): SimpleStreamOptions["requestAuth"] {
+	if (!auth?.headers) return auth;
+	const headers = mergeHeaders(auth.headers);
+	for (const name in headers) {
+		const lower = name.toLowerCase();
+		if ((lower === "authorization" || lower === OPENAI_HEADERS.ACCOUNT_ID) && !headers[name]?.trim()) {
+			delete headers[name];
+		}
+	}
+	return { ...auth, headers };
+}
+
+/** Derive routing from the same Authorization value sent on the wire. */
+export function resolveCodexCompactionBearer(headers: Record<string, string>, fallback: string): string | undefined {
+	const authorization = getHeaderCaseInsensitive(headers, "Authorization")?.trim();
+	if (authorization) return /^Bearer[ \t]+(\S+)$/i.exec(authorization)?.[1];
+	if (!fallback.trim()) return undefined;
+	for (const name in headers) {
+		if (name.toLowerCase() === "authorization") delete headers[name];
+	}
+	headers.Authorization = `Bearer ${fallback.trim()}`;
+	return fallback.trim();
+}
+
 /** Replace inherited credentials on the direct native compaction HTTP request. */
 export function applyExplicitCompactionAuth(
 	headers: Headers,
 	auth: NonNullable<SimpleStreamOptions["requestAuth"]>,
-	apiKey: string,
-	azure: boolean,
-	accountId?: string,
+	keyHeader: "api-key" | "Authorization",
+	keyValue: string | undefined,
 ): void {
 	for (const name of ["authorization", "api-key", "x-api-key", OPENAI_HEADERS.ACCOUNT_ID]) headers.delete(name);
-	if (apiKey) headers.set(azure ? "api-key" : "Authorization", azure ? apiKey : `Bearer ${apiKey}`);
+	if (keyValue) headers.set(keyHeader, keyValue);
 	if (auth.headers) {
 		for (const [name, value] of Object.entries(auth.headers)) headers.set(name, value);
 	}
-	if (accountId) headers.set(OPENAI_HEADERS.ACCOUNT_ID, accountId);
 }
 
 function buildCompactionV2Headers(
@@ -540,7 +566,7 @@ function buildCompactionV2Headers(
 	const cacheOptions = { sessionId: request.sessionId, promptCacheKey: request.promptCacheKey };
 	const routingSessionId = getOpenAIResponsesRoutingSessionId(cacheOptions);
 	const promptCacheSessionId = getOpenAIPromptCacheKey(cacheOptions);
-	const headers: Record<string, string> =
+	let headers: Record<string, string> =
 		api === "azure-openai-responses"
 			? {
 					"content-type": "application/json",
@@ -574,15 +600,27 @@ function buildCompactionV2Headers(
 						},
 					).headers,
 				};
-	let accountId: string | undefined;
-	if (api === "openai-codex-responses" || model.provider === "openai-codex") {
-		const bearer = requestAuth === undefined ? apiKey : resolveRequestAuthBearer(requestAuth);
+	const isCodex = api === "openai-codex-responses" || model.provider === "openai-codex";
+	if (requestAuth !== undefined) {
+		const explicit = new Headers(mergeHeaders(headers));
+		const azure = api === "azure-openai-responses";
+		applyExplicitCompactionAuth(
+			explicit,
+			requestAuth,
+			azure ? "api-key" : "Authorization",
+			azure ? apiKey : apiKey ? explicit.get("Authorization") ?? undefined : undefined,
+		);
+		headers = Object.fromEntries(explicit);
+	} else if (isCodex) {
+		headers = mergeHeaders(headers);
+	}
+	if (isCodex) {
+		const bearer = resolveCodexCompactionBearer(headers, requestAuth === undefined ? apiKey : "");
 		if (!bearer) throw new AIError.MissingApiKeyError(model.provider);
-		accountId =
-			getHeaderCaseInsensitive(requestAuth?.headers, OPENAI_HEADERS.ACCOUNT_ID)?.trim() || getCodexAccountId(bearer);
-		if (accountId) {
-			headers[OPENAI_HEADERS.ACCOUNT_ID] = accountId;
-		}
+		const configuredAccount = getHeaderCaseInsensitive(headers, OPENAI_HEADERS.ACCOUNT_ID)?.trim();
+		const accountId =
+			(requestAuth === undefined ? undefined : configuredAccount) || getCodexAccountId(bearer) || configuredAccount;
+		if (accountId) headers = mergeHeaders(headers, { [OPENAI_HEADERS.ACCOUNT_ID]: accountId });
 		applyCodexResidencyHeader(headers, bearer);
 		if (routingSessionId) {
 			headers[OPENAI_HEADERS.SESSION_ID] = routingSessionId;
@@ -596,11 +634,7 @@ function buildCompactionV2Headers(
 		}
 	}
 	if (codexMetadata) Object.assign(headers, codexMetadata.headers);
-	if (requestAuth !== undefined) {
-		const explicit = new Headers(headers);
-		applyExplicitCompactionAuth(explicit, requestAuth, apiKey, api === "azure-openai-responses", accountId);
-		return explicit;
-	}
+	if (requestAuth !== undefined) return new Headers(mergeHeaders(headers));
 
 	return headers;
 }

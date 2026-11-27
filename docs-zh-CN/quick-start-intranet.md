@@ -2,23 +2,23 @@
 
 ## 安装与更新
 
-本指南适用于个人 fork，不使用根 README 中的上游安装渠道。Fork 仅发布 Windows x64 和 Linux glibc x64 预编译二进制，不通过 npm 发布或提供源码安装模式。优先从 [CNB Releases](https://cnb.cool/jchanghong/bin/-/releases) 下载；能访问公网时也可使用本 fork 的 [GitHub Releases](https://github.com/jchanghong023/oh-my-pi/releases) 或在线安装器。
+Fork 仅从 [CNB Releases](https://cnb.cool/jchanghong/bin/-/releases) 分发 Windows x64 和 Linux glibc x64 预编译二进制，不提供 npm 或源码安装。使用下列安装器前，先设置具有 `repo-release:r` 权限的 `CNB_TOKEN`，并在 [fork 源码](https://cnb.cool/jchanghong/oh-my-pi)目录中运行。
 
 Linux（glibc x64）：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.sh | sh -s -- --binary
+sh scripts/install.sh --binary
 ```
 
 Windows x64（PowerShell）：
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary
+.\scripts\install.ps1 -Binary
 ```
 
-固定版本用 Linux `--ref <tag>` 或 Windows `-Ref <tag>`，tag 形如 `v19.2.1+fork.N`。独立 fork 二进制可用 `omp update --stable` 切换至稳定渠道并更新，但不会降级；包管理器安装需改用 fork 安装器。完成后用 `omp --version` 核对 PATH 实际命中的版本。
+默认使用 CNB 的 `omp` 发布；也可用 Linux `--ref <tag>` 或 Windows `-Ref <tag>` 指定已有版本标签。独立二进制可用 `omp update --check` 检查，再用 `omp update` 更新；设置 `OMP_OFFLINE` 时两者均不可用。包管理器安装需改用 fork 安装器。完成后用 `omp --version` 核对 PATH 实际命中的版本。
 
-在线安装器验证 Release 元数据的 TLS 证书，并在替换前校验二进制的 SHA-256 和完整版本号。企业代理拦截 TLS 时，安装器的元数据请求客户端必须信任代理 CA。运行时需要验证服务身份时，启动前显式设置 `NODE_TLS_REJECT_UNAUTHORIZED=1`；其余边界见[运行规格](../openspec/specs/fork-runtime/spec.md#requirement-安装与运行)。
+安装器和更新器严格校验 CNB 元数据的 TLS 证书，并在替换前比对资产 SHA-256 和完整版本号。缺少版本标记的发布不会安装或更新；需由发布者补齐元数据。企业代理拦截 TLS 时，元数据请求客户端必须信任代理 CA。其余运行时 TLS 边界见[运行规格](../openspec/specs/fork-runtime/spec.md#requirement-安装与运行)。
 
 ### 嵌入式 SDK
 
@@ -41,7 +41,6 @@ omp
 
 - `OMP_CONFIG_ROOT`：持久数据目录，存放配置、凭据和会话。
 - `OMP_CACHE_DIR`：可选性能目录，使用当前用户可访问的绝对路径；红区 Linux 默认使用 `/dev/shm/omp-<UID>`。模型目录缓存 `agent/models.db` 随性能目录切换，不迁移旧缓存；统计和日志也可避开网络磁盘。JS eval 的 `bun` 占位脚本和 WebKit 主程序不使用默认的 `/dev/shm`；显式指定性能目录时，请确保该目录允许执行。
-- `OMP_SKILLS_DIR`：可选团队共享技能目录；用 `/extensions` 查看或启停共享技能，不改共享文件。
 
 红区模式会暂时关闭 Web Search 和 Browser（含 `/crawl`）。可以让 Agent 用 `read` 读取可达的内网 HTTP(S) 地址，`fetch.enabled` 默认开启，并遵循你的显式设置。
 
@@ -58,7 +57,7 @@ omp
 - **内网协作**：`/collab2 1234` 开房，`/collab2 join 1234` 加入。仅在可信隔离内网使用；启用 `OMP_OFFLINE` 时默认 `10.239.93.104:9333`，否则默认 `127.0.0.1:9333`。双方使用同一服务器；`OMP_COLLAB2_IP` 只填 IP，不带端口或前缀。
 - **画布**：`/sketch` 手绘或贴图标注。红区按提示手动打开本机地址；结果作为 PNG 加入草稿，手动发送，附加前可按 `Esc` 取消。
 - **隔离与确认**：`omp -P work` 隔离配置与会话；`omp --approval-mode guarded` 要求确认工具标记的危险操作；`/workspace` 仅提醒写入范围，不是沙箱。
-- **需求与知识**：获授权后用 `omp openspec init` 初始化，再用 `/skill:openspec-propose` 起草变更；旧 schema 见[迁移说明](../openspec/specs/spec-driven-orchestration/spec.md#requirement-包内技能发现与资源兼容)。`omp openwiki code --init` 生成仓库 Wiki；要让 Agent 查询已有 Wiki，先运行 `omp config set openwiki.tools.enabled true`。
-- **编排**：`/team <需求>` 做只读调查与交叉评审，CLI 和配置见 [Team 指南](../docs/team.md)；计划清单用 `/todoloop tasks.md --check` 预检、`/todoloop tasks.md` 执行。[Goal Autopilot](../openspec/specs/spec-driven-orchestration/spec.md#requirement-1-目标与命令) 用于无人值守长任务。
+- **需求与知识**：获授权后用 `omp openspec init` 初始化，再用 `/skill:openspec-propose` 起草变更。内置 OpenSpec 工作流遵循上游 schema，并按普通技能发现规则列出。`omp openwiki code --init` 生成仓库 Wiki；要让 Agent 查询已有 Wiki，先运行 `omp config set openwiki.tools.enabled true`。
+- **编排**：计划清单用 `/todoloop tasks.md --check` 预检、`/todoloop tasks.md` 执行。[Goal Autopilot](../openspec/specs/spec-driven-orchestration/spec.md#requirement-1-目标与命令) 用于无人值守长任务。
 
 更多见[个人命令规格](../openspec/specs/personal-commands/spec.md)、[已批准需求](../openspec/specs/)与[上游快捷键](../docs/keybindings.md)；fork 绑定以上述差异为准。

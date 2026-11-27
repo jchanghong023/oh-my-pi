@@ -74,7 +74,6 @@ describe("AgentSession title generation disposal", () => {
 		const providerSessionId = "provider-session";
 
 		const settings = Settings.isolated({
-			"title.generator": "fork",
 			"compaction.enabled": false,
 			modelRoles: { tiny: `${model.provider}/${model.id}` },
 		});

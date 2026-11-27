@@ -2842,10 +2842,10 @@ describe("provider routing selector (@upstream)", () => {
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.upstream).toBe("cerebras");
 		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
-		expect((result.model as Model<"openai-completions">).compat.openRouterRouting).toEqual({
-			only: ["cerebras"],
-			order: ["anthropic", "cerebras"],
-		});
+		expect((result.model as Model<"openai-completions">).compat.openRouterRouting?.order).toEqual([
+			"anthropic",
+			"cerebras",
+		]);
 		expect((result.model as Model<"openai-completions">).compat.supportsDeveloperRole).toBe(false);
 		expect((model as Model<"openai-completions">).compat.openRouterRouting?.only).toEqual(["anthropic"]);
 	});

@@ -12,7 +12,7 @@ If user clarification is required, return the missing information and exact ques
 
 ## STEP 0: DTAgent.md Knowledge Loading (MANDATORY — do this before everything else)
 
-Before starting any task, the agent MUST first check whether a `DTAgent.md` file exists in the project root directory (the current working directory).
+Before starting any task, check for `DTAgent.md` in the task's verified repository root when supplied, otherwise in the current project directory.
 
 ### Procedure
 
@@ -148,13 +148,17 @@ If no skill name is detected in the user's request, or Skill-First detection fai
 | **review-only** | "审查", "review", "断言质量", "assertion" | improve-validity |
 | **report-only** | "报告", "report" | test-report |
 | **fix-then-coverage** | "修复并提升覆盖率", "fix and improve coverage" | fix-ut → improve-coverage |
+| **generate-if-needed** | `【文件测试生成】`, `【目录测试生成】`, `【变更测试生成】` with existing tests | improve-coverage → if below the requested threshold, run the full-generate pipeline |
 
 **CRITICAL RULES for intent detection:**
-- If the user mentions "覆盖率" or "coverage" or "分析覆盖率" → intent is **coverage-only**, NOT full-generate
-- If the user says "分析当前覆盖率" → coverage-only, do NOT call a generate Skill first
-- If the user says "生成测试" without mentioning coverage → intent is **full-generate**
+- A command-generated task header or explicit action MUST outrank coverage keywords. Mode, thresholds and acceptance criteria do not select a pipeline.
+- For `【文件测试生成】`, `【目录测试生成】` and `【变更测试生成】`, check for the target test file first: missing → full-generate; existing → generate-if-needed. Preserve the requested scope, including a supplied change-method list.
+- `【门禁修复-用例修复】` → fix-only; `【门禁修复-用例修复+覆盖率补充】` → fix-then-coverage; `【门禁修复-覆盖率补充】` → coverage-only. Repair failures before coverage work for combined tasks.
+- Select coverage-only without a task header only when coverage analysis or improvement is the requested action, not when coverage is a generation goal or a repair acceptance criterion.
 - C/C++, Go or Python file extension in the request → intent follows the same keyword matching rules as Java (all four languages now use the same 5-skill pipeline)
 - When in doubt, ask the user to clarify before proceeding
+
+When a delegated task supplies a verified repository root, keep reads and edits for that task in its working tree. MUST verify any supplied source branch or expected commit and target path before modifying tests; for a committed-change task, also verify the target source matches the expected commit before reading it. On mismatch, return the blocking check to the caller. NEVER switch worktrees or branches to satisfy it.
 
 **After determining intent, output a one-line statement like:**
 - "Intent: coverage-only (Java). First skill: improve-coverage"
@@ -182,7 +186,7 @@ Output a stage declaration block:
 | 5 | test-report | pending |
 ```
 
-Then call `todo` with `op: "init"` and `items` containing the exact names of the determined stages. For each completed stage, call `todo` with `op: "done"` and `task` equal to its verbatim item text. Append a conditional stage with `op: "append"`, `phase`, and `items` only when Gap Analysis triggers it.
+Then use `todo` with `op: "append"`, a new phase for this run and `items` containing the determined stages. Keep existing rows; disambiguate item text if already present. Use each verbatim item with `op: "done"` when it completes. Append conditional stages to the same phase only when triggered.
 
 ### Stage List by Path and Intent
 
@@ -199,6 +203,7 @@ Then call `todo` with `op: "init"` and `items` containing the exact names of the
 | Path 2 — review-only | improve-validity only |
 | Path 2 — report-only | test-report only |
 | Path 2 — fix-then-coverage | fix-ut → improve-coverage |
+| Path 2 — generate-if-needed | improve-coverage; if below threshold, append and execute all 5 full-generate stages |
 
 ### Rules
 

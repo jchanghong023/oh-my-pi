@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, postmortem } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEexist, postmortem } from "@oh-my-pi/pi-utils";
 import { configureOpenWikiHome, getOpenWikiConfigDirectory } from "../openwiki/home";
 import { loadOpenWikiVendor } from "../openwiki/vendor-loader";
 import { OPENWIKI_VALUE_FLAGS } from "./flag-tables";
@@ -152,6 +152,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			resolvePageConcurrency,
 			resolveRepositoryRoot,
 			previewRepositoryFiles,
+			readRepositoryRunState,
 			startEmbeddedVisualizeServer,
 			exportStaticVisualizer,
 			runNativeRepositoryGeneration,
@@ -280,16 +281,23 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 		const { materializeOpenWikiSkills } = await import("../openwiki/resources");
 		const skillsDir = await materializeOpenWikiSkills(agentDir);
 		if (controller.signal.aborted) return 130;
-		const selected = await createOpenWikiModel(scope, parsed.model);
+		const selected = await createOpenWikiModel(scope, parsed.model, controller.signal);
 		let planner = selected;
 		try {
 			if (controller.signal.aborted) return 130;
 			planner = await selected.createPlannerModel(parsed.plannerModel);
 			const { updateOpenWikiAgentInstructions } = await import("../openwiki/agents-instructions");
 			if (controller.signal.aborted) return 130;
-			await updateOpenWikiAgentInstructions(root);
 			const wikiDir = path.join(root, "openwiki");
-			await mkdir(wikiDir, { recursive: true });
+			try {
+				await mkdir(wikiDir);
+			} catch (error) {
+				if (!isEexist(error)) throw error;
+				if (!(await lstat(wikiDir)).isDirectory())
+					throw new Error("Refusing to use openwiki: expected a real directory below the repository root.");
+			}
+			const language = command.language ?? ((await readRepositoryRunState(root)) ? null : "zh-CN");
+			await updateOpenWikiAgentInstructions(root);
 			try {
 				await writeFile(path.join(wikiDir, "INSTRUCTIONS.md"), "", { flag: "wx" });
 			} catch (error) {
@@ -303,7 +311,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			const result = await runNativeRepositoryGeneration({
 				root,
 				mode: command.command,
-				language: command.language ?? "zh-CN",
+				language,
 				force: Boolean(command.userMessage?.trim()),
 				planningContext: command.userMessage,
 				modelId: selected.modelId,

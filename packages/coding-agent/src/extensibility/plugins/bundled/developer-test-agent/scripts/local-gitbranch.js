@@ -15,6 +15,7 @@
  * 输出（JSON 到 stdout）：
  *   成功时：
  *     {"ok":true,"currentBranch":"feat/xxx","baseBranch":"feat/xxx","targetBranch":"master","branchMatched":true,"remoteTracking":"origin/master"}
+ *     自定义 fetch refspec 的 remoteTracking 使用完整引用名。
  *
  *   分支不一致时：
  *     {"ok":false,"reason":"BRANCH_MISMATCH","message":"当前分支 master 与源分支 feat/xxx 不一致，请切换到源分支后再执行增量验证。","currentBranch":"master","baseBranch":"feat/xxx","targetBranch":"master"}
@@ -22,8 +23,7 @@
  *   无远端配置时：
  *     {"ok":false,"reason":"NO_REMOTE","message":"未找到代码仓地址对应的远端配置，请先添加远端：git remote add <name> <gitPath>","currentBranch":"feat/xxx","baseBranch":"feat/xxx","targetBranch":"master"}
  *
- *   远端分支不存在时：
- *     {"ok":false,"reason":"NO_REMOTE_BRANCH","message":"远端分支 origin/master 不存在，请先执行 git fetch origin 拉取远端分支。","currentBranch":"feat/xxx","baseBranch":"feat/xxx","targetBranch":"master","remoteTracking":"origin/master"}
+ *   目标分支未映射或映射引用未抓取时返回 NO_REMOTE_BRANCH，并提示检查 fetch refspec。
  *
  *   参数错误时：
  *     {"ok":false,"reason":"INVALID_ARGS","message":"用法：node local-gitbranch.js <baseBranch> <targetBranch> <gitPath>"}
@@ -37,23 +37,51 @@ function execGit(args) {
   return spawnSync("git", args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })
 }
 
-function normalizeGitUrl(url) {
-  // 去掉末尾 .git，统一为小写比较
-  return url.replace(/\.git$/i, "").replace(/\/+$/, "").toLowerCase()
+function repository(url) {
+  let host
+  let pathname
+  if (/^(https?|ssh|git):\/\//i.test(url)) {
+    try {
+      ({ hostname: host, pathname } = new URL(url))
+    } catch {
+      return null
+    }
+  } else {
+    const scp = /^(?:[^@/:]+@)?(\[[^\]]+\]|[^@/:]+):(.+)$/.exec(url)
+    if (!scp) return null
+    host = scp[1]
+    pathname = scp[2]
+  }
+  return {
+    host: host.toLowerCase(),
+    project: pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "").toLowerCase(),
+  }
 }
 
-/**
- * 从 git URL 中提取项目路径（去掉域名部分），
- * 用于忽略域名差异（如 codehub-g.huawei.com vs codehub-dg-g.huawei.com）。
- *
- * 示例：
- *   https://codehub-g.huawei.com/GDDRDTools/LightIDE/CodeCovService.git
- *   → /gddrdtools/lightide/codecovservice
- */
-function extractProjectPath(url) {
-  const normalized = normalizeGitUrl(url)
-  // 去掉协议和域名，只保留路径部分
-  return normalized.replace(/^https?:\/\/[^/]+/, "")
+function canonicalHost(host) {
+  return host === "codehub-dg-g.huawei.com" ? "codehub-g.huawei.com" : host
+}
+
+function matchRefPattern(pattern, ref) {
+  const wildcard = pattern.indexOf("*")
+  if (wildcard === -1) return pattern === ref ? "" : null
+  const prefix = pattern.slice(0, wildcard)
+  const suffix = pattern.slice(wildcard + 1)
+  return ref.length >= prefix.length + suffix.length && ref.startsWith(prefix) && ref.endsWith(suffix)
+    ? ref.slice(prefix.length, ref.length - suffix.length)
+    : null
+}
+
+function trackingRefs(refspecs, branch) {
+  if (refspecs.some(spec => spec.startsWith("^") && matchRefPattern(spec.slice(1), branch) !== null)) return []
+  const refs = []
+  for (const spec of refspecs) {
+    const [source, destination] = spec.replace(/^\+/, "").split(":")
+    if (!destination) continue
+    const capture = matchRefPattern(source, branch)
+    if (capture !== null) refs.push(destination.replace("*", () => capture))
+  }
+  return refs
 }
 
 // ─── 主流程 ────────────────────────────────────────────────────────
@@ -91,28 +119,40 @@ function main() {
   // 3. 获取远端列表，找到与 gitPath 对应的 remote name
   const remotes = execGit(["remote", "-v"])
 
-  const normalizedGitPath = normalizeGitUrl(gitPath)
-  const projectPathFromGitPath = extractProjectPath(gitPath)
-  let fullMatch
-  let pathMatch
+  const rewritten = execGit(["ls-remote", "--get-url", "--", gitPath])
+  const rewrittenUrl = rewritten.status === 0 ? rewritten.stdout.trim() : gitPath
+  const expected = [gitPath, rewrittenUrl].map(repository).filter(Boolean)
+  let remoteName
+  let bestRank = 0
   if (remotes.status === 0) {
     for (const line of remotes.stdout.split(/\r?\n/)) {
-      // 格式：origin	https://codehub-g.huawei.com/xxx/yyy.git (fetch)
-      const match = line.match(/^(\S+)\s+(\S+)\s+\(fetch\)$/)
+      const match = line.match(/^(\S+)\t(.+) \(fetch\)$/)
       if (!match) continue
       const [, name, url] = match
-      if (url === gitPath) {
-        fullMatch = name
-        break
+      const configured = execGit(["config", "--get-all", `remote.${name}.url`])
+      const configuredUrl = configured.status === 0 ? configured.stdout.split(/\r?\n/, 1)[0] : url
+      let rank = 0
+      for (const candidate of [url, configuredUrl]) {
+        const actual = repository(candidate)
+        if (!actual?.project) continue
+        if (candidate === gitPath) {
+          rank = 4
+        } else if (candidate === rewrittenUrl) {
+          rank = Math.max(rank, 3)
+        } else {
+          for (const wanted of expected) {
+            if (actual.project !== wanted.project) continue
+            if (actual.host === wanted.host) rank = Math.max(rank, 2)
+            else if (canonicalHost(actual.host) === canonicalHost(wanted.host)) rank = Math.max(rank, 1)
+          }
+        }
       }
-      if (normalizeGitUrl(url) === normalizedGitPath) {
-        fullMatch ??= name
-      } else if (!pathMatch && extractProjectPath(url) === projectPathFromGitPath) {
-        pathMatch = name
-      }
+      if (rank <= bestRank) continue
+      remoteName = name
+      bestRank = rank
+      if (rank === 4) break
     }
   }
-  const remoteName = fullMatch ?? pathMatch
 
   if (!remoteName) {
     console.log(JSON.stringify({
@@ -126,23 +166,32 @@ function main() {
     return
   }
 
-  // 4. 拼接远端跟踪分支
-  const remoteTracking = `${remoteName}/${targetBranch}`
-
-  // 5. 检查远端分支是否存在
-  const { status } = execGit(["show-ref", "--verify", "--quiet", `refs/remotes/${remoteTracking}`])
-  if (status !== 0) {
-    const missing = status === 1
+  // 4. 检查 fetch refspec 实际映射到的远端跟踪引用。
+  const config = execGit(["config", "--get-all", `remote.${remoteName}.fetch`])
+  const refs = config.status === 0 ? trackingRefs(config.stdout.trim().split(/\r?\n/), `refs/heads/${targetBranch}`) : []
+  const conventionalName = `${remoteName}/${targetBranch}`
+  let remoteTracking
+  let gitError = config.status !== 0 && config.status !== 1
+  for (const ref of refs) {
+    const { status } = execGit(["show-ref", "--verify", "--quiet", ref])
+    if (status === 0) {
+      remoteTracking = ref === `refs/remotes/${conventionalName}` ? conventionalName : ref
+      break
+    }
+    if (status !== 1) gitError = true
+  }
+  if (!remoteTracking) {
+    const missing = !gitError
     console.log(JSON.stringify({
       ok: false,
       reason: missing ? "NO_REMOTE_BRANCH" : "GIT_ERROR",
       message: missing
-        ? `远端分支 ${remoteTracking} 不存在，请先执行 git fetch ${remoteName} 拉取远端分支。`
-        : `无法检查远端分支 ${remoteTracking}，请确认当前 Git 仓库状态。`,
+        ? `未找到目标分支 ${targetBranch} 的跟踪引用，请检查 ${remoteName} 的 fetch refspec 并执行 git fetch ${remoteName}。`
+        : `无法检查 ${remoteName} 的目标分支 ${targetBranch}，请确认当前 Git 仓库状态。`,
       currentBranch,
       baseBranch,
       targetBranch,
-      remoteTracking,
+      remoteTracking: refs[0] ?? conventionalName,
     }))
     return
   }

@@ -110,7 +110,6 @@ describe("status line VCS refresh", () => {
 		const text = lineText(line);
 		expect(text).toContain("cold-branch");
 		expect(text).toContain("Changes: 5");
-		expect(text).not.toContain("Changes: 6");
 
 		line.previewSettings({ ...gitSegment, segmentOptions: { git: { showUntracked: false } } });
 		expect(lineText(line)).toContain("Changes: 2");

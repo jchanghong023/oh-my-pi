@@ -12,6 +12,7 @@ import {
 	parseStreamingJsonThrottled,
 	type ServerSentEvent,
 } from "@oh-my-pi/pi-utils";
+import { NO_AUTH_SENTINEL } from "../auth-retry";
 import { renderDemotedThinking } from "../dialect/demotion";
 import * as AIError from "../error";
 import { parseToolCallArguments } from "../utils/tool-call-arguments";
@@ -103,6 +104,7 @@ import {
 	rememberOpenAIReasoningEffortFallback,
 	resolveOpenAIReasoningEffortFallback,
 } from "./openai-reasoning-fallback";
+import { mergeHeaders } from "./anthropic-headers";
 import { servedModelFromOpenRouterReasoning } from "./anthropic-signature";
 import { resolveCopilotRequestIdentity, wrapFetchForCopilotFallback } from "./github-copilot-headers";
 import { getNativeFinishReasonError } from "./native-finish-reason";
@@ -2040,7 +2042,13 @@ export const streamOpenAICompletionsOnce = (
 			if (output.stopReason === "error") {
 				const failure = new AIError.ProviderResponseError(
 					output.errorMessage || "Provider returned an error stop reason",
-					{ provider: model.provider, kind: "runtime" },
+					{
+						provider: model.provider,
+						kind:
+							model.provider === "codeagent" && output.errorMessage === "Provider finish_reason: content_filter"
+								? "content-blocked"
+								: "runtime",
+					},
 				);
 				if (
 					model.provider === "codeagent" &&
@@ -2074,6 +2082,11 @@ export const streamOpenAICompletionsOnce = (
 					abortTracker.getLocalAbortReason() instanceof AIError.StreamTimeoutError
 				) {
 					safeError = new AIError.StreamTimeoutError("CodeAgent request timed out");
+				} else if (error instanceof AIError.ProviderResponseError && error.kind === "content-blocked") {
+					safeError = new AIError.ProviderResponseError("CodeAgent response blocked by content filtering", {
+						provider: model.provider,
+						kind: "content-blocked",
+					});
 				} else {
 					const status = AIError.status(error);
 					const windowRejectionStatus = status === 400 || status === 413;
@@ -2190,11 +2203,14 @@ function createRequestSetup(
 ): OpenAIRequestSetup & { baseUrl: string } {
 	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
+	const requestAuth = authOptions?.requestAuth;
+	const explicitCodeAgent = model.provider === "codeagent" && requestAuth !== undefined;
+	const codeAgentToken = explicitCodeAgent ? requestAuth.apiKey?.trim() : undefined;
 	const setup = resolveOpenAIRequestSetup(model, {
-		apiKey,
-		requestAuth: authOptions?.requestAuth,
-		requestAuthPrepared: authOptions?.requestAuthPrepared,
-		extraHeaders,
+		apiKey: explicitCodeAgent ? NO_AUTH_SENTINEL : apiKey,
+		requestAuth,
+		requestAuthPrepared: explicitCodeAgent || authOptions?.requestAuthPrepared,
+		extraHeaders: codeAgentToken ? mergeHeaders(extraHeaders, { "x-auth-token": codeAgentToken }) : extraHeaders,
 		initiatorOverride,
 		promptCacheSessionId,
 		sessionId,

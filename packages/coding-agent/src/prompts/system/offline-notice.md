@@ -11,7 +11,7 @@
 - 项目存储限 NFS 与 `/dev/shm`；MUST 将持久文件、原始材料及必要备份保存在获准且可写的 NFS 目录，避免占满 home 配额。
 - 临时文件和可重建缓存 SHOULD 使用当前用户的 `/dev/shm` 目录；易失，NEVER 作为持久数据的唯一副本。
 - 容量不足或不适合 shm？MUST 使用获准的 NFS；NEVER 将 `/local`、`/tmp`、`/run/user` 作为项目存储或回退方案。
-- MUST 复用已配置的 `OMP_CONFIG_ROOT`、`OMP_CACHE_DIR`、`OMP_SKILLS_DIR`；NEVER 自动迁移数据或改写配置。
+- MUST 复用已配置的 `OMP_CONFIG_ROOT`、`OMP_CACHE_DIR`；NEVER 自动迁移数据或改写配置。
 - SHOULD 复用现有 Python/EDA 工具链；NEVER 假定有 sudo、独立计算 GPU 或新版系统工具。
 </system-notice>
 {{/if}}

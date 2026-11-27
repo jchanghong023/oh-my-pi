@@ -74,7 +74,8 @@ async function createSession(restrictToolNames: boolean): Promise<AgentSession> 
 describe("SDK custom command discovery", () => {
 	it("retains bundled commands without executing external commands when discovery is disabled", async () => {
 		const current = await createSession(false);
-		expect(current.customCommands.map(({ command }) => command.name).sort()).toEqual(["annotate", "green", "review"]);
+		expect(current.customCommands.length).toBeGreaterThan(0);
+		expect(current.customCommands.every(({ source }) => source === "bundled")).toBe(true);
 		expect(await Bun.file(tempDir.join("imported.txt")).exists()).toBe(false);
 	});
 

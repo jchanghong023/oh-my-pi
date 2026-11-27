@@ -27,6 +27,7 @@ export interface TodoLoopSnapshot {
 // Adapted from OpenSpec's task-progress.ts list and paragraph recognition.
 // Kept independent: TodoLoop rejects malformed tasks and excludes code examples.
 const LIST_PATTERN = /^( *)([-*+]|\d{1,9}[.)])([ \t]+)(.*)$/;
+const THEMATIC_BREAK_PATTERN = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const TEXT_BREAK_PATTERN = /^(?:\s*$|\s*#{1,6}(?:\s|$)|\s*>|\s*<[!?]|\s*(?:=+|-+)\s*$|\s*([-*_])(?:\s*\1){2,}\s*$)/;
 
 interface LocatedTask {
@@ -53,9 +54,14 @@ function expandIndent(line: string): string {
 }
 
 /** Find a comment that continues onto the next line, excluding literal Markdown. */
-function unclosedCommentStart(line: string): number {
-	if (!line.includes("<!--")) return -1;
+function unclosedCommentStart(
+	line: string,
+	start = 0,
+	continueCodeSpan?: (width: number) => boolean,
+): number {
+	if (!line.includes("<!--") && (!continueCodeSpan || !line.includes("`"))) return -1;
 	const markers = /\\[\\`<]|`+|<!--/g;
+	markers.lastIndex = start;
 	let indexes: CloserIndexes | undefined;
 	for (let marker = markers.exec(line); marker; marker = markers.exec(line)) {
 		if (marker[0] === "<!--") {
@@ -67,6 +73,7 @@ function unclosedCommentStart(line: string): number {
 			const width = marker[0].length;
 			const close = indexes.codeRuns.closerAfter(markers.lastIndex, width);
 			if (close !== -1) markers.lastIndex = close + width;
+			else if (continueCodeSpan?.(width) === true) return -1;
 		}
 	}
 	return -1;
@@ -86,6 +93,7 @@ function parseDocument(content: string): ParsedDocument {
 	let current: LocatedTask | undefined;
 	let fence: { char: string; length: number; base: number; line: number } | undefined;
 	let commentLine: number | undefined;
+	let codeSpanEnd: { line: number; column: number } | undefined;
 	let paragraph: { start: number; title: string } | undefined;
 	let nearestHeading: { level: number; title: string } | undefined;
 	let groupLevel: number | undefined;
@@ -97,11 +105,16 @@ function parseDocument(content: string): ParsedDocument {
 		let line = expandIndent(index === 0 && raw.startsWith("\uFEFF") ? raw.slice(1) : raw);
 		const indent = line.length - line.trimStart().length;
 		if (fence) {
-			const closing = line.trimStart().match(/^(`+|~+)[ \t]*$/)?.[1];
-			if (indent <= fence.base + 3 && closing?.[0] === fence.char && closing.length >= fence.length) {
+			if (line.trim() && indent < fence.base) {
+				// A fence inside a list item ends when that container ends.
 				fence = undefined;
+			} else {
+				const closing = line.trimStart().match(/^(`+|~+)[ \t]*$/)?.[1];
+				if (indent <= fence.base + 3 && closing?.[0] === fence.char && closing.length >= fence.length) {
+					fence = undefined;
+				}
+				continue;
 			}
-			continue;
 		}
 		if (commentLine !== undefined) {
 			const close = line.indexOf("-->");
@@ -140,6 +153,13 @@ function parseDocument(content: string): ParsedDocument {
 			paragraph = undefined;
 			continue;
 		}
+		const thematicBreak = THEMATIC_BREAK_PATTERN.test(line.slice(base));
+		// Setext underlines win over a thematic break after paragraph text.
+		if (thematicBreak && !(paragraph && /^ {0,3}-+[ \t]*$/.test(line))) {
+			current = undefined;
+			paragraph = undefined;
+			continue;
+		}
 		let list = line.match(LIST_PATTERN);
 		let contentIndent = indent;
 		if (list) {
@@ -162,7 +182,28 @@ function parseDocument(content: string): ParsedDocument {
 		const listFence = list?.[4].match(/^(`{3,}|~{3,})(.*)$/);
 		const startsListFence = listFence && !(listFence[1][0] === "`" && listFence[2].includes("`"));
 		if (!startsListFence) {
-			const comment = unclosedCommentStart(line);
+			const end = codeSpanEnd;
+			const comment =
+				end && end.line > index
+					? -1
+					: unclosedCommentStart(line, end?.line === index ? end.column : 0, width => {
+							const itemIndent = list ? contentIndent : (current?.contentIndent ?? base);
+							for (let next = index + 1; next < lines.length; next++) {
+								const continuation = expandIndent(lines[next]);
+								if (
+									TEXT_BREAK_PATTERN.test(continuation) ||
+									LIST_PATTERN.test(continuation) ||
+									/^ {0,3}(?:`{3,}|~{3,})/.test(continuation.slice(itemIndent))
+								)
+									break;
+								if (!continuation.includes("`")) continue;
+								const close = new CloserIndexes(continuation).codeRuns.closerAfter(0, width);
+								if (close === -1) continue;
+								codeSpanEnd = { line: next, column: close + width };
+								return true;
+							}
+							return false;
+						});
 			if (comment !== -1) {
 				commentLine = index + 1;
 				raw = raw.slice(0, raw.length - (line.length - comment));
@@ -209,11 +250,12 @@ function parseDocument(content: string): ParsedDocument {
 			}
 			// Markdown links are context, not checkboxes (including one-letter labels).
 			if (/^[([]/.test(checkbox[2]) && checkbox[1] !== " ") continue;
-			if (![" ", "x", "X"].includes(checkbox[1])) {
+			const invalidState = ![" ", "x", "X"].includes(checkbox[1]);
+			if (invalidState || (checkbox[1] !== " " && !checkbox[2].trim())) {
 				shortcutReferences ??= Lexer.lex(content.replace(/^\uFEFF/, "")).links;
 				const label = checkbox[1].replace(/\s+/g, " ").toLowerCase();
 				if (Object.hasOwn(shortcutReferences, label)) continue;
-				throw new Error(`TodoLoop: invalid checkbox state at line ${index + 1}`);
+				if (invalidState) throw new Error(`TodoLoop: invalid checkbox state at line ${index + 1}`);
 			}
 			// The first real checkbox, including an already completed one, fixes
 			// grouping for every subsequent read independently of remaining work.

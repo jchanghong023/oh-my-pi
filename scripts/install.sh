@@ -2,14 +2,15 @@
 set -e
 
 # OMP Coding Agent Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.sh | sh
+# Usage: sh scripts/install.sh [--ref <tag>]
 #
 # Options:
 #   --binary       Install prebuilt binary (default)
 #   --ref <tag>    Install a specific published release
 #   -r <tag>      Shorthand for --ref
 
-REPO="jchanghong023/oh-my-pi"
+CNB_API="https://api.cnb.cool/jchanghong/bin"
+VERSION_PATTERN='v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 
 # Standalone bootstrap diagnostics: no Bun/omp dependency, no command output or
@@ -339,13 +340,6 @@ install_log_version "${REF:-}"
 INSTALL_STAGE=platform
 INSTALL_STAGE_MS="$(install_now_ms)"
 
-# This fork supports Linux only through the POSIX installer.
-if [ "$(uname -s)" = "Darwin" ]; then
-    echo "macOS is not supported by this fork."
-    exit 1
-fi
-
-
 version_ge() {
     current="$1"
     minimum="$2"
@@ -375,19 +369,12 @@ version_ge() {
     [ "$current_patch" -ge "$minimum_patch" ]
 }
 
-# True when the binary at the install target already matches a release tag.
-# `omp --version` starts with `omp/<version>` and release tags start with `v`.
+# `omp --version` reports omp/<version>.
 installed_binary_matches() {
     target="${INSTALL_DIR}/omp"
     [ -x "$target" ] || return 1
     installed_output=$("$target" --version 2>/dev/null) || return 1
-    case "$installed_output" in
-        omp/*) ;;
-        *) return 1 ;;
-    esac
-    installed_version=${installed_output#omp/}
-    installed_version=${installed_version%% *}
-    [ "$installed_version" = "${1#v}" ]
+    [ "$installed_output" = "omp/$1" ]
 }
 
 
@@ -439,15 +426,6 @@ warn_running_omp() {
     echo "  Exit and restart those sessions to use the new version; there is no need to force-end current work."
 }
 
-# Normalize Linux host architecture to the release asset name.
-host_arch() {
-    case "$(uname -m)" in
-        x86_64|amd64)  echo "x64" ;;
-        arm64|aarch64) echo "arm64" ;;
-        *)             uname -m ;;
-    esac
-}
-
 # Report the command PATH actually resolves, or how to reach the installed binary.
 report_path_hint() {
     # An omp earlier on PATH keeps winning until removed or INSTALL_DIR moves ahead.
@@ -463,10 +441,10 @@ report_path_hint() {
     esac
 }
 
-# Read only the top-level tag and the named asset in the top-level assets array.
-# Scan JSON tokens so nesting, escaped text, and formatting cannot spoof fields.
+# Read only top-level release fields and the named asset in the top-level
+# assets array. Scan JSON tokens so nested fields cannot spoof them.
 release_asset_metadata() {
-    LC_ALL=C awk -v binary="$1" '
+    VERSION_PATTERN="$VERSION_PATTERN" LC_ALL=C awk -v binary="$1" '
         function next_token(    first) {
             sub(/^[ \t\r\n]+/, "", json)
             first = substr(json, 1, 1)
@@ -481,7 +459,7 @@ release_asset_metadata() {
             json = substr(json, length(token) + 1)
         }
 
-        function value(scope, depth,    key, child, names, digests, name, digest) {
+        function value(scope, depth,    key, child, names, algorithms, hashes, name, algorithm, hash) {
             if (depth > 64 || (scope == "release" && token != "{")) exit 1
             if ((scope == "assets" && token != "[") || (scope == "asset" && token != "{"))
                 invalid_assets = 1
@@ -489,7 +467,7 @@ release_asset_metadata() {
                 next_token()
                 if (token != "}") {
                     while (1) {
-                        # GitHub emits literal keys. Reject escaped aliases.
+                        # CNB emits literal keys. Reject escaped aliases.
                         if (token !~ /^"[^\\]*"$/) exit 1
                         key = substr(token, 2, length(token) - 2)
                         next_token()
@@ -500,6 +478,10 @@ release_asset_metadata() {
                             tags++
                             if (token ~ /^"[^\\[:space:]]+"$/)
                                 tag = substr(token, 2, length(token) - 2)
+                        } else if (scope == "release" && key == "name") {
+                            titles++
+                            if (substr(token, 1, 1) == "\"")
+                                title = substr(token, 2, length(token) - 2)
                         } else if (scope == "release" && key == "assets") {
                             asset_arrays++
                             child = "assets"
@@ -507,10 +489,13 @@ release_asset_metadata() {
                             names++
                             if (token ~ /^"[^\\]+"$/)
                                 name = substr(token, 2, length(token) - 2)
-                        } else if (scope == "asset" && key == "digest") {
-                            digests++
-                            if (length(token) == 73 && token ~ /^"sha256:[[:xdigit:]]+"$/)
-                                digest = tolower(substr(token, 9, 64))
+                        } else if (scope == "asset" && key == "hash_algo") {
+                            algorithms++
+                            algorithm = tolower(token)
+                        } else if (scope == "asset" && key == "hash_value") {
+                            hashes++
+                            if (length(token) == 66 && token ~ /^"[[:xdigit:]]+"$/)
+                                hash = tolower(substr(token, 2, 64))
                         }
                         value(child, depth + 1)
                         if (token == "}") break
@@ -522,7 +507,8 @@ release_asset_metadata() {
                     if (names != 1 || name == "") invalid_assets = 1
                     if (name == binary) {
                         matches++
-                        if (digests == 1) asset_digest = digest
+                        if (algorithms == 1 && hashes == 1 && (algorithm == "\"sha256\"" || algorithm == "\"sha-256\""))
+                            asset_digest = hash
                     }
                 }
             } else if (token == "[") {
@@ -545,62 +531,77 @@ release_asset_metadata() {
         END {
             next_token()
             value("release", 0)
-            if (token != "" || tags != 1 || tag == "") exit 1
+            if (token != "" || tags != 1 || tag == "" || titles > 1) exit 1
+            exact = "^" ENVIRON["VERSION_PATTERN"] "$"
+            if (tag ~ exact) version = tag
+            if (title ~ exact) titled_version = title
+            else if (match(title, / \[omp:v[^][]*\]$/)) {
+                titled_version = substr(title, RSTART + 6, RLENGTH - 7)
+                if (titled_version !~ exact) version = ""
+            }
+            if (titled_version ~ exact) {
+                tag_version = version
+                sub(/^v/, "", tag_version)
+                sub(/^v/, "", titled_version)
+                if (tag_version == "" || tag_version == titled_version) version = titled_version
+                else version = ""
+            }
+            sub(/^v/, "", version)
             if (invalid_assets || asset_arrays != 1 || matches != 1) asset_digest = ""
-            print tag, asset_digest
+            print tag, (version == "" ? "-" : version), asset_digest
         }
     '
 }
 
-# Install binary from the fork's published GitHub Releases
+# Never put the bearer token in curl's argv or attach it to a redirect.
+cnb_api_request() {
+    printf 'header = "Authorization: Bearer %s"\n' "$CNB_TOKEN" |
+        curl -q --config - --header 'Accept: application/vnd.cnb.api+json' "$@"
+}
+
+# Install a binary published by the fork on CNB.
 install_binary() {
 
     # Detect platform
     OS="$(uname -s)"
-    ARCH="$(host_arch)"
-
     case "$OS" in
-        Linux) PLATFORM="linux" ;;
+        Darwin) echo "macOS is not supported by this fork."; exit 1 ;;
+        Linux) ;;
         *) echo "Unsupported OS: $OS"; exit 1 ;;
     esac
-
+    ARCH="$(uname -m)"
     case "$ARCH" in
-        x64|arm64) ;;
-        *)     echo "Unsupported architecture: $ARCH"; exit 1 ;;
+        x86_64|amd64) ;;
+        *) echo "Unsupported architecture: $ARCH. Only Linux glibc x64 is supported."; exit 1 ;;
     esac
-
-    if [ "$PLATFORM" = "linux" ]; then
-        if [ -f /etc/alpine-release ] || { command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; }; then
-            PLATFORM="linux-musl"
-        fi
+    if [ -f /etc/alpine-release ] || ! ldd --version 2>&1 | grep -Eqi 'glibc|GNU libc|GNU C Library'; then
+        echo "Only Linux glibc x64 is supported."
+        exit 1
     fi
 
-    BINARY="omp-${PLATFORM}-${ARCH}"
-    INSTALL_PLATFORM="${PLATFORM}-${ARCH}"
-    install_log INFO platform_selected 'result=selected'
+    BINARY=omp-linux-x64
+    INSTALL_PLATFORM=linux-x64
     INSTALL_STAGE=release_metadata
     INSTALL_STAGE_MS="$(install_now_ms)"
     if [ -d "${INSTALL_DIR}/omp" ]; then
         echo "Refusing to replace a directory at ${INSTALL_DIR}/omp" >&2
         exit 1
     fi
-    # Fetch metadata only from the authenticated GitHub API endpoint.
-    if [ -n "$REF" ]; then
-        echo "Fetching release $REF..."
-        RELEASE_ENDPOINT=release_tag
-        case "$REF" in
-            .|*..*) echo "Invalid release tag: $REF" >&2; exit 1 ;;
-        esac
-        REF_PATH="$(printf '%s' "$REF" | sed 's/%/%25/g; s|/|%2F|g; s/?/%3F/g; s/#/%23/g; s/\\/%5C/g')"
-        RELEASE_URL="https://api.github.com/repos/${REPO}/releases/tags/${REF_PATH}"
-    else
-        echo "Fetching latest release..."
-        RELEASE_ENDPOINT=release_latest
-        RELEASE_URL="https://api.github.com/repos/${REPO}/releases/latest"
-    fi
-    install_log INFO http_request_started "method=GET host=api.github.com endpoint=$RELEASE_ENDPOINT timeout_ms=60000 attempt=1"
-    # -q must be the first option to ignore .curlrc. Do not follow redirects.
-    if RELEASE_RESPONSE=$(curl -q -fgsS --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 --write-out '\n%{http_code}' "$RELEASE_URL"); then
+    RELEASE_TAG="${REF:-omp}"
+    case "$RELEASE_TAG" in
+        .|*..*|*[!A-Za-z0-9._+/-]*) echo "Invalid release tag: $RELEASE_TAG" >&2; exit 1 ;;
+    esac
+    case "${CNB_TOKEN:-}" in
+        "") echo "Set CNB_TOKEN with repo-release:r permission to install from CNB." >&2; exit 1 ;;
+        *[!A-Za-z0-9._~+/=-]*) echo "CNB_TOKEN is not a valid bearer token." >&2; exit 1 ;;
+    esac
+    REF_PATH="$(printf '%s' "$RELEASE_TAG" | sed 's|/|%2F|g; s/+/%2B/g')"
+    RELEASE_URL="$CNB_API/-/releases/tags/$REF_PATH"
+    RELEASE_ENDPOINT=release_tag
+    echo "Fetching CNB release $RELEASE_TAG..."
+    install_log INFO http_request_started "method=GET host=api.cnb.cool endpoint=$RELEASE_ENDPOINT timeout_ms=60000 attempt=1"
+    # Strict TLS; do not follow redirects or inherit settings from .curlrc.
+    if RELEASE_RESPONSE=$(cnb_api_request -fgsS --proto '=https' --connect-timeout 10 --max-time 60 --write-out '\n%{http_code}' "$RELEASE_URL"); then
         RELEASE_HTTP_STATUS="${RELEASE_RESPONSE##*
 }"
         if [ "$RELEASE_HTTP_STATUS" != 200 ]; then
@@ -608,15 +609,18 @@ install_binary() {
             echo "Failed to fetch release metadata (expected HTTP 200, got $RELEASE_HTTP_STATUS)." >&2
             exit 1
         fi
-        install_log INFO http_request_completed "result=success host=api.github.com endpoint=$RELEASE_ENDPOINT http_status=$RELEASE_HTTP_STATUS"
+        install_log INFO http_request_completed "result=success host=api.cnb.cool endpoint=$RELEASE_ENDPOINT http_status=$RELEASE_HTTP_STATUS"
     else
         release_exit="$?"
         RELEASE_HTTP_STATUS="${RELEASE_RESPONSE##*
 }"
         install_curl_failed "$release_exit" "$RELEASE_ENDPOINT" "$RELEASE_HTTP_STATUS"
-        if [ -n "$REF" ] && [ "$release_exit" -eq 22 ] && [ "$RELEASE_HTTP_STATUS" = 404 ]; then
-            echo "Release tag not found: $REF" >&2
-            echo "Only published release tags are supported." >&2
+        if [ "$release_exit" -eq 22 ] && [ "$RELEASE_HTTP_STATUS" = 404 ]; then
+            echo "Release tag not found: $RELEASE_TAG" >&2
+            echo "Only published CNB release tags are supported." >&2
+        elif [ "$RELEASE_HTTP_STATUS" = 401 ] || [ "$RELEASE_HTTP_STATUS" = 403 ]; then
+            echo "CNB release access was denied. Set CNB_TOKEN with repo-release:r permission." >&2
+            echo "Failed to fetch release metadata (curl exit $release_exit, HTTP $RELEASE_HTTP_STATUS)." >&2
         else
             echo "Failed to fetch release metadata (curl exit $release_exit, HTTP $RELEASE_HTTP_STATUS)." >&2
         fi
@@ -626,15 +630,22 @@ install_binary() {
 *}"
     if ! RELEASE_META=$(printf '%s\n' "$RELEASE_JSON" | release_asset_metadata "$BINARY"); then
         install_log ERROR release_metadata_invalid 'result=invalid_tag_or_json'
-        echo "Failed to read the release tag from GitHub metadata." >&2
+        echo "Failed to read CNB release metadata." >&2
         exit 1
     fi
-    LATEST="${RELEASE_META%% *}"
-    EXPECTED_DIGEST="${RELEASE_META#* }"
+    METADATA_TAG="${RELEASE_META%% *}"
+    VERSION_AND_DIGEST="${RELEASE_META#* }"
+    LATEST="${VERSION_AND_DIGEST%% *}"
+    EXPECTED_DIGEST="${VERSION_AND_DIGEST#* }"
 
-    if [ -n "$REF" ] && [ "$LATEST" != "$REF" ]; then
+    if [ "$METADATA_TAG" != "$RELEASE_TAG" ]; then
         install_log ERROR release_metadata_invalid 'result=unexpected_tag'
-        echo "GitHub metadata did not match the requested release tag." >&2
+        echo "CNB metadata did not match the requested release tag." >&2
+        exit 1
+    fi
+    if [ "$LATEST" = - ]; then
+        install_log ERROR release_metadata_invalid 'result=invalid_version'
+        echo "CNB release $RELEASE_TAG has no unambiguous binary version. Ask the release owner to republish with version metadata." >&2
         exit 1
     fi
     echo "Using version: $LATEST"
@@ -657,7 +668,7 @@ install_binary() {
 
     if [ -z "$EXPECTED_DIGEST" ]; then
         install_log ERROR release_metadata_invalid 'result=invalid_asset_digest'
-        echo "Missing, invalid, or ambiguous SHA-256 digest for ${BINARY} in GitHub release metadata." >&2
+        echo "Missing, invalid, or ambiguous SHA-256 digest for ${BINARY} in CNB release metadata." >&2
         exit 1
     fi
     if command -v sha256sum >/dev/null 2>&1; then
@@ -668,6 +679,35 @@ install_binary() {
         echo "sha256sum or shasum is required to verify the downloaded omp binary." >&2
         exit 1
     fi
+
+    # Resolve CNB's signed download with verified TLS before relaxing
+    # certificate checks for the checksum-verified binary itself.
+    INSTALL_STAGE=download_url
+    INSTALL_STAGE_MS="$(install_now_ms)"
+    install_log INFO http_request_started 'method=GET host=api.cnb.cool endpoint=release_asset_url timeout_ms=60000 attempt=1'
+    if ASSET_RESPONSE=$(cnb_api_request -fgsS --proto '=https' --connect-timeout 10 --max-time 60 \
+        --output /dev/null --write-out '%{http_code}\n%{redirect_url}' "$CNB_API/-/releases/download/$REF_PATH/$BINARY"); then
+        ASSET_HTTP_STATUS="${ASSET_RESPONSE%%[!0-9]*}"
+        BINARY_URL="${ASSET_RESPONSE#*
+}"
+    else
+        asset_exit="$?"
+        install_curl_failed "$asset_exit" release_asset_url "${ASSET_RESPONSE%%[!0-9]*}"
+        echo "Failed to resolve the CNB binary download. Check repository access and CNB_TOKEN." >&2
+        exit "$asset_exit"
+    fi
+    ASSET_AUTHORITY="${BINARY_URL#https://}"
+    case "$BINARY_URL" in *[[:space:][:cntrl:]\\]*) BINARY_URL="" ;; esac
+    case "${ASSET_AUTHORITY%%[/?#]*}" in ""|*@*) BINARY_URL="" ;; esac
+    case "$ASSET_HTTP_STATUS:$BINARY_URL" in
+        302:https://?*) ;;
+        *)
+            install_log ERROR http_request_failed "result=invalid_redirect endpoint=release_asset_url http_status=${ASSET_HTTP_STATUS:-unavailable}"
+            echo "CNB did not return a valid HTTPS binary download redirect." >&2
+            exit 1
+            ;;
+    esac
+    install_log INFO http_request_completed 'result=success host=api.cnb.cool endpoint=release_asset_url http_status=302'
 
     # Keep compatibility flags on the asset download only. --ssl-no-revoke
     # requires curl 7.44 or newer and only applies to Schannel.
@@ -704,18 +744,16 @@ install_binary() {
     else
         CURL_FAIL_FLAG="-f"
     fi
-    BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY}"
     echo "Downloading ${BINARY}..."
     INSTALL_STAGE=download
     INSTALL_STAGE_MS="$(install_now_ms)"
-    install_log INFO http_request_started 'method=GET host=github.com endpoint=release_asset connect_timeout_ms=10000 low_speed_timeout_ms=30000 attempt=1'
-    if curl "$CURL_FAIL_FLAG" -L --insecure $CURL_SSL_NO_REVOKE --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
-        install_log INFO http_request_completed 'result=success host=github.com endpoint=release_asset http_status=success'
+    install_log INFO http_request_started 'method=GET endpoint=release_asset connect_timeout_ms=10000 low_speed_timeout_ms=30000 attempt=1'
+    if curl -q -g "$CURL_FAIL_FLAG" --proto '=https' --insecure $CURL_SSL_NO_REVOKE --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
+        install_log INFO http_request_completed 'result=success endpoint=release_asset http_status=success'
     else
         install_curl_failed "$?" release_asset
         echo ""
         echo "✗ Download failed" >&2
-        echo "  URL:    ${BINARY_URL}" >&2
         echo "  Target: ${INSTALL_DIR}/omp" >&2
         exit 1
     fi
@@ -737,40 +775,22 @@ install_binary() {
     install_log INFO binary_probe_started 'target=candidate argument=version'
 
     # Verify the downloaded binary can actually start before replacing the
-    # installed one. Bun's musl-target binaries link libstdc++/libgcc
-    # dynamically, which stock Alpine/musl systems do not ship, so the download
-    # succeeds while the binary exits 127 with relocation errors. Smoking the
-    # temp binary first keeps the previous install working when the new one
-    # cannot run.
-    if SMOKE_OUTPUT="$("$TMP_BINARY" --version 2>&1)"; then
+    # installed one.
+    if SMOKE_OUTPUT="$("$TMP_BINARY" --version)"; then
         install_log INFO binary_probe_completed 'target=candidate result=started exit_code=0'
     else
         install_log ERROR binary_probe_failed "target=candidate result=failed exit_code=$?"
         echo ""
         echo "✗ The downloaded omp binary cannot start:"
         echo "$SMOKE_OUTPUT" | sed 's/^/    /'
-        if [ "$PLATFORM" = "linux-musl" ]; then
-            echo ""
-            echo "The musl build links libstdc++/libgcc dynamically. Install them, then re-run the installer:"
-            if command -v apk >/dev/null 2>&1; then
-                echo "    apk add libstdc++ libgcc"
-            else
-                echo "    (install the libstdc++ and libgcc runtime packages for your distro)"
-            fi
-        fi
         exit 1
     fi
     INSTALL_STAGE=candidate_version
     INSTALL_STAGE_MS="$(install_now_ms)"
-    case "$SMOKE_OUTPUT" in
-        omp/*) SMOKE_VERSION=${SMOKE_OUTPUT#omp/} ;;
-        *) SMOKE_VERSION="" ;;
-    esac
-    SMOKE_VERSION=${SMOKE_VERSION%% *}
-    if [ "$SMOKE_VERSION" != "${LATEST#v}" ]; then
+    if [ "$SMOKE_OUTPUT" != "omp/$LATEST" ]; then
         install_log ERROR binary_version_failed 'target=candidate result=mismatch'
         echo "Downloaded binary reports an unexpected version: $SMOKE_OUTPUT" >&2
-        echo "Expected: ${LATEST#v}; existing install was not changed." >&2
+        echo "Expected: omp/$LATEST; existing install was not changed." >&2
         exit 1
     fi
     install_log INFO binary_version_completed 'target=candidate result=matches'

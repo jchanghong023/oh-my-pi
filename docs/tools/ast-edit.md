@@ -69,9 +69,8 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
    - parses each file, skips files with syntax-error trees, collects `replace_by(...)` edits for every match, enforces replacement and file caps, and returns textual before/after slices plus source ranges.
 7. The TS wrapper deduplicates and caps parse errors, groups changes by file, and renders preview diff lines.
 8. If preview found replacements and `applied` is false, `queueResolveHandler(...)` registers a non-forcing pending resolve invoker. While it is pending the session surfaces a `SoftToolRequirement` carrying the resolve reminder: its `toolName` is `bash` while tool commands are mounted and `resolve` otherwise, and its `satisfies` predicate is `isPreviewResolutionToolCall` (a bash command line starting with `resolve`/`reject`, or a direct `resolve`/`reject` call). The agent runtime injects the reminder and escalates to a forced call of that tool only if the model declines the turn.
-9. On `resolve`, the callback checks that any bound file or directory-tree approval still covers the current targets before writing. A file that has become a directory is not covered by its original file approval; run `ast_edit` again to preview and approve it. When targets run separately, the callback refreshes their actual execution roots and checks approval again before each apply pass. A shared path used only to format results need not exist; for example, separate `local://` targets can still apply after the working directory moves if those targets remain valid.
-10. The callback reruns the same rewrites with `dryRun: false`. It then compares the replacement totals and per-file counts with the preview. A mismatch returns a stale-preview error and does not undo any writes within the approved scope.
-11. On a non-stale apply, the callback returns `Applied N replacements in M files.` (in hashline mode followed by fresh `[path#tag]` snapshot headers from the post-apply content). `reject <reason>` discards the proposal without mutating files.
+9. On a `resolve` invocation (`resolve <reason>` as a tool command, or the top-level `resolve` tool when tool commands are not mounted), the queued callback reruns the same rewrite set with `dryRun: false`, recomputes counts, and returns an error result if the live result no longer matches the preview (`stalePreview`). The current implementation compares replacement totals and per-file counts after the rerun; if the new run has already written different counts, the result is marked error.
+10.   On a non-stale apply, the callback returns `Applied N replacements in M files.` (in hashline mode followed by fresh `[path#tag]` snapshot headers re-recorded from the post-apply content); on discard (`reject <reason>`), the invocation returns a discard message without mutating files.
 
 ## Modes / Variants
 
@@ -87,7 +86,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 
 - Filesystem
    - Preview reads files and scans directories.
-   - Separately executed targets are dry-run before the first write, so a failed preflight leaves all files untouched by `ast_edit`. Each native apply pass stages its changes before writing. A write failure or cancellation can leave earlier writes applied, and a later target's failure does not roll back earlier targets.
+   - Each native apply pass stages its changed files in memory before writing; a compute/overlap failure in that pass cannot partially mutate earlier files. Write failures or cancellation during the write loop can still leave earlier writes applied. Multi-target calls run separate passes, so a later target's failure does not roll back earlier targets.
 - Session state (transcript, memory, jobs, checkpoints, registries)
    - Registers a non-forcing pending resolve invoker through `queueResolveHandler(...)`.
    - Surfaces a `SoftToolRequirement` (with the resolve reminder) while pending; the agent runtime escalates to a forced call of its `toolName` (`bash` while tool commands are mounted, `resolve` otherwise) only on non-compliance — no steering message and no per-preview forced tool choice.

@@ -1,7 +1,7 @@
 import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model, UsageReport } from "@oh-my-pi/pi-ai";
-import type { OAuthProvider, OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
+import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { type JSXNode, type KeyEvent, signal, type UiNode, untrack } from "@oh-my-pi/pi-tui";
@@ -26,6 +26,7 @@ import {
 } from "../../config/model-presets";
 import {
 	formatModelStringWithRouting,
+	formatPinnedPickerSelector,
 	resolveAdvisorRoleSelection,
 	resolveModelRoleValue,
 } from "../../config/model-resolver";
@@ -51,7 +52,6 @@ import type {
 	AgentHubOpenOptions,
 	InteractiveModeContext,
 	ResumeSessionOptions,
-	SelectOnlyModelSelectorOptions,
 	SubmittedUserInput,
 } from "../../modes/types";
 import type { SessionOAuthAccountList } from "../../session/agent-session-types";
@@ -73,7 +73,7 @@ import { findSessionContinuation, readSessionInfo, type SessionInfo } from "../.
 import { SessionManager } from "../../session/session-manager";
 import { loadPinnedSessionIds, setSessionPinned } from "../../session/session-pins";
 import { FileSessionStorage } from "../../session/session-storage";
-import { formatLogoutCommandResult, logoutProviderForCommand } from "../../slash-commands/helpers/logout";
+import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
 import type { LogoutAccount } from "../view-model/overlays/logout-account-selector";
 import { describeRedeemOutcome, toResetUsageAccounts } from "../../slash-commands/helpers/reset-usage";
 import { toSessionPinAccounts } from "../../slash-commands/helpers/session-pin";
@@ -218,14 +218,7 @@ function treeSize(roots: readonly SessionTreeNode[]): number {
 }
 
 /** Menus that open at most once: a repeat request focuses the open one. */
-type MenuKind =
-	| "settings"
-	| "model-picker"
-	| "model-picker-select"
-	| "model-hub"
-	| "agents-dashboard"
-	| "agent-hub"
-	| "usage-dashboard";
+type MenuKind = "settings" | "model-picker" | "model-hub" | "agents-dashboard" | "agent-hub" | "usage-dashboard";
 
 /** An open menu: registered when the request runs, given its overlay once the screen mounts. */
 interface OpenMenu {
@@ -317,10 +310,10 @@ export class SelectorController {
 		if (this.#openMenus.get(kind) === menu) this.#openMenus.delete(kind);
 	}
 
-	/** Close a menu, restoring the active editor slot unless a parent overlay owns the keys. */
-	#closeMenu(menu: OpenMenu, restoreEditor = true): void {
+	/** Close `kind`'s menu and give the keys back to the editor area. */
+	#closeMenu(menu: OpenMenu): void {
 		menu.handle?.close();
-		if (restoreEditor) this.focusActiveEditorArea();
+		this.focusActiveEditorArea();
 	}
 
 	/**
@@ -329,6 +322,18 @@ export class SelectorController {
 	 */
 	async #acquireDefaultRoleMutation(): Promise<() => void> {
 		return acquireModelRoleMutation();
+	}
+
+	async #refreshOAuthProviderAuthState(): Promise<void> {
+		const { getOAuthProviders } = await loadProviderAuthUi();
+		const oauthProviders = getOAuthProviders();
+		await Promise.all(
+			oauthProviders.map(provider =>
+				this.ctx.session.modelRegistry
+					.getApiKeyForProvider(provider.id, this.ctx.session.sessionId)
+					.catch(() => undefined),
+			),
+		);
 	}
 
 	/**
@@ -709,7 +714,17 @@ export class SelectorController {
 					const config = configs[name];
 					const source = sources[name];
 					if (!config || !source || !matchesProvider(source, providerId, userSourceOnly)) continue;
-					if (mcpManager.getConnectionStatus(name) !== "disconnected") continue;
+					if (mcpManager.getConnectionStatus(name) !== "disconnected") {
+						const live = mcpManager.getSource(name);
+						if (
+							live?.provider === source.provider &&
+							live.path === source.path &&
+							live.level === source.level &&
+							live.origin === source.origin
+						)
+							continue;
+						await mcpManager.disconnectServer(name);
+					}
 					selectedConfigs[name] = config;
 					selectedSources[name] = source;
 				}
@@ -830,11 +845,7 @@ export class SelectorController {
 	 * picker: the hub assigns persistent roles, which configure the main session
 	 * and future spawns rather than the agent being viewed.
 	 */
-	showModelSelector(options?: { temporaryOnly?: boolean; selectOnly?: SelectOnlyModelSelectorOptions }): void {
-		if (options?.selectOnly) {
-			this.#showModelPicker(options.selectOnly);
-			return;
-		}
+	showModelSelector(options?: { temporaryOnly?: boolean }): void {
 		if (options?.temporaryOnly || this.ctx.focusedAgentId) {
 			this.#showModelPicker();
 			return;
@@ -931,29 +942,22 @@ export class SelectorController {
 	 * bottom-anchored overlay over the transcript. The current model is
 	 * highlighted and preselected; a leading `@` searches ctrl+p quick roles.
 	 */
-	#showModelPicker(selectOnly?: SelectOnlyModelSelectorOptions): void {
-		const menuKind = selectOnly ? "model-picker-select" : "model-picker";
-		const other = this.#openMenus.get(selectOnly ? "model-picker" : "model-picker-select");
-		if (other) this.#closeMenu(other, selectOnly !== undefined);
-		if (selectOnly) {
-			const previous = this.#openMenus.get(menuKind);
-			if (previous) this.#closeMenu(previous, false);
-		} else if (this.#focusOpenMenu(menuKind)) return;
+	#showModelPicker(): void {
+		const menuKind = "model-picker";
+		if (this.#focusOpenMenu(menuKind)) return;
 		const viewed = this.ctx.viewSession;
 		const currentContextTokens = viewed.getContextUsage()?.tokens ?? 0;
 		const current = viewed.model;
 		const quickRoleOrder = cfgCycleOrder.get(this.ctx.settings);
 		const quickRoleCycle = viewed.getRoleModelCycle(quickRoleOrder);
-		const currentSelector = selectOnly
-			? selectOnly.currentSelector
-			: current && formatModelStringWithRouting(current);
+		const currentSelector = current && formatModelStringWithRouting(current);
 		// With no override, the picker inherits the exact session model, not a reparsed selector.
 		const taskOverride = cfgTaskAgentModelOverrides.get(this.ctx.settings).task;
 		const taskSelector = Array.isArray(taskOverride) ? taskOverride[0] : taskOverride;
 		const menu = this.#claimMenu(menuKind);
 		const done = () => {
 			if (this.#openMenus.get(menuKind) !== menu) return;
-			this.#closeMenu(menu, !selectOnly);
+			this.#closeMenu(menu);
 		};
 		const isCurrent = () => this.#openMenus.get(menuKind) === menu;
 		// One pick per target: an Enter repeated while that pick applies is dropped, but a
@@ -967,16 +971,6 @@ export class SelectorController {
 		const size = this.ctx.shell.size;
 		const callbacks: ModelPickerProps["callbacks"] = {
 			onPick: async (model, selector, { overContext, thinkingLevel }) => {
-				if (selectOnly) {
-					if (!isCurrent()) return;
-					done();
-					try {
-						await selectOnly.onSelect(selector);
-					} catch (error) {
-						this.ctx.showError(error instanceof Error ? error.message : String(error));
-					}
-					return;
-				}
 				const key = JSON.stringify([model.provider, model.id, getUpstreamPin(model), thinkingLevel]);
 				if (!isCurrent() || pickInFlightKey === key) return;
 				pickInFlightKey = key;
@@ -1004,7 +998,7 @@ export class SelectorController {
 			},
 			onPickRole: async entry => {
 				const key = `role:${entry.role}`;
-				if (!isCurrent() || selectOnly || pickInFlightKey === key) return;
+				if (!isCurrent() || pickInFlightKey === key) return;
 				pickInFlightKey = key;
 				const pickId = ++latestPickId;
 				const prev = pickQueue;
@@ -1030,33 +1024,29 @@ export class SelectorController {
 					release();
 				}
 			},
-			onPickTask: (_model, selector) => {
-				if (!isCurrent() || selectOnly) return;
+			onPickTask: (model, selector) => {
+				if (!isCurrent()) return;
 				// Session-only: layer the Task override onto the runtime settings
 				// layer so it is never persisted, mirroring the session-model pick.
+				const pin = getUpstreamPin(model);
 				cfgTaskAgentModelOverrides.override(this.ctx.settings, {
 					...cfgTaskAgentModelOverrides.get(this.ctx.settings),
-					task: selector,
+					task: pin ? formatPinnedPickerSelector(model, pin) : selector,
 				});
 				this.ctx.showStatus(`Task subagent model (session-only): ${selector}. Use /agents to persist.`);
 				done();
 			},
 			onKeepThinking: level => {
-				if (!isCurrent() || selectOnly || level === viewed.configuredThinkingLevel()) return;
+				if (!isCurrent() || level === viewed.configuredThinkingLevel()) return;
 				viewed.setThinkingLevel(level);
 				this.ctx.statusLine.refresh();
 				this.ctx.updateEditorBorderColor();
 			},
-			onCatalogRefreshed: selectOnly
-				? undefined
-				: async () => {
-						await this.ctx.session.refreshScopedModels();
-						return this.ctx.session.scopedModels;
-					},
-			onCancel: () => {
-				done();
-				selectOnly?.onCancel?.();
+			onCatalogRefreshed: async () => {
+				await this.ctx.session.refreshScopedModels();
+				return this.ctx.session.scopedModels;
 			},
+			onCancel: done,
 		};
 		const options: ModelPickerProps["options"] = {
 			currentContextTokens,
@@ -1066,8 +1056,6 @@ export class SelectorController {
 			quickRoles: quickRoleCycle?.models,
 			quickRoleOrder,
 			currentQuickRole: quickRoleCycle?.models[quickRoleCycle.currentIndex]?.role,
-			selectOnly: selectOnly !== undefined,
-			getCandidates: selectOnly?.getCandidates,
 			// The level the session runs at, auto's resolved effort once a turn settles it (as the
 			// status line shows); an untouched slider still carries the selection, auto included.
 			thinkingLevelFor: () => viewed.autoResolvedThinkingLevel() ?? viewed.configuredThinkingLevel(),
@@ -1078,7 +1066,7 @@ export class SelectorController {
 					source,
 					registry: this.ctx.session.modelRegistry,
 					scopedModels: this.ctx.session.scopedModels,
-					currentModel: selectOnly ? undefined : current,
+					currentModel: current,
 					callbacks,
 					options,
 					terminalRows: () => size().rows,
@@ -2457,66 +2445,89 @@ export class SelectorController {
 		}
 	}
 
-	#selectLogoutProvider(providers: readonly OAuthProviderInfo[]): Promise<string | undefined> {
-		const { promise, resolve } = Promise.withResolvers<string | undefined>();
-		const auth = this.ctx.session.modelRegistry.authStorage;
-		this.#showInEditorArea(done =>
-			OAuthSelector({
-				mode: "logout",
-				auth,
-				providers,
-				onSelect: id => {
-					done();
-					resolve(id);
-				},
-				onCancel: () => {
-					done();
-					resolve(undefined);
-				},
-			}),
-		);
-		return promise;
-	}
-
-	#selectLogoutAccount(provider: OAuthProviderInfo, accounts: LogoutAccount[]): Promise<number | undefined> {
-		const { promise, resolve } = Promise.withResolvers<number | undefined>();
-		this.#showInEditorArea(done =>
-			LogoutAccountSelector({
-				provider: provider.name,
-				accounts,
-				onSelect: account => {
-					done();
-					resolve(account.credentialId);
-				},
-				onCancel: () => {
-					done();
-					resolve(undefined);
-				},
-			}),
-		);
-		return promise;
-	}
-
-	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
-		if (mode === "logout") {
-			const session = this.ctx.session;
-			try {
-				const result = await logoutProviderForCommand(session, providerId, {
-					selectProvider: providers => this.#selectLogoutProvider(providers),
-					selectAccount: (provider, accounts) => this.#selectLogoutAccount(provider, accounts),
-				});
-				const feedback = formatLogoutCommandResult(result);
-				if (feedback) session.emitNotice(feedback.level, feedback.message);
-			} catch (error) {
-				session.emitNotice("error", `Logout failed: ${error instanceof Error ? error.message : String(error)}`);
+	async #handleCredentialLogout(providerId: string, account: LogoutAccount): Promise<void> {
+		try {
+			// Before the logout: removing a broker-unserved provider's last local login hands it back to the broker.
+			const source = await credentialStoreLabel(providerId);
+			const { removed, remainingSource } = await logoutCredential(
+				this.ctx.session,
+				providerId,
+				account.credentialId,
+			);
+			if (!removed) {
+				this.ctx.showError(`Logout skipped: ${account.label} is no longer stored for ${providerId}.`);
+				return;
 			}
-			return;
+
+			const lines: [string, string][] = [
+				["success", successText(`Successfully logged out ${account.label} from ${providerId}`)],
+				["dim", `Credential removed from ${source}`],
+			];
+			if (remainingSource) lines.push(["warning", `${providerId} is still authenticated via ${remainingSource}`]);
+			this.ctx.present(() => outcomeLinesView(lines));
+		} catch (error: unknown) {
+			this.ctx.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
-		if (providerId) {
-			await this.#handleOAuthLogin(providerId);
+	}
+
+	async #showOAuthLogoutAccountSelector(providerId: string): Promise<void> {
+		const authStorage = this.ctx.session.modelRegistry.authStorage;
+		let accounts: LogoutAccount[];
+		try {
+			accounts = await listLogoutAccounts(authStorage, providerId, this.ctx.session.sessionId);
+		} catch (error: unknown) {
+			this.ctx.showError(
+				`Could not load stored credentials: ${error instanceof Error ? error.message : String(error)}`,
+			);
 			return;
 		}
 		const { getOAuthProviders } = await loadProviderAuthUi();
+		const provider = getOAuthProviders().find(candidate => candidate.id === providerId);
+		if (accounts.length === 0) {
+			const source = authStorage.keys.describe(
+				provider?.storeCredentialsAs ?? providerId,
+				this.ctx.session.sessionId,
+			);
+			const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
+			this.ctx.showError(`Logout skipped: no stored credentials for ${providerId}.${suffix}`);
+			return;
+		}
+
+		this.#showInEditorArea(done =>
+			LogoutAccountSelector({
+				provider: provider?.name ?? providerId,
+				accounts,
+				onSelect: account => {
+					done();
+					void this.#handleCredentialLogout(providerId, account);
+				},
+				onCancel: done,
+			}),
+		);
+	}
+
+	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
+		if (providerId) {
+			if (mode === "login") {
+				await this.#handleOAuthLogin(providerId);
+			} else {
+				await this.#showOAuthLogoutAccountSelector(providerId);
+			}
+			return;
+		}
+
+		const { getOAuthProviders } = await loadProviderAuthUi();
+		if (mode === "logout") {
+			await this.#refreshOAuthProviderAuthState();
+			const oauthProviders = getOAuthProviders();
+			const loggedInProviders = oauthProviders.filter(provider =>
+				this.ctx.session.modelRegistry.authStorage.credentials.has(provider.id),
+			);
+			if (loggedInProviders.length === 0) {
+				this.ctx.showStatus("No stored provider credentials to log out. Remove env or config auth at its source.");
+				return;
+			}
+		}
 
 		// Each credential the picker can act on is checked once while it is open; a closed picker drops late answers.
 		const authState = signal<ReadonlyMap<string, OAuthAuthState>>(new Map());
@@ -2524,7 +2535,10 @@ export class SelectorController {
 		const authSession = this.ctx.session;
 		const authStorage = authSession.modelRegistry.authStorage;
 		for (const provider of getOAuthProviders()) {
-			const stored = authStorage.keys.source(provider.id) !== undefined;
+			const stored =
+				mode === "logout"
+					? authStorage.credentials.has(provider.id)
+					: authStorage.keys.source(provider.id) !== undefined;
 			if (!stored) continue;
 			authState.set(new Map([...authState.peek(), [provider.id, "checking"]]));
 			void authSession.modelRegistry
@@ -2543,13 +2557,14 @@ export class SelectorController {
 				done();
 			};
 			return OAuthSelector({
-				mode: "login",
+				mode,
 				auth: authStorage,
 				disabledProviders: cfgDisabledProviders.get(this.ctx.settings),
 				authState,
 				onSelect: selectedProviderId => {
 					close();
-					void this.#handleOAuthLogin(selectedProviderId);
+					if (mode === "login") void this.#handleOAuthLogin(selectedProviderId);
+					else void this.#showOAuthLogoutAccountSelector(selectedProviderId);
 				},
 				onCancel: close,
 			});

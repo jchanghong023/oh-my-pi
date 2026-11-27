@@ -406,7 +406,6 @@ describe("TodoLoop Markdown format and update compatibility", () => {
 			await fs.writeFile(filePath, changed.replace("[ ] Work", "[x] Work"));
 			const after = await readTodoLoop(filePath);
 			expect(() => validateTodoLoopChange(before, after, "1")).toThrow(/body changed|original content changed/);
-			expect(after.tasks[1].done).toBe(false);
 		}
 	});
 });

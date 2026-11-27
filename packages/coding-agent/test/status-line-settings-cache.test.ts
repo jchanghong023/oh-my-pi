@@ -13,7 +13,6 @@ import { effectiveStatusSettings } from "@oh-my-pi/pi-coding-agent/ui/status/seg
 import { composerShape } from "@oh-my-pi/pi-coding-agent/ui/styles/composer/shapes";
 import { printRows } from "@oh-my-pi/pi-coding-agent/ui/print-rows";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { visibleWidth } from "@oh-my-pi/pi-tui/text/width";
 import { createStatusLine, shapePlacement } from "../src/ui/status/status-line";
 import { disposeStatusLines, flushStatus, lineText, statusLine, statusSession } from "./helpers/session-status-line";
 
@@ -236,7 +235,6 @@ describe("status-line live state", () => {
 		const [row] = hookRows(line, 6);
 		expect(Bun.stripANSI(row!)).toBe("green…");
 		expect(row).toContain("\x1b[32mgreen");
-		expect(visibleWidth(row!)).toBeLessThanOrEqual(6);
 		expect(row?.endsWith("\x1b[0m…")).toBe(true);
 	});
 

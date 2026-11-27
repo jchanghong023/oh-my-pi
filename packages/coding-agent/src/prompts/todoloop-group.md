@@ -33,7 +33,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 
 ## Execution note format
 
-You MUST place appended notes after all original task continuation lines and existing notes, before the next task or heading. You SHOULD separate each appended note from preceding content with a blank line; append-only records without a blank separator are also accepted. You NEVER insert blank lines inside original task prose, rewrite existing notes, or add headings or checkboxes for notes.
+You MUST append notes at the end of the task, before the next sibling or outer list item (even an ordinary list item) or heading. You SHOULD separate each note with a blank line. You NEVER insert blank lines inside original task prose, rewrite existing notes, or add headings or checkboxes for notes.
 
 ```markdown
 - [x] Run the required check.

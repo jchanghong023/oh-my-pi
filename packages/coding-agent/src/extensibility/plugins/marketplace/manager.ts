@@ -237,7 +237,7 @@ export class MarketplaceManager {
 				await fs.writeFile(stagedCatalog, content, { flag: "wx" });
 				// Only the registry, not files in a candidate checkout, authorizes replacement.
 				if (!relocating && (existing.sourceType === "git" || existing.sourceType === "github")) {
-					await removeRegisteredMarketplaceCache(existing, cacheDir);
+					await removeRegisteredMarketplaceCache(existing, cacheDir, { repairMissingCatalog: true });
 				}
 				await promoteCloneToCache(clonePath, path.dirname(destination), name, false);
 			} catch (err) {

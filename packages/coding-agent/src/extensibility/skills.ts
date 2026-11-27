@@ -41,7 +41,6 @@ import { SKILLSHARE_PROVIDER_ID } from "../discovery/skillshare";
 import { substitutePluginRoot } from "../discovery/substitute-plugin-root";
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
-import { checkSkillInvocation, type SkillAccessContext } from "../spec-driven/skill-policy";
 
 export { allowsSkillTokens, SKILL_TOKEN_RE };
 
@@ -146,8 +145,6 @@ interface AdmittedBody {
 	frontmatter: SkillFrontmatter | undefined;
 	namespace: string;
 	filePath: string;
-	realPath: string;
-	shared: boolean;
 }
 
 interface CollisionResolution {
@@ -163,7 +160,6 @@ interface CollisionResolution {
 /**
  * Resolve a same-name skill against what is already loaded.
  * - Precedence, when raw names collide:
- *   0. Shared skills keep priority even if an alias preserves package ownership.
  *   1. An authored skill always outranks a registry-installed package
  *      (`omp skill install`, the `skillshare` provider) — installed steps
  *      aside regardless of admission order.
@@ -189,7 +185,6 @@ function resolveCollision(
 	candidateBody: string,
 	candidateFrontmatter: SkillFrontmatter | undefined,
 	namespace: string,
-	shared: boolean,
 	allowOverride: boolean,
 	isNameExcluded: (name: string) => boolean,
 ): CollisionResolution | undefined {
@@ -202,8 +197,8 @@ function resolveCollision(
 	const bareEntry = admitted.get(candidate.name);
 	const candidateInstalled = candidate._source?.provider === SKILLSHARE_PROVIDER_ID;
 	const bareInstalled = bareSkill?._source?.provider === SKILLSHARE_PROVIDER_ID;
-	const candidateCustom = shared || candidate._source?.provider === CUSTOM_DIR_PROVIDER_ID;
-	const bareCustom = bareEntry?.shared || bareSkill?._source?.provider === CUSTOM_DIR_PROVIDER_ID;
+	const candidateCustom = candidate._source?.provider === CUSTOM_DIR_PROVIDER_ID;
+	const bareCustom = bareSkill?._source?.provider === CUSTOM_DIR_PROVIDER_ID;
 	// Inactive sources stay independently addressable in the management list,
 	// even when their content matches the active fallback.
 	const identical = existingEntries
@@ -220,7 +215,6 @@ function resolveCollision(
 		allowOverride &&
 		bareSkill &&
 		bareEntry &&
-		!bareEntry.shared &&
 		((bareInstalled && !candidateInstalled) || (candidateCustom && !bareCustom))
 	) {
 		if (identical.includes(candidate.name)) return { name: candidate.name, dropped: identical };
@@ -417,10 +411,8 @@ export async function loadSkillCatalog(
 		return true;
 	}
 
-	// Start shared/custom scans alongside providers; admission below still follows
-	// the original precedence, regardless of which source finishes reading first.
-	const sharedSkillsDir = process.env.OMP_SKILLS_DIR?.trim();
-	let directories = sharedSkillsDir ? [sharedSkillsDir, ...customDirectories] : customDirectories;
+	// Start custom scans alongside providers; admission order does not depend on I/O completion.
+	let directories = customDirectories;
 	if (process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")) {
 		// Deduplicate within this load only; refreshes must still read current files.
 		const seen = new Set<string>();
@@ -453,7 +445,7 @@ export async function loadSkillCatalog(
 						requireDescription: true,
 					},
 				);
-				return { expandedDir, scanResult, shared: dir === sharedSkillsDir };
+				return { expandedDir, scanResult };
 			}),
 		),
 	]);
@@ -524,33 +516,14 @@ export async function loadSkillCatalog(
 		frontmatter: SkillFrontmatter | undefined,
 		namespace: string,
 		realPath: string,
-		shared = false,
 	): string | undefined {
-		const sameFile = realPathSet.has(realPath);
-		if (sameFile && !shared) return undefined;
+		if (realPathSet.has(realPath)) return undefined;
 		if (/[\\/]/.test(skill.name)) {
 			collisionWarnings.push({
 				skillPath: skill.filePath,
 				message: `Skill name "${skill.name}" contains a path separator, skipping: ${skill.filePath}`,
 			});
 			return undefined;
-		}
-		if (sameFile) {
-			for (const [name, entry] of admitted) {
-				if (entry.realPath !== realPath) continue;
-				const existing = skillMap.get(name)!;
-				if (entry.shared || existing._source.provider === CUSTOM_DIR_PROVIDER_ID) return undefined;
-				// Shared can promote this file without replacing its plugin ownership or
-				// pre-substituted Markdown. Legacy plugins have only the install root.
-				if (existing.containRoot !== undefined || existing.pluginRoot !== undefined) {
-					skill = { ...existing, _source: { ...existing._source, providerName: "Shared" } };
-					body = entry.body;
-					frontmatter = entry.frontmatter;
-					namespace = entry.namespace;
-				}
-				skill.name = entry.rawName;
-				break;
-			}
 		}
 		const resolved = resolveCollision(
 			skillMap,
@@ -559,7 +532,6 @@ export async function loadSkillCatalog(
 			body,
 			frontmatter,
 			namespace,
-			shared,
 			!skill.disabledReason,
 			isNameExcluded,
 		);
@@ -587,7 +559,7 @@ export async function loadSkillCatalog(
 		const rawName = skill.name;
 		skill.name = name;
 		skillMap.set(name, skill);
-		admitted.set(name, { rawName, body, frontmatter, namespace, filePath: skill.filePath, realPath, shared });
+		admitted.set(name, { rawName, body, frontmatter, namespace, filePath: skill.filePath });
 		realPathSet.add(realPath);
 		return name;
 	}
@@ -618,22 +590,20 @@ export async function loadSkillCatalog(
 		body: string;
 		frontmatter: SkillFrontmatter | undefined;
 		namespace: string;
-		shared: boolean;
 	}> = [];
-	for (const { expandedDir, scanResult, shared } of customDirectoryResults) {
+	for (const { expandedDir, scanResult } of customDirectoryResults) {
 		for (const capSkill of scanResult.items) {
 			allCustomSkills.push({
 				skill: {
 					...toCatalogEntry(capSkill),
 					// Synthetic custom roots are not governed by foreign-provider toggles.
 					disabledReason: undefined,
-					_source: { ...capSkill._source, providerName: shared ? "Shared" : "Custom" },
+					_source: { ...capSkill._source, providerName: "Custom" },
 				},
 				path: capSkill.path,
 				body: capSkill.content,
 				frontmatter: capSkill.frontmatter,
 				namespace: skillNamespace(capSkill),
-				shared,
 			});
 		}
 		collisionWarnings.push(...(scanResult.warnings ?? []).map(message => ({ skillPath: expandedDir, message })));
@@ -650,9 +620,9 @@ export async function loadSkillCatalog(
 	);
 
 	for (let i = 0; i < allCustomSkills.length; i++) {
-		const { skill, body, frontmatter, namespace, shared } = allCustomSkills[i];
+		const { skill, body, frontmatter, namespace } = allCustomSkills[i];
 		const resolvedPath = customRealPaths[i];
-		admit(skill, body, frontmatter, namespace, resolvedPath, shared);
+		admit(skill, body, frontmatter, namespace, resolvedPath);
 	}
 
 	// Managed (auto-learn) skills resolve dead-last with first-wins. Source from
@@ -994,11 +964,7 @@ export type SkillInvocationKind = "user" | "autoload";
 export type SkillPromptInput = Pick<ParsedSkillInvocation, "args"> & Partial<Pick<ParsedSkillInvocation, "prompt">>;
 
 /** Read a skill's instruction body before rendering user-provided arguments. */
-export async function loadSkillPromptBody(
-	skill: Pick<Skill, "name" | "filePath" | "pluginRoot">,
-	context?: SkillAccessContext,
-): Promise<string> {
-	checkSkillInvocation(skill, context);
+export async function loadSkillPromptBody(skill: Pick<Skill, "name" | "filePath" | "pluginRoot">): Promise<string> {
 	const content = await Bun.file(skill.filePath).text();
 	// Only the body is used: keep HTML comments (`repair: false`) and leave YAML
 	// diagnostics to the loader, which already parsed this frontmatter.
@@ -1025,9 +991,7 @@ export interface LoadedSkillPrompt {
 export async function loadSkillPrompt(
 	skill: LoadedSkillPrompt["skill"],
 	source?: SkillRediscoverySource,
-	context?: SkillAccessContext,
 ): Promise<LoadedSkillPrompt> {
-	checkSkillInvocation(skill, context);
 	const host = source?.skillRediscoveryHost?.();
 	if (host && (await isSkillSuperseded(skill, host))) {
 		// The registries install the skill's plugin elsewhere: read what they expose for it now. A
@@ -1038,12 +1002,12 @@ export async function loadSkillPrompt(
 		skill = current;
 	}
 	try {
-		return { skill, body: await loadSkillPromptBody(skill, context) };
+		return { skill, body: await loadSkillPromptBody(skill) };
 	} catch (error) {
 		if (!host || !isEnoent(error)) throw error;
 		const fresh = await findRediscoveredSkill(skill, host);
 		if (!fresh || fresh.filePath === skill.filePath) throw error;
-		return { skill: fresh, body: await loadSkillPromptBody(fresh, context) };
+		return { skill: fresh, body: await loadSkillPromptBody(fresh) };
 	}
 }
 
@@ -1103,8 +1067,7 @@ export async function buildSkillPromptMessage(
 	input: SkillPromptInput,
 	invocation: SkillInvocationKind = "user",
 	source?: SkillRediscoverySource,
-	context?: SkillAccessContext,
 ): Promise<BuiltSkillPromptMessage> {
-	const loaded = await loadSkillPrompt(skill, source, context);
+	const loaded = await loadSkillPrompt(skill, source);
 	return renderSkillPromptMessage(loaded.skill, input, loaded.body, invocation);
 }

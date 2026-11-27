@@ -277,6 +277,8 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		this.#unsubscribe = undefined;
 		for (const adopted of this.#adopted.values()) {
 			clearTimeout(adopted.timer);
+			this.#failedParks.get(adopted.ref)?.closeSession?.();
+			this.#failedParks.delete(adopted.ref);
 		}
 		this.#adopted.clear();
 		this.#revivals.clear();
@@ -295,6 +297,8 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	 * waits for the park and revives.
 	 */
 	readonly #parks = new Map<string, ParkInFlight>();
+	/** A failed park still owns the old session until its transcript can be closed. */
+	readonly #failedParks = new WeakMap<AgentRef, ParkInFlight>();
 	/** Session keys change on wake, while a parked ref keeps its generation. */
 	readonly #parkedSessionKeys = new WeakMap<AgentRef, Set<string>>();
 	/** In-flight revives, bound to the parked ref that initiated them, so concurrent {@link ensureLive} calls coalesce. */
@@ -563,6 +567,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				try {
 					await this.#disposeOrdinarySession(session, park);
 				} catch (error) {
+					if (this.#registry.get(id) === ref) this.#failedParks.set(ref, park);
 					logger.warn("AgentLifecycleManager.park: session dispose failed", { id, error: String(error) });
 				}
 			} finally {
@@ -572,7 +577,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				if (park.closeSession) {
 					const release = this.#releasing.get(ref);
 					if (release) release.closeSession = park.closeSession;
-					else if (!this.#strictReleases.has(ref)) park.closeSession();
+					else if (!this.#strictReleases.has(ref) && !this.#failedParks.has(ref)) park.closeSession();
 				}
 			}
 		})();
@@ -736,6 +741,12 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	 * when the agent is not revivable or no reviver can be produced.
 	 */
 	async #resolveAndRevive(id: string, ref: AgentRef): Promise<AgentSessionHandle> {
+		const failedPark = this.#failedParks.get(ref);
+		if (failedPark) {
+			await failedPark.session.dispose({ strict: true });
+			this.#failedParks.delete(ref);
+			this.#assertLiveAllowed(ref);
+		}
 		let adoption = this.#adopted.get(id);
 		// A reviver-less adoption of this ref (its warm reviver's thread died) keeps
 		// its release hook through cold revival and restores it if that fails.
@@ -837,7 +848,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 
 		// Publish the exact cleanup owner before detach or a synchronous registry notification.
 		const { promise, resolve, reject } = Promise.withResolvers<boolean>();
-		const park = this.#parks.get(id);
+		const park = this.#failedParks.get(ref) ?? this.#parks.get(id);
 		const release: OrdinaryRelease = {
 			ref,
 			tombstone: options?.tombstone === true,
@@ -900,8 +911,12 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			await park.promise;
 		}
 
+		const failedPark = this.#failedParks.get(ref);
+		release.closeSession ??= failedPark?.closeSession;
 		const live =
-			this.#registry.get(id) === ref && !(park?.ref === ref && park.detached) ? (ref.session ?? cleanup.live) : null;
+			this.#registry.get(id) === ref
+				? (ref.session ?? failedPark?.session ?? (park?.ref === ref && park.detached ? null : cleanup.live))
+				: null;
 		cleanup.live ??= live;
 		if (tombstone) this.#markKilled(ref);
 		try {
@@ -915,6 +930,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				} catch (error) {
 					logger.warn("AgentLifecycleManager.release: session dispose failed", { id, error: String(error) });
 				}
+				if (!this.#strictReleases.has(ref)) this.#failedParks.delete(ref);
 			}
 			for (const adoption of cleanup.adoptions) {
 				if (this.#strictReleases.has(ref)) break;
@@ -1027,7 +1043,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		const pending = this.#strictReleases.get(ref);
 		if (pending) return pending;
 		const adopted = this.#adopted.get(ref.id);
-		const park = this.#parks.get(ref.id);
+		const park = this.#failedParks.get(ref) ?? this.#parks.get(ref.id);
 		const ordinary = this.#releasing.get(ref);
 		const cleanup = ordinary?.cleanup ?? {
 			adoptions: new Set<AdoptedAgent>(),
@@ -1059,7 +1075,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		const current = this.#registry.get(id);
 		const adopted = this.#adopted.get(id);
 		const matches = (ref: AgentRef, live = ref.session): boolean =>
-			expected === undefined || ref === expected || live === expected;
+			expected === undefined || ref === expected || live === expected || this.#failedParks.get(ref)?.session === expected;
 		const pending = findRelease(this.#strictReleases, id, expected, current);
 		const ref =
 			pending?.ref ??
@@ -1105,6 +1121,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				// succeeds. SDK disposal may remove its registry route on success.
 				if (!cleanup.strictlyDisposed) {
 					await cleanup.live?.dispose({ ...options.dispose, ...dispose, strict: true });
+					this.#failedParks.delete(ref);
 					cleanup.strictlyDisposed = true;
 				}
 				const releaseAdoptions = async (): Promise<void> => {
@@ -1340,6 +1357,10 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		if (!adopted || adopted.ref !== event.ref) return;
 		if (event.type === "removed") {
 			if (this.#strictReleases.has(event.ref)) return;
+			if (!this.#releasing.has(event.ref)) {
+				this.#failedParks.get(event.ref)?.closeSession?.();
+				this.#failedParks.delete(event.ref);
+			}
 			clearTimeout(adopted.timer);
 			this.#adopted.delete(event.ref.id);
 			dropReviver(adopted);

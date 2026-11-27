@@ -32,8 +32,6 @@ import cfgEnvShadowedTemplate from "../prompts/tools/cfg-env-shadowed.md" with {
 import cfgApprovalTimeoutTemplate from "../prompts/tools/cfg-approval-timeout.md" with { type: "text" };
 import cfgEntryConfiguredTemplate from "../prompts/tools/cfg-entry-configured.md" with { type: "text" };
 import cfgWriteResultTemplate from "../prompts/tools/cfg-write-result.md" with { type: "text" };
-import type { TeamConfigError, TeamConfigService } from "../team/config";
-import { cfgTeamMembers } from "../team/settings";
 import type { ToolSession } from "../tools";
 import type {
 	InternalResource,
@@ -456,10 +454,9 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		const saveUrl = `${settingUrl}/${CFG_SAVE_SEGMENT}`;
 		const finish = (
 			outcome: CfgWriteOutcome,
-			shadow?: { layer: SettingProvenance; effective: unknown },
-			note?: string,
+			shadow?: { layer: SettingProvenance; scope: Settings },
 		): InternalWriteResult => {
-			const effective = shadow ? shown(shadow.effective) : undefined;
+			const effective = shadow ? shown(leaf.get(shadow.scope)) : undefined;
 			const details: CfgWriteDetails = { ...request, outcome, ...(effective !== undefined ? { effective } : {}) };
 			const text = prompt
 				.render(cfgWriteResultTemplate, {
@@ -475,7 +472,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 					provenance: shadow ? PROVENANCE_LABELS[shadow.layer] : undefined,
 				})
 				.trim();
-			return { content: [{ type: "text", text: note ? `${text}\n${note}` : text }], details: { cfg: details } };
+			return { content: [{ type: "text", text }], details: { cfg: details } };
 		};
 
 		if (!save && Bun.deepEquals(previous, value)) return finish("unchanged");
@@ -510,34 +507,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 				`Changing settings requires user approval, but no interactive UI is attached. Ask the user to change \`${leaf.id}\` themselves.`,
 			);
 		}
-		const caller = callerSession(context);
-		const sessionId = caller.getSessionId?.() ?? undefined;
-		let team: { service: TeamConfigService; revision?: string; errorClass: typeof TeamConfigError } | undefined;
-		if (leaf.id === cfgTeamMembers.id) {
-			const registry = caller.modelRegistry;
-			if (!registry) throw new Error("Cannot validate Team members without the calling session's model registry.");
-			const { TeamConfigError, TeamConfigService } = await import("../team/config");
-			const service = new TeamConfigService({
-				getSettings: () => caller.settings,
-				getModelRegistry: () => registry,
-				persistentSettings: host.persistentSettings,
-				isCurrent: () =>
-					approvalHost === host &&
-					caller.modelRegistry === registry &&
-					!context?.signal?.aborted &&
-					!caller.isDisposed?.() &&
-					(caller.getSessionId?.() ?? undefined) === sessionId,
-			});
-			team = { service, errorClass: TeamConfigError };
-			if (save) {
-				const { revision } = await host.persistentSettings.readUserSetting(leaf.id);
-				if (revision === null) throw new Error("User Team configuration cannot be safely read; nothing was saved.");
-				team.revision = revision;
-				const projected = settings.projectUserSetting(leaf.id, value);
-				if (!Bun.deepEquals(value, projected.value) && ABOVE_GLOBAL.includes(projected.source))
-					request.shadowedBy = PROVENANCE_LABELS[projected.source];
-			}
-		} else if (save) {
+		if (save) {
 			// Saving may still be meant for other projects, so ask anyway, but name the layer that wins here.
 			// A session sharing the persistent instance drops or patches its own override on save, so it does not shadow.
 			const persistent = host.persistentSettings;
@@ -550,6 +520,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 					layer === "env" && leaf.envName ? `environment variable ${leaf.envName}` : PROVENANCE_LABELS[layer];
 			}
 		}
+		const sessionId = callerSession(context).getSessionId?.() ?? undefined;
 		const decision = approvalQueue.then(() => decide(host, request, sessionId, context?.signal));
 		approvalQueue = decision.catch(() => undefined);
 		const answer = await decision;
@@ -561,49 +532,13 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		if (answer === "deny") return finish("declined");
 
 		if (!save) {
-			team?.service.validateTeamMembers(value);
 			leaf.override(settings, value);
 			host.applied({ path: leaf.id, value: leaf.get(settings), settings, save });
 			// A non-fallback env var outranks runtime overrides; report it instead of claiming the change.
 			const layer = shadowingLayer(leaf, settings, written, ABOVE_SESSION);
-			return finish("applied", layer ? { layer, effective: leaf.get(settings) } : undefined);
+			return finish("applied", layer ? { layer, scope: settings } : undefined);
 		}
 		const persistent = host.persistentSettings;
-		if (team?.revision !== undefined) {
-			let result;
-			try {
-				result = await team.service.saveTeamConfig(value, team.revision);
-			} catch (error) {
-				if (!(error instanceof team.errorClass)) throw error;
-				const status = error.data?.write.status;
-				const receipt =
-					status === "saved"
-						? "Write committed to the global config."
-						: status === "unchanged"
-							? "No new write: the global config already matched at save time."
-							: status === "not_attempted" || status === "failed"
-								? "Not saved."
-								: "Write status unknown.";
-				const note = error.data?.effectiveNote;
-				const text = [
-					`\`${leaf.id}\`: ${receipt}`,
-					error.message,
-					...(note && note !== error.message ? [note] : []),
-					"Re-read the current user configuration before retrying.",
-				].join("\n");
-				return { isError: true, content: [{ type: "text", text }] };
-			}
-			if (settings !== persistent)
-				host.applied({ path: leaf.id, value: leaf.get(persistent), settings: persistent, save });
-			host.applied({ path: leaf.id, value: leaf.get(settings), settings, save });
-			if (result.effectiveMatchesRequested) return finish("applied");
-			const layer = result.config.source;
-			if (layer && ABOVE_GLOBAL.includes(layer)) {
-				const effective = result.config.effectiveMembers?.map(slot => slot.rawSelector) ?? leaf.get(settings);
-				return finish("applied", { layer, effective });
-			}
-			return finish("applied", undefined, result.effectiveNote);
-		}
 		// A patch keeps the global record's other entries.
 		leaf.set(persistent, patch ? applyPatch(globalValue(leaf, persistent), patch) : value);
 		await persistent.flush();
@@ -621,7 +556,7 @@ export class CfgProtocolHandler implements ProtocolHandler {
 		host.applied({ path: leaf.id, value: leaf.get(settings), settings, save });
 		// Judged on the persistent instance: a separate session carries the mirrored override above.
 		const layer = shadowingLayer(leaf, persistent, written, ABOVE_GLOBAL);
-		return finish("applied", layer ? { layer, effective: leaf.get(persistent) } : undefined);
+		return finish("applied", layer ? { layer, scope: persistent } : undefined);
 	}
 
 	async complete(): Promise<UrlCompletion[]> {

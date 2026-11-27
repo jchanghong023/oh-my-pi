@@ -59,7 +59,7 @@ import { renderFunctionRun, renderStatusCallChain } from "./run-code";
 import { ToolAbortError, throwIfAborted } from "./tool-errors";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
-import { clampTimeout } from "./tool-timeouts";
+import { clampTimeout, TOOL_TIMEOUTS } from "./tool-timeouts";
 
 import {
 	cfgBrowserCdpUrl,
@@ -186,7 +186,7 @@ export interface CrawlBrowserTab {
 
 export type CrawlBrowserOperation =
 	| { kind: "open"; route?: CrawlBrowserRoute; onOpen: (tab: CrawlBrowserTab) => void }
-	| { kind: "run"; tab: CrawlBrowserTab };
+	| { kind: "run"; tab: CrawlBrowserTab; waitSeconds?: number };
 
 const CRAWL_CLOSE_TIMEOUT_MS = 5_000;
 const crawlBrowserTabs = new WeakMap<CrawlBrowserTab, { tab: WorkerTabSession; session: ToolSession }>();
@@ -494,12 +494,24 @@ async function invokeBrowser(
 			(parsed.action === "call" || parsed.action === "run"
 				? tabCallBudgetSeconds(parsed.chain, context.cellTimeoutMs)
 				: undefined);
-		const timeoutSeconds = clampTimeout("browser", requested, cfgToolsMaxTimeout.get(session.settings));
+		const crawl = context.crawlBrowser;
+		if (crawl && crawl.kind !== parsed.action) throw new ToolError("Invalid operation for an owned crawl tab.");
+		const maxTimeout = cfgToolsMaxTimeout.get(session.settings);
+		const crawlWait = crawl?.kind === "run" ? (crawl.waitSeconds ?? 0) : 0;
+		// Only the host-owned crawl needs a second wait after expanding the article.
+		const timeoutSeconds =
+			crawlWait > 0
+				? Math.max(
+						TOOL_TIMEOUTS.browser.min,
+						Math.min(
+							TOOL_TIMEOUTS.browser.max + crawlWait,
+							maxTimeout > 0 ? maxTimeout : Number.POSITIVE_INFINITY,
+						),
+					)
+				: clampTimeout("browser", requested, maxTimeout);
 		const timeoutMs = timeoutSeconds * 1000;
 		const name = parsed.name ?? DEFAULT_TAB_NAME;
 		const details: BrowserPreludeDetails = { action: parsed.action, name };
-		const crawl = context.crawlBrowser;
-		if (crawl && crawl.kind !== parsed.action) throw new ToolError("Invalid operation for an owned crawl tab.");
 
 		switch (parsed.action) {
 			case "open":

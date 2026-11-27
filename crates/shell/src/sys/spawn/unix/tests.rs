@@ -155,8 +155,8 @@ fn cancellation_wave_signals_shared_group_once() {
 		.signal_wave(Signal::Term, &children, &[], true)
 		.expect("batch supported");
 	assert!(wave.failed.is_empty());
-	first.record_wave_signal(Signal::Term, &wave);
-	second.record_wave_signal(Signal::Term, &wave);
+	first.record_wave_signal(Signal::Term, true, Some(&wave));
+	second.record_wave_signal(Signal::Term, true, Some(&wave));
 	assert_eq!(wait(&mut first), ExitStatus::Exited(0));
 	assert_eq!(wait(&mut second), ExitStatus::Exited(0));
 	assert_eq!(std::fs::read_to_string(log).unwrap().lines().count(), 2);
@@ -174,7 +174,7 @@ fn foreground_wave_does_not_signal_other_group_members() {
 	let pid = first.pid();
 	if let Some(wave) = first.signal_wave(Signal::Term, &[(pid, None)], &[], false) {
 		assert!(wave.failed.is_empty());
-		first.record_wave_signal(Signal::Term, &wave);
+		first.record_wave_signal(Signal::Term, false, Some(&wave));
 	} else {
 		assert!(!batch_supported(), "the host can pin the foreground child");
 		first.signal_single(Signal::Term).unwrap();
@@ -917,8 +917,8 @@ fn check_cancel_kills_orphan(batched: bool) {
 		let children = [(peer.pid(), peer.pgid()), (p.pid(), p.pgid())];
 		if let Some(wave) = peer.signal_wave(Signal::Term, &children, &[], true) {
 			assert!(wave.failed.is_empty());
-			peer.record_wave_signal(Signal::Term, &wave);
-			p.record_wave_signal(Signal::Term, &wave);
+			peer.record_wave_signal(Signal::Term, true, Some(&wave));
+			p.record_wave_signal(Signal::Term, true, Some(&wave));
 		} else {
 			assert!(!batch_supported(), "the host can pin both live children");
 			peer.signal(Signal::Term).unwrap();

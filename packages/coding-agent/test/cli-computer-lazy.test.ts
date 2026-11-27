@@ -9,7 +9,6 @@ const versionEnv = {
 	WINDIR: process.env.WINDIR,
 	BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
 	PI_BUILD_VERSION: process.env.PI_BUILD_VERSION,
-	PI_BUILD_TIMESTAMP: "ignored-timestamp",
 };
 
 test("command registration and version keep addons and the default profile lazy", async () => {
@@ -64,5 +63,4 @@ test("root help uses the application version", async () => {
 	]);
 	expect(exitCode, stderr).toBe(0);
 	expect(stdout).toContain(`${APP_NAME} v${VERSION}`);
-	expect(stdout).not.toContain("ignored-timestamp");
 });

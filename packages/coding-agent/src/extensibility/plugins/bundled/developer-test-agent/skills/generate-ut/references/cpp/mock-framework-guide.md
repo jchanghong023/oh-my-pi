@@ -16,11 +16,11 @@
    - 已有binmock → 使用binmock
    - 已有AMock → 使用AMock
    - 已有mockcpp → 使用mockcpp（注意平台兼容性）
-   - 无配置 → 优先使用gmock
+   - 无配置 → 有函数指针等注入点时可用 gmock；直接调用 C 函数符号时 MUST 使用平台支持的符号拦截方式（如 binmock 或 GNU 链接器 `--wrap` 拦截未定义的外部引用）。纯 gmock 不拦截直接调用；无法拦截时，记录未覆盖分支。
 
 4. **Windows/MinGW平台特殊处理**
    - mockcpp在Windows/MinGW下可能无法编译（sys/mman.h缺失）
-   - 优先使用gmock/binmock替代mockcpp
+   - 有注入点时优先使用 gmock；直接调用 C 函数符号时选择平台支持的 binmock 等拦截方式
    - 如果被测函数不需要Mock，使用纯gtest
 
 **关键原则**：被测函数不需要Mock外部依赖时，不引入任何Mock框架。这避免了mockcpp等框架的平台兼容性问题和不必要的编译依赖。
@@ -69,7 +69,7 @@ public:
 
 ### 非虚函数Mock（包装层模式）
 
-当被测代码依赖非虚函数时，创建Mock包装层：
+被测代码 MUST 通过可注入的虚接口调用依赖：生产环境注入包装原类的适配器，测试注入 Mock。仍通过 `OriginalService` 调用时，gmock 无法拦截非虚调用；没有注入点时 MUST 改用支持该调用的替代方式，或记录限制。
 
 ```cpp
 // 步骤1：创建虚函数接口类
@@ -85,15 +85,15 @@ public:
     MOCK_METHOD(int32_t, ProcessData, (const std::string& data), (override));
 };
 
-// 步骤3：创建适配器
-class ServiceAdapter : public OriginalService {
+// 步骤3：生产适配器包装原类；不继承原类
+class ServiceAdapter : public MockServiceInterface {
 public:
-    explicit ServiceAdapter(MockServiceInterface* mock) : mock_(mock) {}
+    explicit ServiceAdapter(OriginalService& service) : service_(service) {}
     int32_t ProcessData(const std::string& data) override {
-        return mock_->ProcessData(data);
+        return service_.ProcessData(data);
     }
 private:
-    MockServiceInterface* mock_;
+    OriginalService& service_;
 };
 ```
 
@@ -217,16 +217,7 @@ MOCKER(strdup).stubs().will(returnValue((char*)nullptr));
 
 ### 策略2：手动构造NULL状态验证后续行为
 
-如果无法Mock分配函数，手动设置分配结果为NULL后验证：
-```cpp
-TEST_F(DeviceTest, test_init_when_device_null_then_handle_correctly) {
-    init_devices();  // 正常调用
-    // 手动设置某个device为NULL模拟malloc失败
-    devices[0] = NULL;
-    // 验证后续函数能正确处理NULL
-    EXPECT_EQ(check_device_status(0), DEVICE_STATUS_INVALID);
-}
-```
+调用 `check_device_status()` 前将 `devices[0]` 置空，只能验证该函数如何处理 NULL。NEVER 将这种测试计为 `init_devices()` 分配失败分支的覆盖；无法使分配调用在 `init_devices()` 内失败时，记录该分支未覆盖。
 
 ### 策略3：包含.c文件直接访问static变量
 

@@ -35,10 +35,10 @@ describe("settings section sidebar", () => {
 		for (let i = 0; i < 7; i++) term.press("right");
 		expect(cfgDevAutoqa.get(settings)).toBe(true);
 		const group = getSettingDef(createSettingsHost().entries, "dev.autoqa")?.group;
-		expect(group).toBe("Developer");
-		clickLabel(term, group!);
+		if (!group) throw new Error("Missing settings group for dev.autoqa");
+		clickLabel(term, group);
 		expect(cfgDevAutoqa.get(settings)).toBe(true);
-		clickLabel(term, group!);
+		clickLabel(term, group);
 		expect(cfgDevAutoqa.get(settings)).toBe(true);
 	});
 });
@@ -98,8 +98,8 @@ describe("extra context filenames editor", () => {
 				for (let i = 0; i < 3; i++) term.press("right");
 				await settings.flush();
 				const label = getSettingDef(createSettingsHost().entries, "contextFiles.extra")?.label;
-				expect(label).toBe("Extra Context Files");
-				expect(settingsScreen(term)).not.toContain(label!);
+				if (!label) throw new Error("Missing settings label for contextFiles.extra");
+				expect(settingsScreen(term)).not.toContain(label);
 			} finally {
 				term.dispose();
 			}

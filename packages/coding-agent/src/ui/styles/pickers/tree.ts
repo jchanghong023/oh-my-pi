@@ -8,6 +8,7 @@
  */
 import type { UiNode } from "@oh-my-pi/pi-tui";
 import type { Block, Hit, PaintContext } from "@oh-my-pi/pi-tui/term/paint";
+import { type Picture, pictureRows } from "@oh-my-pi/pi-tui/term/painters/image";
 import {
 	boxBottom,
 	boxRow,
@@ -25,6 +26,7 @@ import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
 import { caretField } from "./common";
 import { canonicalKeyId } from "../../../config/keybindings/key-id";
 import { getKeybindings } from "../../../config/keybindings/keybindings";
+import { selectKeyId } from "../../../config/keybindings/matchers";
 import { keyLabel } from "../../keys/hints";
 import { bindingGlyph, keyLabels } from "../panels/common";
 
@@ -59,6 +61,16 @@ export type TreeLookTerm = PickerTerm & {
 	readonly total: number;
 };
 
+export function treeDetailHeight(maxRows: number): number {
+	return Math.max(1, Math.floor(maxRows / 2));
+}
+
+/** A user-bound selector action takes precedence over the details shortcut. */
+export function treeDetailsKey(): string {
+	const keybindings = getKeybindings();
+	return ["alt+enter", "alt+i", "alt+v"].find(key => selectKeyId(key, keybindings) === key) ?? "";
+}
+
 /** The key help line, in the user's bindings (branch keys only when bound). */
 function help(theme: Theme): string {
 	const branchKeys = (["app.tree.previousBranch", "app.tree.nextBranch"] as const)
@@ -68,7 +80,7 @@ function help(theme: Theme): string {
 		.join("/");
 	return [
 		`${bindingGlyph("tui.select.confirm", "enter", theme)}: switch.`,
-		`${keyLabel(theme, "alt+enter")}: tool details, ${keyLabels(theme, ["shift+up", "shift+down"])}: scroll details.`,
+		`${keyLabel(theme, treeDetailsKey())}: tool details, ${keyLabels(theme, ["shift+up", "shift+down"])}: scroll details.`,
 		`${keyLabels(theme, ["alt+up", "alt+down"])}: previous/next turn.`,
 		...(branchKeys ? [`${branchKeys}: previous/next branch.`] : []),
 		`${bindingGlyph("tui.select.pageUp", "pageUp", theme)}/${bindingGlyph("tui.select.pageDown", "pageDown", theme)} (${keyLabels(theme, ["left", "right"])}): page.`,
@@ -105,6 +117,8 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 	const head = ["", truncate(theme.style("muted", help(theme)), inner, theme.symbols.ellipsis)];
 	head.push(caretField(theme, `${theme.style("muted", "Search:")} `, term.field.text, term.field.cursor, inner));
 	const body: string[] = [""];
+	let imageStart = 0;
+	let imageEnd = 0;
 	const hits: Hit[] = [];
 	if (term.label) {
 		body.push(truncate(theme.style("muted", "Label (empty to remove):"), inner));
@@ -133,7 +147,7 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 			);
 	} else {
 		const selectedIndex = term.entries.findIndex(row => row.id === props.selected);
-		const detailHeight = term.details ? Math.max(1, Math.floor(term.maxRows / 2)) : 0;
+		const detailHeight = term.details ? treeDetailHeight(term.maxRows) : 0;
 		const { start, end } = scrollWindow(term.entries.length, selectedIndex, Math.max(1, term.maxRows - detailHeight));
 		const overflow = term.entries.length > end - start;
 		const rowWidth = overflow ? inner - 1 : inner;
@@ -171,9 +185,24 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 			body.push(bar ? `${padTo(line, rowWidth)}${bar[i - start]}` : line);
 			if (selected && term.details) {
 				const indent = rowWidth >= 4 ? "  " : "";
+				const image = detailHeight > 1 ? node.children().find(child => child.kind === "image") : undefined;
+				const picture =
+					image &&
+					pictureRows(
+						image.props() as Picture,
+						{ ...cx, width: inner, height: Math.max(1, Math.floor(detailHeight / 2)) },
+						{ label: theme.style("muted", "[Image]") },
+					);
+				// Graphics rows must be drawn unframed; fill and borders can erase their cells.
+				if (picture && picture.state !== "fallback") {
+					imageStart = body.length;
+					body.push(...picture.rows);
+					imageEnd = body.length;
+				}
+				const textHeight = detailHeight - (imageEnd - imageStart);
 				const detailRows = wrapChars(replaceTabs(term.details), Math.max(1, rowWidth - indent.length));
-				const offset = term.clampDetailScroll(Math.max(0, detailRows.length - detailHeight));
-				for (const detail of detailRows.slice(offset, offset + detailHeight)) body.push(`${indent}${detail}`);
+				const offset = term.clampDetailScroll(Math.max(0, detailRows.length - textHeight));
+				for (const detail of detailRows.slice(offset, offset + textHeight)) body.push(`${indent}${detail}`);
 			}
 		}
 	}
@@ -184,7 +213,7 @@ function paintTree(node: UiNode, cx: PaintContext): Block {
 		boxTop(theme, width, "Session Tree"),
 		...head.map(row => boxRow(theme, width, row)),
 		boxRule(theme, width),
-		...body.map(row => boxRow(theme, width, row)),
+		...body.map((row, index) => (index >= imageStart && index < imageEnd ? row : boxRow(theme, width, row))),
 		boxBottom(theme, width),
 	];
 	return { rows, hits: [sheetHit(node, width, rows.length), ...hits] };

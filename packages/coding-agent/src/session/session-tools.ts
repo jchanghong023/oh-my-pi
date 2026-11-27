@@ -531,7 +531,7 @@ export class SessionTools {
 	 * when the live route projection lists it: a frozen prompt never shipped it.
 	 */
 	#basePromptRoutedToolCommandNames: ReadonlySet<string> = new Set();
-	#toolRegistryMutationScope = new AsyncLocalStorage<{ generation: number | undefined; sessionId: string }>();
+	#toolRegistryMutationScope = new AsyncLocalStorage<{ generation: number; sessionId: string } | { cwd: string }>();
 	/**
 	 * Render-scoped candidate prompt surface. Rebuild frames run inside
 	 * `.run(candidate, …)` so tool getters read the candidate during render and
@@ -1078,10 +1078,10 @@ export class SessionTools {
 			this.#assertCurrentToolMutation();
 			return untilAborted(signal, mutation);
 		}
-		const owner = {
-			generation: scope === "transcript" ? this.#host.sessionGeneration() : undefined,
-			sessionId: this.#host.sessionManager.getSessionId(),
-		};
+		const owner =
+			scope === "transcript"
+				? { generation: this.#host.sessionGeneration(), sessionId: this.#host.sessionManager.getSessionId() }
+				: { cwd: this.#host.sessionManager.getCwd() };
 		const serialized = this.#toolRegistryMutationTail.then(() =>
 			this.#toolRegistryMutationScope.run(owner, async () => {
 				signal?.throwIfAborted();
@@ -1101,12 +1101,13 @@ export class SessionTools {
 
 	#assertCurrentToolMutation(): void {
 		const owner = this.#toolRegistryMutationScope.getStore();
-		// Disposal is not a session-identity change: the disposed callers below
-		// roll mutations back silently, so only generation/sessionId drift throws.
+		// Settings and service registries outlive a transcript reset, not a project move.
 		if (
 			owner &&
-			((owner.generation !== undefined && owner.generation !== this.#host.sessionGeneration()) ||
-				owner.sessionId !== this.#host.sessionManager.getSessionId())
+			("cwd" in owner
+				? owner.cwd !== this.#host.sessionManager.getCwd()
+				: owner.generation !== this.#host.sessionGeneration() ||
+					owner.sessionId !== this.#host.sessionManager.getSessionId())
 		) {
 			throw new Error("Session changed during the tool registry mutation.");
 		}
@@ -2554,7 +2555,7 @@ export class SessionTools {
 
 	/** Replaces memory-backend tools while preserving unrelated selections. */
 	replaceMemoryTools(tools: AgentTool[]): Promise<void> {
-		return this.runToolRegistryMutation(async () => {
+		return this.#runToolRegistryMutation("settings", async () => {
 			const removed = new Set<string>(MEMORY_BACKEND_TOOL_NAMES.filter(name => this.#isCurrentBuiltInTool(name)));
 			const nextActive = this.getEnabledToolNames().filter(name => !removed.has(name));
 			for (const name of removed) {
@@ -2676,8 +2677,8 @@ export class SessionTools {
 	 * `commitIf` lets asynchronous producers discard a stale rebuild atomically
 	 * after its inputs have been superseded.
 	 */
-	refreshBaseSystemPrompt(commitIf?: () => boolean): Promise<void> {
-		return this.runToolRegistryMutation(async () => {
+	refreshBaseSystemPrompt(commitIf?: () => boolean, scope: "transcript" | "settings" = "transcript"): Promise<void> {
+		return this.#runToolRegistryMutation(scope, async () => {
 			const prepared = await this.#prepareBaseSystemPrompt();
 			this.#assertCurrentToolMutation();
 			if (commitIf && !commitIf()) return;
@@ -2964,7 +2965,7 @@ export class SessionTools {
 	 */
 	refreshMCPTools(mcpTools: CustomTool[]): Promise<void> {
 		const snapshot = [...mcpTools];
-		return this.runToolRegistryMutation(() =>
+		return this.#runToolRegistryMutation("settings", () =>
 			this.#host.isDisposed() ? Promise.resolve() : this.#applyMCPToolRefresh(snapshot),
 		);
 	}

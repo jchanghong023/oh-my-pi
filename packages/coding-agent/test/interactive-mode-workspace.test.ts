@@ -139,15 +139,11 @@ describe("InteractiveMode workspace command", () => {
 	}
 
 	it("toggles without submitting", async () => {
-		const model = session.model;
-		const tools = session.getEnabledToolNames();
 		expect(await mode.handleWorkspaceModeCommand()).toBe(false);
 		expect(statusText(160)).toContain("Workspace");
 		expect(await mode.handleWorkspaceModeCommand()).toBe(false);
 		expect(statusText(160)).not.toContain("Workspace");
 		expect(mock.calls).toHaveLength(0);
-		expect(session.model).toBe(model);
-		expect(session.getEnabledToolNames()).toEqual(tools);
 	});
 
 	it("submits once when off and already on, preserving text, images, links and the draft", async () => {

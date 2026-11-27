@@ -34,7 +34,7 @@ use crate::{
 	commands::{self, SessionCommands},
 	output_decode,
 	sys::{End, Exits, NativeSpawner, OutputDecoding, Relays, Sessions, SpawnConfig, StdFile},
-	tools::{SpawnLog, ToolConfig},
+	tools::{SpawnId, SpawnLog, ToolConfig},
 };
 
 mod loopback;
@@ -416,6 +416,8 @@ impl Launcher {
 	/// Start the external `spec` names, now. Text routing and the observer
 	/// see a spawn only once it succeeded.
 	fn launch(&self, mut spec: SpawnSpec<'_>) -> io::Result<Box<dyn ExtProc>> {
+		let lineage = spec.lineage;
+		self.spawns.prepare_spawn(lineage);
 		let observed = spec.stdio[1..]
 			.iter()
 			.chain(spec.extra_fds.iter().map(|(_, stdio)| stdio))
@@ -425,23 +427,30 @@ impl Launcher {
 		if let Some(relays) = &mut relays {
 			self.route_text(&mut spec, relays, self.decoding.is_none())?;
 		}
-		let lineage = spec.lineage;
 		let mut child = if self.spawns.measured(lineage.label) {
 			self.spawner.spawn_measured(spec)?
 		} else {
 			self.spawner.spawn(spec)?
 		};
+		#[cfg(unix)]
+		if self.spawns.foreground(lineage.label) {
+			child.drain_output_at_exit();
+		}
 		if let Some(relays) = relays {
 			child = relays.wrap(child);
 		}
-		self.spawns.record(lineage, || child.process());
-		Ok(match &self.observer {
-			Some(observer) => {
-				let pid = child.pid();
-				observer.spawned(pid, lineage.detached);
-				Box::new(Observed { child, observer: Arc::clone(observer), released: false })
-			},
-			None => child,
+		let spawn = self.spawns.record(lineage, || child.process());
+		if let Some(observer) = &self.observer {
+			observer.spawned(child.pid(), lineage.detached);
+		}
+		Ok(if spawn.is_some() || self.observer.is_some() {
+			Box::new(Observed {
+				child,
+				observer: self.observer.clone(),
+				spawn: spawn.map(|id| (self.spawns.clone(), id)),
+			})
+		} else {
+			child
 		})
 	}
 }
@@ -978,18 +987,24 @@ fn protected_processes() -> Vec<(i32, i32)> {
 	i32::try_from(std::process::id()).map_or_else(|_| Vec::new(), |me| vec![(me, me)])
 }
 
-/// An external reported to a [`SpawnObserver`].
+/// An external with spawn accounting in its tool log or session observer.
 struct Observed {
 	child:    Box<dyn ExtProc>,
-	observer: Arc<dyn SpawnObserver>,
-	released: bool,
+	observer: Option<Arc<dyn SpawnObserver>>,
+	spawn:    Option<(SpawnLog, SpawnId)>,
 }
 
 impl Observed {
+	fn exited(&mut self) {
+		if let Some((log, id)) = self.spawn.take() {
+			log.exited(id);
+		}
+		self.release();
+	}
+
 	fn release(&mut self) {
-		if !self.released {
-			self.released = true;
-			self.observer.released(self.child.pid());
+		if let Some(observer) = self.observer.take() {
+			observer.released(self.child.pid());
 		}
 	}
 }
@@ -1005,14 +1020,14 @@ impl ExtProc for Observed {
 
 	fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus> {
 		let status = std::task::ready!(self.child.poll_wait(cx));
-		self.release();
+		self.exited();
 		Poll::Ready(status)
 	}
 
 	fn poll_event(&mut self, cx: &mut Context<'_>) -> Poll<crate::bash::ProcEvent> {
 		let event = std::task::ready!(self.child.poll_event(cx));
 		if matches!(event, crate::bash::ProcEvent::Exited(_)) {
-			self.release();
+			self.exited();
 		}
 		Poll::Ready(event)
 	}
@@ -1039,8 +1054,18 @@ impl ExtProc for Observed {
 		self.child.signal_wave(sig, pids, extra, groups)
 	}
 
-	fn record_wave_signal(&mut self, sig: Signal, wave: &crate::proctree::SignalWave) {
-		self.child.record_wave_signal(sig, wave);
+	fn record_wave_signal(
+		&mut self,
+		sig: Signal,
+		groups: bool,
+		wave: Option<&crate::proctree::SignalWave>,
+	) {
+		self.child.record_wave_signal(sig, groups, wave);
+	}
+
+	#[cfg(unix)]
+	fn continue_stopped(&mut self) -> io::Result<()> {
+		self.child.continue_stopped()
 	}
 
 	fn stop(&mut self) -> io::Result<()> {

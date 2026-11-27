@@ -51,7 +51,7 @@ export function toolFileTargets(toolName: string, args: Record<string, unknown>)
 	const paths: string[] = [];
 	for (const path of candidates) {
 		if (typeof path !== "string" || !path.trim()) continue;
-		const target = unwrapHashlineHeaderPath(path);
+		const target = toolName === "read" || toolName === "ast_edit" ? path : unwrapHashlineHeaderPath(path);
 		if (isFilePath(target) && !paths.includes(target)) paths.push(target);
 	}
 	return paths;

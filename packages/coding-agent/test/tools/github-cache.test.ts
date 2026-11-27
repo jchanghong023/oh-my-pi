@@ -151,7 +151,6 @@ describe("github-cache db layer", () => {
 		const parent = path.join(tempDir, "caller-owned-parent");
 		await fs.mkdir(parent, { recursive: true, mode: 0o755 });
 		await fs.chmod(parent, 0o755);
-		const originalMode = (await fs.stat(parent)).mode & 0o777;
 		process.env.OMP_GITHUB_CACHE_DB = path.join(parent, "github-cache.db");
 		resetCacheForTests();
 
@@ -159,7 +158,7 @@ describe("github-cache db layer", () => {
 
 		expect(db).not.toBeNull();
 		const stat = await fs.stat(parent);
-		expect(stat.mode & 0o777).toBe(originalMode);
+		expect(stat.mode & 0o777).toBe(0o755);
 	});
 
 	it("migrates a v3 cache whose kind CHECK predates mr-diff rows", () => {

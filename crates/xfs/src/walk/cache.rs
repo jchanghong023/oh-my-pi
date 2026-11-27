@@ -32,7 +32,7 @@ use parking_lot::RwLock;
 
 use super::is_separator;
 use crate::{
-	fs::{Dir, Listing, Session, Stamp},
+	fs::{Dir, FileType, Listing, Session, Stamp},
 	ignore::{DirIgnores, EXCLUDE, Names, Sources},
 };
 
@@ -75,6 +75,8 @@ pub(crate) enum Freshness {
 #[derive(Debug)]
 pub(crate) struct CachedDir {
 	freshness:          Freshness,
+	/// This listing was opened via the root or an explicitly followed link.
+	follow:             bool,
 	/// Records carry no sizes, mtimes, or child counts: those change without
 	/// touching the directory's stamp.
 	pub(crate) listing: Listing,
@@ -156,10 +158,13 @@ impl Cache {
 
 	/// The cached listing at `abs`, by age for timed walks or by filesystem
 	/// stamp otherwise. `scratch` is per-worker ignore-source path scratch.
+	/// Only the root or an explicitly followed link can reuse a listing
+	/// opened by following the final path component.
 	pub(crate) async fn lookup(
 		&self,
 		session: &mut Session,
 		abs: &Path,
+		follow: bool,
 		with_ignores: bool,
 		ttl: Option<Duration>,
 		scratch: &mut Vec<u8>,
@@ -172,14 +177,16 @@ impl Cache {
 			(_, false) => None,
 		};
 		let stamp = match (dir.freshness, ttl) {
-			(Freshness::Timed(start), Some(ttl)) => return (start.elapsed() < ttl).then_some(dir),
+			(Freshness::Timed(start), Some(ttl)) => {
+				return (start.elapsed() < ttl && (follow || !dir.follow)).then_some(dir);
+			},
 			(Freshness::Stamp(stamp), None) => stamp,
 			_ => return None,
 		};
 		// A directory reached through a followed link is stored under the
 		// link's path with the target's stamp.
-		match session.stat(abs, true).await {
-			Ok(info) if info.stamp == stamp => {},
+		match session.stat(abs, follow).await {
+			Ok(info) if info.file_type == Some(FileType::Dir) && info.stamp == stamp => {},
 			_ => {
 				self.drop_key(key);
 				return None;
@@ -228,6 +235,7 @@ impl Cache {
 		session: &mut Session,
 		abs: &Path,
 		dir: &Dir,
+		follow: bool,
 		freshness: Freshness,
 		listing: &Listing,
 		names: Names,
@@ -253,7 +261,7 @@ impl Cache {
 		let size = i64::try_from(key.len() + listing.heap_size())
 			.unwrap_or(i64::MAX - ENTRY_OVERHEAD)
 			+ ENTRY_OVERHEAD;
-		self.put(key, CachedDir { freshness, listing, names, ignores: ignores.cloned(), size });
+		self.put(key, CachedDir { freshness, follow, listing, names, ignores: ignores.cloned(), size });
 	}
 }
 

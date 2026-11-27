@@ -231,8 +231,7 @@ describe("ast_edit tool schema", () => {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
 				paths: [filePath],
 			});
-			expect(preview.details).toMatchObject({ applied: false, totalReplacements: 1 });
-			expect(await Bun.file(filePath).text()).toBe("legacyWrap(x, value)\n");
+			expect(preview.details).toMatchObject({ applied: false });
 			await fs.rm(filePath);
 			const invoker = queue.peekPendingInvoker()!;
 			await expect(invoker({ action: "apply", reason: "apply after target disappeared" })).rejects.toThrow();

@@ -11,6 +11,7 @@
  * The session's tool commands run in it too, each reported as a status event
  * under its tool name.
  */
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { ToolError } from "../tools/tool-errors";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { shellChangeSnapshots } from "../commit/selective/journal";
@@ -37,6 +38,7 @@ export interface EvalShellBridgeOptions {
 	signal?: AbortSignal;
 	/** Enclosing eval call, for the tool commands the command runs. */
 	parentToolCallId?: string;
+	getToolContext?: (toolCallId: string) => AgentToolContext | undefined;
 	emitStatus?: (event: JsStatusEvent) => void;
 }
 
@@ -68,7 +70,6 @@ export async function runEvalShell(args: unknown, options: EvalShellBridgeOption
 	let length = 0;
 	let truncated = false;
 	const names = toolCommandNames(session);
-	const toolContext = session.getToolContext?.();
 	const commands =
 		names.length === 0
 			? undefined
@@ -78,11 +79,12 @@ export async function runEvalShell(args: unknown, options: EvalShellBridgeOption
 						session,
 						toolCallId: `sh-${crypto.randomUUID()}`,
 						signal,
-						context: toolContext && {
-							...toolContext,
-							programmatic: true,
-							parentToolCallId: options.parentToolCallId,
-						},
+						context:
+							options.getToolContext ??
+							(() => {
+								const context = session.getToolContext?.();
+								return context && { ...context, programmatic: true, parentToolCallId: options.parentToolCallId };
+							}),
 						onDispatch: dispatch => {
 							options.emitStatus?.({
 								op: dispatch.tool,

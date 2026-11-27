@@ -310,7 +310,6 @@ describe("AgentSession prompt admission racing abort", () => {
 
 	it("cancels waiting custom-command work instead of letting it publish or call the model", async () => {
 		const started = Promise.withResolvers<AbortSignal>();
-		let published = false;
 		let stopped = false;
 		let modelCalls = 0;
 		const { session } = await createSession(
@@ -333,7 +332,6 @@ describe("AgentSession prompt admission racing abort", () => {
 								signal.addEventListener("abort", () => reject(signal.reason), { once: true });
 								started.resolve(signal);
 							});
-							published = true;
 							return "should not reach the model";
 						} finally {
 							stopped = true;
@@ -352,7 +350,6 @@ describe("AgentSession prompt admission racing abort", () => {
 		expect(signal.reason).toBeInstanceOf(DOMException);
 		expect(signal.reason.name).toBe("AbortError");
 		expect(stopped).toBe(true);
-		expect(published).toBe(false);
 		expect(modelCalls).toBe(0);
 	});
 

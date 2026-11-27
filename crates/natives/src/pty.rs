@@ -982,6 +982,25 @@ fn wait_pid_exit_code(pid: i32) -> std::io::Result<i32> {
 	})
 }
 
+/// Observe the owned child without reaping it. A nohang call also verifies
+/// that an adopted PID is ours before enabling numeric child signalling.
+#[cfg(unix)]
+fn observe_child_exit(pid: i32, nohang: bool) -> std::io::Result<()> {
+	let flags = libc::WEXITED | libc::WNOWAIT | if nohang { libc::WNOHANG } else { 0 };
+	loop {
+		let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+		// SAFETY: waitid writes to valid storage, and WNOWAIT never releases
+		// the PID. We only need waitid's return code, not the record.
+		if unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, info.as_mut_ptr(), flags) } == 0 {
+			return Ok(());
+		}
+		let error = std::io::Error::last_os_error();
+		if error.kind() != std::io::ErrorKind::Interrupted {
+			return Err(error);
+		}
+	}
+}
+
 fn run_pty_sync(
 	config: PtyRunConfig,
 	on_chunk: Option<ThreadsafeFunction<String, UnknownReturnValue>>,
@@ -1245,23 +1264,39 @@ fn drive_pty(
 		let _ = reader_tx.send(ReaderEvent::Done);
 	});
 
-	// Capture the targets before the waiter can reap the child and its PID
-	// can be recycled (#4605). This includes children retained across re-exec.
+	// Pin the PTY's owned child before the waiter starts. A foreground
+	// group reported by the terminal is only a hint; it is not an identity.
 	let mut targets = ps::TerminationTargets::new();
 	#[cfg(unix)]
 	if let Some(pgid) = master.process_group_leader().filter(|pgid| *pgid > 0) {
 		targets.add_pgid(pgid);
 	}
-	let pinned_child = child_pid.and_then(omp_shell::proctree::Process::from_pid);
-	if let Some(process) = &pinned_child {
-		targets.add_process(process.clone());
+	#[cfg(unix)]
+	if let Some(pid) = child_pid.filter(|&pid| observe_child_exit(pid, true).is_ok()) {
+		targets.set_owned_child(pid);
 	}
-	#[cfg(target_os = "linux")]
-	if pinned_child.is_none()
-		&& let Some(pid) = child_pid
-	{
-		targets.add_owned_group_leader(pid);
+	#[cfg(windows)]
+	if let Some(process) = child_pid.and_then(omp_shell::proctree::Process::from_pid) {
+		targets.add_process(process);
 	}
+	#[cfg(unix)]
+	let targets = Arc::new(Mutex::new(targets));
+	#[cfg(unix)]
+	let waiter_targets = Arc::clone(&targets);
+	let signal_targets = |signal| {
+		#[cfg(unix)]
+		let mut targets = targets.lock();
+		#[cfg(windows)]
+		let targets = &mut targets;
+		targets.signal(signal);
+		// Interactive shells ignore TERM but exit on terminal hangup.
+		#[cfg(unix)]
+		if signal == ps::TERM_SIGNAL {
+			targets.signal_owned_child(libc::SIGHUP);
+		}
+	};
+	#[cfg(windows)]
+	let mut signal_targets = signal_targets;
 	// Exit, cancellation and JS failure all arrive as control messages, so the
 	// loop below parks in `recv` instead of polling `try_wait`/`heartbeat` on a
 	// timer: an idle session costs no wakeups, and exit is seen immediately.
@@ -1269,6 +1304,11 @@ fn drive_pty(
 	// SIGKILL'd child (`std::process::Child` never waits on `Drop`).
 	let exit_tx = control_tx.clone();
 	std::thread::spawn(move || {
+		#[cfg(unix)]
+		if let Some(pid) = child_pid {
+			let waitable = observe_child_exit(pid, false).is_ok();
+			waiter_targets.lock().release_owned_child(waitable);
+		}
 		let _ = exit_tx.send(ControlMessage::Exited(wait()));
 	});
 	let cancel_tx = control_tx.clone();
@@ -1353,13 +1393,15 @@ fn drive_pty(
 			},
 			Ok(ControlMessage::JsGone | ControlMessage::Cancelled { .. }) => false,
 			Ok(ControlMessage::Exited(status)) => {
-				if kill_at.is_some() {
-					targets.signal(ps::KILL_SIGNAL);
+				// Even if the timer already sent KILL, the waiter captured
+				// a final snapshot before the leader's PID could be recycled.
+				if kill_at.is_some() || (cfg!(unix) && give_up_at.is_some()) {
+					signal_targets(ps::KILL_SIGNAL);
 				}
 				break Some(status);
 			},
 			Err(flume::RecvTimeoutError::Timeout) if kill_at.take().is_some() => {
-				targets.signal(ps::KILL_SIGNAL);
+				signal_targets(ps::KILL_SIGNAL);
 				false
 			},
 			// `give_up_at` passed; disconnect cannot happen while the waiter
@@ -1367,13 +1409,7 @@ fn drive_pty(
 			Err(_) => break None,
 		};
 		if terminate && give_up_at.is_none() {
-			targets.signal(ps::TERM_SIGNAL);
-			// The hangup a closing terminal delivers: interactive shells ignore
-			// SIGTERM but exit on SIGHUP. On Windows TERM already terminated it.
-			#[cfg(unix)]
-			if let Some(process) = &pinned_child {
-				let _ = process.signal(libc::SIGHUP);
-			}
+			signal_targets(ps::TERM_SIGNAL);
 			let now = Instant::now();
 			kill_at = Some(now + KILL_GRACE);
 			give_up_at = Some(now + KILL_GRACE + CANCEL_EXIT_WAIT);

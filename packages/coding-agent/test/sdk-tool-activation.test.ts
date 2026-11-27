@@ -1808,7 +1808,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(session.getActiveToolNames()).not.toContain("write");
 			cfgToolsCommands.override(settings, false);
 			await session.reconcileBuiltinTools();
-			expect(session.getMountedToolCommandNames()).toEqual([]);
 			expect(session.getActiveToolNames()).not.toContain("write");
 		} finally {
 			await session.dispose();

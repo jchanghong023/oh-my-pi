@@ -41,7 +41,8 @@ type Call = {
 	shellCommand?: string;
 	file?: CompactFileSummary;
 	startedAt?: number;
-	endedAt?: number;
+	background?: boolean;
+	settled?: boolean;
 	failed?: boolean;
 };
 type ToolAction = {
@@ -266,8 +267,8 @@ export class CompactThinkingPreview {
 		this.#memory = memory;
 		const pending = session.agent.state.pendingToolCalls;
 		// While not viewing this session, we may have missed tool end events.
-		// Only retain unfinished calls that the current agent confirms are still active.
-		memory.calls = memory.calls.filter(call => call.endedAt !== undefined || pending.has(call.id));
+		// Agent-owned calls need a live pending entry; an async receipt has its own terminal update.
+		memory.calls = memory.calls.filter(call => call.settled || call.background || pending.has(call.id));
 		if (!pending.size) return;
 		const branch = session.sessionManager.getBranch();
 		const diagnostics = collectPendingToolCalls(branch);
@@ -341,14 +342,12 @@ export class CompactThinkingPreview {
 			memory.latestStart = Math.max(memory.latestStart ?? call.startedAt, call.startedAt);
 	}
 
-	/** Retain live calls and only the last settled tool. */
-	#pruneSettled(): void {
+	/** Terminal outcomes arrive in completion order, even when timestamps would tie. */
+	#settle(call: Call, failed: boolean): void {
+		call.settled = true;
+		call.failed = failed;
 		const memory = this.#memory!;
-		let last: Call | undefined;
-		for (const call of memory.calls) {
-			if (call.endedAt !== undefined && call.endedAt >= (last?.endedAt ?? 0)) last = call;
-		}
-		memory.calls = memory.calls.filter(call => call.endedAt === undefined || call === last);
+		memory.calls = memory.calls.filter(item => !item.settled || item === call);
 	}
 
 	observe(event: LocalAgentSessionEvent): void {
@@ -377,21 +376,24 @@ export class CompactThinkingPreview {
 				updateCall(next, event.args);
 				this.#appendCall(next);
 			}
-		} else if (event.type === "tool_execution_end") {
+		} else if (event.type === "tool_execution_end" || event.type === "tool_execution_update") {
 			const call = calls.find(item => item.id === event.toolCallId);
-			if (call && call.endedAt === undefined) {
-				updateCall(call, undefined, event.result);
-				call.endedAt = now;
-				call.failed = event.isError === true || event.result?.isError === true;
+			if (!call || call.settled) return;
+			const result = event.type === "tool_execution_end" ? event.result : event.partialResult;
+			updateCall(call, event.type === "tool_execution_update" ? event.args : undefined, result);
+			const state = fields(fields(result?.details).async).state;
+			const failed =
+				result?.isError === true || (event.type === "tool_execution_end" && (event.isError || event.cancelled === true));
+			if (state === "completed" || state === "failed" || state === "cancelled") {
+				this.#settle(call, state !== "completed" || failed);
+			} else if (event.type === "tool_execution_end") {
+				if (state === "running" && !failed) call.background = true;
+				else this.#settle(call, failed);
 			}
-			this.#pruneSettled();
-		} else if (event.type === "tool_execution_update") {
-			const call = calls.find(item => item.id === event.toolCallId);
-			if (call && call.endedAt === undefined) updateCall(call, event.args, event.partialResult);
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
 			for (const block of event.message.content) {
 				if (block.type !== "toolCall") continue;
-				const call = calls.find(item => item.id === block.id && item.endedAt === undefined);
+				const call = calls.find(item => item.id === block.id && !item.settled);
 				if (!call) continue;
 				updateCall(call, streamedArgs(block));
 			}
@@ -452,11 +454,11 @@ export class CompactThinkingPreview {
 		let current: Call | undefined;
 		let running = 0;
 		for (const call of calls) {
-			if (call.endedAt !== undefined || !pending.has(call.id)) continue;
+			if (call.settled || (!call.background && !pending.has(call.id))) continue;
 			current ??= call;
 			running++;
 		}
-		current ??= calls.at(-1);
+		current ??= calls.find(call => call.settled);
 		if (!current) return;
 		const category = categoryOf(current);
 		return {

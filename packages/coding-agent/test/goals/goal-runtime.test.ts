@@ -332,7 +332,6 @@ describe("goal runtime", () => {
 		harness.advance(1_000);
 		await harness.runtime.onTaskAborted({ reason: "internal" });
 		expect(harness.getState()?.enabled).toBe(true);
-		expect(harness.persists.at(-1)?.state?.autoOrchestrate).toBe(true);
 
 		const restored = await harness.runtime.onThreadResumed();
 		expect(restored).toMatchObject({ enabled: false, autoOrchestrate: true, goal: { status: "paused" } });

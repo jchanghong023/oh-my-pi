@@ -1,6 +1,5 @@
 ---
 name: openspec-verify-change
-disable-model-invocation: true
 description: Verify implementation matches OpenSpec change artifacts. Use when the user wants to validate that implementation is complete, correct, and coherent before archiving. Also use when the user says "openspec verify" or "opsx verify".
 allowed-tools: Bash(omp openspec:*)
 license: MIT

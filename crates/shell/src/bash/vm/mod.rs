@@ -2255,6 +2255,8 @@ impl Shell {
 		} else {
 			extra
 		};
+		#[cfg(target_os = "linux")]
+		let mut identities = Vec::new();
 		let included =
 			|i: usize, detached: bool| selected.map_or(!detached, |hits| hits.contains(&i));
 		let mut children = Vec::new();
@@ -2270,12 +2272,29 @@ impl Shell {
 				_ => None,
 			}) {
 			children.push((ext.pid(), if groups { ext.pgid() } else { None }));
+			#[cfg(target_os = "linux")]
+			if !extra.iter().any(|p| p.pid() as u32 == ext.pid())
+				&& let Some(process) = ext.process()
+			{
+				if let Some(members) = tracked.as_deref_mut() {
+					members.push(process.clone());
+				}
+				identities.push(process);
+			}
+			#[cfg(not(target_os = "linux"))]
 			if let Some(members) = tracked.as_deref_mut()
 				&& let Some(process) = ext.process()
 			{
 				members.push(process);
 			}
 		}
+		#[cfg(target_os = "linux")]
+		let extra = if identities.is_empty() {
+			extra
+		} else {
+			identities.extend_from_slice(extra);
+			&identities
+		};
 		if children.is_empty() && extra.is_empty() {
 			return;
 		}
@@ -2321,8 +2340,8 @@ impl Shell {
 				if let Some(sc) = frame.scratch.as_mut()
 					&& let Live::Ext(ext) = &mut sc.live
 				{
+					ext.record_wave_signal(sig, groups, wave.as_ref());
 					if let Some(wave) = &wave {
-						ext.record_wave_signal(sig, wave);
 						if i32::try_from(ext.pid()).is_ok_and(|pid| wave.failed.contains(&pid)) {
 							// This handle keeps the child's PID unreaped. Retry only
 							// this PID so no other wave member is signalled twice.
@@ -2412,7 +2431,7 @@ impl Shell {
 				proc::list().ok()
 			};
 			for ext in stopped {
-				let _ = ext.signal_single(Signal::Cont);
+				let _ = ext.continue_stopped();
 			}
 			let number = i32::from(Signal::Cont.number(crate::bash::Platform::current()));
 			for process in stopped_extra {
@@ -2558,7 +2577,9 @@ impl Shell {
 							.collect();
 						self.callout_trees(&mut hits);
 						self.signal_externals(sig, Some(&hits), &extra, groups, false, None);
-						if sig.default_action() == DefaultAction::Terminate && sig != Signal::Kill {
+						if sig.default_action() == DefaultAction::Terminate
+							&& (sig != Signal::Kill || (cfg!(unix) && !groups))
+						{
 							self.resume_stopped_externals(&hits, &extra, groups);
 						}
 						for label in labels {

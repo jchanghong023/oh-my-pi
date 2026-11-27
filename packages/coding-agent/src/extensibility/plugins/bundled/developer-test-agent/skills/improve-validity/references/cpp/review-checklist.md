@@ -93,7 +93,7 @@ EXPECT_EQ(result, 100) << "Order total should be 100";
 | 仅非空容器 | `EXPECT_FALSE(x.empty())` | 验证size和元素 |
 | 容器仅下限 | `ASSERT_GE(list.size(), 3)` | 使用 `ASSERT_EQ(list.size(), N)` |
 | 与if条件重复 | `if (result != X) { ASSERT_TRUE(result != X); }` | 直接断言期望值 |
-| SKIP用例 | `GTEST_SKIP` | 保留代码，使用DISABLED_CASE宏 |
+| 无条件跳过 | `GTEST_SKIP()` 无条件绕过业务断言 | 修复用例；无法修复时使用 `DISABLED_CASE`。仅在运行时缺少设备等前置条件时，保留带原因的条件跳过。 |
 
 ### III. 提前退出检查
 

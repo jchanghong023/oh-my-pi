@@ -33,8 +33,8 @@ import {
 import { resolveAssistantErrorPresentation } from "../../../session/transcript/transcript-render-helpers";
 import { fuzzyMatch } from "../../../utils/fuzzy";
 import { replaceTabs } from "../../../utils/text-width";
-import "../../styles/pickers/tree";
-import type { TreeLookRow, TreeLookTerm } from "../../styles/pickers/tree";
+import { treeDetailHeight, treeDetailsKey, type TreeLookRow, type TreeLookTerm } from "../../styles/pickers/tree";
+import { ImageNode, type ImagePart } from "../../transcript/messages/image";
 import { editLine, type LineState } from "../settings/line-edit";
 import { getKeybindings } from "../../../config/keybindings/keybindings";
 import { matchesAppInterrupt, matchesSelectCancel, selectKeyId } from "../../../config/keybindings/matchers";
@@ -253,6 +253,14 @@ interface Row {
 	readonly guides: readonly boolean[];
 }
 
+function treeResultImage(message: MessageLike): ImagePart | undefined {
+	if (message.role !== "toolResult" || !Array.isArray(message.content)) return undefined;
+	return message.content.find(
+		(block): block is ImagePart & { type: "image" } =>
+			isRecord(block) && block.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string",
+	);
+}
+
 export function TreeSelector(props: TreeSelectorProps): JSXNode {
 	const leafId = props.currentLeafId;
 	const resultCalls = new Map<string, TreeToolCall>();
@@ -264,7 +272,8 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			const content = message.content;
 			const output = typeof content === "string" || Array.isArray(content) ? textContent(content, "\n") : "";
 			const replies = toolResultReplies(message.details);
-			const result = replies.length === 0 ? output : [...replies, output].join("\n\n");
+			const image = treeResultImage(message);
+			const result = [...(image ? [`[Image: ${image.mimeType}]`] : []), ...replies, output].join("\n\n");
 			const args = call ? JSON.stringify(call.arguments) : "(unavailable)";
 			return sanitizeText(
 				`Status: ${message.isError ? "Failed" : "Success"}\nArguments: ${args}\nResult:\n${result}`,
@@ -378,7 +387,7 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 		const height = typeof props.terminalHeight === "function" ? props.terminalHeight() : props.terminalHeight;
 		return Math.max(1, Math.min(Math.max(5, Math.floor(height / 2)), height - 8));
 	};
-	const detailHeight = (): number => Math.max(1, Math.floor(maxVisible() / 2));
+	const detailHeight = (): number => treeDetailHeight(maxVisible());
 
 	const filter = signal<TreeFilterMode>(props.initialFilterMode ?? "default");
 	const search = signal<LineState>({ text: "", cursor: 0 });
@@ -428,6 +437,14 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 	const anchor = signal<string | null>(leafId ?? rows.at(-1)?.node.entry.id ?? null);
 	const selected = computed(() => nearestVisible(anchor()));
 	const expanded = signal<{ id: string; text: string } | undefined>(undefined);
+	const detailImage = computed(() => {
+		const details = expanded();
+		const node = details && nodeById.get(details.id);
+		const message = node && messageOf(node.entry);
+		return message && treeResultImage(message);
+	});
+	const pageRows = (): number =>
+		Math.max(1, maxVisible() - (expanded() && !nativeRendering() ? detailHeight() : 0));
 	const detailScroll = signal<{ offset: number; terminalMax?: number }>({ offset: 0 });
 	const nativeDetailLines = computed(() => {
 		const details = expanded();
@@ -616,7 +633,8 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			}
 			return true;
 		}
-		if ((key.id === "alt+enter" || key.id === "alt+return") && toggleDetails()) return true;
+		const id = selectKeyId(key, keybindings);
+		if (id && id === treeDetailsKey() && toggleDetails()) return true;
 		const details = expanded();
 		if (details && (key.id === "shift+up" || key.id === "shift+down")) {
 			const scroll = detailScroll();
@@ -625,7 +643,6 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			if (offset !== scroll.offset) detailScroll.set({ ...scroll, offset });
 			return true;
 		}
-		const id = selectKeyId(key, keybindings);
 		switch (id) {
 			case "up":
 				move(-1, true);
@@ -661,11 +678,11 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 				return true;
 			case "pageUp":
 			case "left":
-				move(-maxVisible(), false);
+				move(-pageRows(), false);
 				return true;
 			case "pageDown":
 			case "right":
-				move(maxVisible(), false);
+				move(pageRows(), false);
 				return true;
 			case "shift+enter":
 				confirm(true);
@@ -773,7 +790,9 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 					pickerAction("summarize", "Summarize & switch", ["shift", "enter"]),
 					pickerAction("label", "Label", ["shift", "l"]),
 					pickerAction("filter", "Filter", ["ctrl", "o"]),
-					...(canToggleDetails() ? [pickerAction("details", "Tool details", ["alt", "enter"])] : []),
+					...(canToggleDetails()
+						? [pickerAction("details", "Tool details", treeDetailsKey().split("+").filter(Boolean))]
+						: []),
 					closeAction(),
 				];
 	const onAction = (act: string, value?: string): void => {
@@ -845,7 +864,7 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 				noun="entries"
 				size="lg"
 				layout="tree"
-				preview={() => (detailItems()?.length ? "none" : "side")}
+				preview={() => (detailItems()?.length && !detailImage() ? "none" : "side")}
 				query={() => search().text}
 				cursor={() => search().cursor}
 				placeholder="Search entries…"
@@ -896,6 +915,8 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			.join("");
 		const out: JSXNode[] = [];
 		const role = messageOf(entry)?.role;
+		const image = detailImage();
+		if (image) return <ImageNode image={image} alt={`[Image: ${image.mimeType}]`} />;
 		if (role === "toolResult" || role === "bashExecution" || role === "pythonExecution") {
 			return <text text={parts} role="omp.picker.title" />;
 		}

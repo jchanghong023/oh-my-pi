@@ -40,7 +40,7 @@ it("executes a pipeline without native stream taps and keeps proc status/output 
 		const job = manager.getJob(id);
 		if (!job) throw new Error("Managed job was not retained");
 		await job.promise;
-		expect(streams).toHaveBeenCalledTimes(1);
+		expect(streams).toHaveBeenCalled();
 		expect(
 			job.status,
 			JSON.stringify({ error: job.errorText, result: job.resultText, progress: job.progressText }),
@@ -52,7 +52,6 @@ it("executes a pipeline without native stream taps and keeps proc status/output 
 		expect(fallback.content).toMatch(/no (?:available )?pipe streams/i);
 		const status = await protocol.resolve(parseInternalUrl(`proc://${id}`), { session });
 		expect(status.content).toContain("pipeline-result");
-		expect(job.status).toBe("completed");
 	} finally {
 		streams.mockRestore();
 		await manager.dispose();

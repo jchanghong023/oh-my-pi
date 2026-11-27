@@ -113,6 +113,16 @@ const fn filetime_nanos(ticks: i64) -> i64 {
 	ticks.saturating_sub(UNIX_EPOCH_TICKS).saturating_mul(100)
 }
 
+const fn type_of_attrs(attrs: u32) -> FileType {
+	if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		FileType::Symlink
+	} else if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
+		FileType::Dir
+	} else {
+		FileType::File
+	}
+}
+
 const fn info_of(info: &FILE_NETWORK_OPEN_INFORMATION) -> FileInfo {
 	let dir = info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
 	FileInfo {
@@ -194,6 +204,10 @@ fn nt_open(
 /// Stamps an open handle and reports its type and size (reparse points
 /// opened without `FILE_OPEN_REPARSE_POINT` report their target).
 fn stat_handle(h: &Handle) -> io::Result<FileInfo> {
+	network_info(h).map(|info| info_of(&info))
+}
+
+fn network_info(h: &Handle) -> io::Result<FILE_NETWORK_OPEN_INFORMATION> {
 	let mut info = FILE_NETWORK_OPEN_INFORMATION::default();
 	let mut iosb = IO_STATUS_BLOCK::default();
 	// SAFETY: `info` is a writable buffer of the size passed.
@@ -209,7 +223,7 @@ fn stat_handle(h: &Handle) -> io::Result<FileInfo> {
 	if status < 0 {
 		return Err(nt_error(status));
 	}
-	Ok(info_of(&info))
+	Ok(info)
 }
 
 pub(crate) fn open_dir(_s: &mut Scratch, path: &Path) -> io::Result<Handle> {
@@ -232,13 +246,14 @@ const fn is_dot_or_dot_dot_utf16(name: &[u8]) -> bool {
 }
 
 /// Reads every entry of `dir` into `out`. Full detail refreshes each entry's
-/// metadata, keeping the directory index's values if access is denied and
-/// reporting other refresh failures after processing the rest of the listing.
+/// metadata. Non-strict listings can keep the directory index's values if
+/// access is denied. Other refresh failures are reported with the remaining entries.
 pub(crate) fn list(
 	s: &mut Scratch,
 	dir: &Handle,
 	detail: Detail,
 	_children: u32,
+	strict: bool,
 	out: &mut Listing,
 ) -> io::Result<()> {
 	let buf = aligned_buf(&mut s.buf, LIST_BUF);
@@ -287,14 +302,8 @@ pub(crate) fn list(
 			}
 			let wname = &rec[FDI_FILE_NAME..FDI_FILE_NAME + name_len];
 			if name_len > 0 && !is_dot_or_dot_dot_utf16(wname) {
-				let attrs = le32(rec, FDI_FILE_ATTRIBUTES);
-				let (file_type, size) = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-					(FileType::Symlink, None)
-				} else if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
-					(FileType::Dir, None)
-				} else {
-					(FileType::File, Some(le64(rec, FDI_END_OF_FILE)))
-				};
+				let file_type = type_of_attrs(le32(rec, FDI_FILE_ATTRIBUTES));
+				let size = (file_type == FileType::File).then(|| le64(rec, FDI_END_OF_FILE));
 				let mtime = filetime_nanos(le64(rec, FDI_LAST_WRITE_TIME) as i64);
 				out.push_with(
 					|names| {
@@ -329,15 +338,19 @@ pub(crate) fn list(
 			let name = &out.names[start..start + record.name_len as usize];
 			let result =
 				nt_open(s, dir, name, FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_OPEN_REPARSE_POINT)
-					.and_then(|handle| stat_handle(&handle));
+					.and_then(|handle| network_info(&handle));
 			match result {
 				Ok(info) => {
-					record.size = (record.file_type == FileType::File).then_some(info.size);
-					record.mtime = Some(info.stamp.mtime);
+					record.file_type = type_of_attrs(info.FileAttributes);
+					record.size = (record.file_type == FileType::File).then_some(info.EndOfFile as u64);
+					record.mtime = Some(filetime_nanos(info.LastWriteTime));
 					true
 				},
-				Err(err) if err.kind() == io::ErrorKind::PermissionDenied => true,
-				Err(err) if err.kind() == io::ErrorKind::NotFound && record.file_type != FileType::Dir => {
+				Err(err) if !strict && err.kind() == io::ErrorKind::PermissionDenied => true,
+				Err(err)
+					if err.kind() == io::ErrorKind::NotFound
+						&& (strict || record.file_type != FileType::Dir) =>
+				{
 					false
 				},
 				Err(err) => {
@@ -426,7 +439,7 @@ pub(crate) fn handle_metadata(h: &Handle) -> io::Result<omp_vfs::Metadata> {
 }
 
 pub(crate) fn stat(s: &mut Scratch, path: &Path, follow: bool) -> io::Result<FileInfo> {
-	if !follow || !path.is_absolute() {
+	if !path.is_absolute() {
 		return stat_win32(path, follow);
 	}
 	// The NT layer takes names as spelled; Win32 rewriting (`/`, `.`/`..`,
@@ -476,7 +489,7 @@ pub(crate) fn stat(s: &mut Scratch, path: &Path, follow: bool) -> io::Result<Fil
 	// The attribute query describes a reparse point (symlink, junction)
 	// itself, not its target.
 	if info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return stat_win32(path, true);
+		return stat_win32(path, follow);
 	}
 	Ok(info_of(&info))
 }
@@ -488,14 +501,7 @@ fn stat_win32(path: &Path, follow: bool) -> io::Result<FileInfo> {
 	} else {
 		std::fs::symlink_metadata(path)?
 	};
-	let attrs = meta.file_attributes();
-	let file_type = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		FileType::Symlink
-	} else if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
-		FileType::Dir
-	} else {
-		FileType::File
-	};
+	let file_type = type_of_attrs(meta.file_attributes());
 	let mtime = filetime_nanos(meta.last_write_time() as i64);
 	Ok(FileInfo {
 		file_type: Some(file_type),

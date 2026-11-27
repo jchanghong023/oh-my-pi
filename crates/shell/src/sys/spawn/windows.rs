@@ -40,11 +40,13 @@
 //!   ([`bridge_fds`]); other extra fds stay with the shell.
 
 use std::{
+	cmp,
 	collections::HashMap,
 	ffi::c_void,
 	fs,
 	io::{self, Write as _},
 	mem,
+	ops::Range,
 	os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle, RawHandle},
 	ptr,
 	sync::{
@@ -64,6 +66,8 @@ use windows_sys::Win32::{
 		HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, NTSTATUS, SetHandleInformation, WAIT_OBJECT_0,
 		WAIT_TIMEOUT,
 	},
+	Globalization::{CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN, CompareStringOrdinal},
+	Storage::FileSystem::GetFullPathNameW,
 	System::{
 		Console::{
 			COORD, CTRL_BREAK_EVENT, ClosePseudoConsole, CreatePseudoConsole,
@@ -623,6 +627,86 @@ fn wide(b: &BStr) -> io::Result<Vec<u16>> {
 	Ok(s.encode_utf16().chain([0]).collect())
 }
 
+const SEP: u16 = b'\\' as u16;
+const COLON: u16 = b':' as u16;
+const VERBATIM: &[u16] = &[SEP, SEP, b'?' as u16, SEP];
+const VERBATIM_UNC: &[u16] =
+	&[SEP, SEP, b'?' as u16, SEP, b'U' as u16, b'N' as u16, b'C' as u16, SEP];
+const NT_PATH: &[u16] = &[SEP, b'?' as u16, b'?' as u16, SEP];
+const DEVICE: &[u16] = &[SEP, SEP, b'.' as u16, SEP];
+// Start using extended paths at std's conservative legacy limit (including NUL).
+const LEGACY_PATH: usize = 248;
+
+fn full_path_len(path: &[u16], buf: &mut [u16]) -> usize {
+	// SAFETY: `path` is NUL-terminated and `buf` is writable for the supplied length.
+	let len = unsafe { GetFullPathNameW(path.as_ptr(), buf.len() as u32, buf.as_mut_ptr(), ptr::null_mut()) };
+	len as usize
+}
+
+/// Normalize before adding a verbatim prefix, which disables Win32 path normalization.
+fn breakaway_executable(executable: &str) -> io::Result<Vec<u16>> {
+	let mut path = wide(BStr::new(executable.as_bytes()))?;
+	if path.len() < LEGACY_PATH || path.starts_with(VERBATIM) || path.starts_with(NT_PATH) {
+		return Ok(path);
+	}
+
+	let mut absolute = vec![0; path.len()];
+	loop {
+		let n = full_path_len(&path, &mut absolute);
+		if n == 0 {
+			return Err(last_error());
+		}
+		if n < absolute.len() {
+			absolute.truncate(n + 1);
+			break;
+		}
+		absolute.resize(n, 0);
+	}
+	if absolute.len() < LEGACY_PATH {
+		return Ok(absolute);
+	}
+	let (prefix, tail) = if let Some(tail) = absolute.strip_prefix(DEVICE) {
+		(VERBATIM, tail)
+	} else if absolute.starts_with(VERBATIM) || absolute.starts_with(NT_PATH) {
+		return Ok(absolute);
+	} else if let Some(tail) = absolute.strip_prefix(&[SEP, SEP]) {
+		(VERBATIM_UNC, tail)
+	} else if matches!(absolute.as_slice(), [_, COLON, SEP, ..]) {
+		(VERBATIM, absolute.as_slice())
+	} else {
+		return Ok(absolute);
+	};
+	path.clear();
+	path.reserve_exact(prefix.len() + tail.len());
+	path.extend_from_slice(prefix);
+	path.extend_from_slice(tail);
+	Ok(path)
+}
+
+/// Prefer a Win32 cwd when removing the verbatim prefix leaves its resolution unchanged.
+fn breakaway_cwd(cwd: &str) -> io::Result<Vec<u16>> {
+	let mut path = wide(BStr::new(cwd.as_bytes()))?;
+	let unc = path.starts_with(VERBATIM_UNC);
+	let start = if unc {
+		// Reuse the `C` in `UNC\` to form the ordinary UNC path's leading `\\`.
+		path[6] = SEP;
+		6
+	} else if matches!(path.strip_prefix(VERBATIM), Some([_, COLON, SEP, ..])) {
+		VERBATIM.len()
+	} else {
+		return Ok(path);
+	};
+	let candidate = &path[start..];
+	let mut absolute = vec![0; candidate.len()];
+	let n = full_path_len(candidate, &mut absolute);
+	if n == candidate.len() - 1 && candidate == absolute {
+		drop(path.drain(..start));
+	} else if unc {
+		path[6] = b'C' as u16;
+	}
+	Ok(path)
+}
+
 /// `%SystemRoot%\System32`, without a terminator.
 fn system_dir() -> io::Result<Vec<u16>> {
 	let mut buf = vec![0u16; 260];
@@ -694,31 +778,57 @@ fn command(path: &BStr, argv: &[BString]) -> io::Result<(Vec<u16>, Vec<u16>)> {
 	Ok((app, line))
 }
 
+fn env_name_cmp(a: &[u16], b: &[u16]) -> cmp::Ordering {
+	if a.is_empty() || b.is_empty() {
+		return a.len().cmp(&b.len());
+	}
+	// SAFETY: Both slices are readable for the supplied UTF-16 code unit counts.
+	match unsafe { CompareStringOrdinal(a.as_ptr(), a.len() as i32, b.as_ptr(), b.len() as i32, 1) } {
+		CSTR_LESS_THAN => cmp::Ordering::Less,
+		CSTR_EQUAL => cmp::Ordering::Equal,
+		CSTR_GREATER_THAN => cmp::Ordering::Greater,
+		_ => panic!("comparing environment names failed: {}", last_error()),
+	}
+}
+
 /// `CREATE_UNICODE_ENVIRONMENT` block: `K=V\0…\0`, sorted by name without
 /// case as Windows requires (case-insensitive duplicates: the last wins).
 fn env_block<'a>(env: impl ExactSizeIterator<Item = (&'a BStr, &'a BStr)>) -> io::Result<Vec<u16>> {
 	let mut vars = Vec::with_capacity(env.len());
+	let mut names = Vec::new();
 	for (k, v) in env {
 		let k = k.to_str().map_err(invalid)?;
 		let v = v.to_str().map_err(invalid)?;
 		// Names may start with `=` (the per-drive `=C:` variables).
-		if k.contains('\0') || v.contains('\0') || k.get(1..).is_some_and(|r| r.contains('=')) {
+		if k.contains('\0')
+			|| v.contains('\0')
+			|| k.as_bytes().get(1..).is_some_and(|r| r.contains(&b'='))
+		{
 			return Err(invalid("environment entry contains NUL or `=` in its name"));
 		}
-		vars.push((k.to_uppercase(), k, v));
+		let start = names.len();
+		names.extend(k.encode_utf16());
+		let end = names.len();
+		if i32::try_from(end - start).is_err() {
+			return Err(invalid("environment name is too long"));
+		}
+		names.push(u16::from(b'='));
+		vars.push((start..end, v));
 	}
-	vars.sort_by(|a, b| a.0.cmp(&b.0));
+	let compare =
+		|a: &Range<usize>, b: &Range<usize>| env_name_cmp(&names[a.clone()], &names[b.clone()]);
+	// Break ordinal ties in input order so deduplication retains the last entry.
+	vars.sort_unstable_by(|a, b| compare(&a.0, &b.0).then_with(|| a.0.start.cmp(&b.0.start)));
 	vars.dedup_by(|later, earlier| {
-		if later.0 != earlier.0 {
+		if !compare(&later.0, &earlier.0).is_eq() {
 			return false;
 		}
 		mem::swap(later, earlier);
 		true
 	});
 	let mut block = Vec::new();
-	for (_, name, value) in vars {
-		block.extend(name.encode_utf16());
-		block.push(u16::from(b'='));
+	for (name, value) in vars {
+		block.extend_from_slice(&names[name.start..=name.end]);
 		block.extend(value.encode_utf16());
 		block.push(0);
 	}
@@ -733,10 +843,10 @@ fn env_block<'a>(env: impl ExactSizeIterator<Item = (&'a BStr, &'a BStr)>) -> io
 /// Escape the caller's jobs where permitted; otherwise stay in the job.
 pub fn spawn_breakaway(argv: &[String], cwd: &str, env: &HashMap<String, String>) -> io::Result<u32> {
 	let executable = argv.first().ok_or_else(|| invalid("missing executable"))?;
-	let app = wide(BStr::new(executable.as_bytes()))?;
+	let app = breakaway_executable(executable)?;
 	let mut line = cmdline::command_line(argv).map_err(invalid)?;
 	line.push(0);
-	let cwd = wide(BStr::new(cwd.as_bytes()))?;
+	let cwd = breakaway_cwd(cwd)?;
 	let env = env_block(
 		env.iter()
 			.map(|(k, v)| (BStr::new(k.as_bytes()), BStr::new(v.as_bytes()))),

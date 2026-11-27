@@ -12,7 +12,8 @@
 
 ```powershell
 # 创建临时目录
-$COV_DIR="$env:TEMP\ut-go"; New-Item -ItemType Directory -Force -Path $COV_DIR | Out-Null
+$COV_DIR = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Path $COV_DIR -ErrorAction Stop | Out-Null
 
 # 步骤1：测量覆盖率（空格分隔标志，.txt扩展名）
 go test -gcflags=all=-l -coverprofile "$COV_DIR\cov.txt" -run TestFuncName -count=1
@@ -21,22 +22,22 @@ go test -gcflags=all=-l -coverprofile "$COV_DIR\cov.txt" -run TestFuncName -coun
 go test -gcflags=all=-l -v -run TestFuncName -count=1 *> "$COV_DIR\test-output.txt"
 
 # 查看函数级覆盖率
-go tool cover "-func=$COV_DIR\cov.txt" | Select-String "FuncName$"
+go tool cover "-func=$COV_DIR\cov.txt" | Select-String -CaseSensitive '\sFuncName\s+\d+(?:\.\d+)?%\s*$'
 
-# 查看行级覆盖率
+# 查看源码中的覆盖位置
 go tool cover "-html=$COV_DIR\cov.txt" -o "$COV_DIR\coverage.html"
 
 # 步骤3：生成覆盖率上报缓存 JSON（写入 .codecovcli/cache/go_{className}.json）
-# {className} 为被测 Go 源文件名（不含 .go 扩展名，如 string_utils）
+# {target} 为被测文件名（不含 .go），或 profile 中的完整文件路径
 # 注意：在 Bash 中运行 node 时，脚本路径必须使用正斜杠
-node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" {className} "$COV_DIR\cov.txt" "$COV_DIR\test-output.txt"
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" "{target}" "$COV_DIR\cov.txt" "$COV_DIR\test-output.txt"
 ```
 
 #### Unix (bash)
 
 ```bash
 # 创建临时目录
-COV_DIR="/tmp/ut-go"; mkdir -p "$COV_DIR"
+COV_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ut-go.XXXXXX") || exit 1
 
 # 步骤1：测量覆盖率
 go test -gcflags=all=-l -coverprofile="$COV_DIR/cov.txt" -run TestFuncName -count=1
@@ -45,18 +46,18 @@ go test -gcflags=all=-l -coverprofile="$COV_DIR/cov.txt" -run TestFuncName -coun
 go test -gcflags=all=-l -v -run TestFuncName -count=1 > "$COV_DIR/test-output.txt" 2>&1
 
 # 查看函数级覆盖率
-go tool cover -func="$COV_DIR/cov.txt" | grep -E "FuncName$"
+go tool cover -func="$COV_DIR/cov.txt" | awk 'NF >= 3 && $(NF-1) == "FuncName"'
 
 # 步骤3：生成覆盖率上报缓存 JSON（写入 .codecovcli/cache/go_{className}.json）
-# {className} 为被测 Go 源文件名（不含 .go 扩展名，如 string_utils）
-node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" {className} "$COV_DIR/cov.txt" "$COV_DIR/test-output.txt"
+# {target} 为被测文件名（不含 .go），或 profile 中的完整文件路径
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" "{target}" "$COV_DIR/cov.txt" "$COV_DIR/test-output.txt"
 ```
 
 ### Windows注意事项
 
 1. **使用空格分隔标志**：`go test -coverprofile cov.txt`（空格）而非 `go test -coverprofile=cov.out`（=）
 2. **不使用 .out 扩展名**：用 `.txt` 或 `.cov`，PowerShell可能将.out解释为包路径
-3. **Select-String 配合 $ 锚点**：匹配函数名末尾，防止 `doWork` 匹配到 `doWorkAll`
+3. **按函数列精确匹配**：覆盖率百分比位于行尾，函数名不是。
 
 ### 覆盖率上报集成（强制）
 
@@ -67,7 +68,7 @@ node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" {className} "$COV_DIR/cov.t
 通过 `extract-go-coverage.js` 脚本完成从 Go 原生覆盖率报告到上报 JSON 的转换：
 
 ```bash
-node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" <类名/模块名> <coverprofile路径> [go-test-v输出路径]
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" <目标文件> <coverprofile路径> [go-test-v输出路径]
 ```
 
 > **Windows 注意**：`{SKILL_DIR}` 替换为 skill 的 "Base directory" 路径，**反斜杠须改为正斜杠**。
@@ -76,7 +77,7 @@ node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" <类名/模块名> <coverpr
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
-| 类名/模块名 | 是 | 被测 Go 源文件名（不含 `.go` 扩展名，如 `string_utils`） |
+| 目标文件 | 是 | 被测 Go 源文件名（不含 `.go`，如 `string_utils`）；同名时 MUST 使用 profile 中含 `.go` 的完整路径，如 `example.com/project/pkg/string_utils.go` |
 | coverprofile路径 | 是 | `go test -coverprofile` 生成的覆盖率文件路径 |
 | go-test-v输出路径 | 否 | `go test -v` 输出文件路径；不指定时测试结果相关字段填 `0` |
 
@@ -84,17 +85,17 @@ node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" <类名/模块名> <coverpr
 
 ```bash
 # 仅覆盖率数据（测试结果字段填0）
-node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" string_utils /tmp/ut-go/cov.txt
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" string_utils "$COV_DIR/cov.txt"
 
 # 覆盖率数据 + 测试执行结果
-node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" string_utils /tmp/ut-go/cov.txt /tmp/ut-go/test-output.txt
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" string_utils "$COV_DIR/cov.txt" "$COV_DIR/test-output.txt"
 ```
 
 #### 输出文件
 
 - **路径**：`<项目根目录>/.codecovcli/cache/go_{className}.json`
 - **写入前清除历史缓存**：脚本在写入前会删除 `.codecovcli/cache/` 目录下的所有历史缓存文件，避免脏数据
-- **异常兜底**：当 coverprofile 文件不存在（如 `go test` 编译失败未生成覆盖率文件）、目标文件未在 coverprofile 中找到（className 不匹配）、或覆盖率数据校验失败时，脚本**仍会写入 JSON 文件**（含 `errorDetail` 字段和 0 覆盖率数据），供外部 DTAgent-Plugin 上报测试执行结果（含编译失败场景）。若提供了 `go-test-v` 输出路径，编译错误和测试结果会正常解析并写入 `metrics` 字段。
+- **异常兜底**：profile 不存在、目标文件未命中或有歧义、数据无效时，MUST 写入含 `errorDetail` 和零覆盖率的 JSON；提供测试输出时仍解析测试结果和编译错误。
 
 #### JSON 格式
 
@@ -102,11 +103,11 @@ node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" string_utils /tmp/ut-go/cov
 
 - `scenario`：固定 `"class-level"`（DTAgent-Plugin 仅上报 class-level 场景，其他值会被跳过）
 - `metrics`：10 个字段，供外部 DTAgent-Plugin 透传到 OTel attributes
-  - `compiled_testcase_num`：编译通过的测试用例数（= 总测试数 - 编译错误数）
+  - `compiled_testcase_num`：已执行并解析到结果的测试用例数
   - `passed_testcase_num`：运行通过的测试用例数
-  - `covered_line_num`：已覆盖行数
+  - `covered_line_num`：已覆盖语句数（外部上报字段名不变）
   - `total_compile_error_num`：编译错误总数
-  - `total_line_num`：可执行总行数
+  - `total_line_num`：可执行语句数（外部上报字段名不变）
   - `accept_testcase_num`：验收通过的测试用例数
   - `generate_testcase_num`：生成的测试用例数
   - `total_testcase_num`：测试用例总数
@@ -118,7 +119,7 @@ node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" string_utils /tmp/ut-go/cov
 
 覆盖率数据获取与上报的完整流程：
 
-1. **运行 `go test -coverprofile`**：生成覆盖率文件（如 `cov.txt`）
+1. **运行 `go test -coverprofile`**：每次采集或复测 MUST 新建临时目录，再生成 `cov.txt`。
 2. **运行 `go test -v`**：生成测试执行结果输出（含 PASS/FAIL 统计、编译错误检测）
 3. **执行 `extract-go-coverage.js`（强制）**：解析覆盖率文件和测试输出，生成 `.codecovcli/cache/go_{className}.json`
 
@@ -138,16 +139,16 @@ node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" string_utils /tmp/ut-go/cov
 
 ### 环境清理
 
-覆盖率分析完成后，删除临时目录：
+覆盖率分析完成后，仅删除本轮创建的临时目录。使用保存了 `COV_DIR` 的同一次 shell 调用。
 
 ```powershell
 # Windows (PowerShell)
-Remove-Item "$env:TEMP\ut-go" -Recurse -Force -ErrorAction SilentlyContinue
+if ($COV_DIR) { Remove-Item -LiteralPath $COV_DIR -Recurse -Force }
 ```
 
 ```bash
 # Unix (bash)
-rm -rf /tmp/ut-go
+rm -rf -- "${COV_DIR:?}"
 ```
 
 ## 导航索引

@@ -177,8 +177,16 @@ function applyChangelogEntries(
 		base = applyDeletions(base, deletions);
 	}
 	const merged = mergeEntries(base, entries);
+	const custom: string[] = [];
+	let customSection = false;
+	for (let i = unreleased.startLine + 1; i < unreleased.endLine; i++) {
+		const line = lines[i]!;
+		const heading = /^###\s+(.*)$/.exec(line);
+		if (heading) customSection = !CHANGELOG_SECTIONS.some(section => section === heading[1]?.trim());
+		if (customSection) custom.push(line);
+	}
 	const sectionLines = renderUnreleasedSections(merged);
-	return [...before, ...sectionLines, ...after].join("\n");
+	return [...before, ...sectionLines, ...(custom.length ? ["", ...custom] : []), ...after].join("\n");
 }
 
 function applyDeletions(

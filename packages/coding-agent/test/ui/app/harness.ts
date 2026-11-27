@@ -47,7 +47,6 @@ export interface AppOptions {
 /** Settings every scenario runs under (network, side models and machine-dependent features off). */
 export const BASE_SETTINGS: Readonly<Record<string, unknown>> = {
 	"compaction.enabled": false,
-	"startup.checkUpdate": false,
 	"retry.enabled": false,
 	"display.smoothStreaming": false,
 	// Ghost words come from an n-gram model of the machine's prompt history (served by the user's daemon).

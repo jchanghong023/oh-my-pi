@@ -354,6 +354,7 @@ class DirResolver {
 	readonly cacheRoot: string | undefined;
 	readonly explicitCacheRoot: string | undefined;
 	readonly executableCacheRoot: string;
+	readonly agentExecutableCacheDir: string;
 
 	// Per-category base dirs. Without XDG, all three equal configRoot / agentDir.
 	// With XDG on Linux, they point to $XDG_*_HOME/omp/.
@@ -424,6 +425,9 @@ class DirResolver {
 		};
 		// The implicit Linux cache lives on /dev/shm, which may be mounted noexec.
 		this.executableCacheRoot = this.explicitCacheRoot ?? xdgCache ?? this.configRoot;
+		this.agentExecutableCacheDir = this.explicitCacheRoot
+			? path.join(this.explicitCacheRoot, "agent", "cache")
+			: path.join(xdgCache ?? this.agentDir, "cache");
 		// XDG flattens the agent/ prefix: ~/.omp/agent/sessions → $XDG_DATA_HOME/omp/sessions
 		this.#agentDirs = {
 			data: xdgData ?? this.agentDir,
@@ -844,7 +848,7 @@ export function getAntigravityCliDir(): string {
 
 /** Get the puppeteer sandbox directory (~/.omp/puppeteer). */
 export function getPuppeteerDir(): string {
-	return dirs.rootSubdir("puppeteer", "cache");
+	return path.join(dirs.executableCacheRoot, "puppeteer");
 }
 
 /**
@@ -1102,9 +1106,16 @@ export function prepareModelCacheDirectory(dbPath: string): void {
 	}
 }
 
-/** Cache directory for direct agent cache consumers. */
+/** Cache directory for managed JS environments; the implicit Linux cache may be noexec. */
 export function getAgentCacheDir(agentDir?: string): string {
-	return dirs.cacheRoot ? path.join(dirs.cacheRoot, "agent", "cache") : path.join(agentDir ?? dirs.agentDir, "cache");
+	return dirs.explicitCacheRoot
+		? path.join(dirs.explicitCacheRoot, "agent", "cache")
+		: path.join(agentDir ?? dirs.agentDir, "cache");
+}
+
+/** Agent cache for installed executables and native libraries, honoring explicit and XDG paths. */
+export function getAgentExecutableCacheDir(): string {
+	return dirs.agentExecutableCacheDir;
 }
 
 /** Get the tiny title model cache directory (~/.omp/agent/cache/tiny-models). */

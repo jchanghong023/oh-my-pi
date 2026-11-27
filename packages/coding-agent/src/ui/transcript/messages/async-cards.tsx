@@ -103,7 +103,7 @@ export function asyncResultRows(
 		const command = label && label !== jobId ? label : undefined;
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
 		if (
-			job.type !== "task" &&
+			(job.type !== "task" || label.startsWith("/tan ")) &&
 			(status === "completed" || status === "failed" || status === "cancelled" || status === "finished") &&
 			(!job.jobId || !represented?.has(`${job.type}:${job.jobId}:${status}`))
 		) {

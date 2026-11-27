@@ -257,8 +257,6 @@ export interface ModelBrowserOptions {
 	/** Session tokens: rows whose window is smaller are flagged (when {@link markOverContext}). */
 	readonly currentContextTokens?: number;
 	readonly markOverContext?: boolean;
-	/** A selection-only host's already ranked matches, when it owns the search. */
-	readonly queryItems?: (query: string) => readonly ModelBrowserItem[];
 	/** Host empty-state text (provider discovery status), with its indent. */
 	readonly emptyText?: () => string | undefined;
 }
@@ -287,7 +285,6 @@ export class ModelBrowserState {
 	readonly #focused = signal(true);
 	readonly #contextTokens: number;
 	readonly #emptyText: (() => string | undefined) | undefined;
-	readonly #queryItems: ModelBrowserOptions["queryItems"];
 	#affinity: SearchAffinity = { models: new Map(), providers: new Map() };
 	readonly #searchIndex?: ModelSearchIndex;
 	#ranker: { source: readonly BrowserRow[]; affinity: SearchAffinity; ranker: ModelItemRanker } | undefined;
@@ -316,7 +313,6 @@ export class ModelBrowserState {
 		const tokens = options.currentContextTokens ?? 0;
 		this.#contextTokens = Number.isFinite(tokens) && tokens > 0 ? Math.floor(tokens) : 0;
 		this.#emptyText = options.emptyText;
-		this.#queryItems = options.queryItems;
 		this.#syncAffinity();
 	}
 
@@ -1068,7 +1064,7 @@ export class ModelBrowserState {
 	/** Recompute the visible rows; the selection lands on `preferred` when listed, else the first model. */
 	#refilter(preferred: string | undefined): void {
 		const query = this.query.trim();
-		const rows = query ? (this.#queryItems?.(query) ?? this.#rank(query)) : this.#items.peek();
+		const rows = query ? this.#rank(query) : this.#items.peek();
 		this.#visible.set(rows);
 		let index = -1;
 		if (preferred !== undefined) index = rows.findIndex(row => !isSeparator(row) && row.selector === preferred);

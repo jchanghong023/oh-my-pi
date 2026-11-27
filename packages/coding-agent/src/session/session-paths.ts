@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getTerminalId } from "../utils/ttyid";
 import {
 	getCustomSessionFilesDir,
@@ -253,8 +254,7 @@ export async function worktreeSessionDirs(
 				dirs.set(
 					dir,
 					recordedCwd =>
-						// Only an enumerated checkout supplies evidence for legacy headers with no cwd.
-						!recordedCwd || matches?.(recordedCwd) === true || matchesSessionCwd(expectedCwd, recordedCwd),
+						!recordedCwd || matchesSessionCwd(expectedCwd, recordedCwd) || matches?.(recordedCwd) === true,
 				);
 			}
 		}
@@ -263,7 +263,10 @@ export async function worktreeSessionDirs(
 			dirs.set(
 				currentDir,
 				recordedCwd =>
-					!recordedCwd || matchesSessionCwd(currentCwd, recordedCwd) || siblingMatches?.(recordedCwd) === true,
+					!recordedCwd ||
+					matchesSessionCwd(currentCwd, recordedCwd) ||
+					managed.matchesMovedCwd(currentCwd, recordedCwd) ||
+					siblingMatches?.(recordedCwd) === true,
 			);
 		} else {
 			dirs.delete(currentDir);
@@ -304,11 +307,36 @@ function managedWorktreeSessionMatcher(primaryRoot: string, prefix: string) {
 		for (let i = 0; i < prefixParts.length; i++) root = path.dirname(root);
 		return root;
 	};
+	const commonDir = vcs.git(primaryRoot)?.info().commonDir;
+	const familyCommonDir = commonDir && resolveEquivalentPath(commonDir);
+	const belongsToFamily = new Map<string, boolean>();
 	return {
 		matchesCwd(recordedCwd: string): boolean {
+			// Old headers may lack cwd; in that case the repo hash in the bucket is the only evidence.
+			if (!recordedCwd) return true;
 			if (!path.isAbsolute(recordedCwd)) return false;
 			const root = rootOf(recordedCwd);
-			return name.test(path.basename(root)) && path.relative(path.join(root, relativeCwd), recordedCwd) === "";
+			if (!name.test(path.basename(root)) || path.relative(path.join(root, relativeCwd), recordedCwd) !== "") {
+				return false;
+			}
+			let belongs = belongsToFamily.get(root);
+			if (belongs === undefined) {
+				// A pruned checkout can still have session history, but a live repository
+				// that has taken its place must prove membership independently of the name.
+				const checkout = fs.existsSync(root) ? vcs.git(root) : undefined;
+				belongs = !checkout || resolveEquivalentPath(checkout.info().commonDir) === familyCommonDir;
+				belongsToFamily.set(root, belongs);
+			}
+			return belongs;
+		},
+		matchesMovedCwd(currentCwd: string, recordedCwd: string): boolean {
+			if (!path.isAbsolute(recordedCwd)) return false;
+			const recordedRoot = rootOf(recordedCwd);
+			return (
+				path.basename(rootOf(currentCwd)) === path.basename(recordedRoot) &&
+				path.relative(path.join(recordedRoot, relativeCwd), recordedCwd) === "" &&
+				!fs.existsSync(recordedCwd)
+			);
 		},
 		hasCollision(cwd: string): boolean {
 			const checkout = path.basename(rootOf(cwd));

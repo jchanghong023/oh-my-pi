@@ -81,8 +81,6 @@ export class RegisteredToolAdapter implements AgentTool<any, any, any> {
 	declare parameters: any;
 	declare label: string;
 	declare strict: boolean;
-	// Extension definitions always use the agent's standard schema validation.
-	readonly lenientArgValidation = false;
 
 	renderCall?: (args: any, options: any, theme: any) => any;
 	renderResult?: (result: any, options: any, theme: any, args?: any) => any;
@@ -434,7 +432,12 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				scheduledCall.name === this.tool.name &&
 				isRecord(effectiveParams) &&
 				effectiveParams.op === "complete";
-			await autopilot.approve(this.runner.approvalRecords, toolCallId, this.tool.name, signal, completingGoal);
+			try {
+				await autopilot.approve(this.runner.approvalRecords, toolCallId, this.tool.name, signal, completingGoal);
+			} catch (error) {
+				cancelPreflight();
+				throw error;
+			}
 		} else if (approvalCheck.required) {
 			const scheduledCall = context?.toolCall?.toolCalls[context.toolCall.index];
 			if (

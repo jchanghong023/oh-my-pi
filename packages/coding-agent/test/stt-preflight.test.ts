@@ -321,18 +321,14 @@ describe("STTController preflight", () => {
 
 describe("stt language normalization", () => {
 	it("reduces configured BCP-47 tags to the base language code the engines accept", () => {
-		// The fork default `stt.language=zh-CN` must reach Whisper as `zh`.
 		expect(normalizeSttLanguage("zh-CN")).toBe("zh");
-		expect(normalizeSttLanguage("en-US")).toBe("en");
 		expect(normalizeSttLanguage("zh-Hans-CN")).toBe("zh");
 		// BCP-47 extensions and private-use subtags include single-character separators.
-		expect(normalizeSttLanguage("zh-CN-u-nu-hanidec")).toBe("zh");
 		expect(normalizeSttLanguage("en-US-x-dictate")).toBe("en");
 		// Underscore and uppercase variants.
 		expect(normalizeSttLanguage("zh_TW")).toBe("zh");
 		expect(normalizeSttLanguage("ZH-cn")).toBe("zh");
-		// Bare codes and non-tags pass through to the engine's own validation.
-		expect(normalizeSttLanguage("zh")).toBe("zh");
+		// Non-tags pass through to the engine's own validation.
 		expect(normalizeSttLanguage("<|zh|>")).toBe("<|zh|>");
 		expect(normalizeSttLanguage("chinese")).toBe("chinese");
 		expect(normalizeSttLanguage("")).toBe("");

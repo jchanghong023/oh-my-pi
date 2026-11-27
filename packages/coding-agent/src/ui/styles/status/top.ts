@@ -207,21 +207,20 @@ function paintTop(node: UiNode, cx: PaintContext): Block {
 	if (embedded) segs = segs.filter(seg => !isContext(seg));
 	const gaugeWidth = embedded ? embeddedInfo(percent, window).length : 0;
 
-	const fit = chip
-		? fitRuleChip(cx, segs)
-		: fitStatus(cx, segs, {
-				separatorWidth: visibleWidth(sep.left),
-				reclaim: look.attachment === "top-border",
-				groupExtra: {
-					left: (caps ? visibleWidth(caps.right) : 0) + visibleWidth(bandCap),
-					right: caps ? visibleWidth(caps.left) : 0,
-				},
-				minGap: ({ segs: count, leftWidth, rightWidth }) => {
-					if (!gaugeWidth) return leftWidth > 0 && rightWidth > 0 ? 1 : 0;
-					if (count === 1 && leftWidth + rightWidth + gaugeWidth > width) return 1;
-					return gaugeWidth <= width ? gaugeWidth : count > 1 ? 1 : 0;
-				},
-			});
+	const fitWithGap = (reserveGauge: boolean): StatusFit =>
+		fitStatus(cx, segs, {
+			separatorWidth: visibleWidth(sep.left),
+			reclaim: look.attachment === "top-border",
+			groupExtra: {
+				left: (caps ? visibleWidth(caps.right) : 0) + visibleWidth(bandCap),
+				right: caps ? visibleWidth(caps.left) : 0,
+			},
+			minGap: ({ leftWidth, rightWidth }) =>
+				reserveGauge && gaugeWidth <= width ? gaugeWidth : leftWidth && rightWidth ? 1 : 0,
+		});
+	let fit = chip ? fitRuleChip(cx, segs) : fitWithGap(embedded);
+	// First let elastic segments yield cells to the label, then fall back to a separate row.
+	if (embedded && fit.left.length === 0 && fit.right.length === 0) fit = fitWithGap(false);
 	if (fit.left.length === 0 && fit.right.length === 0 && look.attachment !== "top-border" && !embedded)
 		return EMPTY_BLOCK;
 

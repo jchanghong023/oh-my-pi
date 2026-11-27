@@ -23,9 +23,9 @@ export interface OpenWikiVisualAssets {
 
 let archive: Promise<OpenWikiArchive> | undefined;
 
-/** Share one lazily decoded archive between the visualizer and license command. */
+/** Embedded archives are immutable; checkout and SDK sidecars may be regenerated. */
 export function loadOpenWikiArchive(): Promise<OpenWikiArchive> {
-	return (archive ??= readOpenWikiArchive());
+	return process.env.PI_COMPILED || process.env.PI_BUNDLED ? (archive ??= readOpenWikiArchive()) : readOpenWikiArchive();
 }
 
 async function readOpenWikiArchive(): Promise<OpenWikiArchive> {

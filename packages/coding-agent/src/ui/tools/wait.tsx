@@ -114,12 +114,17 @@ export function waitFailurePreview(
 		}
 	}
 	const truncation = job.meta?.truncation;
+	const column = job.meta?.limits?.columnTruncated;
 	const artifactId =
 		job.meta?.minimized?.artifactId ??
 		rawFooter.artifactId ??
 		outputWithArtifact.artifactId ??
-		truncation?.artifactId;
-	const elidedBytes = artifactId === truncation?.artifactId ? truncation?.artifactElidedBytes : undefined;
+		truncation?.artifactId ??
+		column?.artifactId;
+	const elidedBytes =
+		artifactId === truncation?.artifactId ? truncation?.artifactElidedBytes
+		: artifactId === column?.artifactId ? column?.artifactElidedBytes
+		: undefined;
 	return {
 		lines,
 		reason,

@@ -59,12 +59,12 @@ export const TERMINAL_DOCK: readonly DockSlot[] = [
 	"modelCycle",
 	"deferredCommand",
 	"progress",
+	"compact",
 	"ask",
 	"status",
 	"attachments",
 	"editorGap",
 	"widgetsAbove",
-	"compact",
 	"composer",
 	"widgetsBelow",
 ];

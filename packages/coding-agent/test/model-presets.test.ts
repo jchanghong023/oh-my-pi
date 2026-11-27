@@ -523,7 +523,6 @@ describe("model presets", () => {
 			},
 		);
 		if (child.exitCode !== 0) throw new Error(child.stderr.toString() || child.stdout.toString());
-		expect(child.exitCode).toBe(0);
 	});
 
 	it("resolves an alias default against the preset's own roles, not the current ones", async () => {

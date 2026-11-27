@@ -781,10 +781,8 @@ FROM model_usage_legacy
 			}
 			const statsDbPath = getStatsDbPath();
 			if (!fs.existsSync(statsDbPath)) return;
-			void this.backfillModelPerfFromStats(statsDbPath)
+			void this.#backfillModelPerfFromStats(statsDbPath, MODEL_PERF_BACKFILL_KEY)
 				.then(imported => {
-					using markCompleteStmt = this.#db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
-					markCompleteStmt.run(MODEL_PERF_BACKFILL_KEY, "complete");
 					logger.info("AgentStorage imported model perf history from stats.db", { imported });
 				})
 				.catch(error => {
@@ -810,7 +808,11 @@ FROM model_usage_legacy
 	 * @returns Number of rows folded in
 	 * @throws When the stats db cannot be opened or queried
 	 */
-	async backfillModelPerfFromStats(statsDbPath: string): Promise<number> {
+	backfillModelPerfFromStats(statsDbPath: string): Promise<number> {
+		return this.#backfillModelPerfFromStats(statsDbPath);
+	}
+
+	async #backfillModelPerfFromStats(statsDbPath: string, markerKey?: string): Promise<number> {
 		preparePerformanceCacheDirectory(path.dirname(statsDbPath), false);
 		const statsDb = new Database(statsDbPath, { readonly: true });
 		try {
@@ -869,7 +871,7 @@ LIMIT ?4`,
 				// Yield so a chunked walk never freezes the TUI (bun:sqlite is sync).
 				await Bun.sleep(0);
 			}
-			if (sums.size > 0) {
+			if (sums.size > 0 || markerKey) {
 				using upsert = this.#db.prepare(
 					`INSERT INTO model_perf (model_key, samples, output_tokens, gen_ms, ttft_samples, ttft_ms, updated_at)
 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ${SQLITE_NOW_EPOCH})
@@ -882,6 +884,13 @@ ON CONFLICT(model_key) DO UPDATE SET
 	updated_at = ${SQLITE_NOW_EPOCH}`,
 				);
 				this.#db.transaction(() => {
+					if (markerKey) {
+						using marker = this.#db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)");
+						if (marker.run(markerKey, "complete").changes === 0) {
+							imported = 0;
+							return;
+						}
+					}
 					for (const [key, accum] of sums) {
 						upsert.run(key, accum.samples, accum.outputTokens, accum.genMs, accum.ttftSamples, accum.ttftMs);
 					}

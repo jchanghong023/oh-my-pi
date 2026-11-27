@@ -1,6 +1,5 @@
 ---
 name: openspec-bulk-archive-change
-disable-model-invocation: true
 description: Archive multiple completed OpenSpec changes at once. Use when archiving several parallel changes. Also use for a plural archive request - "openspec bulk-archive", "opsx bulk-archive", "omp openspec archive all", or "omp openspec archive these changes".
 allowed-tools: Bash(omp openspec:*)
 license: MIT

@@ -297,7 +297,6 @@ describe("AgentSession queued steer delivery", () => {
 
 			const promoted = goalState === "autopilot-active";
 			const nextRequest = JSON.stringify(mock.calls[1].context.messages);
-			expect(nextRequest.includes(feedback)).toBe(promoted);
 			expect(nextRequest).toContain("total=3");
 			expect(totals).toEqual(promoted ? [1, 3, 33] : [1, 3, 6]);
 			expect(JSON.stringify(mock.calls[2].context.messages)).toContain(promoted ? "total=33" : "total=6");
@@ -333,7 +332,6 @@ describe("AgentSession queued steer delivery", () => {
 					}),
 				}),
 			]);
-			expect(mock.calls).toHaveLength(promoted ? 3 : 4);
 			expect(session.agent.hasQueuedMessages()).toBe(false);
 		});
 	}

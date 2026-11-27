@@ -59,7 +59,7 @@ disable-model-invocation: true
 - **每个步骤至少一条输出**：即使步骤快速完成，也必须输出该步骤的关键结论
 - **跳过声明格式**：在步骤输出中追加 `[跳过: 子步骤X-Y，原因: xxx]` 标记，不修改 todo 条目文字
 
-使用 `todo` 跟踪以下步骤：开始时调用 `{"op":"append","phase":"generate-ut","items":["被测函数识别","项目环境与测试框架识别","依赖识别与上下文获取","函数特性分析与测试设计","测试用例生成"]}`，保留调用方已声明的流水线待办，禁止用 `init` 覆盖；每步完成后以 `{"op":"done","task":"被测函数识别"}` 为格式，传入该步骤逐字相同的 `task`。严格按顺序执行：
+使用 `todo` 跟踪以下步骤：每轮开始时用 `{"op":"view"}` 查看待办，选择未用的轮次 N，再调用 `{"op":"append","phase":"generate-ut","items":["第N轮：被测函数识别","第N轮：项目环境与测试框架识别","第N轮：依赖识别与上下文获取","第N轮：函数特性分析与测试设计","第N轮：测试用例生成"]}`（将 N 替换为本轮编号）。禁止用 `init` 覆盖调用方的待办。每步完成后用 `done`，`task` MUST 与本轮条目逐字相同。严格按顺序执行：
 
 ### 步骤1：被测函数识别
 
@@ -173,7 +173,7 @@ C/C++ MUST 优先用已定位源文件提取上下文；按[依赖分析](refere
 
 #### 5.1 准备阶段
 
-1. 读取步骤3获取的上下文文件、语言专属reference中的知识库
+1. 读取步骤3获取的上下文及语言专属参考；C/C++ 的 Mock 框架知识见 `references/cpp/mock-framework-guide.md`
 2. 按步骤2确认的Mock框架，读取对应的reference子文档（如需要）
 3. 必须按照路径远近参考已有测试文件的设计和实现
 
@@ -232,7 +232,6 @@ C/C++ MUST 优先用已定位源文件提取上下文；按[依赖分析](refere
 
 ### assets/
 - `assets/java/cfr-0.152.jar`：CFR反编译工具jar包。`decompile.js` 依赖此文件。
-- `assets/cpp/ut-knowledge.md`：UT基础知识库，提供4种Mock框架（AMOCKER、MOCKER、gtest/gmock、binmock）的详细使用说明、Mock框架选择决策树和对比表。步骤5参考。
 
 ### examples/
 - `examples/cpp/test_example.cpp`：完整C/C++测试用例示例（基本结构、Mock使用、数据清理、Fixture状态跟踪、void函数状态验证、EXPECT_DEATH、#include .c模式、SetUp零重置、计算辅助函数、#define private public顺序、GIVEN阶段约束、显式NULL指针测试）。步骤5参考。

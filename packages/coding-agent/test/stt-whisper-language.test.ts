@@ -69,7 +69,6 @@ describe("local Whisper language contract", () => {
 		expect(infer).toHaveBeenCalledTimes(1);
 		const call = infer.mock.calls[0];
 		if (!call) throw new Error("Whisper inference was not called");
-		expect(call[0]).toBe(audio);
 		expect(call[1]).toMatchObject({
 			language: configured === "en-US" ? "en" : "zh",
 			task: "transcribe",

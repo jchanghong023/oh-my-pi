@@ -3,7 +3,7 @@
  * 从 go test -v 输出中提取测试执行结果，
  * 生成 .codecovcli/cache 格式的 JSON 文件。
  *
- * 用法: node extract-go-coverage.js <类名/模块名> <coverprofile路径> [go-test-v输出路径]
+ * 用法: node extract-go-coverage.js <文件名（无扩展名）或profile完整文件路径> <coverprofile路径> [go-test-v输出路径]
  * 示例: node extract-go-coverage.js string_utils coverage.out
  *       node extract-go-coverage.js string_utils coverage.out go-test-output.txt
  *
@@ -22,13 +22,15 @@ const path = require('path');
 // ========== 参数解析 ==========
 const args = process.argv.slice(2);
 if (args.length < 2) {
-  console.error('用法: node extract-go-coverage.js <类名/模块名> <coverprofile路径> [go-test-v输出路径]');
+  console.error('用法: node extract-go-coverage.js <文件名（无扩展名）或profile完整文件路径> <coverprofile路径> [go-test-v输出路径]');
   console.error('示例: node extract-go-coverage.js string_utils coverage.out');
   console.error('示例: node extract-go-coverage.js string_utils coverage.out go-test-output.txt');
   process.exit(1);
 }
 
-const className = args[0];
+const target = args[0].replace(/\\/g, '/');
+const targetProfilePath = target.endsWith('.go') ? target : null;
+const className = path.posix.basename(target, '.go');
 const coverprofilePath = path.resolve(args[1]);
 const goTestVPath = args[2] ? path.resolve(args[2]) : null;
 
@@ -53,10 +55,8 @@ if (goTestVPath && fs.existsSync(goTestVPath)) {
   const testOutput = new TextDecoder(encoding).decode(testBytes);
   const testLines = testOutput.split('\n');
 
-  // 检测编译错误
-  const hasBuildFailed = /\[build failed\]/.test(testOutput);
-  const hasCompileError = /^#\s+\S+/m.test(testOutput);
-  if (hasBuildFailed || hasCompileError) {
+  // Go emits a package-level build failure summary; "# ..." can be test output.
+  if (/^FAIL[ \t]+\S+[ \t]+\[build failed\][ \t]*\r?$/m.test(testOutput)) {
     compileErrors = 1;
   }
 
@@ -106,7 +106,7 @@ if (goTestVPath && fs.existsSync(goTestVPath)) {
     }
   }
 
-  // 如果有编译错误且没有解析到测试结果，尝试从测试输出中推断测试名
+  // 如果没有测试结果且没有编译错误，尝试从测试输出中推断测试名
   if (!testName && !compileErrors) {
     // 尝试从 === RUN 行提取测试名
     for (const line of testLines) {
@@ -134,11 +134,10 @@ if (!fs.existsSync(coverprofilePath)) {
 //   第一行: mode: set (或 count / atomic)
 //   数据行: package/file.go:lineStart.col,lineEnd.col numStatements count
 //   count=0 表示未覆盖，count>0 表示已覆盖
-const targetFileSuffix = '/' + className + '.go';
 
 let totalStatements = 0;
 let coveredStatements = 0;
-let foundTargetFile = false;
+let matchedFilePath = null;
 const uncoveredBlocks = [];
 const coveredBlocks = [];
 
@@ -164,12 +163,17 @@ if (coverContent) {
     const numStatements = parseInt(match[5]);
     const count = parseInt(match[6]);
 
-    // 过滤到目标文件（文件名匹配 className.go）
-    if (!filePath.endsWith(targetFileSuffix)) {
+    const profilePath = filePath.replace(/\\/g, '/');
+    if (targetProfilePath ? profilePath !== targetProfilePath : path.posix.basename(profilePath) !== `${className}.go`) {
       continue;
     }
 
-    foundTargetFile = true;
+    if (matchedFilePath !== null && matchedFilePath !== profilePath) {
+      errorDetailParts.push(`目标文件名有歧义: ${matchedFilePath}, ${profilePath}。请指定 profile 中的完整文件路径。`);
+      totalStatements = coveredStatements = 0;
+      break;
+    }
+    matchedFilePath = profilePath;
     totalStatements += numStatements;
 
     if (count > 0) {
@@ -180,8 +184,8 @@ if (coverContent) {
     }
   }
 
-  if (!foundTargetFile) {
-    errorDetailParts.push(`未在coverprofile中找到目标文件: ${className}.go`);
+  if (matchedFilePath === null) {
+    errorDetailParts.push(`未在coverprofile中找到目标文件: ${targetProfilePath ?? `${className}.go`}`);
   }
 } else {
   // coverprofile 不存在时，尝试从 go-test-v 输出推断编译失败
@@ -298,7 +302,7 @@ const result = {
     compileErrors: compileErrors,
   },
   metrics: {
-    compiled_testcase_num: Math.max(0, totalTests - compileErrors),
+    compiled_testcase_num: totalTests,
     passed_testcase_num: passedTests,
     covered_line_num: coveredLines,
     total_compile_error_num: compileErrors,

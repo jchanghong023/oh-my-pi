@@ -144,7 +144,7 @@ export function renderFileSlashCommand(command: FileSlashCommand, argsString: st
 	const argsText = args.join(" ");
 	let usesRawArguments = false;
 	const substituted = substituteArgs(command.content, args);
-	const rendered = prompt.render(substituted, {
+	const rendered = prompt.compile(substituted)({
 		args,
 		ARGUMENTS: argsText,
 		arguments: argsText,
@@ -155,7 +155,8 @@ export function renderFileSlashCommand(command: FileSlashCommand, argsString: st
 		},
 	});
 	return appendInlineArgsFallback(
-		rendered,
+		// Raw arguments are user text, not template markup to normalize.
+		usesRawArguments ? rendered : prompt.format(rendered),
 		argsText,
 		usesRawArguments || templateUsesInlineArgPlaceholders(command.content),
 	);

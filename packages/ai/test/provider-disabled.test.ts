@@ -8,7 +8,6 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import * as compatAuth from "@oh-my-pi/pi-catalog/compat/auth";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
-	getAllOAuthProviders,
 	getOAuthProviders,
 	refreshOAuthToken,
 	registerOAuthProvider,
@@ -77,11 +76,10 @@ describe("a provider disabled in its auth rules", () => {
 		).rejects.toBeInstanceOf(AIError.ProviderDisabledError);
 	});
 
-	test("hides paused login choices without losing credential-management metadata", () => {
+	test("hides paused login choices", () => {
 		expect(getOAuthProviders().some(provider => provider.id === PROVIDER)).toBe(true);
 		const spy = disable();
 		expect(getOAuthProviders().some(provider => provider.id === PROVIDER)).toBe(false);
-		expect(getAllOAuthProviders().some(provider => provider.id === PROVIDER)).toBe(true);
 		spy.mockRestore();
 		expect(getOAuthProviders().some(provider => provider.id === PROVIDER)).toBe(true);
 	});

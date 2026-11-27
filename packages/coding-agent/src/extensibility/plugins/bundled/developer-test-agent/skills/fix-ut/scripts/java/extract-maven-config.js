@@ -6,23 +6,40 @@
 const fs = require('fs');
 const path = require('path');
 
+function decodeXmlAttribute(value) {
+  const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+  return value.replace(/&(amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);/g, (_, entity) =>
+    entity[0] === '#'
+      ? String.fromCodePoint(Number(entity[1] === 'x' ? `0${entity.slice(1)}` : entity.slice(1)))
+      : entities[entity]
+  );
+}
+
 function extractMavenConfig(projectDir) {
   const config = {};
-  const workspacePath = path.join(projectDir, '.idea', 'workspace.xml');
+  let workspacePath;
+  for (let dir = path.resolve(projectDir); ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, '.idea', 'workspace.xml');
+    if (fs.existsSync(candidate)) {
+      workspacePath = candidate;
+      break;
+    }
+    if (path.dirname(dir) === dir) break;
+  }
 
-  if (fs.existsSync(workspacePath)) {
+  if (workspacePath) {
     try {
       const content = fs.readFileSync(workspacePath, 'utf-8');
       
       const settingsMatch = content.match(/userSettingsFile[^>]*value="([^"]+)"/);
       if (settingsMatch) {
-        config.settingsPath = settingsMatch[1];
+        config.settingsPath = decodeXmlAttribute(settingsMatch[1]);
       }
 
       const mavenProperties = extractMavenProperties(content);
       const vmOptions = extractVmOptions(content);
 
-      if (mavenProperties) {
+      if (mavenProperties.length) {
         config.mavenProperties = mavenProperties;
       }
       if (vmOptions) {
@@ -55,29 +72,21 @@ function extractMavenProperties(content) {
     let entryMatch;
 
     while ((entryMatch = entryPattern.exec(mapContent)) !== null) {
-      const key = entryMatch[1];
-      const value = entryMatch[2];
+      const key = decodeXmlAttribute(entryMatch[1]);
+      const value = decodeXmlAttribute(entryMatch[2]);
       properties.push(`-D${key}=${value}`);
     }
   }
 
-  return properties.length > 0 ? properties.join(' ') : '';
+  return properties;
 }
 
 function extractVmOptions(content) {
   // 匹配 MavenRunner 组件中的 vmOptions 配置
-  const vmOptionsPattern = /<component name="MavenRunner">[\s\S]*?<option name="vmOptions" value="([^"]*)"\s*\/>/g;
-  let match;
-  const vmOptions = [];
-
-  while ((match = vmOptionsPattern.exec(content)) !== null) {
-    const value = match[1];
-    if (value) {
-      vmOptions.push(value);
-    }
-  }
-
-  return vmOptions.length > 0 ? vmOptions.join(' ') : '';
+  const runner = /<component\s+name="MavenRunner"\s*>([\s\S]*?)<\/component>/.exec(content);
+  if (!runner) return '';
+  const option = /<option name="vmOptions" value="([^"]*)"\s*\/>/.exec(runner[1]);
+  return option ? decodeXmlAttribute(option[1]) : '';
 }
 
 function findProjectDir(startDir) {

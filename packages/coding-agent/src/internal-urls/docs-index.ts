@@ -71,7 +71,7 @@ export function decodeDocsIndex(embed: string): DocsIndex | null {
 }
 
 /**
- * Dev tree / source checkout: index the repo `docs/` tree and the Team guide.
+ * Dev tree / source checkout: build the index from the repo `docs/` directory.
  * Returns `null` when that directory is absent — for an npm-installed package,
  * four levels up from `src/internal-urls/` is `node_modules/`, not a repo root,
  * so `docs/` is structurally unreachable and the caller falls back to the

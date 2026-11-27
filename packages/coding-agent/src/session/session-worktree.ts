@@ -5,12 +5,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { $which, hashPath } from "@oh-my-pi/pi-utils";
+import { $which, hashPath, isEnoent, pathIsWithin } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { sanitizeDisplayLines, sanitizeDisplayWarnings, shortenPath } from "../utils/render-utils";
 import type { SettingValueOf } from "../config/registry";
 import type { Settings } from "../config/settings";
 import type { cfgWorktreeOnExit } from "../task/settings";
 import type { SessionWorktree as BackendSessionWorktree } from "../worktree/backend";
+import { sessionWorktreeMarker } from "../worktree/git-managed";
 import { resolveAvailableWorktreePath } from "../worktree/paths";
 import { worktreeBackend, worktreeOrigin } from "../worktree/worktrees";
 import type { AgentSession } from "./agent-session";
@@ -129,6 +131,24 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 	if (!/^[^\s~^:?*[\\]+$/.test(branch) || branch.startsWith("-") || branch.endsWith("/") || branch.includes("..")) {
 		throw new Error(`Invalid branch name: ${branch}`);
 	}
+	const commonDir = await fs.realpath(repository.info().commonDir);
+	return withFileLock(path.join(commonDir, "omp-session-worktrees"), () =>
+		resolveSessionWorktree(repository, cwd, branch),
+	);
+}
+
+async function readWorktreeMarker(gitDir: string): Promise<string | undefined> {
+	return fs.readFile(sessionWorktreeMarker(gitDir), "utf8").catch(error => {
+		if (!isEnoent(error)) throw error;
+		return undefined;
+	});
+}
+
+async function resolveSessionWorktree(
+	repository: ReturnType<typeof vcs.requireGit>,
+	cwd: string,
+	branch: string,
+): Promise<SessionWorktree> {
 	const branchRef = `refs/heads/${branch}`;
 	const branchCommit = await repository.resolveRef(branchRef);
 	const createdBranch = branchCommit === null || branchCommit === undefined;
@@ -184,6 +204,10 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 				) {
 					throw new Error("Directory is not a checkout of the requested branch in this repository.");
 				}
+				// An existing checkout no longer belongs exclusively to its creator.
+				if (!primary && (await readWorktreeMarker(info.gitDir)) === "owned") {
+					await fs.writeFile(sessionWorktreeMarker(info.gitDir), "shared");
+				}
 				return {
 					path: reusedPath,
 					branch,
@@ -216,8 +240,10 @@ export async function createSessionWorktree(cwd: string, settings: Settings, bra
 		clone: false,
 		keepChanges: false,
 	});
+	const canonicalPath = await fs.realpath(worktreePath);
+	await fs.writeFile(sessionWorktreeMarker(vcs.requireGit(canonicalPath).info().gitDir), "owned");
 	return {
-		path: await fs.realpath(worktreePath),
+		path: canonicalPath,
 		branch,
 		sourceCwd: cwd,
 		baseCommit,
@@ -313,6 +339,10 @@ export async function planWorktreeExit(
 	// Newest first: a `/wt` worktree may have been forked from an older owned one.
 	for (const worktree of owned.toReversed()) {
 		try {
+			if (await wasShared(worktree)) {
+				warn(sharedWorktreeNotice(worktree));
+				continue;
+			}
 			const { state, fingerprint } = await snapshotSessionWorktree(worktree);
 			const action = decideWorktreeExit(policy, state);
 			if (action === "keep") continue;
@@ -347,10 +377,10 @@ export async function removeExitWorktrees(plan: readonly WorktreeExitPlan[]): Pr
 				continue;
 			}
 			// Git cannot open the source repo while our cwd is the deleted worktree.
-			const rel = path.relative(worktree.path, process.cwd());
-			const holdsCwd = !rel.startsWith("..") && !path.isAbsolute(rel);
-			if (holdsCwd) process.chdir(worktree.sourceCwd);
-			await removeSessionWorktree(worktree, state.moved);
+			const holdsCwd = pathIsWithin(worktree.path, process.cwd());
+			await removeSessionWorktree(worktree, state.moved, () => {
+				if (holdsCwd) process.chdir(worktree.sourceCwd);
+			});
 			if (holdsCwd) {
 				const commits = state.moved ? `; its commits are on branch ${worktree.branch}` : "";
 				messages.push(
@@ -364,11 +394,32 @@ export async function removeExitWorktrees(plan: readonly WorktreeExitPlan[]): Pr
 	return messages;
 }
 
+async function wasShared(worktree: SessionWorktree): Promise<boolean> {
+	if (worktree.ovnfs) return false;
+	const checkout = vcs.git(worktree.path);
+	return checkout != null && (await readWorktreeMarker(checkout.info().gitDir)) === "shared";
+}
+
+function sharedWorktreeNotice(worktree: SessionWorktree): string {
+	return `Kept worktree ${shortenPath(worktree.path)}: another session reused it.`;
+}
+
 /**
  * Force-remove an owned `wt`; delete only newly created branches that have not moved.
- * Throws a user-facing error when git refuses either step.
+ * Refuses a shared worktree or one Git cannot remove.
  */
-export async function removeSessionWorktree(wt: SessionWorktree, moved: boolean): Promise<void> {
+export async function removeSessionWorktree(
+	wt: SessionWorktree,
+	moved: boolean,
+	beforeRemove?: () => void,
+): Promise<void> {
 	if (wt.created === false) return;
-	await worktreeBackend(wt).remove(wt, moved || wt.createdBranch === false);
+	const remove = async () => {
+		if (await wasShared(wt)) throw new Error(sharedWorktreeNotice(wt));
+		beforeRemove?.();
+		await worktreeBackend(wt).remove(wt, moved || wt.createdBranch === false);
+	};
+	const commonDir = !wt.ovnfs && vcs.git(wt.sourceCwd)?.info().commonDir;
+	if (!commonDir) return remove();
+	await withFileLock(path.join(await fs.realpath(commonDir), "omp-session-worktrees"), remove);
 }

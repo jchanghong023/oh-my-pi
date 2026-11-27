@@ -252,11 +252,6 @@ def command(args, db, state):
         if not active or args.init:
             head = git("rev-parse", "--verify", "HEAD^{commit}").decode().strip()
             base = fork_base(head, args.base) if args.mode == "fork" else ""
-            if args.init:
-                # Clear old generations, including any interrupted plan.
-                for folder in state.iterdir():
-                    if re.fullmatch("[a-f0-9]{32}", folder.name) and folder.is_dir():
-                        shutil.rmtree(folder)
             generation = uuid.uuid4().hex
             new = state / generation
             try:
@@ -268,6 +263,11 @@ def command(args, db, state):
             active = (generation, args.mode, args.count, head, base)
             db.execute("DELETE FROM active")
             db.execute("INSERT INTO active VALUES (?, ?, ?, ?, ?)", active)
+            if args.init:
+                # Do not discard the previous run until its replacement is ready.
+                for folder in state.iterdir():
+                    if folder != new and re.fullmatch("[a-f0-9]{32}", folder.name) and folder.is_dir():
+                        shutil.rmtree(folder)
         elif active[1:3] != (args.mode, args.count) or (
             args.base is not None and resolve_base(active[3], args.base) != active[4]
         ):

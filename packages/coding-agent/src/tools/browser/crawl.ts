@@ -2,6 +2,7 @@ import type { SlashCommandRuntime } from "../../slash-commands/types";
 import type { CrawlBrowserRoute, CrawlBrowserTab } from "../browser";
 import { TOOL_TIMEOUTS } from "../tool-timeouts";
 import { crawlBrowserRequest, writeCrawlMarkdown } from "./crawl-access";
+import { isNavigatedContextError } from "./navigation";
 
 export interface CrawlOptions {
 	url: string;
@@ -155,7 +156,7 @@ try {
     { urlPattern: "*", resourceType: "Document", requestStage: "Response" }
   ] });
   const minimumWait = ${JSON.stringify(waitSeconds * 1000)};
-  const readinessTimeout = ${(TOOL_TIMEOUTS.browser.max - 45) * 1000};
+  const readinessTimeout = ${(TOOL_TIMEOUTS.browser.max - 45 + waitSeconds) * 1000};
   const deadline = Date.now() + readinessTimeout;
   const navigate = async destination => {
     let response;
@@ -176,6 +177,7 @@ try {
     ${JSON.stringify(scroll ? "Page did not finish loading or reach a stable scroll end" : "Page did not finish loading")} +
     " within " + readinessTimeout + "ms; content was not saved"
   );
+  const contextWasReplaced = ${isNavigatedContextError.toString()};
   const waitForReady = async minimum => {
     const waitStarted = Date.now();
     let previous;
@@ -184,7 +186,16 @@ try {
       if (attachment) throw new Error("Navigation returned an attachment or non-HTML document");
       rejectDocumentError();
       rejectErrorRoute(page.url());
-      const snapshot = await page.evaluate(${JSON.stringify(READINESS_SNAPSHOT)});
+      let snapshot;
+      try {
+        snapshot = await page.evaluate(${JSON.stringify(READINESS_SNAPSHOT)});
+      } catch (error) {
+        if (!contextWasReplaced(error)) throw error;
+        if (Date.now() >= deadline) throw timeoutError();
+        previous = undefined;
+        await wait(250);
+        continue;
+      }
       const now = Date.now();
       if (now >= deadline) throw timeoutError();
       const state = JSON.stringify([snapshot.url, snapshot.text]);
@@ -277,6 +288,7 @@ const READINESS_SNAPSHOT = `(() => {
 const FULL_ARTICLE_TARGET = `(attribute, followLinks) => {
   const done = attribute + "-expanded";
   let navigation;
+  let unavailable;
   const select = (control, url) => {
     for (const marked of document.querySelectorAll("[" + attribute + "]")) marked.removeAttribute(attribute);
     control.setAttribute(attribute, "");
@@ -287,7 +299,7 @@ const FULL_ARTICLE_TARGET = `(attribute, followLinks) => {
     const label = (element.getAttribute("aria-label") || element.innerText || element.textContent || "")
       .replace(/[\\s\\u200b]/g, "").replace(/[›»→>…]+$/, "").toLowerCase();
     if (!/^(?:查看全文|阅读全文|展开全文|显示全文|查看完整(?:文章|内容)|阅读完整(?:文章|内容)|继续阅读|阅读更多|readmore|read(?:the)?full(?:article|post)|continuereading)$/.test(label)) continue;
-    const control = element.closest("a,button,[role='button'],summary,[onclick]") || element;
+    const control = element.closest("a,button,input[type='image'],input[type='submit'],[role='button'],summary,[onclick]") || element;
     const style = getComputedStyle(control);
     if (control.hasAttribute(done) || style.display === "none" || style.visibility === "hidden" ||
         !control.getClientRects().length || control.getAttribute("aria-hidden") === "true") continue;
@@ -305,20 +317,23 @@ const FULL_ARTICLE_TARGET = `(attribute, followLinks) => {
     const expandsFragment = sameDocument && (!href || target.href.includes("#"));
     const navigates = link && !(frame === "_self" && (placeholder || expandsFragment));
     if (!followLinks && (navigates || (sameDocument && target.hash.startsWith("#/")))) continue;
-    if (control.disabled || control.getAttribute("aria-disabled") === "true") {
-      return { error: "The full-article control is disabled; preview was not saved" };
+    const error = control.disabled || control.getAttribute("aria-disabled") === "true"
+      ? "The full-article control is disabled; preview was not saved"
+      : control.form && (control.type === "submit" || control.type === "image")
+        ? "Refusing to submit a form to open the full article"
+        : link?.hasAttribute("download")
+          ? "The full-article link is a download, not a webpage"
+          : navigates && target.protocol !== "http:" && target.protocol !== "https:"
+            ? "The full-article link is not an HTTP or HTTPS webpage"
+            : undefined;
+    if (error) {
+      unavailable ??= error;
+      continue;
     }
-    if (control.form && control.type === "submit") {
-      return { error: "Refusing to submit a form to open the full article" };
-    }
-    if (link?.hasAttribute("download")) return { error: "The full-article link is a download, not a webpage" };
     if (!navigates) return select(control);
-    if (target.protocol !== "http:" && target.protocol !== "https:") {
-      return { error: "The full-article link is not an HTTP or HTTPS webpage" };
-    }
     navigation ??= { control, url: target.href };
   }
-  return navigation ? select(navigation.control, navigation.url) : {};
+  return navigation ? select(navigation.control, navigation.url) : { error: unavailable };
 }`;
 
 // Pick an on-screen nested scroll panel before moving the document, so its lazy loaders stay visible.
@@ -377,6 +392,7 @@ export async function runCrawl(
 ): Promise<void> {
 	const entry = normalizedUrl(options.url);
 	if (!entry) throw new Error("Crawl requires an HTTP or HTTPS URL");
+	const waitSeconds = options.wait ?? 5;
 	let origin = new URL(entry).origin;
 	const seen = new Set([entry]);
 	const writes = new Map<string, Promise<string>>();
@@ -428,11 +444,11 @@ export async function runCrawl(
 				{
 					action: "run",
 					name: tab.name,
-					code: navigationCode(item.url, options.wait ?? 5, options.scroll ?? true),
+					code: navigationCode(item.url, waitSeconds, options.scroll ?? true),
 					timeout: TOOL_TIMEOUTS.browser.max,
 				},
 				signal,
-				{ kind: "run", tab },
+				{ kind: "run", tab, waitSeconds },
 			);
 			owned = undefined;
 			await release(tab, displayUrl);

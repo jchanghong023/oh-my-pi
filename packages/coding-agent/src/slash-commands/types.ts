@@ -60,7 +60,7 @@ export interface ParsedSlashCommand {
  */
 export type SlashCommandResult =
 	| undefined
-	| { consumed: true; agentInvoked?: boolean; failed?: boolean; costCapped?: boolean }
+	| { consumed: true; agentInvoked?: boolean; failed?: boolean }
 	| { prompt: string; goalAutoOrchestrateInitialId?: string };
 
 /**
@@ -224,5 +224,5 @@ export interface SlashCommandSpec extends BuiltinSlashCommand {
 /** Result returned by `executeAcpBuiltinSlashCommand`. */
 export type AcpBuiltinSlashCommandResult =
 	| false
-	| { consumed: true; agentInvoked?: boolean; failed?: boolean; costCapped?: boolean }
+	| { consumed: true; agentInvoked?: boolean; failed?: boolean }
 	| { prompt: string };

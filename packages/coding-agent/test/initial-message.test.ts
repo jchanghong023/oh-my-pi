@@ -40,7 +40,8 @@ describe("buildInitialMessage", () => {
 		expect(parsed.messages).toEqual(["first", "second"]);
 	});
 
-	it.each(["/review file.ts", "/custom-command arg"])("keeps %s as a CLI message when @file is empty", message => {
+	it("keeps a slash command as a CLI message when @file is empty", () => {
+		const message = "/review file.ts";
 		const parsed = createArgs([message, "second"]);
 
 		const result = buildInitialMessage({ parsed, fileText: "", fileImages: [] });

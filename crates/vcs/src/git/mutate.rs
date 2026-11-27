@@ -11,6 +11,7 @@ use std::{
 };
 
 use gix::bstr::{BString, ByteSlice};
+use gix::index::entry::Flags;
 
 use super::{
 	GitRepo,
@@ -107,7 +108,55 @@ fn scoped_index(repo: &gix::Repository, path: &Path) -> Result<gix::index::File>
 			"conflicted or sparse-directory index cannot be reconciled safely",
 		));
 	}
+	index
+		.verify_entries()
+		.map_err(|err| Error::backend("git scoped commit", err))?;
 	Ok(index)
+}
+
+/// Stage-zero index entries are leaves: `a` and `a/b` cannot both survive.
+/// Check component prefixes, not just adjacent entries (`a.b` can intervene).
+fn reject_index_path_collisions(index: &gix::index::File, op: &'static str) -> Result<()> {
+	for entry in index.entries() {
+		let path = entry.path(index).as_bytes();
+		for (offset, _) in path.iter().enumerate().filter(|(_, byte)| **byte == b'/') {
+			let parent = path[..offset].as_bstr();
+			if index.entry_by_path(parent).is_some() {
+				return Err(Error::backend(
+					op,
+					format!("index file/directory collision between {parent} and {}", path.as_bstr()),
+				));
+			}
+		}
+	}
+	Ok(())
+}
+
+fn require_no_scoped_git_operation(git_dir: &Path) -> Result<()> {
+	// Use worktree-local state, including a sequencer that hasn't written the
+	// current step's pseudo-ref yet. A resolved index is not enough.
+	for marker in [
+		"MERGE_HEAD",
+		"CHERRY_PICK_HEAD",
+		"REVERT_HEAD",
+		"REBASE_HEAD",
+		"rebase-apply",
+		"rebase-merge",
+		"sequencer",
+		"BISECT_LOG",
+	] {
+		match fs::symlink_metadata(git_dir.join(marker)) {
+			Ok(_) => {
+				return Err(Error::backend(
+					"git scoped commit",
+					format!("Git operation in progress ({marker})"),
+				));
+			},
+			Err(err) if err.kind() == io::ErrorKind::NotFound => {},
+			Err(err) => return Err(err.into()),
+		}
+	}
+	Ok(())
 }
 
 /// Apply a ref update, synthesizing a committer for the reflog entry when no
@@ -391,6 +440,7 @@ impl GitRepo {
 		}
 		index.sort_entries();
 		if let Some(mut lock) = private_lock {
+			reject_index_path_collisions(&index, "git isolated stage")?;
 			index
 				.write_to(&mut lock, INDEX_WRITE)
 				.map_err(|err| Error::backend("git isolated stage", err))?;
@@ -772,9 +822,12 @@ impl GitRepo {
 				None,
 			)
 			.map_err(|err| Error::backend(OP, err))?;
+			require_no_scoped_git_operation(repo.git_dir())?;
 			let mut index = scoped_index(&repo, &real_path)?;
 			let proposed = scoped_index(&repo, &commit_path)?;
 			let reconciled = scoped_index(&repo, &reconciled_path)?;
+			reject_index_path_collisions(&proposed, OP)?;
+			reject_index_path_collisions(&reconciled, OP)?;
 			if write_index_tree(&repo, &proposed)? != tree {
 				return Err(Error::backend(
 					OP,
@@ -796,17 +849,16 @@ impl GitRepo {
 						.entry_by_path(path)
 						.is_some_and(|other| entry.flags == other.flags)
 			});
-			let intent = gix::index::entry::Flags::INTENT_TO_ADD;
+			let intent = Flags::INTENT_TO_ADD;
 			if resumed
 				&& differing_paths.is_empty()
 				&& same_unowned_flags
 				&& index.entries().iter().all(|entry| {
 					let path = entry.path(&index);
-					!entry.flags.contains(intent)
-						|| !scope.contains(path)
-						|| reconciled
-							.entry_by_path(path)
-							.is_some_and(|other| other.flags.contains(intent))
+					!scope.contains(path)
+						|| reconciled.entry_by_path(path).is_some_and(|other| {
+							entry.flags.contains(intent) == other.flags.contains(intent)
+						})
 				}) {
 				result.index_updated = true;
 				return Ok(());
@@ -819,6 +871,11 @@ impl GitRepo {
 					OP,
 					"reconciliation changes an unconfirmed index entry or flag",
 				));
+			}
+			// The pinned gix decodes REUC but neither exposes the records
+			// nor writes the extension. Don't replace an index carrying them.
+			if index.resolve_undo().is_some_and(|paths| !paths.is_empty()) {
+				return Err(Error::backend(OP, "cannot preserve resolve-undo (REUC) records"));
 			}
 			// Keep the actual entries (including sparse/assume-valid flags and
 			// racy stats) outside the scope. Within it only the confirmed blob
@@ -833,8 +890,9 @@ impl GitRepo {
 					}
 					let flags = index.entry_by_path(path).map_or(entry.flags, |old| {
 						let mut flags = old.flags;
-						if !entry.flags.contains(intent) {
-							flags.remove(intent);
+						flags.set(intent, entry.flags.contains(intent));
+						if flags.contains(intent) {
+							flags.insert(Flags::EXTENDED);
 						}
 						flags
 					});
@@ -892,6 +950,7 @@ impl GitRepo {
 						.id
 				};
 				let id_hex = id.to_hex().to_string();
+				require_no_scoped_git_operation(repo.git_dir())?;
 				if let Err(err) = update_reference(
 					&repo,
 					OP,
@@ -976,9 +1035,14 @@ impl GitRepo {
 	/// Checkout a branch or detached revision without overwriting local changes.
 	pub fn checkout(&self, rev: &str) -> Result<()> {
 		let repo = self.gix()?;
+		let mut head_lock = lock_head_for_update(&self.info().head_path, "git checkout")?;
 		let (target, symbolic) = resolve_checkout_target(&repo, rev)?;
 		checkout_tree(self, &repo, target, false)?;
-		write_head(self.info().head_path.as_path(), symbolic.as_deref(), target)?;
+		match symbolic {
+			Some(name) => writeln!(head_lock, "ref: {name}")?,
+			None => writeln!(head_lock, "{target}")?,
+		}
+		commit_head_lock(head_lock, "git checkout")?;
 		Ok(())
 	}
 
@@ -1058,9 +1122,10 @@ impl GitRepo {
 
 	/// Create a branch at HEAD and switch to it without touching files.
 	pub fn checkout_new_branch(&self, name: &str) -> Result<()> {
+		let mut head_lock = lock_head_for_update(&self.info().head_path, "git checkout")?;
 		self.create_branch(name, "HEAD", false)?;
-		fs::write(&self.info().head_path, format!("ref: refs/heads/{name}\n"))?;
-		Ok(())
+		writeln!(head_lock, "ref: refs/heads/{name}")?;
+		commit_head_lock(head_lock, "git checkout")
 	}
 
 	/// Restore index and/or worktree paths from a selected source.
@@ -1111,14 +1176,15 @@ impl GitRepo {
 	/// Reset HEAD, index, and optionally the worktree to a target commit.
 	pub fn reset(&self, mode: ResetMode, target: Option<&str>) -> Result<()> {
 		let repo = self.gix()?;
+		let head_path = &self.info().head_path;
+		let head_lock = lock_head_for_update(head_path, "git reset")?;
 		let id = resolve_commit(&repo, target.unwrap_or("HEAD"))?;
 		if mode == ResetMode::Hard {
 			checkout_tree(self, &repo, id, true)?;
 		} else if mode == ResetMode::Mixed {
 			self.read_tree(&id.to_hex().to_string(), None)?;
 		}
-		update_current_head(&repo, &self.info().head_path, id)?;
-		Ok(())
+		update_current_head(&repo, head_path, head_lock, id)
 	}
 
 	/// Remove untracked files and directories according to ignore mode.
@@ -1701,6 +1767,13 @@ impl GitRepo {
 		let hook = dir.join(name);
 		if hook_is_executable(&hook) {
 			return Ok(Some(hook));
+		}
+		if strict && cfg!(windows) {
+			// Git for Windows retries the traditional hook with STRIP_EXTENSION.
+			let executable = dir.join(format!("{name}.exe"));
+			if hook_is_executable(&executable) {
+				return Ok(Some(executable));
+			}
 		}
 		// Git 2.55's event switch only suppresses configured hooks, not files.
 		if strict
@@ -2704,15 +2777,21 @@ fn worktree_id(
 	))
 }
 
-fn write_head(path: &Path, symbolic: Option<&str>, id: gix::hash::ObjectId) -> Result<()> {
-	fs::write(path, match symbolic {
-		Some(name) => format!("ref: {name}\n"),
-		None => format!("{}\n", id.to_hex()),
-	})?;
-	Ok(())
+fn lock_head_for_update(path: &Path, op: &'static str) -> Result<gix::lock::File> {
+	gix::lock::File::acquire_to_update_resource(path, gix::lock::acquire::Fail::Immediately, None)
+		.map_err(|err| Error::backend(op, err))
 }
 
-fn update_current_head(repo: &gix::Repository, path: &Path, id: gix::hash::ObjectId) -> Result<()> {
+fn commit_head_lock(lock: gix::lock::File, op: &'static str) -> Result<()> {
+	lock.commit().map(|_| ()).map_err(|err| Error::backend(op, err))
+}
+
+fn update_current_head(
+	repo: &gix::Repository,
+	path: &Path,
+	mut lock: gix::lock::File,
+	id: gix::hash::ObjectId,
+) -> Result<()> {
 	let content = fs::read_to_string(path).unwrap_or_default();
 	if let Some(name) = content.trim().strip_prefix("ref: ") {
 		update_reference(
@@ -2725,7 +2804,8 @@ fn update_current_head(repo: &gix::Repository, path: &Path, id: gix::hash::Objec
 			false,
 		)?;
 	} else {
-		fs::write(path, format!("{}\n", id.to_hex()))?;
+		writeln!(lock, "{id}")?;
+		commit_head_lock(lock, "git reset")?;
 	}
 	Ok(())
 }

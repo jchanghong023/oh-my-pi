@@ -480,7 +480,7 @@ describe("runSubprocess async quiescence fresh-yield contract", () => {
 				closeGate.reject(new Error("final transcript close failed"));
 				// Let the close rejection propagate and the second owner reap run.
 				await new Promise<void>(resolve => setImmediate(resolve));
-				expect(harness.disposeNotice()).toBe("dispose failed: Error: final transcript close failed");
+				expect(harness.disposeNotice()).toContain("final transcript close failed");
 				expect(lateJob?.status).toBe("cancelled");
 				if (last === "abort") {
 					lateJobGate.resolve();

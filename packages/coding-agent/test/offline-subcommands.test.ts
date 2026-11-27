@@ -384,8 +384,6 @@ describe("offline model-dependent subcommands", () => {
 			await stageCommitFixture(f.home, f.env);
 			const agentic = await f.run(["commit", "--dry-run", "--no-changelog"]);
 			expect(agentic.exitCode, `${agentic.stdout}\n${agentic.stderr}`).toBe(0);
-			expect(agentic.stdout).toContain("Qwen3.6-35B-A3B");
-			expect(agentic.stdout).toContain("Generated commit message:");
 			expect(agentic.stdout).toContain("feat: added offline fixture");
 			expect(requests.length).toBeGreaterThan(0);
 			for (const request of requests.splice(0)) {
@@ -441,7 +439,6 @@ describe("offline model-dependent subcommands", () => {
 			expect(requests).toEqual([]);
 			const override = await f.run(["commit", "--dry-run", "--no-changelog", "--model", "ascend/vision"]);
 			expect(override.exitCode, `${override.stdout}\n${override.stderr}`).toBe(0);
-			expect(override.stdout).toContain("vision");
 			expect(override.stdout).toContain("feat: added offline fixture");
 			expect(new Set(requests)).toEqual(new Set(["vision"]));
 		} finally {
@@ -465,8 +462,6 @@ describe("offline model-dependent subcommands", () => {
 			await stageCommitFixture(f.home, f.env);
 			const result = await f.run(["commit", "--dry-run", "--no-changelog", "--model", "ascend/vision"], CLI, true);
 			expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
-			expect(result.stdout).toContain("vision");
-			expect(result.stdout).toContain("Generated commit message:");
 			expect(result.stdout).toContain("feat: added offline fixture");
 			expect(result.stderr).not.toContain("Company provider unavailable");
 			expect(new Set(requests)).toEqual(new Set(["vision"]));

@@ -3,7 +3,7 @@ Symbol-aware code intelligence from language servers — navigation, refactors, 
 <operations>
 - Position-based: `file` + `line` + `symbol` (substring; `#N` for Nth match). `line` is 1-indexed.
 - `rename` — applies by default; `apply: false` previews. Project-aware lookups ERROR without `symbol` — no silent fallback on missing/ambiguous matches.
-- `code_actions` — lists by default. `apply: true` applies the sole or uniquely preferred action; use `query` (title substring or zero-based index) to select explicitly.
+- `code_actions` — lists by default; apply ONE with `apply: true` + `query` (title substring or index).
 - `rename_file` — moves the path and applies reference edits returned by servers; applies by default. Check references not covered by those edits.
 - `diagnostics` — path, glob (`src/**/*.ts`), or `file: "*"` for workspace.
 - `symbols` — `file` lists file symbols; `file: "*"` + `query` searches workspace.

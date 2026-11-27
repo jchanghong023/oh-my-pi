@@ -177,7 +177,7 @@ describe("multiline IME-safe caret layout", () => {
 		});
 	});
 
-	test.each(["unfocused", "drawn caret", "middle of line", "borderless", "visual selection"] as const)(
+	test.each(["unfocused", "middle of line", "borderless", "visual selection"] as const)(
 		"keeps the earlier row's right border behavior when %s",
 		condition => {
 			createRoot(dispose => {
@@ -185,7 +185,7 @@ describe("multiline IME-safe caret layout", () => {
 					const composer = new Composer({
 						text: draft,
 						shape: condition === "borderless" ? "band" : "box",
-						caret: condition === "drawn caret" ? "drawn" : "terminal",
+						caret: "terminal",
 						vim: condition === "visual selection",
 					});
 					composer.setCursor(condition === "middle of line" ? lineEnd - 1 : lineEnd);

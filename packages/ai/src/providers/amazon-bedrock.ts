@@ -325,6 +325,7 @@ async function sendBedrockRequest(
 			method: "POST",
 			headers: requestHeaders,
 			body,
+			redirect: options.requestAuth === undefined ? undefined : "error",
 			signal: watchdog.signal,
 			fetch: options.fetch,
 			timeout: false,

@@ -18,7 +18,6 @@ import { beginStartupComposer, stopPendingStartupComposer } from "@oh-my-pi/pi-c
 import {
 	cfgMarketplaceAutoUpdate,
 	cfgStartupChangelogMode,
-	cfgStartupCheckUpdate,
 	cfgStartupSetupWizard,
 	cfgStartupShowSplash,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -92,7 +91,6 @@ describe("startup model fallback notice after first-run setup", () => {
 		resetSettingsForTest();
 		initTheme();
 		settings = await Settings.init({ inMemory: true, cwd: tmp });
-		cfgStartupCheckUpdate.override(settings, false);
 		cfgStartupChangelogMode.override(settings, "hidden");
 		cfgStartupSetupWizard.override(settings, false);
 		cfgStartupShowSplash.override(settings, false);

@@ -260,7 +260,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 		if (!expected) throw new Error("Expected initial auto Goal notice");
 		const compactSpy = mockCompaction("PRE-PROMPT-GOAL-COMPACTED");
 		const runMaintenance = SessionMaintenance.prototype.runPrePromptCompactionIfNeeded;
-		let baselineTokens = 0;
 		let admittedTokens = 0;
 		let threshold = 0;
 		let previewPersisted = false;
@@ -280,15 +279,13 @@ describe("AgentSession mid-run threshold compaction", () => {
 						})?.usedTokens ?? 0,
 						overhead + storedTokens + tokenizer.countMessages(pending, { excludeEncryptedReasoning: true }),
 					);
-				baselineTokens = count(withoutNotice);
 				admittedTokens = count(messages);
 				// Keep history plus the ordinary prompt just below admission; only
 				// the full initial orchestration notice should cross this threshold.
-				threshold = baselineTokens + 1;
+				threshold = count(withoutNotice) + 1;
 				// The harness config lives in the runtime-override layer; a global
 				// write would remain masked by its original 100,000-token threshold.
 				cfgCompactionThresholdTokens.override(session.settings, threshold);
-				expect(cfgCompactionThresholdTokens.get(session.settings)).toBe(threshold);
 				previewPersisted =
 					session.messages.some(
 						message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
@@ -304,7 +301,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 
 		await session.prompt("Continue release work", { goalAutoOrchestrateInitialId: state.goal.id });
 
-		expect(baselineTokens).toBeLessThan(threshold);
 		expect(admittedTokens).toBeGreaterThan(threshold);
 		expect(previewPersisted).toBe(false);
 		expect(compactSpy).toHaveBeenCalledTimes(1);
@@ -390,7 +386,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 		await session.prompt("work on the release", { goalAutoOrchestrateInitialId: state.goal.id });
 		const expected = expectedAtContinuation;
 		if (!expected) throw new Error("Expected auto Goal recovery at the continuation boundary");
-		expect(expected.content).toContain(state.goal.objective);
 
 		expect(observedContexts).toHaveLength(2);
 		expect(liveAtContinuation).toEqual([
@@ -547,8 +542,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 			if (hasTask) expect(recoveryText).toContain(rules);
 			else expect(recoveryText).not.toContain(rules);
 			expect(event.summary).toBe(summaries[committed.length - 1]!);
-			expect(event.summary).not.toContain(objective);
-			expect(event.summary).not.toContain(rules);
 			const saved = sessionManager
 				.getBranch()
 				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context")

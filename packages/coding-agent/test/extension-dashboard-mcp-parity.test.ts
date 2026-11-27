@@ -345,15 +345,13 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 	});
 });
 
-describe("shared skill runtime/dashboard parity", () => {
+describe("skill runtime/dashboard parity", () => {
 	let root = "";
 	let projectDir = "";
-	let sharedDir = "";
 	let settings: Settings;
 	let runtime: ExtensionDashboardRuntime;
 	let restoreDiscovery: () => void;
 	let restoreHome: () => void;
-	let previousSharedDir: string | undefined;
 	let previousClaudeConfigDir: string | undefined;
 
 	const writeSkill = async (directory: string, description: string, name = "panel-shared") => {
@@ -366,18 +364,14 @@ describe("shared skill runtime/dashboard parity", () => {
 
 	beforeEach(async () => {
 		resetSettingsForTest();
-		root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-dashboard-")));
+		root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-skill-dashboard-")));
 		projectDir = path.join(root, "project");
-		sharedDir = path.join(root, "shared");
 		await fs.mkdir(projectDir, { recursive: true });
 		const homeSpy = spyOn(os, "homedir").mockReturnValue(root);
 		restoreHome = () => homeSpy.mockRestore();
 		setAgentDir(path.join(root, "personal"));
-		previousSharedDir = process.env.OMP_SKILLS_DIR;
-		restoreEnvValue("OMP_SKILLS_DIR", sharedDir);
 		previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 		restoreEnvValue("CLAUDE_CONFIG_DIR", undefined);
-		await writeSkill(sharedDir, "Shared version");
 		await writeSkill(path.join(root, "personal", "skills"), "Personal version");
 		await writeSkill(path.join(projectDir, "configured"), "Configured version");
 		settings = await Settings.init({
@@ -393,7 +387,6 @@ describe("shared skill runtime/dashboard parity", () => {
 
 	afterEach(async () => {
 		restoreDiscovery();
-		restoreEnvValue("OMP_SKILLS_DIR", previousSharedDir);
 		restoreEnvValue("CLAUDE_CONFIG_DIR", previousClaudeConfigDir);
 		restoreHome();
 		resetSettingsForTest();
@@ -425,11 +418,7 @@ describe("shared skill runtime/dashboard parity", () => {
 		);
 		for (const skill of loaded.skills) {
 			const row = rows.find(candidate => candidate.name === skill.name)!;
-			expect(row.source).toEqual({
-				provider: skill._source!.provider,
-				providerName: skill._source!.providerName,
-				level: skill._source!.level,
-			});
+			expect(row.source.providerName).toBe(skill._source!.providerName);
 			expect(isShadowedExtension(row)).toBe(false);
 		}
 		return rows;
@@ -441,22 +430,19 @@ describe("shared skill runtime/dashboard parity", () => {
 	const panelRows = (rows: Extension[]) =>
 		rows.filter(row => path.basename(path.dirname(row.path)) === "panel-shared");
 
-	test("shows the shared bare winner and both invocable namespace versions", async () => {
+	test("shows the configured bare winner and the invocable personal version", async () => {
 		const rows = await loadAndCompare();
 		expect(
 			panelRows(rows)
 				.map(row => row.name)
 				.sort(),
-		).toEqual(["configured/panel-shared", "panel-shared", "personal/panel-shared"]);
-		const shared = rows.find(row => row.name === "panel-shared")!;
-		expect(shared.path).toBe(path.join(sharedDir, "panel-shared", "SKILL.md"));
-		expect(shared.source.providerName).toBe("Shared");
+		).toEqual(["panel-shared", "personal/panel-shared"]);
+		const configured = rows.find(row => row.name === "panel-shared")!;
+		expect(configured.source.providerName).toBe("Custom");
 		expect(rows.find(row => row.name === "personal/panel-shared")?.path).toBe(
 			path.join(root, "personal", "skills", "panel-shared", "SKILL.md"),
 		);
-		expect(rows.find(row => row.name === "configured/panel-shared")?.path).toBe(
-			path.join(projectDir, "configured", "panel-shared", "SKILL.md"),
-		);
+		expect(configured.path).toBe(path.join(projectDir, "configured", "panel-shared", "SKILL.md"));
 	});
 
 	test("keeps parent and child dashboard skill settings local while the child hold is bound", async () => {
@@ -466,8 +452,6 @@ describe("shared skill runtime/dashboard parity", () => {
 		const childPath = await writeSkill(childDirectory, "Child session only", "review-child-only");
 		cfgSkillsCustomDirectories.override(settings, [parentDirectory]);
 		const childSettings = settings.overlay({ "skills.customDirectories": [childDirectory] });
-		expect(cfgSkillsCustomDirectories.get(settings)).toEqual([parentDirectory]);
-		expect(cfgSkillsCustomDirectories.get(childSettings)).toEqual([childDirectory]);
 		const releaseChild = initializeWithSettings(childSettings);
 		try {
 			const childRuntime = createExtensionDashboardRuntime({ cwd: projectDir, settings: childSettings });
@@ -486,8 +470,6 @@ describe("shared skill runtime/dashboard parity", () => {
 
 			const configuredDirectory = path.join(projectDir, "configured");
 			cfgSkillsCustomDirectories.override(settings, [configuredDirectory]);
-			expect(cfgSkillsCustomDirectories.get(settings)).toEqual([configuredDirectory]);
-			expect(cfgSkillsCustomDirectories.get(childSettings)).toEqual([childDirectory]);
 			const reloadedParentRows = await loadAndCompare();
 			expect(reloadedParentRows.some(row => row.path === parentPath || row.path === childPath)).toBe(false);
 			expect(
@@ -542,7 +524,7 @@ describe("shared skill runtime/dashboard parity", () => {
 			panelRows(included)
 				.map(row => row.name)
 				.sort(),
-		).toEqual(["configured/panel-shared", "panel-shared", "personal/panel-shared"]);
+		).toEqual(["panel-shared", "personal/panel-shared"]);
 		expect(included.filter(row => row.state === "active").map(row => row.name)).toEqual(["personal/panel-shared"]);
 		cfgSkillsIgnoredSkills.set(settings, ["personal/*"]);
 		expect((await loadAndCompare()).every(row => row.state === "disabled")).toBe(true);
@@ -612,28 +594,4 @@ describe("shared skill runtime/dashboard parity", () => {
 			});
 		}
 	}
-
-	test("refresh follows a changed shared root while preserving personal and configured versions", async () => {
-		await loadAndCompare();
-		const replacementDir = path.join(root, "replacement");
-		const replacementPath = await writeSkill(replacementDir, "Replacement shared version");
-		restoreEnvValue("OMP_SKILLS_DIR", replacementDir);
-		const refreshed = await loadAndCompare();
-		expect(
-			panelRows(refreshed)
-				.map(row => row.name)
-				.sort(),
-		).toEqual(["configured/panel-shared", "panel-shared", "personal/panel-shared"]);
-		expect(refreshed.find(row => row.name === "panel-shared")?.path).toBe(replacementPath);
-		expect(refreshed.find(row => row.name === "panel-shared")?.description).toBe("Replacement shared version");
-		expect(refreshed.find(row => row.name === "personal/panel-shared")?.state).toBe("active");
-		expect(refreshed.find(row => row.name === "personal/panel-shared")?.path).toBe(
-			path.join(root, "personal", "skills", "panel-shared", "SKILL.md"),
-		);
-		expect(refreshed.find(row => row.name === "configured/panel-shared")).toMatchObject({
-			state: "active",
-			path: path.join(projectDir, "configured", "panel-shared", "SKILL.md"),
-		});
-		expect(refreshed.some(row => row.path === path.join(sharedDir, "panel-shared", "SKILL.md"))).toBe(false);
-	});
 });

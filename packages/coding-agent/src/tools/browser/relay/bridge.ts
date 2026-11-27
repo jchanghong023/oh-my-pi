@@ -490,6 +490,8 @@ export class RelayBridge {
 	#rpcSeq = 0;
 	/** Connected extension browser instances, keyed by stable instance id. */
 	#instances = new Map<string, ExtInstance>();
+	/** Old target namespaces and the profile that can still establish their absence. Not used for routing. */
+	#retiredBrowserCodes = new Map<string, string>();
 	#socketInstance = new Map<RelaySocket, string>();
 	/** Chrome extension id each extension socket's upgrade named in its `Origin`. */
 	#socketExtensionId = new Map<RelaySocket, string>();
@@ -880,6 +882,9 @@ export class RelayBridge {
 		if (inst.code !== code) {
 			// The browser restarted, and Chrome reuses tab ids: retire the previous run's targets, and the closes
 			// queued for them, so an old target id cannot name a tab the user opened since.
+			if (instanceId !== "anon" && msg.browserSession && inst.code !== instanceCode(instanceId, "")) {
+				this.#retiredBrowserCodes.set(inst.code, instanceId);
+			}
 			for (const [key, tab] of this.#tabs) {
 				if (tab.instanceId === instanceId) this.#onTabRemoved(key);
 			}
@@ -888,6 +893,7 @@ export class RelayBridge {
 			}
 			inst.code = code;
 		}
+		this.#retiredBrowserCodes.delete(code);
 		inst.socket = socket;
 		inst.goneSince = null;
 		inst.reconnected?.resolve();
@@ -1975,6 +1981,19 @@ export class RelayBridge {
 					return;
 				}
 				const inst = this.#instanceNamedByTarget(raw);
+				let retired = false;
+				if (parsed) {
+					const separator = parsed.key.indexOf(":");
+					const profile = this.#retiredBrowserCodes.get(parsed.key.slice(0, separator));
+					const replacement = profile && this.#instances.get(profile);
+					// Reloading an extension also replaces browserSession while its tabs stay open.
+					// A live tab with the same numeric ID is ambiguous; never close it or report it gone.
+					retired =
+						!!replacement &&
+						!!replacement.socket &&
+						!!replacement.info &&
+						!this.#tabs.has(replacement.code + parsed.key.slice(separator));
+				}
 				this.#reply(conn, msg, {
 					targetInfo: {
 						targetId: "relay-browser",
@@ -1984,8 +2003,8 @@ export class RelayBridge {
 						attached: true,
 						canAccessOpener: false,
 					} satisfies TargetInfo,
-					// A different browser's hello (or an empty relay) cannot establish absence.
-					...(inst?.socket && inst.info ? { ompTargetGone: true } : {}),
+					// Only the named browser or a directly observed replacement proves absence.
+					...(retired || (inst?.socket && inst.info) ? { ompTargetGone: true } : {}),
 				});
 				return;
 			}

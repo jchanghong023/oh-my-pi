@@ -208,6 +208,8 @@ export interface IsolatedRunOptions {
 	agentId: string;
 	/** Merge mode driving how changes are captured ("branch" commits, "patch" diffs). */
 	mergeMode: "patch" | "branch";
+	/** The caller needs a run-end capture to apply the initial result. */
+	captureWhileAlive?: boolean;
 	/** Output dir for `${agentId}.patch` artifacts (patch mode and branch-mode commit failures). */
 	artifactsDir: string;
 	/** Human description carried onto the branch commit (branch mode). */
@@ -534,6 +536,13 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	let releasePromise: Promise<void> | undefined;
 	let sourceResult: SingleResult | undefined;
 	let runOutcome: SingleResult | undefined;
+	const runCaptureDone =
+		opts.baseOptions.keepAlive !== false && (opts.onBeforeCapture || opts.onAfterResult)
+			? Promise.withResolvers<void>()
+			: undefined;
+	const hasReleaseOwner = () =>
+		opts.baseOptions.keepAlive !== false &&
+		(releasePromise !== undefined || AgentLifecycleManager.global().has(opts.agentId));
 	// A run-end capture failure leaves a recovery outcome to observe, not a
 	// release capture to retry. Retention during release never skips a stage.
 	let retainedAtRunEnd = false;
@@ -576,7 +585,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	const finish = async (result: SingleResult): Promise<SingleResult> => {
 		runOutcome = rememberAgentArtifacts(result);
 		// A kept-alive session can still write. Its final observer belongs to releaseIsolation.
-		if (opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId)) {
+		if (hasReleaseOwner()) {
 			return runOutcome;
 		}
 		return observeRunOutcome(runOutcome);
@@ -609,8 +618,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				await cleanupHandle();
 				return;
 			}
-			let observingResult = false;
 			try {
+				await runCaptureDone?.promise;
 				await deferredCleanup;
 				if (!retainedAtRunEnd && !beforeCaptureDone && sourceResult) {
 					await opts.onBeforeCapture?.(sourceResult);
@@ -676,27 +685,12 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					releaseCapture = undefined;
 				}
 				if (runOutcome) {
-					observingResult = true;
 					await observeResult(runOutcome);
 				}
 			} catch (error) {
 				let releaseError = error;
 				try {
-					if (sourceResult && (opts.onBeforeCapture || opts.onAfterResult)) {
-						const result = runOutcome ?? sourceResult;
-						await preserveObservationFailure(result, error);
-						// Report an earlier-stage failure through the result observer, but
-						// only retry an observer that failed on the next release attempt.
-						if (!observingResult) {
-							try {
-								await observeResult(result);
-							} catch (observationError) {
-								await preserveObservationFailure(result, observationError);
-							}
-						}
-					} else {
-						await preserveWorkspace();
-					}
+					await preserveWorkspace();
 				} catch (preservationError) {
 					releaseError = new AggregateError(
 						[error, preservationError],
@@ -781,15 +775,19 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		});
 		opts.onSubprocessResult?.(result);
 		sourceResult = result;
-		// A successful result cannot be captured while deferred owner jobs or
-		// shutdown hooks may still write the worktree. Failed runs skip capture,
-		// so their cleanup remains asynchronous.
+		// Owner jobs and shutdown hooks must stop writing before capturing the checkout.
 		if (deferredCleanup && (result.exitCode === 0 || opts.onBeforeCapture || opts.onAfterResult)) {
 			await deferredCleanup;
 		}
-		if (!(opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId))) {
+		// Only capture a retained child's initial turn early when the caller will
+		// apply it. Explicit capture hooks must precede both capture stages.
+		const releaseOwnsCapture = hasReleaseOwner();
+		if (opts.onBeforeCapture && releaseOwnsCapture && !opts.captureWhileAlive) return await finish(result);
+		const captureAborted = result.aborted && (opts.onBeforeCapture || opts.onAfterResult);
+		if (opts.onBeforeCapture) {
 			try {
-				await opts.onBeforeCapture?.(result);
+				await opts.onBeforeCapture(result);
+				beforeCaptureDone = !releaseOwnsCapture;
 			} catch (error) {
 				return await finish(await preserveObservationFailure(result, error));
 			}
@@ -882,7 +880,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				});
 			}
 		}
-		if (result.exitCode === 0) {
+		if (result.exitCode === 0 || captureAborted) {
 			try {
 				const capture = await writeIsolationPatch(runChanges, opts.artifactsDir, opts.agentId);
 				handedOff = capture.fingerprint;
@@ -906,6 +904,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	} catch (err) {
 		return await finish(opts.buildFailureResult(err));
 	} finally {
+		runCaptureDone?.resolve();
 		if (
 			workspace &&
 			!retainWorkspace &&

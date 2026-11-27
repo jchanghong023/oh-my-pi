@@ -16,7 +16,7 @@ import {
 	relativePathWithinNormalizedRoot,
 	tryParseJson,
 } from "@oh-my-pi/pi-utils";
-import { boundSettings, isUserSourceEnabled } from "../capability";
+import { boundSettings, isUserSourceEnabled, onProviderSwitchesChange } from "../capability";
 import type { ContextFile } from "../capability/context-file";
 import type { ExtensionModule } from "../capability/extension-module";
 import { createFileReader, invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
@@ -32,6 +32,7 @@ import type { Skill, SkillFrontmatter } from "../capability/skill";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
 import { resolveClaudePaths } from "../config/claude-paths";
 import { getActiveSettings, withActiveSettings } from "../config/settings-context";
+import { cfgDisabledProviders, cfgEnabledProviders } from "../config/model-settings";
 import type { MCPRequestIdFormat } from "../mcp/types";
 import { type ConfiguredThinkingLevel } from "../utils/render-utils";
 import { parseConfiguredThinkingLevel } from "../thinking/levels";
@@ -1682,6 +1683,7 @@ export function clearPluginRootsAndCaches(extraPaths?: readonly string[]): void 
 let preloadedPluginRoots: ClaudePluginRoot[] = [];
 let injectedPluginDirRoots: ClaudePluginRoot[] = [];
 let loadOwnedPluginRoots: (() => Promise<PluginRootsResult>) | undefined;
+let stopPreloadWatcher: (() => void) | undefined;
 let preloadRevision = 0;
 
 async function refreshPreloadedPluginRoots(loadRoots: () => Promise<PluginRootsResult>): Promise<void> {
@@ -1701,11 +1703,39 @@ export async function preloadPluginRoots(
 	options?: { includeClaude?: boolean; refresh?: boolean },
 ): Promise<void> {
 	if (options?.refresh) invalidatePluginRootsCache();
-	const settings = getActiveSettings() ?? boundSettings();
-	const loadRoots = (includeClaude?: boolean) =>
-		withActiveSettings(settings, () => listClaudePluginRoots(home, cwd, { includeClaude }));
+	stopPreloadWatcher?.();
+	const owner = getActiveSettings() ?? boundSettings();
+	const getOwner = () => owner ?? boundSettings();
+	const claudeEnabled = () => withActiveSettings(getOwner(), () => isUserSourceEnabled("claude-plugins"));
+	const loadRoots = (includeClaude = claudeEnabled()) => listClaudePluginRoots(home, cwd, { includeClaude });
 	loadOwnedPluginRoots = loadRoots;
-	await refreshPreloadedPluginRoots(() => loadRoots(options?.includeClaude));
+
+	let includeClaude = options?.includeClaude ?? claudeEnabled();
+	const refreshIfChanged = () => {
+		const next = claudeEnabled();
+		if (includeClaude === next) return;
+		includeClaude = next;
+		void refreshPreloadedPluginRoots(() => loadRoots(next)).catch(error =>
+			logger.warn("Failed to refresh preloaded plugin roots", { error: String(error) }),
+		);
+	};
+	const watchOwner = () =>
+		getOwner()?.onEffectiveChange([cfgEnabledProviders, cfgDisabledProviders], refreshIfChanged, {
+			includeUserChanges: true,
+		});
+	let unwatchOwner = watchOwner();
+	const unwatchBinding = onProviderSwitchesChange(() => {
+		if (!owner) {
+			unwatchOwner?.();
+			unwatchOwner = watchOwner();
+		}
+		refreshIfChanged();
+	});
+	stopPreloadWatcher = () => {
+		unwatchOwner?.();
+		unwatchBinding();
+	};
+	await refreshPreloadedPluginRoots(() => loadRoots(includeClaude));
 }
 
 /**

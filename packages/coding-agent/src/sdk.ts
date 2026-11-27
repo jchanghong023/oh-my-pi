@@ -30,7 +30,13 @@ import type {
 	TextContent,
 } from "@oh-my-pi/pi-ai";
 import type { DiscoverAuthStorageOptions } from "@oh-my-pi/pi-ai/auth-broker/discover";
-import { resolveApiKeyOnce, withRequestServiceTier } from "@oh-my-pi/pi-ai/auth-retry";
+import {
+	type ApiKeyResolution,
+	isApiKeyResolver,
+	resolveApiKeyOnce,
+	seedApiKeyResolver,
+	withRequestServiceTier,
+} from "@oh-my-pi/pi-ai/auth-retry";
 import { mergeHeaders } from "@oh-my-pi/pi-ai/providers/anthropic-headers";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import { anthropicHostRunsTool } from "@oh-my-pi/pi-ai/providers/anthropic";
@@ -473,6 +479,7 @@ import {
 import { cfgTtsr } from "./export/ttsr-settings";
 import { cfgDisabledProviders, cfgEnabledModels, cfgEnabledProviders, cfgModelRoles } from "./config/model-settings";
 import { cfgEditRecoverInlineEdits } from "./edit/settings";
+import { activeGoalAutopilotContextId } from "./goals/request-context";
 import { cfgGoalEnabled } from "./goals/settings";
 import {
 	cfgImagesBlockImages,
@@ -2315,12 +2322,18 @@ async function createAgentSessionScoped(
 				cacheDbPath: getModelDbPath(agentDir),
 			},
 		);
+	let hasSession = false;
 	let prewalk = options.prewalk;
 	let deferredPrewalk = options.deferredPrewalk;
 	// Track whether we internally created the authStorage so we can close it
 	// if construction fails before the session takes ownership.
 	const ownsAuthStorage = !options.authStorage && !options.modelRegistry;
 	const authStorage = modelRegistry.authStorage;
+	if (ownsAuthStorage) {
+		startupCleanup.defer(() => {
+			if (!hasSession) authStorage.close();
+		});
+	}
 	if (options.authStorage && options.authStorage !== authStorage) {
 		throw new Error(
 			"options.authStorage and options.modelRegistry.authStorage must be the same instance when both are provided",
@@ -2507,7 +2520,6 @@ async function createAgentSessionScoped(
 		logger.time("sessionManager", () =>
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
-	let hasSession = false;
 	// Acquire the journal before any startup writes can fork an owned session.
 	sessionManager.acquireRuntimeOwnership();
 	startupCleanup.defer(() => {
@@ -3142,7 +3154,12 @@ async function createAgentSessionScoped(
 				const messages = session?.messages ?? [];
 				return buildCallContext(messages, toolCallId, source, resolveToolCallIntent(messages, toolCallId));
 			},
-			getContextMessages: () => convertToLlm(session?.messages ?? [], session?.model),
+			getContextMessages: () =>
+				convertToLlm(
+					session?.messages ?? [],
+					session?.model,
+					activeGoalAutopilotContextId(session?.getLocalGoalModeState()),
+				),
 			noteEvalPreludeCall: name => session?.noteEvalPreludeCall(name),
 			setWorkPoolYieldItems: items => session.setWorkPoolYieldItems(items),
 			getCheckpointState: () => session.getCheckpointState(),
@@ -3611,7 +3628,8 @@ async function createAgentSessionScoped(
 		let runtimeDiscoveryPromise: Promise<void> | undefined;
 		const deferredDiscoveryStrategy =
 			options.offline &&
-			(agentKind === SUB_AGENT_RULE_NAME ||
+			(!companyLane ||
+				agentKind === SUB_AGENT_RULE_NAME ||
 				options.modelPatternSource === "scope" ||
 				deferredModelPatterns.length === 0)
 				? "offline"
@@ -3741,8 +3759,7 @@ async function createAgentSessionScoped(
 				}),
 			);
 			if (!runtimeResolved && modelRegistry.getDiscoverableProviders().length > 0) {
-				// Explicit top-level `--model` keeps the online discovery exception;
-				// automatic task spawns and cold revives, like CLI scopes, use cache only.
+				// Only the process/CLI lane permits the explicit top-level online exception.
 				await logger.time("resolveModelDiscoveryFallbackNonRuntime", () =>
 					modelRegistry.refresh(deferredDiscoveryStrategy),
 				);
@@ -5313,7 +5330,7 @@ async function createAgentSessionScoped(
 		// Read both dynamically so a `/model` switch or setting change takes
 		// effect on the next turn.
 		const convertToLlmWithBlockImages = (messages: AgentMessage[], reader: Model | undefined): Message[] => {
-			const converted = convertToLlm(messages, reader);
+			const converted = convertToLlm(messages, reader, activeGoalAutopilotContextId(session?.getLocalGoalModeState()));
 			if (cfgImagesBlockImages.get(settings)) {
 				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
 			}
@@ -5533,6 +5550,22 @@ async function createAgentSessionScoped(
 								? "off"
 								: streamOptions?.reasoning,
 					});
+			if (auth === undefined && mainRequest) {
+				const local = withRequestServiceTier(
+					(await effectiveGetApiKey(streamModel)) ?? requestOptions.apiKey,
+					requestOptions.serviceTier,
+				);
+				if (isApiKeyResolver(local)) {
+					let resolved: ApiKeyResolution;
+					const key = await resolveApiKeyOnce(local, requestSignal, credential => {
+						resolved = credential;
+					});
+					requestOptions.apiKey = seedApiKeyResolver(resolved ?? key, local);
+				} else {
+					requestOptions.apiKey = local;
+				}
+				requestOptions.metadata = agent.metadataForProvider(streamModel.provider);
+			}
 			const effectiveOptions =
 				auth !== undefined
 					? {
@@ -5672,11 +5705,10 @@ async function createAgentSessionScoped(
 			...cfgSampling.get(settings),
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: requestModel => {
-				// The loop resolves its seeded credential before invoking streamFn.
+				// With a host resolver, dispatch tries request-scoped auth before local credentials.
 				assertOfflineDispatchModel(requestModel);
 				options.assertDispatchModel?.(requestModel);
-				const admission = session?.getAdmittedRequestAuth(requestModel);
-				if (admission?.auth !== undefined) return admission.auth.apiKey;
+				if (options.resolveRequestAuth) return undefined;
 				return effectiveGetApiKey(requestModel);
 			},
 			streamFn: (streamModel, context, streamOptions) => {
@@ -7235,7 +7267,6 @@ async function createAgentSessionScoped(
 				await releaseComputerSessionsForOwner(evalKernelOwnerId);
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
 				await disposeVmContextsByOwner(evalKernelOwnerId);
-				if (ownsAuthStorage) authStorage.close();
 			}
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {

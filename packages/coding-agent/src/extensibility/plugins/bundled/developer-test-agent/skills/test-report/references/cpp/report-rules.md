@@ -5,13 +5,12 @@
 ### 使用gcov
 
 ```bash
-# 检查gcda文件
-find . -name "*.gcda" | grep {TARGET_SOURCE_FILE}
-# 生成覆盖率报告
-mkdir -p /tmp/ut-cpp/gcov_output && cd /tmp/ut-cpp/gcov_output
-gcov {TARGET_GCDA_PATH} > /dev/null 2>&1
-# 提取覆盖率统计
-grep "#####:" xxx.cpp.gcov  # 未执行行
+# 从编译工作目录运行，保留相对源文件路径的解析基准。
+find "$PWD" -name '*.gcda' | grep -F -- "{TARGET_SOURCE_FILE}"
+# TARGET_GCDA_PATH 取上一步输出的绝对路径；gcov 在当前目录生成 .gcov。
+gcov "{TARGET_GCDA_PATH}"
+# 提取未执行行（含仅经异常路径可达的行）
+grep -E '^[[:space:]]*(#####|=====):' xxx.cpp.gcov
 ```
 
 ### gcov标记含义
@@ -21,7 +20,7 @@ grep "#####:" xxx.cpp.gcov  # 未执行行
 | `数字:` | 已执行次数 |
 | `#####:` | 未执行 |
 | `-:` | 不可执行 |
-| `=====` | 特殊标记 |
+| `=====:` | 仅经异常路径可达且未执行 |
 
 ### 覆盖率指标
 

@@ -55,7 +55,8 @@ Check `tests/conftest.py` for existing fixtures. Use `app`, `client`, `authentic
 
 ### Strategy 4: Check Environment
 
-> `$PYTHON` refers to the interpreter resolved in Environment Setup (SKILL.md).
+> `$PYTHON` refers to the interpreter selected in [fix-rules.md](./fix-rules.md).
+> Quote its path in Bash; invoke it with `& $PYTHON` in PowerShell.
 
 ```bash
 # Verify module importable
@@ -80,7 +81,13 @@ Document failure pattern: function name, error message, debugging attempts, stra
 
 ### Strategy 1: Branch-Specific Tests
 
-Run `parse_coverage.py` to identify missing lines. Map each to its branch condition. Create exactly ONE targeted test per missing branch.
+Use the current coverage report; if missing, follow .coveragerc Recovery below. Use `read` to load `skill://bundled-developer-test-agent/generate-ut` for its baseDir only; NEVER start the generation workflow. From the project directory, run:
+
+```bash
+"$PYTHON" "{GENERATE_SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" "<function_name>" "<start_line>" "<end_line>" "<source_file_path>"
+```
+
+Replace `{GENERATE_SKILL_DIR}` with the returned baseDir. Map each missing line to its branch condition. Create exactly ONE targeted test per missing branch.
 
 ### Strategy 2: Integration Approach
 
@@ -142,8 +149,8 @@ Document: current coverage, missing lines, strategies attempted, remaining gaps.
 
 ## .coveragerc Recovery
 
-1. **Primary approach**: `coverage run --rcfile=NUL -m pytest <test_file>` then `coverage json -o coverage.json --rcfile=NUL` — bypasses all .coveragerc issues
-2. Fallback: `pytest <test_file> --cov=<source_module> --cov-report=json -v`
+1. **Primary approach**: Follow the temporary-directory setup and `coverage run` / `coverage json` commands in `skill://bundled-developer-test-agent/generate-ut/references/python/generation-rules.md`. Use the selected interpreter.
+2. Fallback: Scope `COVERAGE_FILE` to the pytest command and set it to `$COV_DIR/.coverage`. Run `"$PYTHON" -m pytest "<test_file>" "--cov=<source_module>" "--cov-report=json:$COV_DIR/coverage.json" -v`.
 3. Do NOT modify tracked project configuration files — always use command-line overrides or temporary configs
 4. If `parse_coverage.py` reports `total_executable_lines=0`: re-run coverage to generate fresh data
 5. If `parse_coverage.py` reports unexpected results but direct coverage.json inspection confirms >=90%, accept the direct evidence and proceed
@@ -154,7 +161,7 @@ Document: current coverage, missing lines, strategies attempted, remaining gaps.
 If parse_coverage.py reports significantly lower coverage than expected:
 1. Ensure `source_file_path` argument is provided to prevent cross-file contamination
 2. Verify the source_file_path matches the actual file path in coverage.json (check keys in `files` dict)
-3. If results still seem wrong, inspect coverage.json directly: `$PYTHON -c "import json; d=json.load(open('coverage.json')); [print(k) for k in d['files']]"`
+3. If results still seem wrong, inspect coverage.json directly: `"$PYTHON" -c "import json, sys; print(*json.load(open(sys.argv[1], encoding='utf-8'))['files'], sep='\n')" "$COV_DIR/coverage.json"`
 4. Accept direct coverage.json evidence over script output when they conflict
 
 ## Recovery Anti-Patterns
@@ -187,7 +194,7 @@ These failure branches supplement the Step 4 common fixes list with explicit rec
 | ImportError: cannot import name | Wrong import path or name | Re-read source file to verify exact class/function name and import path |
 | ModuleNotFoundError for project modules | sys.path does not include project root | Add sys.path.insert(0, project_root) at top of test file |
 | AttributeError after correct import | Importing from wrong submodule | Check __init__.py re-exports; import from actual defining module instead |
-| Wrong Python executable | Using wrong interpreter | Always use `$PYTHON -m pytest` explicitly — see Environment Setup in SKILL.md |
+| Wrong Python executable | Using wrong interpreter | Run pytest with the interpreter selected in [fix-rules.md](./fix-rules.md) |
 
 **Recovery steps**:
 1. Read the error traceback to identify the exact failing import
@@ -235,13 +242,13 @@ These failure branches supplement the Step 4 common fixes list with explicit rec
 | RuntimeError: generator ignored GeneratorExit | Generator not properly closed in test | Use with pytest.raises(...) context instead of manual next() calls |
 
 **Recovery steps**:
-1. If test hangs: add --timeout=10 to pytest command
+1. If a test hangs: add `--timeout=10` only if the pytest-timeout option is available; otherwise use the shell tool's timeout
 2. Identify the hanging test from output
 3. Check for real blocking primitives (Event, Queue, sleep) - mock all of them
 4. Check for while-loops - ensure side_effect lists provide termination
 5. Check for fixture conflicts - replace @patch with with patch(...) context managers
 6. Simplify mock setup: remove complex side_effect chains; use direct return_value
-7. Re-run with timeout. Max 3 timeout-fix iterations within the Step 4 budget
+7. Re-run with the same timeout mechanism. Max 3 timeout-fix iterations within the Step 4 budget
 
 ## Step 5.1 Failure Branch: Coverage Shortfall After Tests Pass
 
@@ -249,8 +256,7 @@ These failure branches supplement the Step 4 common fixes list with explicit rec
 
 **Recovery steps** (supplements existing Step 5.1 guidance):
 
-1. Run with --cov-report=term-missing to get exact uncovered lines:
-   $PYTHON -m pytest test_file --cov=source_module --cov-report=term-missing -v
+1. Reuse the coverage commands under .coveragerc Recovery. With pytest-cov, add `--cov-report=term-missing` to see uncovered lines in the terminal.
 2. Map each uncovered line to its branch condition by re-reading the source
 3. For each uncovered branch, identify WHY existing tests do not cover it:
    - Missing branch test: No test triggers this condition - Create a targeted test

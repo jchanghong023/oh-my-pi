@@ -22,6 +22,7 @@ export interface AddWorktreeOptions {
 
 export interface ListWorktreesOptions {
 	json: boolean;
+	cwd?: string;
 }
 
 export interface ClearWorktreesOptions {
@@ -30,6 +31,7 @@ export interface ClearWorktreesOptions {
 	/** Print what would be removed without touching the filesystem. */
 	dryRun: boolean;
 	json: boolean;
+	cwd?: string;
 }
 export async function addWorktree(options: AddWorktreeOptions): Promise<void> {
 	if (options.branch && options.forceBranch) {
@@ -105,7 +107,7 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<void> {
 }
 
 export async function listWorktrees(options: ListWorktreesOptions): Promise<void> {
-	const entries = await managedWorktrees();
+	const entries = await managedWorktrees(options.cwd);
 	if (options.json) {
 		console.log(JSON.stringify(entries, null, 2));
 		return;
@@ -128,7 +130,7 @@ export async function listWorktrees(options: ListWorktreesOptions): Promise<void
 }
 
 export async function clearWorktrees(options: ClearWorktreesOptions): Promise<{ removed: number; failed: number }> {
-	const entries = await managedWorktrees();
+	const entries = await managedWorktrees(options.cwd);
 	const targets = options.all ? entries : entries.filter(entry => entry.orphanReason !== undefined);
 
 	if (targets.length === 0) {

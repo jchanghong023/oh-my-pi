@@ -129,6 +129,13 @@ pub(super) const BUF: usize = 64 << 10;
 /// Reads plus writes one poll of a pump does at most before it yields.
 pub(super) const BURST: usize = 32;
 
+#[cfg(unix)]
+enum Snapshot {
+	Unmeasured,
+	Remaining(usize),
+	Drained,
+}
+
 /// Bytes read from one side and not yet all written to the other.
 struct Chunk {
 	buf:   Box<[u8]>,
@@ -136,11 +143,21 @@ struct Chunk {
 	end:   usize,
 	/// The source ended (end of file or an error): flush, then done.
 	eof:   bool,
+	/// On foreground exit, completion of the finite pipe snapshot.
+	#[cfg(unix)]
+	snapshot: Snapshot,
 }
 
 impl Chunk {
 	fn new() -> Self {
-		Self { buf: vec![0; BUF].into_boxed_slice(), start: 0, end: 0, eof: false }
+		Self {
+			buf: vec![0; BUF].into_boxed_slice(),
+			start: 0,
+			end: 0,
+			eof: false,
+			#[cfg(unix)]
+			snapshot: Snapshot::Unmeasured,
+		}
 	}
 
 	/// Read but not written yet.
@@ -157,15 +174,54 @@ impl Chunk {
 		src: &mut impl PollIo,
 		dst: &mut impl PollIo,
 	) -> Poll<()> {
+		self.poll_copy_until::<false>(cx, src, dst, None)
+	}
+
+	#[cfg(unix)]
+	fn poll_snapshot(&mut self, cx: &mut Context<'_>, src: &mut OsPipe, dst: &mut End) -> bool {
+		// The operand is already gone, so the bytes pending in the chunk
+		// and the pipe now include everything it wrote.
+		let mut remaining = match self.snapshot {
+			Snapshot::Unmeasured => src.available().ok(),
+			Snapshot::Remaining(bytes) => Some(bytes),
+			Snapshot::Drained => return true,
+		};
+		let done = self
+			.poll_copy_until::<true>(cx, src, dst, remaining.as_mut())
+			.is_ready();
+		self.snapshot = if done {
+			Snapshot::Drained
+		} else {
+			remaining.map_or(Snapshot::Unmeasured, Snapshot::Remaining)
+		};
+		done
+	}
+
+	fn poll_copy_until<const SNAPSHOT: bool>(
+		&mut self,
+		cx: &mut Context<'_>,
+		src: &mut impl PollIo,
+		dst: &mut impl PollIo,
+		mut remaining: Option<&mut usize>,
+	) -> Poll<()> {
 		for _ in 0..BURST {
 			if self.start == self.end {
-				if self.eof {
+				let max = if SNAPSHOT {
+					remaining.as_deref().copied().unwrap_or(self.buf.len())
+				} else {
+					self.buf.len()
+				};
+				if self.eof || max == 0 {
 					let _ = std::task::ready!(dst.poll_flush(cx));
 					return Poll::Ready(());
 				}
-				match std::task::ready!(src.poll_read(cx, &mut self.buf)) {
+				let cap = max.min(self.buf.len());
+				match std::task::ready!(src.poll_read(cx, &mut self.buf[..cap])) {
 					Ok(0) => self.eof = true,
 					Ok(n) => {
+						if SNAPSHOT && let Some(left) = remaining.as_deref_mut() {
+							*left -= n;
+						}
 						self.start = 0;
 						self.end = n;
 					},
@@ -390,6 +446,27 @@ impl Pumps {
 			feed.poll(cx);
 		}
 		orphan::poll(cx);
+	}
+
+	/// Deliver the bytes the exited process wrote, not the descendants'
+	/// end of file. On drop, each still-open output is adopted as usual.
+	#[cfg(unix)]
+	pub fn poll_exit_snapshot(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+		let mut done = true;
+		for task in &mut self.tasks {
+			done &= match task {
+				Task::In { .. } => true,
+				Task::Out { src, dst, chunk, .. } => chunk.poll_snapshot(cx, src, dst),
+				Task::Duplex(d) => {
+					let Duplex { sock, end, outbound, .. } = &mut **d;
+					outbound
+						.as_mut()
+						.is_none_or(|(chunk, _)| chunk.poll_snapshot(cx, sock, end))
+				},
+			};
+		}
+		orphan::poll(cx);
+		if done { Poll::Ready(()) } else { Poll::Pending }
 	}
 }
 

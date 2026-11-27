@@ -65,6 +65,6 @@ export interface WorktreeBackend {
 	create(start: WorktreeStart): Promise<SessionWorktree>;
 	inspect(worktree: SessionWorktree): Promise<WorktreeInspection>;
 	remove(worktree: SessionWorktree, moved: boolean): Promise<void>;
-	managed(): Promise<ManagedWorktree[]>;
+	managed(cwd?: string): Promise<ManagedWorktree[]>;
 	locations(cwd: string): Promise<WorktreeLocation[]>;
 }

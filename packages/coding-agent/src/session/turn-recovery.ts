@@ -31,7 +31,13 @@ import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isUnexpectedSocketCloseMessage, logger, prompt, sleepLong, sleepUntil } from "@oh-my-pi/pi-utils";
 import { cfgOffline } from "../config/auxiliary-model-policy";
 import type { ModelRegistry } from "../config/model-registry";
-import { formatModelStringWithRouting, resolveExplicitModelRole, resolveModelOverride } from "../config/model-resolver";
+import {
+	formatModelStringWithRouting,
+	resolveAllowedModels,
+	resolveExplicitModelRole,
+	resolveModelOverride,
+	resolveModelRoleValue,
+} from "../config/model-resolver";
 
 import type { Settings } from "../config/settings";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
@@ -2739,15 +2745,9 @@ export class TurnRecovery {
 			originalThinkingLevel,
 			lastAppliedFallbackThinkingLevel,
 		} = this.#activeRetryFallback;
-		const resolvedPrimary = resolveModelOverride(
-			[originalSelectorRaw],
-			this.#host.modelRegistry,
-			this.#host.settings,
-		);
-		const originalRole = resolveExplicitModelRole(originalSelectorRaw, this.#host.settings);
-		const wireSelector = originalRole
-			? undefined
-			: parseRetryFallbackSelector(originalSelectorRaw, this.#host.modelRegistry);
+		const { modelRegistry, settings } = this.#host;
+		const originalRole = resolveExplicitModelRole(originalSelectorRaw, settings);
+		const wireSelector = originalRole ? undefined : parseRetryFallbackSelector(originalSelectorRaw, modelRegistry);
 		if (!originalRole && !wireSelector) {
 			// Malformed stored selectors cannot be restored. Keep fallback routing
 			// attribution, but do not discard valid roles merely because their
@@ -2755,13 +2755,18 @@ export class TurnRecovery {
 			this.#activeRetryFallback = undefined;
 			return false;
 		}
+		const resolvedPrimary = originalRole
+			? resolveModelRoleValue(originalSelectorRaw, await resolveAllowedModels(modelRegistry, settings), { settings })
+			: resolveModelOverride([originalSelectorRaw], modelRegistry, settings);
 		const primaryModel =
 			resolvedPrimary.model ??
-			(wireSelector && this.#host.modelRegistry.find(wireSelector.provider, wireSelector.id));
+			(wireSelector ? modelRegistry.find(wireSelector.provider, wireSelector.id) : undefined);
 		if (!primaryModel) return false;
+		const primaryThinkingLevel =
+			originalRole && resolvedPrimary.explicitThinkingLevel ? resolvedPrimary.thinkingLevel : originalThinkingLevel;
 		const originalSelector = originalRole
 			? parseRetryFallbackSelector(
-					formatRetryFallbackSelector(primaryModel, concreteThinkingLevel(originalThinkingLevel)),
+					formatRetryFallbackSelector(primaryModel, concreteThinkingLevel(primaryThinkingLevel)),
 					this.#host.modelRegistry,
 				)
 			: wireSelector;
@@ -2784,7 +2789,7 @@ export class TurnRecovery {
 
 		const currentThinkingLevel = this.#host.configuredThinkingLevel();
 		const thinkingToApply =
-			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? originalThinkingLevel : currentThinkingLevel;
+			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? primaryThinkingLevel : currentThinkingLevel;
 		const primarySelector = formatModelStringWithRouting(primaryModel);
 		const previousEditMode = this.#host.resolveActiveEditMode();
 		// Clear before the swap: `setModelWithProviderSessionReset` and

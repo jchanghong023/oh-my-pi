@@ -11,7 +11,9 @@ use std::{
 
 use omp_vfs::{Fs, Metadata};
 
-use super::{Detail, FileId, FileInfo, FileType, Listing, Stamp, not_regular, os_name};
+use super::{
+	Detail, FileId, FileInfo, FileType, IncompleteListing, Listing, Stamp, not_regular, os_name,
+};
 
 /// Entry type of a provider file type; `None` for special files.
 fn type_of(file_type: omp_vfs::FileType) -> Option<FileType> {
@@ -96,7 +98,14 @@ pub(super) async fn open_child(fs: &Fs, parent: &Path, name: &[u8]) -> io::Resul
 	Ok(path)
 }
 
-pub(super) async fn list(fs: &Fs, dir: &Path, detail: Detail, out: &mut Listing) -> io::Result<()> {
+pub(super) async fn list(
+	fs: &Fs,
+	dir: &Path,
+	detail: Detail,
+	strict: bool,
+	out: &mut Listing,
+) -> io::Result<()> {
+	let mut incomplete = None;
 	for entry in fs.read_dir(dir).await? {
 		let entry = entry?;
 		let name = entry.file_name();
@@ -111,6 +120,10 @@ pub(super) async fn list(fs: &Fs, dir: &Path, detail: Detail, out: &mut Listing)
 		}
 		let file_type = match entry.file_type_async().await {
 			Ok(file_type) => file_type,
+			Err(err) if strict && err.kind() != io::ErrorKind::NotFound => {
+				incomplete.get_or_insert(err);
+				continue;
+			},
 			Err(err) if is_skippable(&err) => continue,
 			Err(err) => return Err(err),
 		};
@@ -121,13 +134,20 @@ pub(super) async fn list(fs: &Fs, dir: &Path, detail: Detail, out: &mut Listing)
 			Detail::Minimal => (None, None),
 			Detail::Full => match entry.metadata_async().await {
 				Ok(meta) => ((file_type == FileType::File).then(|| meta.len()), mtime_of(&meta)),
+				Err(err) if strict && err.kind() != io::ErrorKind::NotFound => {
+					incomplete.get_or_insert(err);
+					continue;
+				},
 				Err(err) if is_skippable(&err) => continue,
 				Err(err) => return Err(err),
 			},
 		};
 		out.push(name.as_encoded_bytes(), file_type, size, mtime, 0);
 	}
-	Ok(())
+	match incomplete {
+		Some(error) => Err(io::Error::new(error.kind(), IncompleteListing(error))),
+		None => Ok(()),
+	}
 }
 
 /// Opens the regular file at `path`, following symlinks. The type is checked

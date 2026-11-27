@@ -74,7 +74,7 @@ private UserService userService;
 
 * **禁止**：Mock 私有方法。
 * **禁止**：Mock `final` 方法（除非项目明确支持并启用了 inline mocking，且在 POM 中已确认）。
-* **受限**：仅当 POM 中配置了 `mockito-inline` 或 Mockito **3.4+** 时才允许静态 Mock。
+* **受限**：静态 Mock 必须使用 Mockito 3.4+，且测试实际启用 inline MockMaker。
 * 若因框架限制无法 Mock，必须调整输入或内部状态以触发所需分支。
 
 ---
@@ -83,8 +83,7 @@ private UserService userService;
 
 ### 3.4.1 静态方法 Mock（Mockito static）
 
-**仅**在确认已支持静态 Mock 时使用
-（如已配置 `mockito-inline` 或 Mockito 3.4+）：
+确认测试实际启用 inline MockMaker 后才使用（如 `mockito-inline`、`mock-maker-inline` 扩展配置，或未改用其他 MockMaker 的 `mockito-core` 5+）：
 
 ```java
 try (MockedStatic<StringUtils> stringUtilsMock = mockStatic(StringUtils.class)) {

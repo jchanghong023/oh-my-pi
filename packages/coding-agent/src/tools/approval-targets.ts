@@ -1,11 +1,9 @@
 /**
  * Cache-key derivation for `tools.approvalMode: always-ask-cached` grants.
  *
- * Shared by every path-based tool (`read`, `write`, `edit`) so one approved
- * target maps to one key: a filesystem path resolved against the session cwd
- * (case-folded on case-insensitive platforms via {@link approvalCacheKeyForPath}),
- * a session-local URL mapped to that session's backing path, another registered
- * internal URL kept in normalized form, or a readable web URL kept as written.
+ * Shared by path-based tools. Ordinary filesystem targets use resolved path
+ * keys; registered URLs normally keep their normalized URI. Session-local
+ * operations that must not inherit an ordinary read grant use opaque keys.
  */
 import { isReadableUrlPath } from "./details/read";
 import * as fs from "node:fs";
@@ -18,6 +16,26 @@ import { resolveToCwd } from "./path-utils";
 
 /** Key prefix for a recursive search of a tree: opaque, so no folder or file grant matches it. */
 const APPROVAL_TREE_SEARCH_PREFIX = "tree\0";
+
+/** A recursive list of artifact names is neither a directory nor a content-read grant. */
+const APPROVAL_LOCAL_LISTING_PREFIX = "local-list\0";
+
+export function approvalLocalListingKey(root: string): string {
+	return `${APPROVAL_LOCAL_LISTING_PREFIX}${root}`;
+}
+
+/** Filesystem root of an artifact listing grant, for restricted-folder policy only. */
+export function approvalLocalListingRoot(key: string): string | undefined {
+	return key.startsWith(APPROVAL_LOCAL_LISTING_PREFIX) ? key.slice(APPROVAL_LOCAL_LISTING_PREFIX.length) : undefined;
+}
+
+/** A read-tier local:// mutation still requires a mutation grant, not a file or folder read grant. */
+const APPROVAL_LOCAL_MUTATION_PREFIX = "local-write\0";
+
+/** Filesystem subject of a local mutation grant, for restricted-folder policy only. */
+export function approvalLocalMutationPath(key: string): string | undefined {
+	return key.startsWith(APPROVAL_LOCAL_MUTATION_PREFIX) ? key.slice(APPROVAL_LOCAL_MUTATION_PREFIX.length) : undefined;
+}
 
 /**
  * Cache key for a recursive search rooted at `directoryKey`. Such a search reads below subfolders,
@@ -85,8 +103,8 @@ export function isApprovalPublicUrl(url: string): boolean {
  * approving a write is how its file comes to exist.
  */
 export function approvalTargetNamesFile(target: string): boolean {
-	// A recursive search's tree key is opaque: nothing on disk names it, and it is never a file.
-	if (target.startsWith(APPROVAL_TREE_SEARCH_PREFIX)) return false;
+	if (target.startsWith(APPROVAL_TREE_SEARCH_PREFIX) || target.startsWith(APPROVAL_LOCAL_LISTING_PREFIX)) return false;
+	if (target.startsWith(APPROVAL_LOCAL_MUTATION_PREFIX)) return true;
 	const router = InternalUrlRouter.instance();
 	const normalized = router.normalize(target);
 	if (router.canHandle(normalized) || isReadableUrlPath(target)) return false;
@@ -116,11 +134,13 @@ export function approvalTargetKey(cwd: string, target: string, session?: ToolSes
 	const trimmed = target.trim();
 	if (trimmed.length === 0) return undefined;
 	const router = InternalUrlRouter.instance();
-	const normalized = router.normalize(trimmed);
-	if (session) {
-		const backing = approvalLocalBackingPath(normalized, session);
-		if (backing !== undefined) return approvalCacheKeyForPath(backing);
+	const rawUrl = router.normalize(target);
+	if (session && splitUrlScheme(rawUrl)?.scheme === "local") {
+		const backing = approvalLocalBackingPath(rawUrl, session);
+		// Keep the backing spelling case-sensitive: Windows session roots may opt in to case sensitivity.
+		return `${APPROVAL_LOCAL_MUTATION_PREFIX}${backing ?? rawUrl}`;
 	}
+	const normalized = trimmed === target ? rawUrl : router.normalize(trimmed);
 	if (router.canHandle(normalized)) return normalized;
 	if (isReadableUrlPath(trimmed)) return trimmed;
 	try {

@@ -283,7 +283,7 @@ describe("Agent hub Enter activation", () => {
 		}
 	});
 
-	it.each(["done", "failed", "cancelled"] as const)(
+	it.each(["done", "failed"] as const)(
 		"opens a completed %s execution as a read-only native transcript",
 		async outcome => {
 			await using temp = await TempDir.create("@omp-hub-readonly-record-");

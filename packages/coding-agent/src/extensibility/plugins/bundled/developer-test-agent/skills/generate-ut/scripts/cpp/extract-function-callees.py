@@ -29,7 +29,7 @@ class CalleeInfo(TypedDict):
     defined_in_file: str | None
     defined_at_line: int | None
     is_member: bool
-    declared_in_header: bool
+    needs_definition: bool
 
 
 class CppCallExtractor:
@@ -153,29 +153,10 @@ class CppCallExtractor:
                 return True
         return False
 
-    def _is_system_location(self, cursor, directory: str) -> bool:
-        try:
-            loc = cursor.location
-            if loc and loc.file:
-                filename = loc.file.name
-                if filename:
-                    abs_path = os.path.realpath(os.path.join(directory, filename))
-                    if sys.platform == 'win32':
-                        abs_path_lower = abs_path.lower()
-                        system_dirs = [
-                            os.environ.get('ProgramFiles', r'C:\Program Files').lower(),
-                            os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)').lower(),
-                            os.environ.get('SystemRoot', r'C:\Windows').lower(),
-                        ]
-                        for d in system_dirs:
-                            if abs_path_lower.startswith(d):
-                                return True
-                    else:
-                        if abs_path.startswith('/usr/') or abs_path.startswith('/opt/'):
-                            return True
-        except Exception:
-            pass
-        return False
+    @staticmethod
+    def _is_system_location(cursor) -> bool:
+        # Older Python bindings do not expose SourceLocation.is_in_system_header.
+        return bool(ci.conf.lib.clang_Location_isInSystemHeader(cursor.location))
 
     @staticmethod
     def _called_symbol(cursor):
@@ -185,6 +166,7 @@ class CppCallExtractor:
         if callee and callee.spelling and callee.kind in (
             ci.CursorKind.FUNCTION_DECL, ci.CursorKind.CXX_METHOD, ci.CursorKind.FUNCTION_TEMPLATE,
             ci.CursorKind.DESTRUCTOR, ci.CursorKind.CONVERSION_FUNCTION, ci.CursorKind.VAR_DECL,
+            ci.CursorKind.PARM_DECL,
         ):
             return callee
         return None
@@ -339,7 +321,7 @@ class CppCallExtractor:
         target = next((node for node in self._function_definitions(tu, filename, directory)
                        if node.location.line == target_line), None)
         if target is None:
-            return [], ""
+            raise ValueError(f"找不到函数定义: {filename}:{target_line}；请传入定义所在文件和行号")
 
         target_class = self._parent_class(target)
         file_key = self._path_key(filename)
@@ -347,7 +329,7 @@ class CppCallExtractor:
         callees = []
         for node in target.walk_preorder():
             callee = self._called_symbol(node)
-            if callee is None or self._is_stdlib_name(callee.spelling) or self._is_system_location(callee, directory):
+            if callee is None or self._is_stdlib_name(callee.spelling) or self._is_system_location(callee):
                 continue
             key = self._symbol(callee)
             if key in seen:
@@ -355,22 +337,24 @@ class CppCallExtractor:
             seen.add(key)
 
             # A function pointer is an injection point, not an expandable function body.
-            definition = callee.get_definition() if callee.kind != ci.CursorKind.VAR_DECL else None
+            definition = (None if callee.kind in (ci.CursorKind.VAR_DECL, ci.CursorKind.PARM_DECL)
+                          else callee.get_definition())
             definition_file = definition.location.file if definition is not None else None
             is_local = bool(definition_file and
                             self._path_key(definition_file.name, directory) == file_key)
-            location = definition.location if is_local else callee.location
-            path = os.path.abspath(os.path.join(directory, location.file.name)) if location.file else None
             callee_class = self._parent_class(callee) if callee.kind == ci.CursorKind.CXX_METHOD else None
             is_same_class = target_class is not None and callee_class is not None and target_class == callee_class
+            is_internal = is_local or is_same_class
+            location = definition.location if is_internal and definition_file else callee.location
+            path = os.path.abspath(os.path.join(directory, location.file.name)) if location.file else None
             callees.append(CalleeInfo(
                 name=callee.spelling,
                 class_name=callee_class.spelling if callee_class is not None else None,
-                is_internal=is_local or is_same_class,
+                is_internal=is_internal,
                 defined_in_file=path,
                 defined_at_line=location.line if path else None,
                 is_member=callee_class is not None,
-                declared_in_header=bool(path and path.endswith('.h')),
+                needs_definition=is_internal and not definition_file,
             ))
         return callees, target_class.spelling if target_class is not None else ""
 
@@ -432,8 +416,8 @@ class CppCallExtractor:
             for node in function.walk_preorder():
                 if is_target:
                     callee = self._called_symbol(node)
-                    if (callee is not None and callee.kind != ci.CursorKind.VAR_DECL
-                            and callee.location.file and not self._is_system_location(callee, directory)):
+                    if (callee is not None and callee.kind not in (ci.CursorKind.VAR_DECL, ci.CursorKind.PARM_DECL)
+                            and callee.location.file and not self._is_system_location(callee)):
                         key = self._symbol(callee)
                         if key not in seen_callees:
                             seen_callees.add(key)
@@ -449,7 +433,7 @@ class CppCallExtractor:
                                      ci.CursorKind.TYPE_REF, ci.CursorKind.TEMPLATE_REF):
                     continue
                 ref = node.referenced
-                if ref is None or not ref.location.file or self._is_system_location(ref, directory):
+                if ref is None or not ref.location.file or self._is_system_location(ref):
                     continue
                 if ref.kind == ci.CursorKind.VAR_DECL:
                     parent = ref.semantic_parent
@@ -464,7 +448,7 @@ class CppCallExtractor:
                         underlying = ref.underlying_typedef_type.get_canonical()
                         if underlying.kind == ci.TypeKind.RECORD:
                             record = underlying.get_declaration().get_definition()
-                            if record is not None and record.location.file and not self._is_system_location(record, directory):
+                            if record is not None and record.location.file and not self._is_system_location(record):
                                 start, alias_start = record.extent.start, ref.extent.start
                                 if (start.file.name != alias_start.file.name
                                         or not alias_start.offset <= start.offset < ref.extent.end.offset):
@@ -484,7 +468,7 @@ class CppCallExtractor:
             ranges = function_ranges.get(self._path_key(loc.file.name, directory), ())
             if any(start <= loc.offset < end for start, end in ranges):
                 macro = node.referenced
-                if macro and macro.location.file and not self._is_system_location(macro, directory):
+                if macro and macro.location.file and not self._is_system_location(macro):
                     macros.setdefault(self._symbol(macro), macro)
 
         files = {}
@@ -548,7 +532,7 @@ def main() -> int:
         for item in callees:
             location = f"{item['defined_in_file']}:{item['defined_at_line']}"
             tag = "(内部依赖)" if item['is_internal'] else "(外部依赖)"
-            extra = " [需查找实现位置]" if item['is_internal'] and item['declared_in_header'] else ""
+            extra = " [需查找实现位置]" if item['needs_definition'] else ""
             class_prefix = f"{item['class_name']}::" if item['class_name'] else ""
             print(f"{class_prefix}{item['name']} {location} {tag}{extra}")
     except Exception as error:

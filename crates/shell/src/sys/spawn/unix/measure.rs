@@ -610,10 +610,8 @@ pub(super) struct Report {
 
 /// The helper's operand PID and final usage pipe.
 pub(super) struct Started {
-	reader:                  File,
-	pub(super) operand:      i32,
-	/// A foreground wave narrowed later abandonment to this operand.
-	pub(super) operand_only: bool,
+	reader:              File,
+	pub(super) operand: i32,
 }
 
 impl Report {
@@ -687,7 +685,7 @@ impl Report {
 		} else {
 			0
 		};
-		(Ok((pid, place)), Some(Started { reader, operand, operand_only: false }))
+		(Ok((pid, place)), Some(Started { reader, operand }))
 	}
 }
 

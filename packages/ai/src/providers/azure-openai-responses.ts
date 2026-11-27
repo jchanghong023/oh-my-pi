@@ -351,7 +351,8 @@ function buildAzureResponsesRequest(
 		);
 	}
 
-	const keyHeaders = apiKey ? { "api-key": apiKey } : undefined;
+	const explicitAuthorization = getHeaderCaseInsensitive(mergeHeaders(requestAuth?.headers), "Authorization");
+	const keyHeaders = apiKey && !explicitAuthorization?.trim() ? { "api-key": apiKey } : undefined;
 	const headers = mergeHeaders(
 		requestAuth === undefined ? keyHeaders : undefined,
 		model.headers,
@@ -359,6 +360,11 @@ function buildAzureResponsesRequest(
 		requestAuth !== undefined ? keyHeaders : undefined,
 		requestAuth?.headers,
 	);
+	if (explicitAuthorization?.trim() && getHeaderCaseInsensitive(requestAuth?.headers, "api-key") === undefined) {
+		for (const name in headers) {
+			if (name.toLowerCase() === "api-key") delete headers[name];
+		}
+	}
 	if (
 		requestAuth !== undefined &&
 		(apiKey || requestAuth.apiKey?.trim()) &&

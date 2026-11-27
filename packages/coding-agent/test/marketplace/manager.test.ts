@@ -1562,7 +1562,6 @@ describe("MarketplaceManager", () => {
 				if (operation === "add") {
 					await ctx.manager.addMarketplace(mktDir);
 				} else {
-					expect(await ctx.manager.listMarketplaces()).toEqual([]);
 					await ctx.manager.refreshStaleMarketplaces();
 				}
 

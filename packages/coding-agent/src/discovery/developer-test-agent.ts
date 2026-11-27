@@ -1,5 +1,4 @@
 import * as path from "node:path";
-import { prompt } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
 import { type Skill, skillCapability } from "../capability/skill";
 import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
@@ -29,17 +28,15 @@ export async function loadDeveloperTestSkills(ctx: LoadContext): Promise<LoadRes
 
 export async function loadDeveloperTestCommands(ctx: LoadContext): Promise<LoadResult<SlashCommand>> {
 	const root = await getDeveloperTestAgentRoot(ctx.agentDir);
+	// Leave the resource path literal through both invocation argument passes.
+	const pluginRoot = root.replaceAll("\\", "/").replace(/[${]/g, char => `{{{default false "${char}"}}}`);
 	return loadFilesFromDir<SlashCommand>(ctx, path.join(root, "commands"), PROVIDER_ID, "project", {
 		extensions: ["md"],
 		origin: "bundled-developer-test-agent",
 		transform: (name, content, filePath, source) => ({
 			name: name.replace(/\.md$/, ""),
 			path: filePath,
-			// Defer raw user input until the native file-command invocation render.
-			content: prompt.render(content, {
-				pluginRoot: root.replaceAll("\\", "/"),
-				rawArguments: "{{{rawArguments}}}",
-			}),
+			content: content.replaceAll("{{pluginRoot}}", () => pluginRoot),
 			level: "project",
 			_source: source,
 		}),

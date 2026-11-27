@@ -2235,18 +2235,22 @@ export class MCPManager implements MCPManagerApi {
 	): Promise<MCPServerConfig> {
 		const signal = opts?.signal ?? this.#connectAbort.signal;
 		let resolved: MCPServerConfig = { ...config };
-		if (config.oauth?.type === "client_credentials") {
+		const clientCredentials = config.oauth?.type === "client_credentials";
+		if (clientCredentials && !hasMcpAuthorizationHeader(config)) {
 			throw new Error("MCP OAuth client_credentials grant is not supported");
 		}
 
 		const auth = config.auth;
-		const lookup = opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
+		const lookup =
+			!clientCredentials && opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
+		const inheritedToken = process.env.OAUTH_ACCESS_TOKEN;
 		const requiresAuthorizationCode = opts?.oauth !== false && config.oauth?.type === "authorization_code";
 		if (
 			requiresAuthorizationCode &&
 			!lookup &&
 			!hasMcpAuthorizationHeader(config) &&
-			!((config.type === "stdio" || config.type === undefined) && config.env?.OAUTH_ACCESS_TOKEN !== undefined)
+			!((config.type === "stdio" || config.type === undefined) &&
+				(config.env?.OAUTH_ACCESS_TOKEN !== undefined || inheritedToken?.trim()))
 		) {
 			throw new Error("MCP authorization code grant requires an authenticated credential in this profile");
 		}
@@ -2332,7 +2336,7 @@ export class MCPManager implements MCPManagerApi {
 			}
 		}
 
-		if (requiresAuthorizationCode) {
+		if (requiresAuthorizationCode || clientCredentials) {
 			if (resolved.type === "http" || resolved.type === "sse") {
 				const { headers } = resolved;
 				if (headers) {
@@ -2342,9 +2346,10 @@ export class MCPManager implements MCPManagerApi {
 						if (value && !/^bearer$/i.test(value)) return resolved;
 					}
 				}
-			} else if (resolved.env?.OAUTH_ACCESS_TOKEN?.trim()) {
+			} else if ((resolved.env?.OAUTH_ACCESS_TOKEN ?? inheritedToken)?.trim()) {
 				return resolved;
 			}
+			if (clientCredentials) throw new Error("MCP OAuth client_credentials grant is not supported");
 			throw new Error("MCP authorization code grant requires an authenticated credential in this profile");
 		}
 

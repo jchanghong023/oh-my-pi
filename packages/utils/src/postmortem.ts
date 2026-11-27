@@ -643,12 +643,10 @@ function formatFatalRecoveryHints(providers: Iterable<FatalRecoveryHintProvider>
 	return lines.length > 0 ? `\n[Recovery]\n${lines.join("\n")}\n` : "";
 }
 
-/** The terminal gets one cause line; the log retains the original multiline message and full stack. */
+/** Keep exception text on the user's terminal; the diagnostic log is structured and bounded. */
 function formatTerminalFatalError(label: string, err: Error, logFile: string): string {
-	const name = escapeFatalHintText(err.name || "Error");
-	const firstLine = String(err.message || "").split(/[\r\n\u2028\u2029]/u, 1)[0] || "(no message)";
-	const message = firstLine.length > 240 ? `${firstLine.slice(0, 239)}…` : firstLine;
-	return `\n[${label}] ${name}: ${escapeFatalHintText(message)}\nDetails: ${escapeFatalHintText(logFile)}\n`;
+	const report = formatFatalError(label, err).split("\n").map(escapeFatalHintText).join("\n");
+	return `${report}Diagnostic log: ${escapeFatalHintText(logFile)}\n`;
 }
 
 function formatFatalError(label: string, err: Error): string {
@@ -729,7 +727,7 @@ async function exitAfterFatal(
 		result: "failed",
 		...logger.diagnosticError(err),
 	});
-	// Capture the actual file that received the stack (including a rotation suffix).
+	// Keep the structured diagnostic file discoverable without persisting exception text.
 	// A pipe or redirected stderr retains the detailed report for its consumer.
 	const interactive =
 		process.stdin.isTTY && process.stdout.isTTY && (isTerminalStderrSuppressed() || process.stderr.isTTY);

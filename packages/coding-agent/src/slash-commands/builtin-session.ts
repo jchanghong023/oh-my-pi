@@ -749,8 +749,20 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		inlineHint: "[provider]",
 		allowArgs: true,
 		handleTui: (command, runtime) => {
+			const providerId = command.args.trim();
+			if (providerId) {
+				const matchedProvider = getOAuthProviders().find(provider => provider.id === providerId);
+				if (!matchedProvider) {
+					runtime.ctx.showWarning(`Unknown OAuth provider: ${providerId}`);
+					clearSubmittedText(runtime);
+					return;
+				}
+				void runtime.ctx.showOAuthSelector("logout", matchedProvider.id);
+				clearSubmittedText(runtime);
+				return;
+			}
+			void runtime.ctx.showOAuthSelector("logout");
 			clearSubmittedText(runtime);
-			void runtime.ctx.showOAuthSelector("logout", command.args.trim() || undefined);
 		},
 	},
 	{

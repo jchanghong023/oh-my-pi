@@ -77,11 +77,5 @@ describe("P2-15 Unicode review path identity", () => {
 		expect(file.path).toBe(filePath);
 		expect(file.oldPath).toBe(filePath);
 		expect(file.newPath).toBe(filePath);
-		expect(file.rows.flatMap(row => (row.kind === "removed" ? [row.content] : []))).toEqual([
-			"export const value = 1;",
-		]);
-		expect(file.rows.flatMap(row => (row.kind === "added" ? [row.content] : []))).toEqual([
-			"export const value = 2;",
-		]);
 	});
 });

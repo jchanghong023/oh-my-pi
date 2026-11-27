@@ -19,7 +19,7 @@ const binariesDir = Bun.env.OMP_RELEASE_BINARY_DIR
 	: path.join(repoRoot, "packages", "coding-agent", "binaries");
 const nativeDir = Bun.env.OMP_RELEASE_NATIVE_DIR?.trim();
 const entrypoint = path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts");
-const buildVersion = Bun.env.RELEASE_VERSION;
+const buildVersion = Bun.env.RELEASE_VERSION?.replace(/^v/, "");
 const updateRepository = Bun.env.UPDATE_REPOSITORY;
 // Worker threads re-enter the binary's single CLI host entry.
 const isDryRun = process.argv.includes("--dry-run");

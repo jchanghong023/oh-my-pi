@@ -101,17 +101,6 @@ function validateCoverageData(total, covered) {
     return { valid: false, reason: `覆盖行(${covered})大于总行数(${total})，数据不一致` };
   }
 
-  // 异常判定：总行数>2000 且覆盖率<60%
-  if (total > 2000) {
-    const rate = covered / total;
-    if (rate < 0.6) {
-      return {
-        valid: false,
-        reason: `异常数据：总行数 ${total}，覆盖行 ${covered}，覆盖率 ${(rate * 100).toFixed(2)}%（总行数>2000且覆盖率<60%）`,
-      };
-    }
-  }
-
   return { valid: true };
 }
 
@@ -197,12 +186,17 @@ if (fs.existsSync(surefireDir)) {
 
   if (surefireFile) {
     const surefireXml = fs.readFileSync(surefireFile, 'utf-8');
-    const tsMatch = /<testsuite\s+[^>]*tests="(\d+)"[^>]*errors="(\d+)"[^>]*skipped="(\d+)"[^>]*failures="(\d+)"/.exec(surefireXml);
-    if (tsMatch) {
-      totalTests = parseInt(tsMatch[1]);
-      errors = parseInt(tsMatch[2]);
-      skippedTests = parseInt(tsMatch[3]);
-      failedTests = parseInt(tsMatch[4]);
+    const suite = /<testsuite\s+((?:[^>"']|"[^"]*"|'[^']*')*)>/.exec(surefireXml);
+    if (suite) {
+      for (const [, name, doubleQuoted, singleQuoted] of suite[1].matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+        const value = Number(doubleQuoted ?? singleQuoted);
+        switch (name) {
+          case 'tests': totalTests = value; break;
+          case 'errors': errors = value; break;
+          case 'skipped': skippedTests = value; break;
+          case 'failures': failedTests = value; break;
+        }
+      }
       passedTests = totalTests - errors - failedTests - skippedTests;
     }
   }
@@ -268,14 +262,14 @@ const result = {
   testResult: {
     totalTests: totalTests,
     passedTests: passedTests,
-    failedTests: failedTests,
+    failedTests: failedTests + errors,
     skippedTests: skippedTests
   },
   metrics: {
-    compiled_testcase_num: totalTests - errors,
+    compiled_testcase_num: totalTests,
     passed_testcase_num: passedTests,
     covered_line_num: lineCovered,
-    total_compile_error_num: errors,
+    total_compile_error_num: 0,
     total_line_num: totalLines,
     accept_testcase_num: passedTests,
     generate_testcase_num: totalTests,

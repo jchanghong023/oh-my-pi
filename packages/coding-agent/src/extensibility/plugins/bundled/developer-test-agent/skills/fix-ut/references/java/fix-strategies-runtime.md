@@ -28,7 +28,7 @@
 1. 分析错误堆栈，定位 NPE 的具体行号和为 null 的对象来源（参数传入 / Mock 返回 / 新建对象）
 2. 检查 Mock 配置：`when()` 条件是否匹配；`thenReturn()` 是否返回 null
 3. 分析被测方法逻辑：null 检查、默认值处理、期望输入
-4. 选择修复：修改测试输入参数（最常用） / 调整 Mock 配置（补全链：`when(a.getB().getC()).thenReturn(...)`） / 重构测试设计
+4. 选择修复：修改测试输入参数（最常用） / 逐段配置 Mock（如先 `when(a.getB()).thenReturn(b)`，再 `when(b.getC()).thenReturn(c)`，其中 `b` 是 Mock） / 重构测试设计
 
 ## 3. 运行时异常 (exception-runtime)
 
@@ -46,7 +46,7 @@
 
 **三步修复**：
 1. 从错误堆栈定位反射调用位置，提取测试指定的字段名和目标类
-2. 用 `context_retrieve` 获取类定义，检查实际字段列表（注意大小写和拼写）
+2. 用 `grep` 定位类声明，再用 `read` 读取字段定义；检查大小写和拼写
 3. 三种情况：字段名拼写错误 → 修正；字段不存在 → 找功能相似的替代字段（如 "description" → "subTitle"）；继承链字段 → 检查父类
 
 ## 5. 编译时异常 (exception-compilation)

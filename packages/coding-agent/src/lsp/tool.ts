@@ -1495,7 +1495,6 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			const symbolName = symbol ? parseSymbolSpec(symbol).symbol : undefined;
 
 			let output: string;
-			let success = true;
 			// Set on bare empty-lookup outcomes (no definition/references/…): the
 			// result carries no information once consumed, so compaction may elide
 			// it. Clean diagnostics runs are NOT useless — they are verification
@@ -1732,8 +1731,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 								);
 
 					if (result.length === 0) {
-						success = apply !== true;
-						output = apply === true ? "No code actions available to apply" : "No code actions available";
+						output = "No code actions available";
 						break;
 					}
 
@@ -1761,7 +1759,6 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 								normalizedQuery.length === 0
 									? "apply=true needs query (an action's title or index) to choose among"
 									: `No code action matches "${normalizedQuery}". Available actions:`;
-							success = false;
 							output = `${reason}\n${actionLines.join("\n")}`;
 							break;
 						}
@@ -1784,7 +1781,6 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 						});
 
 						if (!appliedAction) {
-							success = false;
 							output = `Action "${selectedAction.title}" has no workspace edit or command to apply`;
 							break;
 						}
@@ -1929,8 +1925,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			}
 			return {
 				content: [{ type: "text", text: output }],
-				details: { serverName, action, success, request: params },
-				...(!success ? { isError: true } : {}),
+				details: { serverName, action, success: true, request: params },
 				...(useless ? { useless: true } : {}),
 			};
 		} catch (err) {
@@ -1956,7 +1951,6 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			return {
 				content: [{ type: "text", text: `LSP error: ${errorMessage}` }],
 				details: { serverName, action, success: false, request: params },
-				...(action === "code_actions" && apply === true ? { isError: true } : {}),
 			};
 		}
 	}

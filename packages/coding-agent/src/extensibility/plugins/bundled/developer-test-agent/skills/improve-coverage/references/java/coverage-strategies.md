@@ -59,7 +59,7 @@
 **关键策略要点**：
 - Redisson 锁：Mock `RLock`，预设 `tryLock`、`isHeldByCurrentThread` 返回值
 - 文件服务：Mock `S3Client`，预设 `putObject`/`getObject`
-- 异步处理：`when(executor.submit(any())).thenReturn(CompletableFuture.completedFuture(result))`
+- 异步处理：按实际 `submit` 重载指定匹配器类型，如 `when(executor.submit(ArgumentMatchers.<Callable<Result>>any())).thenReturn(CompletableFuture.completedFuture(result))`；若接收 `Runnable`，用 `any(Runnable.class)`。
 - HTTP/RPC：Mock `HttpClient` 或 `RestTemplate`，预设 `HttpResponse` 返回值
 - 缓存和消息队列：Mock `RedisTemplate.opsForValue()`、`KafkaTemplate.send()`
 

@@ -53,6 +53,7 @@ export class CompactFileDiff {
 		height: number;
 		theme: ReturnType<typeof currentTheme>;
 		rows: readonly string[];
+		complete: boolean;
 	};
 
 	constructor(
@@ -171,7 +172,7 @@ export class CompactFileDiff {
 		if (!matches(latest)) return undefined;
 		const bodyWidth = width - Math.min(1, width - 1);
 		if (!this.#previewRows(latest, cwd, bodyWidth, height).length) return undefined;
-		return latest.diff;
+		return this.#preview?.complete ? latest.diff : undefined;
 	}
 
 	#previewRows(file: TurnToolDiff, cwd: string, width: number, height: number): readonly string[] {
@@ -187,17 +188,8 @@ export class CompactFileDiff {
 			return cached.rows;
 		const inline = !file.diff || file.op === "delete";
 		if (height < 1 || (!inline && (height < 3 || width < 8))) return [];
-		const body: EditCard["body"] = inline
-			? []
-			: [
-					{
-						k: "raw",
-						text: this.#rows(file)
-							.flatMap(line => wrapDiffRow(line, width - 2))
-							.slice(0, height - 2)
-							.join("\n"),
-					},
-				];
+		const wrapped = inline ? [] : this.#rows(file).flatMap(line => wrapDiffRow(line, width - 2));
+		const body: EditCard["body"] = inline ? [] : [{ k: "raw", text: wrapped.slice(0, height - 2).join("\n") }];
 		const origin = file.sourcePath ?? file.path;
 		const card: EditCard = {
 			kind: inline ? "inline" : "card",
@@ -220,7 +212,15 @@ export class CompactFileDiff {
 			term: { look: "edit", margin: false, edit: { cards: [card] } satisfies EditTerm },
 		});
 		const rows = renderBlock(node, width, { env: staticEnvironment(theme) }).rows;
-		this.#preview = { file, cwd, width, height, theme, rows };
+		this.#preview = {
+			file,
+			cwd,
+			width,
+			height,
+			theme,
+			rows,
+			complete: inline ? !file.diff : wrapped.length <= height - 2,
+		};
 		return rows;
 	}
 

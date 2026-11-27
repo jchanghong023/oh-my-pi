@@ -754,7 +754,7 @@ export function getTablePrimaryKey(db: Database, table: string): { column: strin
 	return { column: column.name, type: column.type };
 }
 
-export function resolveTableRowLookup(db: Database, table: string, context: "read" | "write"): SqliteRowLookup {
+export function resolveTableRowLookup(db: Database, table: string, context: "read" | "write" = "read"): SqliteRowLookup {
 	const primaryKeyColumns = getPrimaryKeyColumns(db, table);
 	if (primaryKeyColumns.length === 1) {
 		const column = primaryKeyColumns[0]!;

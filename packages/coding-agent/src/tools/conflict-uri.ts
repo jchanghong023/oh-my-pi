@@ -420,7 +420,17 @@ async function resolveAllConflicts(
 		}
 
 		const change: EditToolPerFileResult = { path: absolutePath, ...editDiffString(original, text, absolutePath) };
-		await writethroughNoop(absolutePath, bom + text, signal);
+		try {
+			await writethroughNoop(absolutePath, bom + text, signal);
+		} catch (error) {
+			signal?.throwIfAborted();
+			failedFiles.push({
+				displayPath: sample.displayPath,
+				count: fileEntries.length,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			continue;
+		}
 		conflictChanges.push(change);
 		session.bumpFileMutationVersion?.(absolutePath);
 		session.recordFileChange?.({ path: absolutePath, tool: "edit", before: bom + original, after: bom + text });

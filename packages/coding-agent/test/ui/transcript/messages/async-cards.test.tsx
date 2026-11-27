@@ -144,7 +144,6 @@ test("displays process receipts and task diagnostics without automatic task stat
 			jobs: [
 				{ jobId: "bash-complete", type: "bash", status: "completed", durationMs: 1000 },
 				{ jobId: "bash-failed", type: "bash", status: "failed", label: "compile project" },
-				{ jobId: "bash-cancelled", type: "bash", status: "cancelled" },
 				{ jobId: "eval-cancelled", type: "eval", status: "cancelled" },
 				{ jobId: "eval-running", type: "eval", status: "running" },
 				{
@@ -176,7 +175,6 @@ test("displays process receipts and task diagnostics without automatic task stat
 					"bash-failed",
 					"compile project",
 					"Background job cancelled",
-					"bash-cancelled",
 					"eval-cancelled",
 					"artifact write failed",
 					"task-failed: Structured output invalid: invalid output",

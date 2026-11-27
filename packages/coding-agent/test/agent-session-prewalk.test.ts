@@ -208,20 +208,14 @@ describe("AgentSession prewalk", () => {
 			toolCall("second-write", "write"),
 			{ content: ["second done"] },
 		]);
-		const notices: string[] = [];
+		let warningCount = 0;
 		created.session.subscribe(event => {
-			if (event.type === "notice" && event.source === "prewalk") notices.push(event.message);
+			if (event.type === "notice" && event.source === "prewalk" && event.level === "warning") warningCount++;
 		});
-		// Deny both the configured source and resolved request credential for the
-		// target, while leaving the primary authorized. A rejected handoff must
-		// disarm prewalk and keep every turn on the primary model.
+		// A rejected handoff must disarm prewalk and keep every turn on the primary model.
 		const original = modelRegistry.hasConfiguredAuth.bind(modelRegistry);
 		vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation(model =>
 			model.id === created.target.id ? false : original(model),
-		);
-		const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
-		vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async (model, sessionId, options) =>
-			model.id === created.target.id ? undefined : originalGetApiKey(model, sessionId, options),
 		);
 
 		await created.session.prompt("first task");
@@ -229,7 +223,7 @@ describe("AgentSession prewalk", () => {
 		expect(created.session.model?.id).toBe(created.primary.id);
 		await created.session.prompt("second task");
 		expect(created.requested.every(id => id === created.primary.id)).toBe(true);
-		expect(notices.filter(message => message.includes("handoff failed"))).toHaveLength(1);
+		expect(warningCount).toBe(1);
 	});
 
 	it.each(["main", "sub"] as const)(
@@ -755,10 +749,6 @@ describe("AgentSession prewalk", () => {
 		]);
 		await created.session.prompt("old task");
 		vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValueOnce(false);
-		const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
-		vi.spyOn(modelRegistry, "getApiKey").mockImplementationOnce(async (model, sessionId, options) =>
-			model.id === created.target.id ? undefined : originalGetApiKey(model, sessionId, options),
-		);
 		await expect(created.session.setModel(created.target)).rejects.toThrow("No API key");
 		expect(await created.session.cycleRoleModels(["smol"])).toBeUndefined();
 		expect(await created.session.newSession()).toBe(true);
@@ -777,10 +767,6 @@ describe("AgentSession prewalk", () => {
 		await created.session.prompt("old task");
 		const oldSessionId = created.session.sessionId;
 		vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation(model => model.id !== created.primary.id);
-		const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
-		vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async (model, sessionId, options) =>
-			model.id === created.primary.id ? undefined : originalGetApiKey(model, sessionId, options),
-		);
 		expect(await created.session.newSession()).toBe(true);
 		expect(created.session.sessionId).not.toBe(oldSessionId);
 		expect(created.session.model?.id).toBe(created.target.id);

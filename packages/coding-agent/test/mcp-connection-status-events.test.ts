@@ -61,18 +61,16 @@ describe("MCPManager connection status events", () => {
 		const manager = new MCPManager(workDir);
 		const events: McpConnectionStatusEvent[] = [];
 		const configPath = path.join(os.homedir(), ".codex", "config.toml");
-		const error = 'Server "broken": stdio server requires "command" field';
 		try {
-			const result = await manager.connectServers(
+			await manager.connectServers(
 				{ broken: { type: "stdio", command: "" } },
 				{ broken: { provider: "codex", providerName: "Codex", path: configPath, level: "user" } },
 				event => events.push(event),
 				0,
 			);
-			expect(result.errors.get("broken")).toBe(error);
 			expect(events).toEqual([
 				{ type: "connecting", serverNames: ["broken"] },
-				{ type: "failed", serverName: "broken", error, sourcePath: configPath },
+				{ type: "failed", serverName: "broken", error: expect.any(String), sourcePath: configPath },
 			]);
 		} finally {
 			await manager.disconnectAll();

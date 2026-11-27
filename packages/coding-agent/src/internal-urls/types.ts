@@ -111,8 +111,6 @@ export interface SchemeWritePolicy {
 	 * still follows {@link SchemeWritePolicy.tier}.
 	 */
 	cancels?(url: InternalUrl): boolean;
-	/** True when this target accepts an omitted write body (for example, process cancellation). */
-	contentOptional?(url: InternalUrl): boolean;
 }
 
 /**

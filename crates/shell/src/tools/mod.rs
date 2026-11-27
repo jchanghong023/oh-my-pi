@@ -41,11 +41,14 @@ mod timeout;
 mod urlmap;
 
 use std::{
-	collections::{HashMap, HashSet, VecDeque},
+	collections::{HashMap, VecDeque},
 	sync::Arc,
 	task::Waker,
 	time::Duration,
 };
+
+#[cfg(unix)]
+use std::collections::HashSet;
 
 use bstr::{BStr, BString, ByteSlice};
 use parking_lot::Mutex;
@@ -211,8 +214,6 @@ impl ToolConfig {
 	}
 }
 
-type SpawnRecord = (u32, crate::proctree::Process);
-
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Measurement {
 	#[default]
@@ -240,28 +241,52 @@ impl Measurement {
 
 #[derive(Default)]
 struct SpawnState {
-	spawned:       Vec<SpawnRecord>,
-	external:      HashSet<u32>,
+	/// A bucket is in the history even after its last pin is gone.
+	external:      HashMap<u32, HashMap<u64, crate::proctree::Process>>,
+	pinned:        usize,
+	serial:        u64,
 	next_sweep_at: usize,
 	measurement:   HashMap<u32, Measurement>,
+	#[cfg(unix)]
+	foreground:    HashSet<u32>,
 }
 
 impl SpawnState {
 	fn clear_records(&mut self, labels: &[u32]) {
-		self.spawned.retain(|(label, _)| !labels.contains(label));
 		for label in labels {
-			self.external.remove(label);
+			if let Some(records) = self.external.remove(label) {
+				self.pinned -= records.len();
+			}
 		}
 		// Only a sweep may raise the threshold. Releasing unrelated labels
 		// must not postpone a sweep of the remaining handles.
-		self.next_sweep_at = self.next_sweep_at.min(
-			self
-				.spawned
-				.len()
-				.saturating_mul(2)
-				.max(SpawnLog::PRUNE_THRESHOLD),
-		);
+		self.next_sweep_at = self.next_sweep_at.min(self.sweep_threshold());
 	}
+
+	fn sweep_threshold(&self) -> usize {
+		self.pinned.saturating_mul(2).max(SpawnLog::PRUNE_THRESHOLD)
+	}
+
+	fn sweep(&mut self) {
+		self.pinned = self
+			.external
+			.values_mut()
+			.map(|records| {
+				records.retain(|_, process| {
+					process.status() == crate::proctree::ProcessStatus::Running
+				});
+				records.len()
+			})
+			.sum();
+		self.next_sweep_at = self.sweep_threshold();
+	}
+}
+
+/// Token for one pinned spawn, independent of what reuses its PID or label.
+#[derive(Clone, Copy)]
+pub struct SpawnId {
+	label:  u32,
+	serial: u64,
 }
 
 /// External identities and measurement policy for labeled subshell trees.
@@ -277,31 +302,53 @@ impl SpawnLog {
 	/// spawn.
 	const PRUNE_THRESHOLD: usize = 32;
 
-	/// Capture the identity of an external spawned with `lineage`.
+	/// Reclaim the pins of abandoned children periodically, before the next
+	/// spawn allocates resources. Increasing the threshold geometrically
+	/// keeps this amortized when most children stay live.
+	pub fn prepare_spawn(&self, lineage: Lineage) {
+		let mut state = self.0.lock();
+		let projected = state.pinned + usize::from(lineage.label != 0);
+		if projected >= state.next_sweep_at.max(Self::PRUNE_THRESHOLD) {
+			state.sweep();
+		}
+	}
+
+	/// Capture the identity of an external spawned with `lineage`. Detaching
+	/// spares it from session cancellation, not explicit signals to its
+	/// labeled tree (for example, `timeout … nohup …`).
 	pub fn record(
 		&self,
 		lineage: Lineage,
 		process: impl FnOnce() -> Option<crate::proctree::Process>,
-	) {
-		if lineage.label != 0 && !lineage.detached {
-			let process = process();
-			let mut state = self.0.lock();
-			state.external.insert(lineage.label);
-			if let Some(process) = process {
-				state.spawned.push((lineage.label, process));
-				if state.spawned.len() >= state.next_sweep_at.max(Self::PRUNE_THRESHOLD) {
-					state.spawned.retain(|(_, process)| {
-						process.status() == crate::proctree::ProcessStatus::Running
-					});
-					// Geometric growth amortizes sweeps when most children stay
-					// alive.
-					state.next_sweep_at = state
-						.spawned
-						.len()
-						.saturating_mul(2)
-						.max(Self::PRUNE_THRESHOLD);
-				}
-			}
+	) -> Option<SpawnId> {
+		let label = lineage.label;
+		if label == 0 {
+			return None;
+		}
+		let process = process();
+		let mut state = self.0.lock();
+		let Some(process) = process else {
+			state.external.entry(label).or_default();
+			return None;
+		};
+		state.serial = state.serial.wrapping_add(1);
+		let serial = state.serial;
+		state.external.entry(label).or_default().insert(serial, process);
+		state.pinned += 1;
+		Some(SpawnId { label, serial })
+	}
+
+	/// Release the exact identity once its native handle reports exit, without
+	/// erasing spawn history or scanning other running children.
+	pub fn exited(&self, id: SpawnId) {
+		let mut state = self.0.lock();
+		if state
+			.external
+			.get_mut(&id.label)
+			.is_some_and(|records| records.remove(&id.serial).is_some())
+		{
+			state.pinned -= 1;
+			state.next_sweep_at = state.next_sweep_at.min(state.sweep_threshold());
 		}
 	}
 
@@ -312,10 +359,24 @@ impl SpawnLog {
 		label != 0 && self.0.lock().measurement.get(&label) == Some(&Measurement::Measured)
 	}
 
-	fn inherit_measurement(&self, parent: u32, label: u32) {
+	#[cfg(unix)]
+	fn set_foreground(&self, label: u32) {
+		self.0.lock().foreground.insert(label);
+	}
+
+	#[cfg(unix)]
+	pub(crate) fn foreground(&self, label: u32) -> bool {
+		label != 0 && self.0.lock().foreground.contains(&label)
+	}
+
+	fn inherit_policy(&self, parent: u32, label: u32) {
 		let mut state = self.0.lock();
 		if let Some(&measurement) = state.measurement.get(&parent) {
 			state.measurement.insert(label, measurement);
+		}
+		#[cfg(unix)]
+		if state.foreground.contains(&parent) {
+			state.foreground.insert(label);
 		}
 	}
 
@@ -338,13 +399,11 @@ impl SpawnLog {
 
 	/// Pinned, still-live external members of the labeled trees.
 	fn live(&self, labels: &[u32]) -> Vec<crate::proctree::Process> {
-		self
-			.0
-			.lock()
-			.spawned
+		let state = self.0.lock();
+		labels
 			.iter()
-			.filter(|(label, _)| labels.contains(label))
-			.map(|(_, process)| process)
+			.filter_map(|label| state.external.get(label))
+			.flat_map(HashMap::values)
 			.filter(|process| process.status() == crate::proctree::ProcessStatus::Running)
 			.cloned()
 			.collect()
@@ -352,15 +411,18 @@ impl SpawnLog {
 
 	/// Whether any pinned member remains alive, without allocating a snapshot.
 	fn has_live(&self, labels: &[u32]) -> bool {
-		self.0.lock().spawned.iter().any(|(label, process)| {
-			labels.contains(label) && process.status() == crate::proctree::ProcessStatus::Running
-		})
+		let state = self.0.lock();
+		labels
+			.iter()
+			.filter_map(|label| state.external.get(label))
+			.flat_map(HashMap::values)
+			.any(|process| process.status() == crate::proctree::ProcessStatus::Running)
 	}
 
 	/// Whether the labeled command started any external process.
 	fn has_external(&self, labels: &[u32]) -> bool {
 		let state = self.0.lock();
-		labels.iter().any(|label| state.external.contains(label))
+		labels.iter().any(|label| state.external.contains_key(label))
 	}
 
 	/// Clear one invocation's records before reusing its label.
@@ -374,6 +436,8 @@ impl SpawnLog {
 		state.clear_records(labels);
 		for label in labels {
 			state.measurement.remove(label);
+			#[cfg(unix)]
+			state.foreground.remove(label);
 		}
 	}
 }
@@ -396,7 +460,7 @@ impl Labels {
 		self.last = self.last.wrapping_add(1).max(1);
 		if parent != 0 {
 			self.parents.push((self.last, parent));
-			self.log.inherit_measurement(parent, self.last);
+			self.log.inherit_policy(parent, self.last);
 		}
 		self.last
 	}
@@ -732,6 +796,12 @@ impl ToolCalls {
 		let mut at = 0;
 		while at < self.active.len() {
 			let (id, tool) = &mut self.active[at];
+			// A pending wave can still refer to an ended run's old label.
+			if ctl.0.word() == 0
+				&& let Tool::Extra(extra) = tool
+			{
+				extra.recycle(&mut self.labels, |label| shell.label_live(label));
+			}
 			let id = *id;
 			let group = self.labels.group(tool.child().label);
 			let live = tool.child().label != 0 && group.iter().any(|&l| shell.label_live(l));
@@ -851,16 +921,20 @@ mod tests {
 		let mut child = SpawnedChild::sleep();
 		let log = SpawnLog::default();
 		let process = || Some(child.process());
-		log.record(Lineage { label: 7, detached: false }, process);
-		log.record(Lineage { label: 8, detached: true }, process);
+		let id = log.record(Lineage { label: 7, detached: false }, process).unwrap();
+		let detached = log.record(Lineage { label: 8, detached: true }, process).unwrap();
 		let recorded = log.has_external(&[7]);
 		let detached_recorded = log.has_external(&[8]);
 		let snapshot = log.live(&[7]);
 		let live = log.has_live(&[7]);
 		child.child.kill().unwrap();
 		child.wait_after_signal(Signal::Kill);
+		log.exited(id);
 		assert!(recorded);
-		assert!(!detached_recorded, "detached members are excluded");
+		assert!(detached_recorded, "explicit labels include detached members");
+		assert_eq!(log.0.lock().pinned, 1, "exit retires only its own pin");
+		log.exited(detached);
+		assert_eq!(log.0.lock().pinned, 0);
 		assert_eq!(snapshot.len(), 1, "the live member must be pinned at spawn");
 		assert_eq!(snapshot[0].pid(), child.pid());
 		assert!(live);
@@ -876,15 +950,17 @@ mod tests {
 	fn spawn_log_prunes_exited_handles_without_losing_history_or_live_members() {
 		let mut live = SpawnedChild::sleep();
 		let log = SpawnLog::default();
-		log.record(Lineage { label: 9, detached: false }, || Some(live.process()));
+		let _ = log.record(Lineage { label: 9, detached: false }, || Some(live.process()));
 		for _ in 0..SpawnLog::PRUNE_THRESHOLD * 3 {
+			let lineage = Lineage { label: 7, detached: false };
+			log.prepare_spawn(lineage);
 			let mut child = SpawnedChild::sleep();
-			log.record(Lineage { label: 7, detached: false }, || Some(child.process()));
+			let _ = log.record(lineage, || Some(child.process()));
 			child.child.kill().unwrap();
 			child.wait_after_signal(Signal::Kill);
 			log.release(&[8]); // A nested builtin-only tool leaves no process records.
 		}
-		let retained = log.0.lock().spawned.len();
+		let retained = log.0.lock().pinned;
 		let history = log.has_external(&[7]);
 		let exited_live = log.has_live(&[7]);
 		let snapshot = log.live(&[9]);
@@ -920,7 +996,7 @@ mod tests {
 		assert!(labels.log.measured(inner));
 		assert!(labels.log.measured(innermost));
 		assert!(!labels.log.measured(other));
-		labels
+		let _ = labels
 			.log
 			.record(Lineage { label: inner, detached: false }, || None);
 		labels.log.clear_records(&[inner]);
@@ -947,7 +1023,7 @@ mod tests {
 		for _ in 0..64 {
 			let retired = labels.fresh(outer);
 			let cleanup = labels.fresh(retired);
-			labels
+			let _ = labels
 				.log
 				.record(Lineage { label: cleanup, detached: false }, || None);
 			labels.retired.push(retired);
@@ -972,7 +1048,7 @@ mod tests {
 		let outer = labels.fresh(0);
 		let retired = labels.fresh(outer);
 		let mut child = SpawnedChild::sleep();
-		labels
+		let _ = labels
 			.log
 			.record(Lineage { label: retired, detached: false }, || Some(child.process()));
 		labels.retired.push(retired);

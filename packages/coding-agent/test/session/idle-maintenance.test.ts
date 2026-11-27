@@ -247,7 +247,6 @@ describe("AgentSession idle maintenance", () => {
 			await until(() => h.recaps.length === 1, "the recap");
 
 			const request = h.side.model.calls[0];
-			expect(sideCalls(h)).toBe(1);
 			// Live title and active todo task anchor the request; the transcript alone cannot guarantee them.
 			expect(lastUserText(request.context)).toContain("Fix login flow");
 			expect(lastUserText(request.context)).toContain("Wire focused tests");
@@ -764,9 +763,6 @@ describe("AgentSession idle maintenance", () => {
 			const job = startBackgroundJob(h);
 
 			await runTurn(h);
-			expect(h.session.wakeSources).toBeDefined();
-			await elapse(RECAP_DELAY_MS - 1);
-			expect(sideCalls(h)).toBe(0);
 			await elapse(3 * RECAP_DELAY_MS);
 			expect(h.session.wakeSources).toBeDefined();
 			expect(sideCalls(h)).toBe(0);

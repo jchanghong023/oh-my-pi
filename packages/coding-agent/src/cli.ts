@@ -152,11 +152,11 @@ async function installNetworkBootstrap(): Promise<void> {
 }
 
 async function startAuthBrokerCli(action: AuthBrokerAction): Promise<void> {
-	if (isProcessEntry) {
+	if (isProcessEntry || action === "serve") {
 		const { initializeDiagnosticLogging, setTransports } = await import("@oh-my-pi/pi-utils/logger");
 		// The supervisor captures the service's structured logs from stdout.
 		if (action === "serve") setTransports({ console: true, file: false });
-		initializeDiagnosticLogging("cli");
+		if (isProcessEntry) initializeDiagnosticLogging("cli");
 	}
 	await installNetworkBootstrap();
 }

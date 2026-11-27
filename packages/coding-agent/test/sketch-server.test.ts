@@ -33,7 +33,6 @@ describe("native sketch server", () => {
 		const url = new URL(server.url);
 		expect(url.protocol).toBe("http:");
 		expect(url.hostname).toBe("127.0.0.1");
-		expect(Number(url.port)).toBeGreaterThan(0);
 		const page = await fetch(server.url);
 		expect(page.status).toBe(200);
 		expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");

@@ -86,6 +86,7 @@ import {
 	requestRemoteCompaction,
 	shouldUseOpenAiRemoteCompaction,
 	trimRemoteCompactionInputToContextWindow,
+	usesRemoteSummaryModelCredentials,
 	withOpenAiRemoteCompactionPreserveData,
 } from "./openai";
 import autoHandoffThresholdFocusPrompt from "./prompts/auto-handoff-threshold-focus.md" with { type: "text" };
@@ -1163,6 +1164,26 @@ async function withRemoteRequestAuth<T>(
 	return withAuth(apiKey, send, { signal, missingKeyMessage });
 }
 
+function withRemoteSummaryRequestAuth<T>(
+	endpoint: string,
+	model: Model,
+	apiKey: ApiKey,
+	signal: AbortSignal | undefined,
+	options: SummaryOptions,
+	send: (key: string, auth?: SimpleStreamOptions["requestAuth"]) => Promise<T>,
+): Promise<T> {
+	if (!usesRemoteSummaryModelCredentials(endpoint, model)) return send("");
+	return withRemoteRequestAuth(
+		model,
+		apiKey,
+		signal,
+		options,
+		undefined,
+		send,
+		"Remote compaction credentials unavailable",
+	);
+}
+
 /** One summarization call over a single conversation window. */
 async function summarizeConversationWindow(
 	conversationText: string,
@@ -1201,12 +1222,12 @@ async function summarizeConversationWindow(
 
 	if (options?.remoteEndpoint) {
 		const endpoint = options.remoteEndpoint;
-		const remote = await withRemoteRequestAuth(
+		const remote = await withRemoteSummaryRequestAuth(
+			endpoint,
 			model,
 			apiKey,
 			signal,
 			options,
-			undefined,
 			(key, requestAuth) =>
 				requestRemoteCompaction(
 					endpoint,
@@ -1214,7 +1235,6 @@ async function summarizeConversationWindow(
 					signal,
 					{ fetch: options.fetch, model, apiKey: key, requestAuth, onPayload: options.onPayload },
 				),
-			"Remote compaction credentials unavailable",
 		);
 		return remote.summary;
 	}
@@ -1458,12 +1478,12 @@ async function generateShortSummary(
 	try {
 		if (options?.remoteEndpoint) {
 			const endpoint = options.remoteEndpoint;
-			const remote = await withRemoteRequestAuth(
+			const remote = await withRemoteSummaryRequestAuth(
+				endpoint,
 				model,
 				apiKey,
 				signal,
 				options,
-				undefined,
 				(key, requestAuth) =>
 					requestRemoteCompaction(
 						endpoint,
@@ -1471,7 +1491,6 @@ async function generateShortSummary(
 						signal,
 						{ fetch: options.fetch, model, apiKey: key, requestAuth, onPayload: options.onPayload },
 					),
-				"Remote compaction credentials unavailable",
 			);
 			outcome = { kind: "text", text: remote.summary };
 		} else {

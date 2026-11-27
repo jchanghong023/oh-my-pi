@@ -85,8 +85,8 @@
 - 发射正常完成：`expectNext(...)` → `verifyComplete()`；Mono 单值同此；空 publisher 用 `expectNextCount(0)` → `verifyComplete()`
 - 多值：顺序重要用 `expectNext(a, b, c)`；仅关注数量用 `expectNextCount(n)` → `verifyComplete()`
 - 复杂对象：`expectNextMatches(predicate)` 或 `assertNext(consumer)`
-- 错误终止：`expectError(SomeException.class)` 或细节版 `expectErrorSatisfies(...)`；先发射后失败：`expectNext(...)` → `expectError(...)`
-- 取消/背压/时间：`thenCancel()` → `verify()`；`StepVerifier.create(publisher, 0)` → `thenRequest(n)`；`withVirtualTime(...)` → `thenAwait(...)`；`verifyTimeout(Duration)`
+- 错误终止：`expectError(SomeException.class)` 或 `expectErrorSatisfies(...)` 后 MUST 调用 `verify()`；先发射后失败时先加 `expectNext(...)`
+- 取消/背压/时间：`thenCancel()` → `verify()`；`StepVerifier.create(publisher, 0)` → `thenRequest(n)`；`withVirtualTime(...)` → `thenAwait(...)`；要限制验证时间，用 `verify(Duration)` 执行已声明的终止断言
 
 **判定**：对照策略检查发射与终止是否均已覆盖。
 

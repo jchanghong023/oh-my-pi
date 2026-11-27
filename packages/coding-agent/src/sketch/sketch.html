@@ -199,7 +199,8 @@ SOFTWARE.
       var cancelling = false;
       var finished = false;
       var terminalError = '';
-      var pasteGeneration = 0;
+      var pasting = false;
+      var sendAfterPaste = false;
       var states = [];
       var lastX = 0;
       var lastY = 0;
@@ -212,7 +213,7 @@ SOFTWARE.
         status.textContent = message;
       }
 
-      function busy() { return pending || cancelling || finished || restoring; }
+      function busy() { return pending || cancelling || finished || restoring || pasting; }
 
       function updateView() {
         container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${zoom})`;
@@ -224,7 +225,7 @@ SOFTWARE.
 
       function zoomAt(value, x, y) {
         if (busy() || resizing || pointerId !== null) return;
-        const next = Math.max(0.1, Math.min(8, value));
+        const next = Math.max(Math.min(0.1, zoom), Math.min(8, value));
         offsetX = x - (x - offsetX) * next / zoom;
         offsetY = y - (y - offsetY) * next / zoom;
         zoom = next;
@@ -232,7 +233,9 @@ SOFTWARE.
       }
 
       function fitCanvas() {
-        zoom = Math.max(0.1, Math.min(8, viewport.clientWidth / canvas.width, viewport.clientHeight / canvas.height));
+        const fit = Math.min(8, viewport.clientWidth / canvas.width, viewport.clientHeight / canvas.height);
+        if (fit <= 0) return;
+        zoom = fit;
         offsetX = (viewport.clientWidth - canvas.width * zoom) / 2;
         offsetY = (viewport.clientHeight - canvas.height * zoom) / 2;
         updateView();
@@ -279,7 +282,6 @@ SOFTWARE.
 
       function clearCanvas() {
         if (busy() || resizing) return;
-        pasteGeneration++;
         drawing = false;
         canvas.width = initialWidth;
         canvas.height = initialHeight;
@@ -290,7 +292,6 @@ SOFTWARE.
 
       function undo() {
         if (busy() || resizing || states.length < 2) return;
-        pasteGeneration++;
         drawing = false;
         restoring = true;
         var previous = states[states.length - 2];
@@ -444,9 +445,12 @@ SOFTWARE.
         xhr.send(body);
       }
       function send() {
+        if (pasting) {
+          sendAfterPaste = true;
+          return;
+        }
         if (busy() || resizing) return;
         finishStroke();
-        pasteGeneration++;
         try {
           var encoded = canvas.toDataURL('image/png').split(',')[1];
           if (!encoded) {
@@ -463,8 +467,8 @@ SOFTWARE.
       }
       function cancel() {
         if (cancelling || finished || terminalError || restoring) return;
+        sendAfterPaste = false;
         finishStroke();
-        pasteGeneration++;
         transport('cancel', '');
       }
       document.getElementById('clearButton').addEventListener('click', clearCanvas);
@@ -474,6 +478,7 @@ SOFTWARE.
 
       document.addEventListener('keydown', function (event) {
         var key = (event.key || '').toLowerCase();
+        if ((key === 'enter' || key === ' ') && event.target.closest?.('button')) return;
         if (key === ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) {
           event.preventDefault();
           spaceHeld = true;
@@ -490,7 +495,7 @@ SOFTWARE.
         else if (key === '3') document.querySelector('[data-size="8"]').click();
       });
       document.addEventListener('keyup', function (event) {
-        if (event.key !== ' ') return;
+        if (event.key !== ' ' || !spaceHeld) return;
         event.preventDefault();
         spaceHeld = false;
         updateView();
@@ -502,12 +507,16 @@ SOFTWARE.
       });
 
       function pasteImage(blob) {
-        var generation = ++pasteGeneration;
+        pasting = true;
+        setStatus('pending', '正在加载粘贴的图片…');
         var image = new Image();
         var objectUrl = URL.createObjectURL(blob);
         image.onload = function () {
           URL.revokeObjectURL(objectUrl);
-          if (generation !== pasteGeneration || busy() || resizing) return;
+          const shouldSend = sendAfterPaste;
+          sendAfterPaste = false;
+          pasting = false;
+          if (finished || cancelling) return;
           finishStroke();
           var scale = Math.min(DEFAULT_WIDTH / image.width, DEFAULT_HEIGHT / image.height, 1);
           canvas.width = Math.max(1, Math.round(image.width * scale));
@@ -516,9 +525,14 @@ SOFTWARE.
           ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
           saveState();
           fitCanvas();
+          setStatus('ready', '可继续绘图或添加附件。');
+          if (shouldSend) send();
         };
         image.onerror = function () {
           URL.revokeObjectURL(objectUrl);
+          sendAfterPaste = false;
+          pasting = false;
+          if (finished || cancelling) return;
           setStatus('error', '无法加载粘贴的图片。当前绘图保持不变。');
         };
         image.src = objectUrl;
@@ -544,7 +558,6 @@ SOFTWARE.
         event.preventDefault();
         event.stopPropagation();
         finishStroke();
-        pasteGeneration++;
         resizing = true;
         const resizeId = event.pointerId;
         resizeHandle.setPointerCapture(resizeId);

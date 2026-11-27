@@ -108,6 +108,7 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 export async function bundleDist(outDir: string = defaultOutDir): Promise<void> {
 	const cliPath = path.join(outDir, "cli.js");
 	const start = Bun.nanoseconds();
+	await runCommand(["bun", "run", "gen:export-viewer"]);
 	const exportViewer = await readGeneratedExportViewer();
 	const openWikiText = await buildOpenWikiResourceText();
 	await cleanBundleOutputs(outDir);

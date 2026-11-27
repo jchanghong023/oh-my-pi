@@ -7,7 +7,7 @@
 - **测试框架**：pytest（首选），unittest（兼容）
 - **Mock框架**：unittest.mock（patch、MagicMock、PropertyMock）
 - **覆盖率工具**：pytest-cov / coverage.py，目标 ≥ 90%
-- **执行环境**：优先使用 `.venv/Scripts/python.exe`，回退到父项目.venv或系统python
+- **执行环境**：`$PYTHON` 为所选解释器；Windows 优先 `.venv/Scripts/python.exe`，Linux/macOS 优先 `.venv/bin/python`，回退到父项目 .venv 或系统 Python。
 
 ## 项目类型检测与策略
 
@@ -79,13 +79,13 @@
 
 ```bash
 # 语法检查
-.venv/Scripts/python.exe -c "import ast; ast.parse(open('<test_file>').read()); print('Syntax OK')"
+"$PYTHON" -c "import ast, sys; from pathlib import Path; ast.parse(Path(sys.argv[1]).read_bytes(), filename=sys.argv[1]); print('Syntax OK')" "<test_file>"
 
 # 执行测试
-.venv/Scripts/python.exe -m pytest <test_file> -v --tb=short --timeout=10
+"$PYTHON" -m pytest "<test_file>" -v --tb=short
 ```
 
-Windows下bash命令使用正斜杠（/），不使用反斜杠。
+PowerShell 用 `& $PYTHON`；Windows 下 Bash 路径用 `/`。仅当 `pytest --help` 列出 `--timeout` 时，才传 `--timeout=10`；否则使用 shell 工具的超时。
 
 ## 覆盖率测量与清理
 
@@ -95,53 +95,45 @@ Windows下bash命令使用正斜杠（/），不使用反斜杠。
 
 ```powershell
 # Windows (PowerShell) - 创建临时目录
-$COV_DIR="$env:TEMP\ut-python"; New-Item -ItemType Directory -Force -Path $COV_DIR | Out-Null
+$COV_DIR = (New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString())) -ErrorAction Stop).FullName
 
 # 运行覆盖率
-.venv/Scripts/python.exe -m coverage run --rcfile=NUL --branch -m pytest <test_file> -v --tb=short --timeout=10
+& $PYTHON -m coverage run --rcfile=NUL "--data-file=$COV_DIR\.coverage" --branch -m pytest "<test_file>" -v --tb=short
 
 # 生成JSON报告到临时目录
-.venv/Scripts/python.exe -m coverage json -o "$COV_DIR\coverage.json" --rcfile=NUL
+& $PYTHON -m coverage json --rcfile=NUL "--data-file=$COV_DIR\.coverage" -o "$COV_DIR\coverage.json"
 
 # 解析函数级覆盖率
-.venv/Scripts/python.exe "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR\coverage.json" <function_name> <start_line> <end_line> <source_file_path>
+& $PYTHON "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR\coverage.json" "<function_name>" "<start_line>" "<end_line>" "<source_file_path>"
 ```
 
 ```bash
 # Unix (bash) - 创建临时目录
-COV_DIR="/tmp/ut-python"; mkdir -p "$COV_DIR"
+COV_DIR=$(mktemp -d) || exit 1
 
 # 运行覆盖率
-.venv/bin/python -m coverage run --rcfile=NUL --branch -m pytest <test_file> -v --tb=short --timeout=10
+"$PYTHON" -m coverage run --rcfile=/dev/null --data-file="$COV_DIR/.coverage" --branch -m pytest "<test_file>" -v --tb=short
 
 # 生成JSON报告到临时目录
-.venv/bin/python -m coverage json -o "$COV_DIR/coverage.json" --rcfile=NUL
+"$PYTHON" -m coverage json --rcfile=/dev/null --data-file="$COV_DIR/.coverage" -o "$COV_DIR/coverage.json"
 
 # 解析函数级覆盖率
-.venv/bin/python "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" <function_name> <start_line> <end_line> <source_file_path>
+"$PYTHON" "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" "<function_name>" "<start_line>" "<end_line>" "<source_file_path>"
 ```
 
 ### 环境清理
 
-覆盖率测量完成后，删除临时目录及项目目录中可能残留的覆盖率中间产物：
+覆盖率测量完成后，仅删除本次创建的临时目录；不得修改或删除项目原有的 `.coverage`。
 
 ```powershell
 # Windows (PowerShell) - 删除临时目录
-Remove-Item "$env:TEMP\ut-python" -Recurse -Force -ErrorAction SilentlyContinue
-
-# 清理项目目录中可能残留的 .coverage 文件
-Remove-Item ".coverage" -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath "$COV_DIR" -Recurse -Force
 ```
 
 ```bash
 # Unix (bash) - 删除临时目录
-rm -rf /tmp/ut-python
-
-# 清理项目目录中可能残留的 .coverage 文件
-rm -f .coverage
+rm -rf -- "$COV_DIR"
 ```
-
-**注意**：`coverage run` 会在当前工作目录生成 `.coverage` 二进制数据文件。即使 JSON 报告输出到临时目录，`.coverage` 文件仍会留在项目目录，必须显式清理。唯一保留的覆盖率交付物是通过 `parse_coverage.py` 解析后输出的覆盖率结果。
 
 ## 子文件导航
 

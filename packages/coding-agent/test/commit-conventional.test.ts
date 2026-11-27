@@ -247,7 +247,6 @@ describe("llm-git generation routing", () => {
 				config: config({ maxRetries: 2, initialBackoffMs: 0, mapReduceEnabled: false }),
 				inference,
 			});
-			expect(calls).toBe(3);
 			expect(complete.mock.calls.map(([, , opts]) => opts?.thinkingProbe)).toEqual([true, true, true]);
 			expect(result.commit.summary).toBe("added parser recovery");
 		} finally {

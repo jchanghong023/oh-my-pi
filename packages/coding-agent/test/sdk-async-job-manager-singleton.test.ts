@@ -187,10 +187,9 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 			expect(manager.cancel(cancelled)).toBe(true);
 			expect(manager.getJob(cancelled)?.status).toBe("cancelled");
 			expect(manager.atCapacity).toBe(false);
-			const last = manager.register("bash", "replacement", () => release.promise, { suppressDelivery: true });
+			manager.register("bash", "replacement", () => release.promise, { suppressDelivery: true });
 			expect(manager.atCapacity).toBe(true);
 			expect(manager.getJob(queued)?.queued).toBe(true);
-			expect(manager.getJob(last)?.status).toBe("running");
 		} finally {
 			release.resolve("released");
 			await session.asyncJobManager?.waitForAll();

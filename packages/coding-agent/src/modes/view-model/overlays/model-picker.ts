@@ -62,10 +62,6 @@ export interface ModelPickerOptions {
 	taskModeKeys?: readonly KeyId[];
 	/** `provider/id` highlighted and preselected in task mode (current Task subagent model). */
 	taskSelector?: string;
-	/** Choose a model without the session, Task, role, or effort controls. */
-	selectOnly?: boolean;
-	/** Complete selection-only catalogue and shared search. */
-	getCandidates?: (query: string) => readonly Model[];
 	/**
 	 * Level the untouched slider shows for `model` (clamped to its ladder): the
 	 * session's current level. An untouched pick carries the session's own

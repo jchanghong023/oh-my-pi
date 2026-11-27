@@ -21,13 +21,15 @@ import {
 	choiceValue,
 	fieldError,
 	fieldQuestions,
+	hasInitialFormRecommendation,
 	type HtmlFormData,
 	type HtmlFormValue,
+	initialChoiceSelection,
 	type OptionNote,
 	textValue,
 } from "../../../tools/html-form/data";
 import type { ChoiceField, FormField, HtmlForm, TextField } from "../../../tools/html-form/parse";
-import { implicitChoiceDefaults, spansText } from "../../../tools/html-form/parse";
+import { spansText } from "../../../tools/html-form/parse";
 import { type DialogVim, UndoHistory, VimEditor } from "../../composer/vim-editor";
 import { editLine, type LineState } from "../../overlays/settings/line-edit";
 import type { AskPill } from "../../overlays/panels/ask-dialog";
@@ -107,10 +109,8 @@ function boxKey(box: TextBox): string {
 
 function emptyAnswer(field: FormField): FieldAnswer {
 	const text = field.kind === "text" ? field.value : "";
-	const checked = field.kind === "choice" ? field.options.flatMap((o, i) => (o.checked ? [i] : [])) : [];
 	return {
-		// Several checked radios: the last one wins, as in a browser.
-		checked: new Set(field.kind === "choice" && !field.multi ? checked.slice(-1) : checked),
+		checked: field.kind === "choice" ? initialChoiceSelection(field) : new Set(),
 		other: { text: "", cursor: 0 },
 		otherChosen: false,
 		text: { text, cursor: 0 },
@@ -200,7 +200,7 @@ export class HtmlFormModel {
 		this.#callbacks = callbacks;
 		this.focused = signal(options.focused ?? true);
 		this.answers.set(form.fields.map(emptyAnswer));
-		this.#recommended = callbacks.validateTimeoutRecommendation === true && this.#hasInitialRecommendation();
+		this.#recommended = callbacks.validateTimeoutRecommendation === true && hasInitialFormRecommendation(form);
 		if (options.vim) {
 			const vim = options.vim;
 			form.fields.forEach((field, index) => {
@@ -310,33 +310,6 @@ export class HtmlFormModel {
 	#isValidTimeoutValue(field: FormField, index: number, value: HtmlFormValue | undefined): boolean {
 		if (field.kind === "choice" && field.options[0]?.placeholder && this.answer(index).checked.has(0)) return false;
 		return fieldError(field, value) === undefined;
-	}
-
-	#hasInitialRecommendation(): boolean {
-		// Like data(), the last control contributing a value owns its name. An overwritten
-		// default is not a recommendation, even when its own control is valid.
-		const names = new Set<string>();
-		for (let index = this.fields.length - 1; index >= 0; index--) {
-			const field = this.field(index);
-			if (!field.name || names.has(field.name)) continue;
-			const value = this.value(index);
-			if (value === undefined) continue;
-			names.add(field.name);
-			if (!this.#isValidTimeoutValue(field, index, value)) continue;
-			if (field.kind === "text") {
-				if (field.value.trim()) return true;
-			} else {
-				const checked = this.answer(index).checked;
-				if (
-					field.options.some(
-						(option, at) => checked.has(at) && !option.disabled && !implicitChoiceDefaults.has(option),
-					)
-				) {
-					return true;
-				}
-			}
-		}
-		return false;
 	}
 
 	/** Whether field `index` holds an acceptable, non-empty answer. */

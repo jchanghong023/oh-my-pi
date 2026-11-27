@@ -196,7 +196,9 @@ export const ttsrHelp = {
 	description: "Inspect and test Time-Traveling Stream Rules (TTSR)",
 } satisfies CommandMetadata;
 
-export const updateHelp = { description: "Check for and install updates" } satisfies CommandMetadata;
+export const updateHelp = {
+	description: "Check for or install OMP updates from CNB, or upgrade installed plugins",
+} satisfies CommandMetadata;
 
 export const usageHelp = {
 	description: "Show provider usage limits for every authenticated account",

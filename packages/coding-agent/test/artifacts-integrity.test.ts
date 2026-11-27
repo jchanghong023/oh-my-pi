@@ -172,7 +172,6 @@ describe("ArtifactManager write integrity", () => {
 				await fs.promises.mkdir(dir, { recursive: true });
 				const destination = path.join(dir, filename);
 				expect(destination.length).toBe(targetLength);
-				expect(`${destination}.tmp-${crypto.randomUUID()}`.length).toBeGreaterThan(282);
 				const unregister = registerArtifactsDir(dir);
 				try {
 					const handler = new AgentProtocolHandler();

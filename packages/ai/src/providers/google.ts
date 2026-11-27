@@ -60,7 +60,13 @@ export const streamGoogle: StreamFunction<"google-generative-ai"> = (
 				sessionId: options?.sessionId ?? options?.promptCacheKey,
 				parentSessionId: options?.parentSessionId,
 			});
-			return { params, url, headers, fetch: options?.fetch };
+			return {
+				params,
+				url,
+				headers,
+				fetch: options?.fetch,
+				redirect: requestAuth === undefined ? undefined : "error",
+			};
 		},
 	});
 };

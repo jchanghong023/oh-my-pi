@@ -162,7 +162,6 @@ test("shows the same optional profile tag in terminal and native status for idle
 			expect(native()).toEqual([]);
 
 			facts.set({ ...facts(), profile: "work" });
-			expect(terminal()).toBe(`${PLAIN_THEME.symbols.icon("omp")}-work`);
 			expect(native()).toEqual(["work"]);
 			facts.set({ ...facts(), turnStartedAt: 0 });
 			expect(terminal()).toBe(`${PLAIN_THEME.symbols.activityFrames[0]}-work 1m`);

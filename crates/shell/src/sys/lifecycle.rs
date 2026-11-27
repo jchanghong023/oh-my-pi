@@ -199,12 +199,16 @@ impl Lifecycle {
 	}
 
 	/// Whether the exit has been observed.
-	#[cfg_attr(
-		not(target_os = "linux"),
-		expect(dead_code, reason = "only Linux externals observe their own exit (pidfd)")
-	)]
+	#[cfg(unix)]
 	pub const fn has_exited(&self) -> bool {
 		self.status.is_some()
+	}
+
+	/// The foreground process exited and its output snapshot was delivered.
+	#[cfg(unix)]
+	pub fn collect_snapshot(&mut self) -> ExitStatus {
+		self.collected = true;
+		self.status.expect("output snapshot follows process exit")
 	}
 
 	/// Whether [`Lifecycle::poll`] handed the exit to the engine.
@@ -294,8 +298,8 @@ impl Tracker {
 	/// Input pumps stop: nothing reads the child's stdin any more (a
 	/// grandchild still reading it loses the rest, by design).
 	pub fn exited(&self, status: ExitStatus) -> bool {
-		self.cancel_pumps();
 		let (waker, reap) = self.life.lock().exited(status);
+		self.cancel_pumps();
 		if let Some(w) = waker {
 			w.wake();
 		}

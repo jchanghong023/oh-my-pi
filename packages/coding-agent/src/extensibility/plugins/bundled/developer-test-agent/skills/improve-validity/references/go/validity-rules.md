@@ -105,6 +105,6 @@ if result != 100 {
 ### III. 提前退出检查
 
 - 循环内 `return` 导致后续断言未执行
-- `t.Fatal` 在循环内导致后续迭代未执行（应使用 `t.Error` 累积错误）
+- 循环内 `t.Fatal` 会终止整个测试，后续迭代不执行。
 
-**修复**：循环内使用 `t.Error` 而非 `t.Fatal`，或拆分为独立测试用例。
+**修复**：独立断言 MAY 用 `t.Error` 累积失败。后续断言依赖前置结果（如 `err == nil` 或指针非空）时，MUST 用 `t.Error` 后 `continue`，或在独立的 `t.Run` 子测试内保留 `t.Fatal`。

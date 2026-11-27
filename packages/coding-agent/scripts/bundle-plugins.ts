@@ -16,7 +16,7 @@ export async function createBundlePlugins(): Promise<{ plugins: BunPlugin[]; spe
 		createOpenWikiVendorLoaderPlugin(),
 		await createLegacyPiVirtualModulePlugin(),
 	];
-	const specDrivenArchive = await buildSpecDrivenArchive();
-	plugins.push(await createSpecDrivenArchivePlugin(specDrivenArchive));
-	return { plugins, specDrivenArchive };
+	const archive = await buildSpecDrivenArchive();
+	plugins.push(createSpecDrivenArchivePlugin(archive));
+	return { plugins, specDrivenArchive: archive.bytes };
 }

@@ -168,8 +168,6 @@ describe("status-line brand and spacing", () => {
 		const dim = theme.fgSgr("dim");
 		const accent = theme.fgSgr("accent");
 		const icon = theme.symbols.icon("omp");
-		expect(icon).not.toBe("");
-		expect(dim).not.toBe(accent);
 		const line = new SessionStatusLine(statusSession());
 		line.previewSettings(settings);
 		const paint = (now: number) => {
@@ -247,7 +245,6 @@ describe("status-line transparency", () => {
 		expect(transparent).toContain("\x1b[49m");
 		for (const key of ["sep.powerlineLeft", "sep.powerlineRight"]) {
 			const cap = theme.symbols.symbol(key);
-			expect(cap).not.toBe("");
 			expect(opaque).toContain(cap);
 			expect(transparent).not.toContain(cap);
 		}

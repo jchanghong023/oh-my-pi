@@ -103,7 +103,7 @@ describe("compaction queue image forwarding", () => {
 		const { ctx } = makeCtx();
 		new UiHelpers(ctx).queueCompactionMessage("no images here", "followUp", []);
 		expect(ctx.compactionQueuedMessages).toEqual([
-			{ text: "no images here", mode: "followUp", images: undefined, draftDetached: true },
+			expect.objectContaining({ text: "no images here", mode: "followUp", images: undefined }),
 		]);
 	});
 

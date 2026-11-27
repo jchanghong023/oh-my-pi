@@ -19,7 +19,7 @@ import { keyCaps } from "@oh-my-pi/pi-tui/term/painters/picker";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import type { TspPickerLevel, TspPickerScope } from "@oh-my-pi/pi-wire";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
-import { formatModelStringWithRouting } from "../../../config/model-resolver";
+import { formatModelStringWithRouting, formatPinnedPickerSelector } from "../../../config/model-resolver";
 import type { ScopedModelItem } from "../../../modes/view-model/overlays/model-hub";
 import {
 	buildSessionModelScope,
@@ -104,22 +104,18 @@ function levelColor(theme: Theme, level: ConfiguredThinkingLevel): string {
 type Mode = "session" | "role" | "task";
 
 /** The browser state behind a picker; {@link prewarmModelPicker} builds rows through the same one. */
-function pickerBrowser(
-	source: ModelBrowserSource,
-	options: ModelBrowserOptions,
-	selectOnly = false,
-): ModelBrowserState {
-	const browser = new ModelBrowserState(source, { markOverContext: !selectOnly, ...options });
-	// Only session pickers have a provider rail; Team rows identify their provider inline.
-	browser.setPickerProvider(selectOnly);
+function pickerBrowser(source: ModelBrowserSource, options: ModelBrowserOptions): ModelBrowserState {
+	const browser = new ModelBrowserState(source, { markOverContext: true, ...options });
+	// The provider rail and logos identify providers; labels only need the model ID.
+	browser.setPickerProvider(false);
 	return browser;
 }
 
 /** Every bare row key contains a slash; pinned rows use a separate identity namespace. */
 function pinnedPickerItem(model: Model, pin: string): ModelBrowserItem {
 	const { provider, id } = model;
-	const selector = `pin:${encodeURIComponent(JSON.stringify([provider, id, pin]))}`;
-	return { model, provider, id, selector, perfSelector: `${provider}/${id}` };
+	const selector = formatPinnedPickerSelector(model, pin);
+	return { model, provider, id: `${id} · via ${pin}`, selector, perfSelector: `${provider}/${id}` };
 }
 
 const routedPickerScopes = new WeakMap<ModelBrowserItem[], ModelBrowserItem[]>();
@@ -193,26 +189,10 @@ function* untilAborted(work: SlicedWork, signal: AbortSignal | undefined): Slice
 export function ModelPicker(props: ModelPickerProps): JSXNode {
 	const { source, registry, callbacks } = props;
 	const options = props.options ?? {};
-	const selectOnly = options.selectOnly === true;
-	const getCandidates = selectOnly ? options.getCandidates : undefined;
-	const candidateCatalogue = new Map<string, ModelBrowserItem>();
-	const candidateItems = (query: string): ModelBrowserItem[] => {
-		const items = (getCandidates?.(query) ?? []).map(model => {
-			const { provider, id } = model;
-			const selector = `${provider}/${id}`;
-			const cached = candidateCatalogue.get(selector);
-			if (cached?.model === model) return cached;
-			const item = { model, provider, id, selector };
-			candidateCatalogue.set(selector, item);
-			return item;
-		});
-		modelItems.set([...candidateCatalogue.values()]);
-		return items;
-	};
 	const quickRoleKey = `@`;
 	const cycleKey = keyCaps(["ctrl", "p"]);
-	const taskKey = !selectOnly && callbacks.onPickTask ? options.taskModeKeys?.[0] : undefined;
-	const taskKeys = new Set<string>(!selectOnly && callbacks.onPickTask ? (options.taskModeKeys ?? []) : []);
+	const taskKey = callbacks.onPickTask ? options.taskModeKeys?.[0] : undefined;
+	const taskKeys = new Set<string>(callbacks.onPickTask ? (options.taskModeKeys ?? []) : []);
 	const currentQuickRole = options.currentQuickRole ? `${quickRoleKey}${options.currentQuickRole}` : undefined;
 
 	const roleMode = signal(false);
@@ -228,7 +208,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 
 	const quickRoles = new Map<string, ResolvedRoleModel>();
 	const quickRoleItems: ModelBrowserItem[] = (() => {
-		const entries = selectOnly ? [] : (options.quickRoles ?? []);
+		const entries = options.quickRoles ?? [];
 		const order = options.quickRoleOrder?.length ? options.quickRoleOrder : entries.map(entry => entry.role);
 		const palette = segmentPalette(currentTheme(), order.length);
 		return entries.map((entry, index) => {
@@ -245,15 +225,10 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		});
 	})();
 
-	const browser = pickerBrowser(
-		source,
-		{
-			currentContextTokens: options.currentContextTokens,
-			queryItems: getCandidates ? candidateItems : undefined,
-			emptyText: () => (roleMode() ? `  No quick roles in the ${cycleKey} cycle` : undefined),
-		},
-		selectOnly,
-	);
+	const browser = pickerBrowser(source, {
+		currentContextTokens: options.currentContextTokens,
+		emptyText: () => (roleMode() ? `  No quick roles in the ${cycleKey} cycle` : undefined),
+	});
 
 	const mode = (): Mode => (taskMode() ? "task" : roleMode() ? "role" : "session");
 
@@ -263,7 +238,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 	/** The highlighted model's slider; session mode only. */
 	const slider = (): ThinkingSlider | undefined => {
 		const levelFor = options.thinkingLevelFor;
-		if (selectOnly || !levelFor || mode() !== "session") return undefined;
+		if (!levelFor || mode() !== "session") return undefined;
 		const model = browser.selected()?.model;
 		if (!model) return undefined;
 		return thinkingSlider(model, thinking() ?? levelFor(model));
@@ -304,14 +279,14 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 
 	/** The browser's rows for the query's mode: a leading `@` lists the quick roles (outside task mode). */
 	const syncItems = (query: string, refresh = false): void => {
-		const wantRoles = !selectOnly && query.startsWith(quickRoleKey) && !taskMode.peek();
+		const wantRoles = query.startsWith(quickRoleKey) && !taskMode.peek();
 		const changed = wantRoles !== roleMode.peek();
 		if (!changed && !refresh) return;
 		batch(() => {
 			roleMode.set(wantRoles);
 			if (wantRoles) scope.set(ALL_SCOPE);
 			browser.setShowProvider(!wantRoles);
-			browser.setMarkOverContext(!selectOnly && !wantRoles && !taskMode.peek());
+			browser.setMarkOverContext(!wantRoles && !taskMode.peek());
 			browser.setPreserveQueryOrder(wantRoles);
 			const target = current();
 			browser.setCurrentSelector(target);
@@ -321,11 +296,6 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 	};
 
 	const syncFromRegistry = (): void => {
-		if (getCandidates) {
-			browser.setItems(candidateItems(""));
-			browser.setCurrentSelector(options.currentSelector);
-			return;
-		}
 		const scoped = buildSessionModelScope(
 			source,
 			registry,
@@ -333,44 +303,53 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		);
 		batch(() => {
 			configError.set(scoped.error);
-			let items = selectOnly ? scoped.items : routedPickerItems(scoped.items);
-			if (!selectOnly) {
-				const selector = options.currentSelector;
-				const currentModel = props.currentModel;
-				let sessionItem = currentModel
-					? items.find(item => routedModelsAreEqual(item.model, currentModel))
-					: (items.find(item => (item.perfSelector ?? item.selector) === selector) ??
-						items.find(item => formatModelStringWithRouting(item.model) === selector));
-				if (!sessionItem && currentModel) {
-					// A session pin can be resolved from a bare catalog row without being listed in it.
-					const pin = getUpstreamPin(currentModel);
-					if (pin) {
-						sessionItem = pinnedPickerItem(currentModel, pin);
-						items = [...items, sessionItem];
-					}
+			let items = routedPickerItems(scoped.items);
+			const selector = options.currentSelector;
+			const currentModel = props.currentModel;
+			let sessionItem = currentModel
+				? items.find(item => routedModelsAreEqual(item.model, currentModel))
+				: (items.find(item => (item.perfSelector ?? item.selector) === selector) ??
+					items.find(item => formatModelStringWithRouting(item.model) === selector));
+			if (!sessionItem && currentModel) {
+				// A session pin can be resolved from a bare catalog row without being listed in it.
+				const pin = getUpstreamPin(currentModel);
+				if (pin) {
+					sessionItem = pinnedPickerItem(currentModel, pin);
+					items = [...items, sessionItem];
 				}
-				sessionRowKey.set(sessionItem?.selector);
-				if (taskKeys.size > 0 && options.taskSelector) {
-					const taskModel = source.resolveRoleValue(
-						options.taskSelector,
-						scoped.availableItems.map(item => item.model),
-					).model;
-					taskRowKey.set(items.find(item => routedModelsAreEqual(item.model, taskModel))?.selector);
-				} else {
-					taskRowKey.set(sessionItem?.selector);
-				}
-				browser.setRoles(scoped.roles);
-				if (items !== scoped.items && scoped.mruOrder.length > 0) {
-					const recent = new Map(scoped.mruOrder.map(selector => [selector, [selector]]));
-					for (const item of items) {
-						if (item.perfSelector) recent.get(formatModelStringWithRouting(item.model))?.push(item.selector);
-					}
-					browser.setMruOrder([...recent.values()].flat());
-				} else {
-					browser.setMruOrder(scoped.mruOrder);
-				}
-				browser.setPerfStats(source.modelPerf);
 			}
+			sessionRowKey.set(sessionItem?.selector);
+			if (taskKeys.size > 0 && options.taskSelector) {
+				const taskModel = source.resolveRoleValue(
+					options.taskSelector,
+					scoped.availableItems.map(item => item.model),
+				).model;
+				let taskItem = items.find(item => routedModelsAreEqual(item.model, taskModel));
+				const taskPin = taskModel && getUpstreamPin(taskModel);
+				if (
+					!taskItem &&
+					taskModel &&
+					taskPin &&
+					items.some(item => item.provider === taskModel.provider && item.model.id === taskModel.id)
+				) {
+					taskItem = pinnedPickerItem(taskModel, taskPin);
+					items = [...items, taskItem];
+				}
+				taskRowKey.set(taskItem?.selector);
+			} else {
+				taskRowKey.set(sessionItem?.selector);
+			}
+			browser.setRoles(scoped.roles);
+			if (items !== scoped.items && scoped.mruOrder.length > 0) {
+				const recent = new Map(scoped.mruOrder.map(selector => [selector, [selector]]));
+				for (const item of items) {
+					if (item.perfSelector) recent.get(formatModelStringWithRouting(item.model))?.push(item.selector);
+				}
+				browser.setMruOrder([...recent.values()].flat());
+			} else {
+				browser.setMruOrder(scoped.mruOrder);
+			}
+			browser.setPerfStats(source.modelPerf);
 			modelItems.set(items);
 			syncItems(browser.query, true);
 		});
@@ -379,7 +358,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 	/** Show scope `picked` (the active one again shows all); the highlight falls back to the current model when it leaves. */
 	const setScope = (picked: string): void => {
 		const id = picked === scope.peek() ? ALL_SCOPE : picked;
-		if (selectOnly || roleMode.peek() || id === scope.peek()) return;
+		if (roleMode.peek() || id === scope.peek()) return;
 		if (id !== ALL_SCOPE && !scopes().some(entry => entry.id === id)) return;
 		const before = browser.pickerSelected;
 		batch(() => {
@@ -434,7 +413,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		const thinkingLevel = pendingThinking(item.model);
 		callbacks.onPick(
 			item.model,
-			selectOnly ? item.selector : formatModelStringWithRouting(item.model),
+			formatModelStringWithRouting(item.model),
 			thinkingLevel === undefined ? { overContext } : { overContext, thinkingLevel },
 		);
 	};
@@ -451,16 +430,15 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 	const initial = current();
 	if (initial) browser.selectSelector(initial);
 	// Re-read only when the catalog moved (discovery landing, a models.yml edit).
-	if (!selectOnly)
-		registry
-			.refreshIfStale()
-			.then(async changed => {
-				if (!changed) return;
-				const scope = await callbacks.onCatalogRefreshed?.();
-				if (scope) scopedModels = scope;
-				syncFromRegistry();
-			})
-			.catch(error => configError.set(error instanceof Error ? error.message : String(error)));
+	registry
+		.refreshIfStale()
+		.then(async changed => {
+			if (!changed) return;
+			const scope = await callbacks.onCatalogRefreshed?.();
+			if (scope) scopedModels = scope;
+			syncFromRegistry();
+		})
+		.catch(error => configError.set(error instanceof Error ? error.message : String(error)));
 
 	effect(() => {
 		const rows = Math.max(16, props.terminalRows?.() ?? 40);
@@ -474,7 +452,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 			toggleTaskMode();
 			return true;
 		}
-		if (!selectOnly && !roleMode()) {
+		if (!roleMode()) {
 			if (key.id === "tab") {
 				cycleScope(1);
 				return true;
@@ -485,12 +463,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 			}
 		}
 		// ←/→ step the slider; the query keeps ⌥←/→ and ⌃←/→ for its caret.
-		if (
-			!selectOnly &&
-			options.thinkingLevelFor &&
-			mode() === "session" &&
-			(key.id === "left" || key.id === "right")
-		) {
+		if (options.thinkingLevelFor && mode() === "session" && (key.id === "left" || key.id === "right")) {
 			stepThinking(key.id === "left" ? -1 : 1);
 			return true;
 		}
@@ -529,7 +502,6 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		const close = `${keyCaps(cancelKbd())} close`;
 		const nav = `${keyCaps(actionKbd("tui.select.up", "up"))}/${keyCaps(actionKbd("tui.select.down", "down"))}`;
 		const confirm = keyCaps(confirmKbd());
-		if (selectOnly) return `${nav} models · ${confirm} select · type to search · ${close}`;
 		const provider = `${keyCaps(["tab"])} provider`;
 		let hint: string;
 		switch (mode()) {
@@ -556,14 +528,14 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		return {
 			look: "omp.model-picker",
 			browser,
-			heading: selectOnly ? "Select Model" : taskMode() ? "Switch Task Model" : "Switch Model",
+			heading: taskMode() ? "Switch Task Model" : "Switch Model",
 			...(taskMode() ? { tone: "error" } : {}),
 			status: error
 				? { text: error, tone: "error" }
 				: taskMode()
 					? { text: TASK_HINT, tone: "error" }
 					: {
-							text: selectOnly ? "Select a model to use" : roleMode() ? QUICK_ROLE_HINT : STATUS_HINT,
+							text: roleMode() ? QUICK_ROLE_HINT : STATUS_HINT,
 							tone: "muted",
 						},
 			...(shown
@@ -587,12 +559,10 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 			density="snug"
 			layout="rows"
 			preview="none"
-			placeholder={() =>
-				selectOnly ? "Search models…" : mode() === "task" ? "Search Task models…" : "Search, @ for roles…"
-			}
-			scopes={() => (selectOnly || mode() === "role" ? undefined : scopes())}
-			scope={() => (selectOnly || mode() === "role" ? undefined : scope())}
-			scopeStyle={() => (selectOnly || mode() === "role" ? undefined : "rail")}
+			placeholder={() => (mode() === "task" ? "Search Task models…" : "Search, @ for roles…")}
+			scopes={() => (mode() === "role" ? undefined : scopes())}
+			scope={() => (mode() === "role" ? undefined : scope())}
+			scopeStyle={() => (mode() === "role" ? undefined : "rail")}
 			query={() => rows().query}
 			cursor={() => rows().cursor}
 			columns={() => rows().columns}
@@ -605,7 +575,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 			current={() => rows().current}
 			total={() => rows().total}
 			level={level}
-			title={() => (selectOnly ? "Select Model" : configError() ? "Switch model" : undefined)}
+			title={() => (configError() ? "Switch model" : undefined)}
 			subtitle={() => {
 				const error = configError();
 				return error ? [{ s: "error", t: error }] : undefined;

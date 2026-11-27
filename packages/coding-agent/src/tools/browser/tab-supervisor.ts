@@ -35,7 +35,7 @@ import {
 	recordSharedTarget,
 	type SharedTargetScope,
 } from "./orphan-registry";
-import { stopSharedBrowserIfUnreachable } from "./shared-daemon";
+import { describeSharedBrowserGeneration, stopSharedBrowserIfUnreachable } from "./shared-daemon";
 import {
 	acquireBrowser,
 	type BrowserHandle,
@@ -76,7 +76,7 @@ import { listTernBlocks, noTernBlockError, pickTernBlock } from "./tern/blocks";
 import type * as Tern from "./tern/tern-tab";
 import { TernError } from "./tern/wire";
 import { newUploadStagingDir, removeUploadStaging, sweepUploadStaging } from "./upload-files";
-import { describeUnit, isLiveUnit } from "./unit-lease";
+import { isLiveUnit } from "./unit-lease";
 import { WebKitUnavailableError } from "./webkit/host";
 
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
@@ -1618,9 +1618,7 @@ async function dispatchRun(
 				// Both paths below kill an inline worker's tab. Close its core first: the close finalizes an active
 				// recording, which the kill's `terminate()` (it only drops the relay connection) would leave unfinished.
 				if (tab.worker.mode === "inline" && tabs.get(name) === tab && tab.state === "alive") {
-					const closed = waitForClosed(tab).catch(() => undefined);
-					safeSend(tab, { type: "close" });
-					await closed;
+					await closeTabWorker(tab).catch(() => undefined);
 				}
 				if (error.reason === USER_CANCELLED_DEBUGGER) {
 					// The relay hides a tab whose debugging bar the user cancelled, so a re-adoption cannot succeed. The kill
@@ -2109,8 +2107,7 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 	// A held-out tab's worker was terminated with its failed re-adoption: nothing answers a close.
 	if (wasAlive && !tab.heldOut && !(tab.worker as ExitTrackedWorker)[kWorkerExited]) {
 		try {
-			tab.worker.send({ type: "close", keepPage: opts.keepPage });
-			await waitForClosed(tab);
+			await closeTabWorker(tab, opts.keepPage);
 		} catch {
 			// The close by id below confirms an owned page is gone either way.
 		}
@@ -2211,15 +2208,24 @@ async function releaseTabStrict(
 ): Promise<"released" | "kept"> {
 	const timeoutMs = opts.timeoutMs ?? DEFAULT_TAB_CLOSE_TIMEOUT_MS;
 	if (tab.backend === "tern" || tab.backend === "webkit") {
-		await strictCleanupStage(
-			tab,
-			"page",
-			timeoutMs,
-			`${tab.ternTab.product} browser block ${tab.targetId} (close)`,
-			async () => {
-				if (progress.wasAlive) await tab.ternTab.close({ timeoutMs, strict: true });
-			},
-		);
+		const browser = tab.browser;
+		const lastHold = () => browser.refCount <= (progress.browserHoldReleased ? 0 : 1);
+		const block = `${tab.ternTab.product} browser block ${tab.targetId} (close)`;
+		const close = (budget: number) =>
+			strictCleanupStage(tab, "page", budget, block, async () => {
+				if (progress.wasAlive) await tab.ternTab.close({ timeoutMs: budget, strict: true });
+			});
+		try {
+			await close(tab.backend === "webkit" && lastHold() ? Math.min(GRACE_MS, timeoutMs) : timeoutMs);
+		} catch (error) {
+			if (tab.backend !== "webkit" || !lastHold()) throw error;
+			await strictCleanupStage(tab, "browser", timeoutMs, "WebKit host", async () => {
+				if (!lastHold()) throw error;
+				await releaseTabBrowser(tab, opts, timeoutMs);
+			});
+			// Confirm the block is gone and finish any recording cleanup before forgetting the tab.
+			await close(timeoutMs);
+		}
 	} else if (tab.backend === "cmux") {
 		await strictCleanupStage(
 			tab,
@@ -2240,8 +2246,7 @@ async function releaseTabStrict(
 		await strictCleanupStage(tab, "worker", closeGraceMs + timeoutMs, "tab worker termination", async () => {
 			if (progress.wasAlive && !tab.heldOut && !(tab.worker as ExitTrackedWorker)[kWorkerExited]) {
 				try {
-					tab.worker.send({ type: "close", keepPage: opts.keepPage });
-					await waitForClosed(tab, closeGraceMs);
+					await closeTabWorker(tab, opts.keepPage, closeGraceMs);
 				} catch {
 					// Target closure below is authoritative, but termination must settle.
 				}
@@ -3307,15 +3312,19 @@ function recheckSharedBrowser(scope: SharedTargetScope): void {
 	});
 }
 
-/** A retained proc id survives restart; a different unit with the same name proves nothing. */
+/** The broker must confirm the original shared Chromium generation is no longer live. */
 async function sharedBrowserGenerationEnded(browser: PuppeteerBrowserHandle, timeoutMs: number): Promise<boolean> {
 	const unit = browser.daemonLease?.unit;
-	if (!browser.sharedDaemon || !unit?.id) return false;
+	const scope = sharedTargetScopeOf(browser);
+	if (!scope || !unit?.id) return false;
 	const signal = AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
 	return await withTimeout(
 		(async () => {
-			const current = await describeUnit(await daemonClient(), unit.id, signal);
-			return current?.id === unit.id && (!isLiveUnit(current) || current.generation !== unit.generation);
+			const current = await describeSharedBrowserGeneration(await daemonClient(), scope, unit.id, signal);
+			return (
+				current !== undefined &&
+				(current.id !== unit.id || !isLiveUnit(current) || current.generation !== unit.generation)
+			);
 		})(),
 		timeoutMs,
 		"Timed out checking the original shared Chromium generation",
@@ -3397,12 +3406,19 @@ function closeAbandonedWorkerPage(browser: PuppeteerBrowserHandle, worker: Worke
 		.finally(() => void releaseBrowser(browser, { kill: false }).catch(() => undefined));
 }
 
-async function waitForClosed(tab: WorkerTabSession, timeoutMs = GRACE_MS): Promise<void> {
+async function closeTabWorker(tab: WorkerTabSession, keepPage?: boolean, timeoutMs = GRACE_MS): Promise<void> {
 	const { promise, resolve } = Promise.withResolvers<void>();
 	const unsubscribe = tab.worker.onMessage(msg => {
-		if (msg.type === "closed") resolve();
+		if (msg.type !== "closed") return;
+		if (msg.pageClosed && tab.browser.kind.kind === "relay") {
+			const progress = cleanupProgress(tab);
+			progress.done.add("page");
+			progress.strictPageConfirmed = true;
+		}
+		resolve();
 	});
 	try {
+		tab.worker.send({ type: "close", keepPage });
 		await raceWithTimeout(promise, timeoutMs, "Timed out closing browser tab worker");
 	} finally {
 		unsubscribe();

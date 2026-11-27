@@ -43,7 +43,6 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { installFile } from "../packages/natives/scripts/installed-file";
 import { detectHostAvx2Support, detectHostMusl, resolveLocalHostAddon } from "./host-detect";
 import { hasVersionStampSlot, nativesPackageVersion, stampNativeVersion } from "./stamp-native-version";
 
@@ -278,14 +277,19 @@ async function installAddon(
 	version: string,
 	allowUnstamped: boolean,
 ): Promise<boolean> {
-	// copyFile follows Bazel output symlinks without stamping the original.
-	return installFile(sourcePath, destPath, {
-		prepare: async tempPath => {
-			const stamp = !allowUnstamped || hasVersionStampSlot(await fs.readFile(tempPath));
-			if (stamp) await stampNativeVersion(tempPath, version);
-			return stamp;
-		},
-	});
+	const realSource = await fs.realpath(sourcePath); // bazel-bin outputs are symlink-reachable; copy the real bytes
+	const tempPath = `${destPath}.tmp.${process.pid}`;
+	try {
+		await fs.copyFile(realSource, tempPath);
+		await fs.chmod(tempPath, 0o644);
+		const stamp = !allowUnstamped || hasVersionStampSlot(await fs.readFile(tempPath));
+		if (stamp) await stampNativeVersion(tempPath, version);
+		await fs.rename(tempPath, destPath); // atomic even if dest is a loaded addon
+		return stamp;
+	} catch (err) {
+		await fs.unlink(tempPath).catch(() => {});
+		throw err;
+	}
 }
 
 /** Trailing sentence of a probe failure; the loader's own output precedes it. */
@@ -479,7 +483,7 @@ async function buildLocalHostAddon(host: HostInfo, destDir: string, skipLoadProb
 	const builtPath = path.join(repoRoot, "packages/natives/native", filename);
 	if (path.dirname(builtPath) !== destDir) {
 		await fs.mkdir(destDir, { recursive: true });
-		await installFile(builtPath, path.join(destDir, filename));
+		await installAddon(builtPath, path.join(destDir, filename), await nativesPackageVersion(), false);
 	}
 	console.log(`installed ${filename} → ${path.join(destDir, filename)}`);
 	if (!skipLoadProbe) {

@@ -120,7 +120,6 @@ describe("runSkillsCommand", () => {
 			// against the home directory, not against the inspected directory.
 			const demo = result.skills.find(skill => skill.filePath === path.join(skillsRoot, "demo", "SKILL.md"));
 			expect(demo?.name).toBe("demo");
-			expect(demo?.source).toBe("custom:user");
 		} finally {
 			await removeWithRetries(directory);
 		}

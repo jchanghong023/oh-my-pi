@@ -51,7 +51,14 @@ export async function resolveWorkspaceModeScope(
 	localOptions: LocalProtocolOptions,
 	inheritedScope?: WorkspaceModeScope,
 ): Promise<WorkspaceModeScope> {
-	const projectRoot = inheritedScope ? inheritedScope.projectRoot : (vcs.gitInfo(cwd)?.repoRoot ?? null);
+	let projectRoot = inheritedScope?.projectRoot ?? null;
+	if (!inheritedScope) {
+		try {
+			projectRoot = vcs.gitInfo(cwd)?.repoRoot ?? null;
+		} catch {
+			// A broken .git pointer grants no project write root.
+		}
+	}
 	const canonicalProjectRoot =
 		inheritedScope || projectRoot === null
 			? projectRoot

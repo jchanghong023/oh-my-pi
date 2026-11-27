@@ -231,7 +231,7 @@ export class EvalRunner {
 		}
 		const results = await Promise.allSettled([
 			disposeKernelSessionsByOwner(this.#kernelOwnerId, { strict: options?.strict }),
-			disposeVmContextsByOwner(this.#kernelOwnerId),
+			disposeVmContextsByOwner(this.#kernelOwnerId, { strict: options?.strict }),
 		]);
 		const errors: unknown[] = [];
 		for (const result of results) if (result.status === "rejected") errors.push(result.reason);

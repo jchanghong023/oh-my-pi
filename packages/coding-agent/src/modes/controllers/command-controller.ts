@@ -1467,7 +1467,7 @@ export class CommandController {
 		// Drop the rendered transcript so the UI matches the now-empty model
 		// context (mirrors #runNewSessionFlow's teardown, minus the new session —
 		// the session id, title, and transcript file all survive).
-		this.ctx.clearTransientSessionUi();
+		this.ctx.clearTransientSessionUi({ clearCompactToolHistory: true });
 		this.ctx.resetTranscript();
 		this.ctx.statusLine.refresh();
 		this.ctx.updateEditorBorderColor();

@@ -778,7 +778,7 @@ export async function formatContent(
 			// Use custom linter client if configured
 			if (serverConfig.createClient) {
 				const linterClient = getLinterClient(serverName, serverConfig, cwd);
-				const formattedContent = await linterClient.format(absolutePath, content);
+				const formattedContent = await linterClient.format(absolutePath, content, signal);
 				return { content: formattedContent, failed: false, unsupported: false };
 			}
 

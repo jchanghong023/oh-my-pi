@@ -21,18 +21,6 @@ export function releaseSettingsInstance(instance: Settings): void {
 	releasedSettingsInstances.add(instance);
 }
 
-/** Visit live instances without retaining them beyond the current operation. */
-export function forEachSettingsInstance(visit: (instance: Settings) => void): void {
-	for (const ref of liveSettingsInstances) {
-		const instance = ref.deref();
-		if (instance) visit(instance);
-		else {
-			liveSettingsInstances.delete(ref);
-			collectedSettingsInstances.unregister(ref);
-		}
-	}
-}
-
 /** The current async session's settings, without a process-global fallback. */
 export function getActiveSettings(): Settings | undefined {
 	const active = activeSettingsScope.getStore();

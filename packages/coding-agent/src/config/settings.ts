@@ -60,14 +60,7 @@ import { cfgDisabledProviders, cfgModelRoles, cfgModelRoleStorage } from "./mode
 import { cfgShellPath } from "../exec/settings";
 import { cfgSttLanguage } from "../stt/settings";
 import {
-	UserSettingError,
-	UserSettingsStore,
-	type UserSettingSaveResult,
-	type UserSettingSnapshot,
-} from "./user-settings";
-import {
 	findSettingsContext,
-	forEachSettingsInstance,
 	getActiveSettings as getContextActiveSettings,
 	registerSettingsInstance,
 	releaseSettingsInstance,
@@ -175,7 +168,7 @@ type ProjectSettingsDiscovery = {
 type PersistedReloadMode = "strict" | "keep-last-good";
 
 /** Layer refreshes serialized by `Settings.#exclusive`: disk reloads and cwd re-scopes. */
-type LayerRefreshKind = PersistedReloadMode | "rescope" | "user-setting";
+type LayerRefreshKind = PersistedReloadMode | "rescope";
 
 /** Quiet period after the last config-file change before reloading from disk. */
 const CONFIG_WATCH_DEBOUNCE_MS = 200;
@@ -197,8 +190,6 @@ export interface SettingsOptions {
 	inMemory?: boolean;
 	/** Read config sources without opening storage or writing migrations */
 	readOnly?: boolean;
-	/** Explicit config edits load without initialization and require an existing whole-file CAS snapshot. */
-	existingConfigOnly?: boolean;
 	/** Initial runtime overrides, keyed by setting id (legacy ids migrate; values are checked like `override`). */
 	overrides?: Readonly<Record<string, unknown>>;
 	/** Extra config.yml-style overlays loaded after global/project settings */
@@ -877,7 +868,6 @@ export class Settings {
 
 	/** Whether to persist changes */
 	#persist: boolean;
-	readonly #existingConfigOnly: boolean;
 	/** Main-thread instance this worker mirror replicates; set only by {@link Settings.mirror}. */
 	#mirror: SettingsMirrorSource | undefined;
 	/** {@link SettingsMirrorState.generation} this mirror last adopted; `-1` before the first. */
@@ -900,7 +890,6 @@ export class Settings {
 		if (options.configFiles) configFiles.push(...options.configFiles);
 		this.#configFiles = configFiles.map(file => path.resolve(this.#cwd, expandTilde(file)));
 		this.#persist = !options.inMemory && options.readOnly !== true;
-		this.#existingConfigOnly = options.existingConfigOnly === true;
 		if (!projection) registerSettingsInstance(this);
 		if (options.overrides) this.#overrides = this.#overrideLayer(options.overrides);
 	}
@@ -942,10 +931,7 @@ export class Settings {
 	static init(options: SettingsOptions = {}): Promise<Settings> {
 		if (globalInstancePromise) return globalInstancePromise;
 
-		const promise = Promise.try(() => {
-			const instance = new Settings(options);
-			return options.existingConfigOnly ? instance.#loadReadOnly() : instance.#load();
-		});
+		const promise = Promise.try(() => new Settings(options).#load());
 		globalInstancePromise = promise;
 
 		return promise.then(
@@ -1018,7 +1004,7 @@ export class Settings {
 
 	/** Retain a live SDK-scoped instance; caller-owned instances need no SDK lease. @internal */
 	retainScoped(): (() => void) | undefined {
-		return this.#retainScopedLease?.();
+		return this.#retainScopedLease?.() ?? this.#parent?.retainScoped();
 	}
 
 	/**
@@ -1313,165 +1299,6 @@ export class Settings {
 		if (getByPath(projectLayerForMerge(this.#project), segments) !== undefined) return "project";
 		if (getByPath(this.#global, segments) !== undefined) return "global";
 		return this.#parent?.getProvenance(setting) ?? "default";
-	}
-
-	/** Read the raw user leaf without quarantine or migration. */
-	async readUserSetting(id: string): Promise<UserSettingSnapshot> {
-		if (this.#parent) return this.#parent.readUserSetting(id);
-		const setting = lookupSetting(id);
-		if (!setting) throw new Error(`Unknown setting: ${id}`);
-		return new UserSettingsStore({
-			agentDir: this.#agentDir,
-			migrate: raw => this.#migrateRawSettings(raw, false),
-			requireExisting: this.#existingConfigOnly,
-			revisionScope: this.#existingConfigOnly ? "file" : "setting",
-		}).read(setting.segments);
-	}
-
-	/** Pure projection through the same merge, parent, null, cwd and environment rules as a normal read. */
-	projectUserSetting(id: string, value: unknown): { value: unknown; source: SettingProvenance } {
-		const setting = lookupSetting(id);
-		if (!setting) throw new Error(`Unknown setting: ${id}`);
-		const project = (instance: Settings): { merged: RawSettings; source: SettingProvenance } => {
-			const parent = instance.#parent ? project(instance.#parent) : undefined;
-			const global = structuredClone(instance.#global);
-			if (!parent) {
-				if (value === undefined) deleteByPath(global, setting.segments);
-				else setByPath(global, setting.segments, value);
-			}
-			const own = instance.#mergeOwnLayers({ ...instance.#ownLayers(), global });
-			const merged = parent ? instance.#deepMerge(parent.merged, own) : own;
-			let source: SettingProvenance = parent?.source ?? "default";
-			for (const [layer, name] of [
-				[global, "global"],
-				[projectLayerForMerge(instance.#project), "project"],
-				[instance.#configOverlay, "overlay"],
-				[instance.#overrides, "runtime"],
-			] as const) {
-				if (getByPath(layer, setting.segments) !== undefined) source = name;
-			}
-			return { merged, source };
-		};
-		const projected = project(this);
-		const configured = configuredValue(projected.merged, setting, this.#cwd);
-		const env = setting.envValue();
-		const useEnv =
-			env !== undefined &&
-			(setting.envFallback
-				? configured === undefined ||
-					(setting.envFallback === "blank" && typeof configured === "string" && configured.trim() === "")
-				: !this.hasRuntimeOverride(setting));
-		// A higher layer's explicit null can suppress the global value while selecting the default.
-		const source =
-			configured === undefined &&
-			(projected.source === "global" || getByPath(projected.merged, setting.segments) !== null)
-				? "default"
-				: projected.source;
-		return { value: useEnv ? env : (configured ?? setting.default), source: useEnv ? "env" : source };
-	}
-
-	async saveUserSetting(id: string, value: unknown, expectedRevision: string): Promise<UserSettingSaveResult> {
-		if (this.#parent) return this.#parent.saveUserSetting(id, value, expectedRevision);
-		const setting = lookupSetting(id);
-		if (!setting) throw new Error(`Unknown setting: ${id}`);
-		if (!this.#persist || this.#savesCancelled)
-			throw new UserSettingError("execution_failed", "User settings persistence is unavailable.", {
-				saveState: "failed",
-				write: { status: "not_attempted" },
-			});
-		if (this.#hasPendingUserSetting(setting.segments))
-			throw new UserSettingError("revision_conflict", "This user setting has a pending local edit.", {
-				saveState: "failed",
-				write: { status: "not_attempted" },
-			});
-		const store = new UserSettingsStore({
-			agentDir: this.#agentDir,
-			migrate: raw => this.#migrateRawSettings(raw, false),
-			requireExisting: this.#existingConfigOnly,
-			revisionScope: this.#existingConfigOnly ? "file" : "setting",
-		});
-		this.#persistedMutationGeneration++;
-		let refresh = false;
-		let committed = false;
-		let receipt: UserSettingSaveResult | undefined;
-		const handleRefreshFailure = (error: unknown): void => {
-			if (receipt) {
-				throw new UserSettingError("execution_failed", `Failed to refresh saved user settings: ${String(error)}`, {
-					...receipt,
-					saveState: "failed",
-				});
-			}
-			logger.warn("Settings: failed to refresh saved user settings", { error: String(error) });
-		};
-		try {
-			receipt = await store.save([{ segments: setting.segments, value }], expectedRevision);
-			refresh = receipt.write.status === "saved" || receipt.write.status === "unchanged";
-			committed = receipt.write.status === "saved";
-			return receipt;
-		} catch (error) {
-			refresh =
-				error instanceof UserSettingError &&
-				(error.data.write.status === "saved" || error.data.write.status === "unknown");
-			committed = error instanceof UserSettingError && error.data.write.status === "saved";
-			throw error;
-		} finally {
-			this.#persistedMutationGeneration++;
-			// Adopting only the active layer preserves unrelated pending writes and never flushes them.
-			try {
-				if (refresh) {
-					try {
-						await this.#refreshSavedGlobal(store, setting);
-					} catch (error) {
-						handleRefreshFailure(error);
-					}
-				}
-			} finally {
-				if (committed) await this.#notifyUserSettingSaved(setting);
-			}
-		}
-	}
-
-	/** Refresh peers sharing this user root, then notify user-layer observers even when overrides mask the value. */
-	async #notifyUserSettingSaved(setting: AnySetting): Promise<void> {
-		const peers: Promise<void>[] = [];
-		let root: string;
-		try {
-			root = await fs.promises.realpath(this.#agentDir);
-		} catch (error) {
-			if (!isEnoent(error)) {
-				logger.warn("Settings: failed to resolve committed user settings root", { error: String(error) });
-				return;
-			}
-			root = path.resolve(this.#agentDir);
-		}
-		const rootKey = process.platform === "win32" ? root.toLowerCase() : root;
-		forEachSettingsInstance(instance => {
-			if (instance.#parent || instance.#savesCancelled || !instance.#configPath) return;
-			peers.push(
-				(async () => {
-					const instanceRoot = await fs.promises.realpath(instance.#agentDir).catch(error => {
-						if (!isEnoent(error)) throw error;
-						return path.resolve(instance.#agentDir);
-					});
-					if ((process.platform === "win32" ? instanceRoot.toLowerCase() : instanceRoot) !== rootKey) return;
-					await instance.#exclusive("user-setting", async () => {
-						if (instance.#savesCancelled) return;
-						const store = new UserSettingsStore({
-							agentDir: root,
-							migrate: raw => instance.#migrateRawSettings(raw, false),
-						});
-						await instance.#refreshSavedGlobal(store, setting);
-						if (!instance.#savesCancelled) instance.#notifyChange(setting, true);
-					});
-				})().catch(error => {
-					logger.warn("Settings: failed to refresh committed user setting", {
-						path: setting.id,
-						error: String(error),
-					});
-				}),
-			);
-		});
-		await Promise.all(peers);
 	}
 
 	/**
@@ -2185,26 +2012,6 @@ export class Settings {
 	getGlobalSettings(): RawSettings {
 		const own = structuredClone(this.#global);
 		return this.#parent ? this.#deepMerge(this.#parent.getGlobalSettings(), own) : own;
-	}
-
-	#hasPendingUserSetting(segments: readonly string[]): boolean {
-		if (
-			segments[0] === "modelRoles" &&
-			(segments.length === 1
-				? this.#modifiedGlobalModelRoles.size > 0
-				: this.#modifiedGlobalModelRoles.has(segments[1]))
-		) {
-			return true;
-		}
-		for (const pending of this.#modified.values()) {
-			if (
-				pending.every((segment, index) => segments[index] === segment) ||
-				segments.every((segment, index) => pending[index] === segment)
-			) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/**
@@ -3779,11 +3586,12 @@ export class Settings {
 			if (nested) delete nested.autoRedeem;
 			delete raw[dotted];
 			if (legacy === undefined) continue;
+			const target = nested ?? (raw[group] === undefined ? (raw[group] = {}) : undefined);
+			if (!target) continue;
 			const mode = typeof legacy === "boolean" ? (legacy ? "yes" : "no") : legacy;
 			for (const key of ["autoRedeem5h", "autoRedeemWeekly"]) {
-				if (nested?.[key] !== undefined || raw[`${group}.${key}`] !== undefined) continue;
-				if (nested) nested[key] = mode;
-				else raw[`${group}.${key}`] = mode;
+				if (target[key] !== undefined || raw[`${group}.${key}`] !== undefined) continue;
+				target[key] = mode;
 			}
 		}
 
@@ -3803,12 +3611,15 @@ export class Settings {
 		// Rename the legacy local `mnemosyne` memory backend to `mnemopi`.
 		// - `memory.backend: "mnemosyne"` now selects the renamed backend.
 		// - the top-level `mnemosyne` settings object becomes `mnemopi`.
-		// Idempotent: skips the object move once `mnemopi` is materialised.
+		// Explicit new fields win, without shadowing unrelated legacy fields.
 		if (memoryBackendObj && memoryBackendObj.backend === "mnemosyne") {
 			memoryBackendObj.backend = "mnemopi";
 		}
-		if ("mnemosyne" in raw && !("mnemopi" in raw)) {
-			raw.mnemopi = raw.mnemosyne;
+		if ("mnemosyne" in raw) {
+			if (!("mnemopi" in raw)) raw.mnemopi = raw.mnemosyne;
+			else if (isRecord(raw.mnemosyne) && isRecord(raw.mnemopi)) {
+				raw.mnemopi = { ...raw.mnemosyne, ...raw.mnemopi };
+			}
 			delete raw.mnemosyne;
 		}
 
@@ -4642,54 +4453,24 @@ export class Settings {
 			throw error;
 		}
 	}
-	/** Read back the committed layer without overtaking an in-flight ordinary save or flushing pending edits. */
-	async #refreshSavedGlobal(store: UserSettingsStore, setting: AnySetting): Promise<void> {
-		for (;;) {
-			if (this.#savesCancelled) return;
-			const saving = this.#savePromise;
-			if (saving) {
-				// A failed save restores its pending edits before settling; adoption will reapply them.
-				await saving.catch(() => {});
-				continue;
-			}
-			const generation = this.#persistedMutationGeneration;
-			const raw = await store.readActiveRaw();
-			if (this.#savesCancelled) return;
-			if (this.#savePromise || generation !== this.#persistedMutationGeneration) continue;
-			if (!this.#adoptSavedGlobal(raw, this.#configPath ?? this.#agentDir, setting)) {
-				throw new Error(`The active settings could not adopt ${setting.id}.`);
-			}
-			return;
-		}
-	}
 
 	/**
 	 * Adopts `saved` (config.yml as a save just wrote it) as the live global layer, first
 	 * re-applying every global write still pending — made after that save's snapshot, since saves
-	 * never overlap ({@link #chainSave}) — so a live value never regresses to its on-disk one. If an
-	 * unrelated invalid disk edit prevents adoption, an explicit CAS save can still apply its own
-	 * setting to the last good layer. Ordinary saves already hold their writes in the live layer.
+	 * never overlap ({@link #chainSave}) — so a live value never regresses to its on-disk one. An
+	 * invalid result keeps the live layer, which is last good and already holds the save's writes,
+	 * like a keep-last-good reload; the file keeps the external edit for the user to fix.
 	 * Notifies every setting whose effective value changed.
 	 */
-	#adoptSavedGlobal(saved: RawSettings, source: string, committedSetting?: AnySetting): boolean {
-		saved = this.#migrateRawSettings(saved, false);
+	#adoptSavedGlobal(saved: RawSettings, source: string): void {
 		this.#applyPendingGlobalWrites(saved);
 		this.#keepReadableValues(saved, this.#global, source);
-		if (!this.#acceptsLayers({ ...this.#ownLayers(), global: saved }, source)) {
-			if (!committedSetting) return false;
-			const segments = committedSetting.segments;
-			const value = getByPath(saved, segments);
-			saved = structuredClone(this.#global);
-			if (value === undefined) deleteByPath(saved, segments);
-			else setByPath(saved, segments, value);
-			if (!this.#acceptsLayers({ ...this.#ownLayers(), global: saved }, source)) return false;
-		}
+		if (!this.#acceptsLayers({ ...this.#ownLayers(), global: saved }, source)) return;
 		this.#persistedMutationGeneration++;
 		const previous = this.#snapshot();
 		this.#global = saved;
 		this.#rebuildMerged();
 		this.#fireChangesSince(previous);
-		return true;
 	}
 
 	/** Re-applies every global write still pending a save onto `target`, a global layer read from disk. */

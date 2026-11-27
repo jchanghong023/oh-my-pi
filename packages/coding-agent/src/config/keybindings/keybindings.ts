@@ -26,12 +26,15 @@ export interface KeybindingConflict {
  * Default chords that give way to a user remap: when another action's user
  * binding claims one and the user left this action at its defaults, the
  * chord is dropped from it. Ctrl+Q backs up Ctrl+Enter for follow-up, which
- * Windows Terminal cannot deliver (#1903); Shift+Up backs up Alt+Up for
- * dequeue, which macOS Terminal.app consumes.
+ * Windows Terminal cannot deliver (#1903). Shift+Up and F6 back up chords
+ * macOS Terminal.app consumes. The new temporary-model default also yields
+ * to users who kept the former Ctrl+T thinking visibility binding.
  */
 const YIELDING_DEFAULTS: Partial<Record<Keybinding, KeyId>> = {
 	"app.message.followUp": "ctrl+q",
 	"app.message.dequeue": "shift+up",
+	"app.thinking.cycle": "f6",
+	"app.model.selectTemporary": "ctrl+t",
 };
 
 /** Chords lowercased (config chords are case-insensitive) and deduplicated, in configured order. */

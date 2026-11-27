@@ -1841,6 +1841,13 @@ fn resolve(
 	})
 }
 
+/// String-only host commands must not be called with lossy argv.
+fn rejects_raw_args(host: &dyn crate::bash::Host, argv: &[BString], resolved: &Resolved) -> bool {
+	matches!(resolved, Resolved::Tool(_) | Resolved::Native(_) | Resolved::Device(_))
+		&& argv[1..].iter().any(|arg| std::str::from_utf8(arg).is_err())
+		&& !host.accepts_raw_args(BStr::new(&argv[0]), resolved)
+}
+
 /// Resolve the command name: `command`/`builtin` prefixes, functions,
 /// the host's table, then a PATH search through the pollable `Fs`.
 fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool) -> Option<Flow> {
@@ -1921,7 +1928,7 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 					break Target::Function(name.clone());
 				}
 			}
-			let mut resolved = if utf8_name {
+			let resolved = if utf8_name {
 				let rctx = ResolveCtx { has_slash, via };
 				match resolve(k, cx, vp, name, mode, rctx) {
 					Ok(resolved) => resolved,
@@ -1933,15 +1940,8 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 			} else {
 				Resolved::NotFound
 			};
-			// Host commands that consume strings must not receive a lossy
-			// conversion. Byte-native intrinsics handle their own operands.
-			if matches!(resolved, Resolved::Tool(_) | Resolved::Native(_) | Resolved::Device(_))
-				&& current_argv(vp)[1..]
-					.iter()
-					.any(|arg| std::str::from_utf8(arg).is_err())
-				&& !cx.host.accepts_raw_args(BStr::new(name), &resolved)
-			{
-				resolved = Resolved::NotFound;
+			if via != Via::Builtin && rejects_raw_args(cx.host, current_argv(vp), &resolved) {
+				break Target::SearchRejectedRaw;
 			}
 			let detached = vp.lineage.detached;
 			let ExecState { argv, arrayref, exec_as, .. } = st(vp);
@@ -2045,7 +2045,8 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 		&& target.is_path_search()
 	{
 		let fallback = target.search_fallback();
-		let preferred = fallback.is_some();
+		let rejects_raw = matches!(target, Target::SearchRejectedRaw);
+		let preferred = fallback.is_some() || rejects_raw;
 		// File-system probes: `CmdExpanded` reads the clock after them.
 		k.clock_stale();
 		// bash's `search_for_command`: a `PATH` in the command's temporary
@@ -2157,7 +2158,9 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 				// process image cannot be a native).
 				let exec = sc.exec.as_mut().expect("exec");
 				let rctx = ResolveCtx { has_slash: false, via: Via::Plain };
-				let target = if let Some(original) = fallback {
+				let target = if rejects_raw {
+					Target::RejectedRaw
+				} else if let Some(original) = fallback {
 					original
 				} else if exec.exec_as.is_some() || !utf8_name {
 					Target::NotFound
@@ -2165,15 +2168,8 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 					// A deferred command whose shadowed program `PATH` lacks:
 					// the host's own command after all.
 					let resolved = cx.host.resolve(BStr::new(&name), exec::mode_of(vp), rctx);
-					// PATH fallback must not revive a host command that
-					// cannot consume the original argument bytes.
-					if matches!(resolved, Resolved::Tool(_) | Resolved::Native(_) | Resolved::Device(_))
-						&& exec.argv[1..]
-							.iter()
-							.any(|arg| std::str::from_utf8(arg).is_err())
-						&& !cx.host.accepts_raw_args(BStr::new(&name), &resolved)
-					{
-						Target::NotFound
+					if rejects_raw_args(cx.host, &exec.argv, &resolved) {
+						Target::RejectedRaw
 					} else {
 						resolved.into()
 					}
@@ -2186,11 +2182,7 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 					&& let Some(native) = cx.host.fallback(BStr::new(&name))
 				{
 					let resolved = Resolved::Native(native);
-					if exec.argv[1..]
-						.iter()
-						.any(|arg| std::str::from_utf8(arg).is_err())
-						&& !cx.host.accepts_raw_args(BStr::new(&name), &resolved)
-					{
+					if rejects_raw_args(cx.host, &exec.argv, &resolved) {
 						Target::NotFound
 					} else {
 						resolved.into()
@@ -2345,6 +2337,18 @@ fn dispatch(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, line: u32) 
 			s.status = status;
 			s.stage = Stage::Output;
 			exec_failed(k, cx, vp);
+			None
+		},
+		Target::RejectedRaw | Target::SearchRejectedRaw => {
+			let name = argv0(vp);
+			let err = std::io::Error::new(
+				std::io::ErrorKind::InvalidInput,
+				"builtin cannot accept non-UTF-8 argument",
+			);
+			k.diag(cx, vp, line, Diag::StartFailed { name, err });
+			let s = st(vp);
+			s.status = 126;
+			s.stage = Stage::Output;
 			None
 		},
 		Target::NotFound | Target::Search | Target::SearchNative(_) | Target::SearchTool(_) => {

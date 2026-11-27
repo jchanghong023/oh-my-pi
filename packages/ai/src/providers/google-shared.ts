@@ -1145,6 +1145,7 @@ export interface GoogleGenAIRequestPlan {
 	url: string;
 	headers: Record<string, string>;
 	fetch?: FetchImpl;
+	redirect?: RequestInit["redirect"];
 	/** Optional URL retried once when {@link url} returns 404 (regional Vertex endpoint missing a global-only model). */
 	fallbackUrl?: string;
 }
@@ -1234,6 +1235,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 						method: "POST",
 						headers: { ...plan.headers, "Content-Type": "application/json", Accept: "text/event-stream" },
 						body: requestBody,
+						redirect: plan.redirect,
 						signal: options?.signal,
 						prepareInit: () => {
 							clearWatchdog?.();

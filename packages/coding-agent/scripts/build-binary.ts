@@ -39,8 +39,8 @@ function resolveCrossBuild(value: string | undefined): CrossBuild | null {
 	}
 }
 
-// Embed the same fork update target as CI; the runtime environment can override it.
-const updateRepository = "jchanghong023/oh-my-pi";
+// Match the default `bun run cnb` distribution without overriding the package version.
+const updateRepository = "jchanghong/bin@omp";
 async function runCommand(command: string[]): Promise<void> {
 	const proc = Bun.spawn(command, {
 		cwd: packageDir,

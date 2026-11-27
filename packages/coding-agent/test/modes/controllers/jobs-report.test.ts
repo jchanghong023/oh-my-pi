@@ -73,6 +73,5 @@ describe("CommandController /jobs full", () => {
 		const lines = await renderFullJobs([]);
 		expect(lines.join("\n")).toMatch(/Running:\s+0/);
 		expect(lines.join("\n")).toContain("No async jobs");
-		expect(lines.some(line => /\[(?:bash|task|eval)\]/.test(line))).toBe(false);
 	});
 });

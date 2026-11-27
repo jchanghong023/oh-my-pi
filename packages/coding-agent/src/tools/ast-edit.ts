@@ -1,4 +1,5 @@
 import type { AstEditToolDetails } from "./details/ast-edit";
+import { realpath } from "node:fs/promises";
 import { type } from "@oh-my-pi/omptype";
 import type {
 	AgentTool,
@@ -706,13 +707,16 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 										const journaled = new Map<string, { path: string; before: string }>();
 										if (this.session.recordFileChange) {
 											for (const relativePath of fileList) {
-												const absolute = await resultSnapshotPath(
+												const target = await resultSnapshotPath(
 													relativePath,
 													this.session.cwd,
 													applyContext,
 												);
-												const before = absolute === undefined ? undefined : await readSnapshot(absolute);
-												if (absolute !== undefined && before?.text != null) {
+												if (target === undefined) continue;
+												const absolute = await realpath(target).catch(() => undefined);
+												if (absolute === undefined) continue;
+												const before = await readSnapshot(absolute);
+												if (before?.text != null) {
 													journaled.set(relativePath, { path: absolute, before: before.text });
 												}
 											}

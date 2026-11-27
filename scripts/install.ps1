@@ -1,10 +1,6 @@
 # OMP Coding Agent Installer for Windows
 # Requires Windows PowerShell 5.1 or PowerShell 7+ (x64).
-# Usage: irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1 | iex
-#
-# Or with options:
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.ps1))) -Binary -Ref 'v18.0.6+fork.123'
+# Usage: .\scripts\install.ps1 [-Ref <tag>]
 #
 # Binary fallback uses Invoke-WebRequest -UseBasicParsing so Windows
 # PowerShell 5.1 can run without Internet Explorer.
@@ -15,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$InstallerSourcePath = $PSCommandPath
 
 # Bootstrap-only diagnostics. These scripts cannot depend on Bun or an installed
 # omp; use the application data-root conventions and a bounded per-attempt file.
@@ -150,7 +147,7 @@ function Get-InstallFailureFields {
             $fields.source_file = "install.ps1"
             $fields.source_line = [int]$Failure.InvocationInfo.ScriptLineNumber
         }
-        # The child process returns HTTP diagnostics separately from its message.
+        # The transport returns HTTP diagnostics separately from its message.
         $isolatedFailure = $Failure.Exception.Data["OmpInstallHttpFailure"]
         if ($isolatedFailure) {
             $fields.error_type = $isolatedFailure.error_type
@@ -190,18 +187,53 @@ if ($PSVersionTable.PSVersion -lt [version]"5.1") {
     throw "Windows PowerShell 5.1 or newer is required (found $($PSVersionTable.PSVersion)). Install PowerShell 7 from https://aka.ms/powershell and re-run the installer."
 }
 
+function New-InstallHttpFailure {
+    param([hashtable]$Fields)
+    # Server error bodies and redirect URLs are never safe to echo.
+    $failure = [Exception]::new("CNB web request failed ($($Fields.error_type), HTTP $($Fields.http_status)).")
+    $failure.Data["OmpInstallHttpFailure"] = $Fields
+    return $failure
+}
+
 # Only downloads may bypass certificate validation: their bytes are checked
 # against the digest from trusted release metadata before execution. Isolate
 # legacy TLS settings so neither request changes the caller's host settings.
 function Invoke-InstallWebRequest {
-    param([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile)
+    param([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile, [hashtable]$Headers = @{}, [switch]$Redirect)
 
     if ($PSVersionTable.PSVersion.Major -ge 7) {
         if ($OutFile) {
-            Invoke-WebRequest -Uri $Uri.AbsoluteUri -OutFile $OutFile -TimeoutSec $TimeoutSec -UseBasicParsing -SkipCertificateCheck
-        } else {
-            # Do not follow redirects: Windows PowerShell can redirect HTTPS to HTTP.
-            Invoke-RestMethod -Uri $Uri.AbsoluteUri -TimeoutSec $TimeoutSec -MaximumRedirection 0
+            Invoke-WebRequest -Uri $Uri.AbsoluteUri -OutFile $OutFile -TimeoutSec $TimeoutSec -UseBasicParsing -SkipCertificateCheck -MaximumRedirection 0
+            return
+        }
+
+        # Keep both authenticated requests on the original connection, over
+        # verified TLS. In particular, never follow the signed asset redirect.
+        $status = "unavailable"
+        try {
+            $handler = [Net.Http.HttpClientHandler]::new()
+            $handler.AllowAutoRedirect = $false
+            $client = [Net.Http.HttpClient]::new($handler)
+            try {
+                $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+                $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $Uri)
+                try {
+                    foreach ($key in $Headers.Keys) { $request.Headers.Add($key, [string]$Headers[$key]) }
+                    $completion = if ($Redirect) { [Net.Http.HttpCompletionOption]::ResponseHeadersRead } else { [Net.Http.HttpCompletionOption]::ResponseContentRead }
+                    $response = $client.SendAsync($request, $completion).GetAwaiter().GetResult()
+                    try {
+                        $status = [int]$response.StatusCode
+                        if ($Redirect) { return @{ status = $status; location = [string]$response.Headers.Location } }
+                        if ($status -ne 200) { throw [Net.WebException]::new("Expected HTTP 200.") }
+                        $json = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                        return (ConvertFrom-Json -InputObject $json)
+                    } finally { $response.Dispose() }
+                } finally { $request.Dispose() }
+            } finally { $client.Dispose() }
+        } catch {
+            $failureFields = Get-InstallFailureFields $_
+            $failureFields.http_status = $status
+            throw (New-InstallHttpFailure $failureFields)
         }
         return
     }
@@ -241,9 +273,9 @@ function Invoke-InstallWebRequest {
             }
         }
     }
-    $job = Start-Job -ArgumentList @($Uri.AbsoluteUri, $TimeoutSec, $OutFile, $proxyAddress, ($null -eq $callerProxy), $useDefaultProxyCredentials, $proxyCredentials) -ScriptBlock {
+    $job = Start-Job -ArgumentList @($Uri.AbsoluteUri, $TimeoutSec, $OutFile, $proxyAddress, ($null -eq $callerProxy), $useDefaultProxyCredentials, $proxyCredentials, $Headers, [bool]$Redirect) -ScriptBlock {
         param([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile, [string]$ProxyAddress, [bool]$ProxyDisabled,
-            [bool]$UseDefaultProxyCredentials, [hashtable]$ProxyCredentials)
+            [bool]$UseDefaultProxyCredentials, [hashtable]$ProxyCredentials, [hashtable]$Headers, [bool]$Redirect)
         $ErrorActionPreference = "Stop"
         $ProgressPreference = "SilentlyContinue"
         try {
@@ -273,7 +305,7 @@ function Invoke-InstallWebRequest {
                 [Net.WebRequest]::DefaultWebProxy = $null
             }
 
-            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             if ($OutFile) {
                 # A PowerShell scriptblock cannot run on the TLS worker thread.
                 Add-Type -TypeDefinition @'
@@ -285,23 +317,46 @@ namespace Omp {
 }
 '@
                 [Net.ServicePointManager]::ServerCertificateValidationCallback = [Omp.InstallerTls]::Callback
-                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -TimeoutSec $TimeoutSec -UseBasicParsing
+                Invoke-WebRequest -Uri $Uri -OutFile $OutFile -TimeoutSec $TimeoutSec -UseBasicParsing -MaximumRedirection 0
                 @{ success = $true }
             } else {
-                # Return the JSON body so job serialization cannot truncate
-                # the nested asset records needed for digest verification.
-                $response = Invoke-WebRequest -Uri $Uri -TimeoutSec $TimeoutSec -UseBasicParsing -MaximumRedirection 0
-                @{ success = $true; release_json = $response.Content }
+                $request = [Net.HttpWebRequest]::CreateHttp($Uri)
+                $request.AllowAutoRedirect = $false
+                $request.Timeout = $TimeoutSec * 1000
+                $request.ReadWriteTimeout = $TimeoutSec * 1000
+                foreach ($key in $Headers.Keys) {
+                    if ($key -eq "Accept") { $request.Accept = $Headers[$key] }
+                    else { $request.Headers[$key] = $Headers[$key] }
+                }
+                $response = $request.GetResponse()
+                try {
+                    $status = [int]$response.StatusCode
+                    if ($Redirect) {
+                        @{ success = $true; status = $status; location = $response.Headers["Location"] }
+                    } elseif ($status -ne 200) {
+                        @{ success = $false; error_type = "WebException"; error_code = 0; http_status = $status }
+                    } else {
+                        # Relay the JSON body without job-serializing nested assets.
+                        $reader = [IO.StreamReader]::new($response.GetResponseStream())
+                        try { @{ success = $true; release_json = $reader.ReadToEnd() } }
+                        finally { $reader.Dispose() }
+                    }
+                } finally { $response.Dispose() }
             }
         } catch {
+            $errorException = $_.Exception
+            while ($errorException -is [System.Management.Automation.MethodInvocationException] -and $errorException.InnerException) {
+                $errorException = $errorException.InnerException
+            }
             $failure = @{
                 success = $false
-                message = $_.Exception.Message
-                error_code = $_.Exception.HResult
-                error_type = $_.Exception.GetType().Name
+                http_status = "unavailable"
+                error_code = $errorException.HResult
+                error_type = $errorException.GetType().Name
             }
-            if ($_.Exception.Response -is [Net.HttpWebResponse]) {
-                $failure.http_status = [int]$_.Exception.Response.StatusCode
+            if ($errorException -is [Net.WebException] -and $errorException.Response -is [Net.HttpWebResponse]) {
+                $failure.http_status = [int]$errorException.Response.StatusCode
+                $errorException.Response.Dispose()
             }
             $failure
         }
@@ -313,14 +368,14 @@ namespace Omp {
     }
     if (-not $result) { throw "The installer web request process returned no result." }
     if (-not $result.success) {
-        $failure = [Exception]::new($result.message)
-        $failure.Data["OmpInstallHttpFailure"] = $result
-        throw $failure
+        throw (New-InstallHttpFailure $result)
     }
+    if ($Redirect) { return @{ status = $result.status; location = $result.location } }
     if (-not $OutFile) { return (ConvertFrom-Json -InputObject $result.release_json) }
 }
 
-$Repo = "jchanghong023/oh-my-pi"
+$CnbApi = "https://api.cnb.cool/jchanghong/bin"
+$VersionPattern = '(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
 # Read the OS architecture from environment variables for compatibility with Windows PowerShell 5.1 and PowerShell 7+.
 # A 32-bit host on 64-bit Windows reports PROCESSOR_ARCHITEW6432; only x64 is supported.
@@ -341,8 +396,7 @@ Write-InstallLog INFO platform_selected @{ result = "selected" }
 # executable writes to stderr while $ErrorActionPreference is "Stop", regardless
 # of the process exit code. `omp --version` and curl.exe both report progress on
 # stderr, so run them with the preference relaxed to "Continue" and let callers
-# gate on $LASTEXITCODE. Global "Stop" stays in effect for the cmdlet-driven
-# operations (Invoke-WebRequest/Invoke-RestMethod) that depend on it.
+# gate on $LASTEXITCODE. Global "Stop" stays in effect for cmdlet operations.
 function Invoke-Native {
     param([Parameter(Mandatory = $true)][scriptblock]$Command)
     $previous = $ErrorActionPreference
@@ -373,9 +427,12 @@ function Save-InstallBinary {
             }
         }
         Set-InstallStage "download_curl"
-        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "curl"; attempt = 1; connect_timeout_ms = 10000; low_speed_timeout_ms = 30000 }
+        Write-InstallLog INFO http_request_started @{ method = "GET"; endpoint = "release_asset"; transport = "curl"; attempt = 1; connect_timeout_ms = 10000; low_speed_timeout_ms = 30000 }
         try {
-            Invoke-Native { & $curlExe.Source -fL --insecure --ssl-no-revoke --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar @proxyArguments $Uri.AbsoluteUri -o $OutFile }
+            # CNB signed URLs are validated as HTTPS before reaching this helper.
+            # Pin curl to the requested HTTP(S) scheme without following redirects.
+            $curlProtocol = if ($Uri.Scheme -eq "http") { "=http" } else { "=https" }
+            Invoke-Native { & $curlExe.Source -q -fg --proto $curlProtocol --insecure --ssl-no-revoke --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar @proxyArguments $Uri.AbsoluteUri -o $OutFile }
             $curlExit = $LASTEXITCODE
         } catch [System.Management.Automation.ApplicationFailedException] {
             # No process exited: do not reuse a previous native command's exit code.
@@ -397,18 +454,19 @@ function Save-InstallBinary {
     if (-not $curlExe -or $curlExit -ne 0) {
         Write-InstallLog WARN download_transport_fallback @{ result = "fallback"; from = "curl"; to = "Invoke-WebRequest"; reason = $(if ($curlExe) { "curl_failed" } else { "curl_absent" }) }
         Set-InstallStage "download_webrequest"
-        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; timeout_ms = 900000; attempt = $(if ($curlExe) { 2 } else { 1 }) }
+        Write-InstallLog INFO http_request_started @{ method = "GET"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; timeout_ms = 900000; attempt = $(if ($curlExe) { 2 } else { 1 }) }
         try {
             Invoke-InstallWebRequest -Uri $Uri -OutFile $OutFile -TimeoutSec 900
             Write-InstallLog INFO http_request_completed @{ result = "success"; endpoint = "release_asset"; transport = "Invoke-WebRequest"; http_status = "success" }
         } catch {
-            Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
+            $webFailure = Get-InstallFailureFields $_
+            Write-InstallLog ERROR http_request_failed $webFailure
             $downloadCleanupErrors = @()
             Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue -ErrorVariable +downloadCleanupErrors
             $cleanupLevel = if ($downloadCleanupErrors.Count) { "WARN" } else { "INFO" }
             Write-InstallLog $cleanupLevel candidate_cleanup_completed @{ result = $(if ($downloadCleanupErrors.Count) { "partial" } else { "removed_or_absent" }); reason = "download_failed"; error_count = $downloadCleanupErrors.Count }
             $curlDetail = if ($curlExe) { "curl exit $curlExit`n" } else { "" }
-            throw "Download failed: $($Uri.AbsoluteUri)`n${curlDetail}Invoke-WebRequest: $($_.Exception.Message)"
+            throw "CNB binary download failed.`n${curlDetail}Invoke-WebRequest: $($webFailure.error_type), HTTP $($webFailure.http_status)"
         }
     }
 }
@@ -547,14 +605,16 @@ function Test-InstalledBinaryVersion {
     try {
         $versionOutput = @(Invoke-Native { & $TargetPath --version 2>&1 })
         $exitCode = $LASTEXITCODE
-        $versionText = $versionOutput | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | Select-Object -First 1
-        $script:InstallProbeDetail = "Expected omp/$($ReleaseTag -replace '^v', ''); exit code: $exitCode; output:`n$(($versionOutput | Out-String).Trim())"
-        if ($exitCode -ne 0 -or $versionText -notmatch '^omp/(\S+)') {
+        $stdout = @($versionOutput | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+        $expectedVersion = $ReleaseTag -creplace '\Av', ''
+        $script:InstallProbeDetail = "Expected omp/$expectedVersion; exit code: $exitCode; output:`n$(($versionOutput | Out-String).Trim())"
+        $versionMatch = if ($stdout.Count -eq 1) { [regex]::Match([string]$stdout[0], "\Aomp/($VersionPattern)\z") }
+        if ($exitCode -ne 0 -or -not $versionMatch -or -not $versionMatch.Success) {
             $probeLevel = if ($probeTarget -eq "candidate") { "ERROR" } else { "INFO" }
             Write-InstallLog $probeLevel binary_probe_failed @{ target = $probeTarget; result = "invalid_or_failed"; exit_code = $exitCode }
             return $false
         }
-        $matchesRelease = $Matches[1] -eq ($ReleaseTag -replace '^v', '')
+        $matchesRelease = $versionMatch.Groups[1].Value -ceq $expectedVersion
         $probeLevel = if (-not $matchesRelease -and $probeTarget -eq "candidate") { "ERROR" } else { "INFO" }
         Write-InstallLog $probeLevel binary_probe_completed @{ target = $probeTarget; result = $(if ($matchesRelease) { "matches" } else { "mismatch" }); exit_code = $exitCode }
         return $matchesRelease
@@ -582,49 +642,60 @@ function Install-Binary {
     if (Test-Path -LiteralPath $OutPath -PathType Container) {
         throw "Refusing to replace a directory at $OutPath"
     }
-    if ($Ref) {
-        Set-InstallStage "release_metadata"
-        # Escape the tag as a single URI segment. EscapeDataString preserves
-        # literal dots, so reject complete dot segments before Uri normalizes them.
-        if ($Ref -in ".", "..") {
-            Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_requested_tag" }
-            throw "Invalid release tag: $Ref"
-        }
-        $refPath = [Uri]::EscapeDataString($Ref)
-        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
-        Write-Host "Fetching release $Ref..."
-        try {
-            $Release = Invoke-InstallWebRequest -Uri "https://api.github.com/repos/$Repo/releases/tags/$refPath" -TimeoutSec 60
-        } catch {
-            $failureFields = Get-InstallFailureFields $_
-            Write-InstallLog ERROR http_request_failed $failureFields
-            if ($failureFields.http_status -eq 404) {
-                throw "Release tag not found: $Ref`nOnly published release tags are supported."
-            }
-            throw
-        }
-    } else {
-        Write-Host "Fetching latest release..."
-        Set-InstallStage "release_metadata"
-        Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_latest"; timeout_ms = 60000; attempt = 1 }
-        try {
-            $Release = Invoke-InstallWebRequest -Uri "https://api.github.com/repos/$Repo/releases/latest" -TimeoutSec 60
-        } catch {
-            Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
-            throw
-        }
+    Set-InstallStage "release_metadata"
+    $ReleaseTag = if ($Ref) { $Ref } else { "omp" }
+    if ($ReleaseTag -cnotmatch '\A[A-Za-z0-9._+/-]+\z' -or $ReleaseTag -eq "." -or $ReleaseTag.Contains("..")) {
+        Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_requested_tag" }
+        throw "Invalid release tag: $ReleaseTag"
     }
-    Write-InstallLog INFO http_request_completed @{ result = "success"; host = "api.github.com"; endpoint = "release_metadata"; http_status = "success" }
+    if ([string]::IsNullOrEmpty($env:CNB_TOKEN)) {
+        throw "Set CNB_TOKEN with repo-release:r permission to install from CNB."
+    }
+    if ($env:CNB_TOKEN -cnotmatch '\A[A-Za-z0-9._~+/-]+=*\z') {
+        throw "CNB_TOKEN is not a valid bearer token."
+    }
+    # Send these headers only to fixed CNB OpenAPI routes, never to the signed URL.
+    $headers = @{ Accept = "application/vnd.cnb.api+json"; Authorization = "Bearer $env:CNB_TOKEN" }
+    $refPath = [Uri]::EscapeDataString($ReleaseTag)
+    Write-Host "Fetching CNB release $ReleaseTag..."
+    Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.cnb.cool"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
+    try {
+        $Release = Invoke-InstallWebRequest -Uri "$CnbApi/-/releases/tags/$refPath" -TimeoutSec 60 -Headers $headers
+    } catch {
+        $failureFields = Get-InstallFailureFields $_
+        Write-InstallLog ERROR http_request_failed $failureFields
+        if ($failureFields.http_status -eq 404) {
+            throw "Release tag not found: $ReleaseTag`nOnly published CNB release tags are supported."
+        }
+        if ($failureFields.http_status -in 401, 403) {
+            Write-Host "CNB release access was denied. Set CNB_TOKEN with repo-release:r permission."
+        }
+        throw
+    }
+    Write-InstallLog INFO http_request_completed @{ result = "success"; host = "api.cnb.cool"; endpoint = "release_tag"; http_status = "success" }
 
-    $Latest = $Release.tag_name
-    if ($Latest -isnot [string] -or -not $Latest -or $Latest -in ".", "..") {
-        Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_tag" }
-        throw "Failed to fetch release tag"
-    }
-    if ($Ref -and -not [string]::Equals($Latest, $Ref, [StringComparison]::Ordinal)) {
+    if ($Release.tag_name -isnot [string] -or $Release.tag_name -cne $ReleaseTag) {
         Write-InstallLog ERROR release_metadata_invalid @{ result = "unexpected_tag" }
-        throw "GitHub metadata did not match the requested release tag."
+        throw "CNB metadata did not match the requested release tag."
     }
+    $semver = "\Av?$VersionPattern\z"
+    $tagVersion = if ($ReleaseTag -cmatch $semver) { $ReleaseTag -creplace '\Av', '' }
+    $titleVersion = if ($Release.name -is [string]) {
+        if ($Release.name -cmatch $semver) { $Release.name -creplace '\Av', '' }
+        elseif ($Release.name -cmatch ' \[omp:v([^][]*)\]\z') {
+            $declared = $Matches[1]
+            if ($declared -cmatch "\A$VersionPattern\z") { $declared }
+            else {
+                Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_version" }
+                throw "CNB release $ReleaseTag contains invalid binary version metadata."
+            }
+        }
+    }
+    if ((-not $tagVersion -and -not $titleVersion) -or ($tagVersion -and $titleVersion -and $tagVersion -cne $titleVersion)) {
+        Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_version" }
+        throw "CNB release $ReleaseTag has no unambiguous binary version. Ask the release owner to republish with version metadata."
+    }
+    $Latest = if ($titleVersion) { $titleVersion } else { $tagVersion }
     Write-Host "Using version: $Latest"
     Set-InstallLogVersion $Latest
     Write-InstallLog INFO release_selected @{ result = "selected" }
@@ -647,12 +718,36 @@ function Install-Binary {
         Write-InstallLog ERROR release_metadata_invalid @{ result = "asset_missing_or_ambiguous"; asset = $BinaryName }
         throw "Expected exactly one $BinaryName asset in release $Latest."
     }
-    $digest = $assets[0].digest
-    if ($digest -isnot [string] -or $digest -cnotmatch '\Asha256:[0-9a-fA-F]{64}\z') {
+    $digest = $assets[0].hash_value
+    if ($assets[0].hash_algo -isnot [string] -or $assets[0].hash_algo -notmatch '\Asha-?256\z' -or
+        $digest -isnot [string] -or $digest -cnotmatch '\A[0-9a-fA-F]{64}\z') {
         Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_asset_digest"; asset = $BinaryName }
         throw "Release $Latest does not provide a valid SHA-256 digest for $BinaryName."
     }
-    $expectedHash = $digest.Substring(7)
+    $expectedHash = $digest
+
+    Set-InstallStage "download_url"
+    Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.cnb.cool"; endpoint = "release_asset_url"; timeout_ms = 60000; attempt = 1 }
+    try {
+        $redirect = Invoke-InstallWebRequest -Uri "$CnbApi/-/releases/download/$refPath/$BinaryName" -TimeoutSec 60 -Headers $headers -Redirect
+    } catch {
+        $failureFields = Get-InstallFailureFields $_
+        Write-InstallLog ERROR http_request_failed $failureFields
+        if ($failureFields.http_status -in 401, 403) {
+            Write-Host "CNB release access was denied. Set CNB_TOKEN with repo-release:r permission."
+        }
+        throw
+    }
+    $BinaryUrl = $null
+    if ($redirect.status -ne 302 -or -not [Uri]::TryCreate($redirect.location, [UriKind]::Absolute, [ref]$BinaryUrl) -or
+        $BinaryUrl.Scheme -ne "https" -or -not $BinaryUrl.Host -or $BinaryUrl.UserInfo) {
+        Write-InstallLog ERROR http_request_failed @{ result = "invalid_redirect"; endpoint = "release_asset_url"; http_status = $redirect.status }
+        if ($redirect.status -in 401, 403) {
+            throw "CNB release access was denied. Set CNB_TOKEN with repo-release:r permission."
+        }
+        throw "CNB did not return an HTTPS binary download redirect."
+    }
+    Write-InstallLog INFO http_request_completed @{ result = "success"; host = "api.cnb.cool"; endpoint = "release_asset_url"; http_status = 302 }
 
     Set-InstallStage "prepare_candidate"
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
@@ -667,8 +762,6 @@ function Install-Binary {
     # install target. Prefer the in-box curl.exe (Windows 10 1803+) for a live
     # progress bar; fall back to Invoke-WebRequest when curl is unavailable or
     # fails.
-    $releasePath = [Uri]::EscapeDataString($Latest)
-    $BinaryUrl = "https://github.com/$Repo/releases/download/$releasePath/$BinaryName"
     Write-Host "Downloading $BinaryName..."
     $TmpPath = Join-Path $InstallDir (".omp.tmp.{0}.{1}.exe" -f $PID, [System.Guid]::NewGuid().ToString("N"))
     $renamedAside = $false
@@ -732,9 +825,8 @@ function Install-Binary {
                     Write-InstallLog INFO rollback_completed @{ result = "restored" }
                 } catch {
                     Write-InstallLog ERROR rollback_failed (Get-InstallFailureFields $_)
-                    # Rollback failed too: the aside binary is the only restored
-                    # copy and the fresh download below is the other recovery
-                    # path, so the finally must keep it.
+                    # Rollback failed too: the aside is the only old copy
+                    # and the fresh download is the other recovery path.
                     $rollbackFailed = $true
                     $failedStage = "rollback"
                     Write-InstallLog WARN recovery_files_retained @{ result = "retained"; old_image = $true; candidate = $true }
@@ -828,9 +920,15 @@ function Install-Binary {
                     Write-Host "The previous installed binary is still available at $OutPath"
                 }
                 $installLiteral = "'" + $InstallDir.Replace("'", "''") + "'"
-                $releaseLiteral = "'" + $Latest.Replace("'", "''") + "'"
-                Write-Host "Resolve the permission or file-lock error above, then retry the same release and install directory:"
-                Write-Host "`$env:PI_INSTALL_DIR = $installLiteral; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/$Repo/main/scripts/install.ps1))) -Binary -Ref $releaseLiteral"
+                $releaseLiteral = "'" + $ReleaseTag.Replace("'", "''") + "'"
+                $retryScript = if ($InstallerSourcePath) { $InstallerSourcePath } else { ".\scripts\install.ps1" }
+                $retryLiteral = "'" + $retryScript.Replace("'", "''") + "'"
+                if (-not $InstallerSourcePath) {
+                    Write-Host "Retry from a local checkout of the current CNB installer:"
+                } else {
+                    Write-Host "Resolve the reported error, then retry with this installer:"
+                }
+                Write-Host "`$env:PI_INSTALL_DIR = $installLiteral; & $retryLiteral -Binary -Ref $releaseLiteral"
                 Write-Host "After retrying, verify the installed file and the command found on PATH:"
                 Write-Host "& $targetLiteral --version; Get-Command omp; omp --version"
             }

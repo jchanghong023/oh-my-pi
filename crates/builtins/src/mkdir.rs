@@ -76,7 +76,11 @@ impl fmt::Display for MkdirError {
 				if let Some(context) = context {
 					write!(formatter, "{context}: ")?;
 				}
-				formatter.write_str(&strip_errno(source))
+				if source.raw_os_error().is_some() {
+					formatter.write_str(&strip_errno(source))
+				} else {
+					fmt::Display::fmt(source, formatter)
+				}
 			},
 		}
 	}

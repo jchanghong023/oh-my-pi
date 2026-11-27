@@ -155,13 +155,17 @@ async function streamsResource(
 			`proc://${id} has no streams: only bash jobs record their \`|\` stages and redirected files. Read proc://${id} for its output.`,
 		);
 	}
-	if (!streams)
+	if (!streams) {
+		if (stream !== undefined) {
+			throw new Error(`Stream not found: proc://${id}/streams/${stream}. List them with proc://${id}/streams.`);
+		}
 		return textResource(
 			url,
 			`${id} has no available pipe streams or redirected files. Only bash jobs record them. Read proc://${id} for its output.`,
 			undefined,
-			stream === undefined,
+			true,
 		);
+	}
 	if (stream === undefined) {
 		const rows = streams.list().map(info => {
 			// Stage source spans lines (`for …; do …; done`); a row shows each on one line. A file's path stays whole.
@@ -198,7 +202,6 @@ export class ProcProtocolHandler implements ProtocolHandler {
 			scope: "workspace",
 			tier: () => "exec",
 			cancels: isKill,
-			contentOptional: isKill,
 		},
 	};
 

@@ -1,6 +1,14 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { flattenLine } from "@oh-my-pi/pi-tui/text/sanitize";
-import { type ChoiceField, type FormBlock, type FormField, type HtmlForm, spansText, type TextField } from "./parse";
+import {
+	type ChoiceField,
+	type FormBlock,
+	type FormField,
+	type HtmlForm,
+	implicitChoiceDefaults,
+	spansText,
+	type TextField,
+} from "./parse";
 
 /** Submitted value of one control: text, a number for `number`/`range` inputs, or a group's checked values. */
 export type HtmlFormValue = string | number | string[];
@@ -113,6 +121,45 @@ function compilePattern(pattern: string): RegExp | undefined {
 	}
 }
 
+/** Defaults for a choice control: the last checked option wins for a single choice. */
+export function initialChoiceSelection(field: ChoiceField): Set<number> {
+	const checked = new Set<number>();
+	for (const [index, option] of field.options.entries()) {
+		if (!option.checked) continue;
+		if (!field.multi) checked.clear();
+		checked.add(index);
+	}
+	return checked;
+}
+
+/** Whether the original form explicitly recommends an answer that survives submission. */
+export function hasInitialFormRecommendation(form: HtmlForm, validateAll = false): boolean {
+	const names = new Set<string>();
+	let recommended = false;
+	for (let index = form.fields.length - 1; index >= 0; index--) {
+		const field = form.fields[index]!;
+		const checked = field.kind === "choice" ? initialChoiceSelection(field) : undefined;
+		const value = field.kind === "text" ? textValue(field, field.value) : choiceValue(field, checked!);
+		const valid =
+			!(field.kind === "choice" && field.options[0]?.placeholder && checked?.has(0)) &&
+			fieldError(field, value) === undefined;
+		if (validateAll && !valid) return false;
+		// Like defaultFormData, the last control contributing a value owns its name.
+		if (!field.name || names.has(field.name) || value === undefined) continue;
+		names.add(field.name);
+		if (!valid) continue;
+		if (
+			field.kind === "text"
+				? field.value.trim()
+				: field.options.some((option, at) => checked!.has(at) && !option.disabled && !implicitChoiceDefaults.has(option))
+		) {
+			if (!validateAll) return true;
+			recommended = true;
+		}
+	}
+	return recommended;
+}
+
 /** Data the form submits untouched: hidden inputs, preselected options and prefilled text. */
 export function defaultFormData(form: HtmlForm): HtmlFormData {
 	// A null prototype keeps a control named `__proto__` an ordinary key instead of hitting the inherited setter.
@@ -120,10 +167,7 @@ export function defaultFormData(form: HtmlForm): HtmlFormData {
 	for (const [name, value] of form.hidden) data[name] = value;
 	for (const field of form.fields) {
 		if (!field.name) continue;
-		const value =
-			field.kind === "text"
-				? textValue(field, field.value)
-				: choiceValue(field, new Set(field.options.flatMap((option, index) => (option.checked ? [index] : []))));
+		const value = field.kind === "text" ? textValue(field, field.value) : choiceValue(field, initialChoiceSelection(field));
 		if (value !== undefined) data[field.name] = value;
 	}
 	return data;

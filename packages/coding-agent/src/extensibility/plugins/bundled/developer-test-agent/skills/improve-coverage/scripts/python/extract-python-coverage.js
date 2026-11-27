@@ -14,6 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { stripVTControlCharacters } = require('node:util');
 
 // ========== 参数解析 ==========
 const args = process.argv.slice(2);
@@ -132,7 +133,7 @@ if (pytestVPath && fs.existsSync(pytestVPath)) {
   const reportedTestFiles = new Set();
 
   for (const line of testOutput.split('\n')) {
-    const trimmed = line.trimEnd();
+    const trimmed = stripVTControlCharacters(line).trimEnd();
     const result = /^(?<filePath>.+?\.py)::(?<testId>.+?)\s+(?<status>PASSED|FAILED|ERROR)(?:\s+\[\s*\d+%\])?$/.exec(trimmed)
       || /^\[gw\d+\]\s+(?:\[\s*\d+%\]\s+)?(?<status>PASSED|FAILED|ERROR)\s+(?<filePath>.+?\.py)::(?<testId>.+)$/.exec(trimmed);
     if (result) {
@@ -302,6 +303,7 @@ function countCodeLines(content) {
   const lines = content.split('\n');
   let codeLines = 0;
   let inDocstring = false;
+  let inImport = false;
   let docstringDelimiter = null; // '"""' 或 "'''"
 
   for (const line of lines) {
@@ -320,6 +322,12 @@ function countCodeLines(content) {
         docstringDelimiter = null;
         // 如果 delimiter 后面还有代码，也不额外处理（Python 习惯上 docstring 结束后不跟代码）
       }
+      continue;
+    }
+
+    // 括号内的多行导入到右括号为止；忽略注释中的括号。
+    if (inImport) {
+      if (/^[^#]*\)/.test(trimmed)) inImport = false;
       continue;
     }
 
@@ -351,7 +359,10 @@ function countCodeLines(content) {
     }
 
     // 跳过 from ... import 语句
-    if (trimmed.startsWith('from ') && trimmed.includes(' import')) {
+    const fromImport = /^from\s+\S+\s+import\b([^#]*)/.exec(trimmed);
+    if (fromImport) {
+      const imported = fromImport[1].trimStart();
+      inImport = imported.startsWith('(') && !imported.includes(')');
       continue;
     }
 

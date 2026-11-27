@@ -1285,8 +1285,6 @@ describe("wave 3 commands", () => {
 			expect(worktreeGit(newDir, "rev-parse", "HEAD")).toBe(sourceTip);
 			expect(worktreeGit(newDir, "status", "--porcelain")).toBe("");
 			expect(await Bun.file(path.join(newDir, "tracked.txt")).text()).toBe("committed\n");
-			expect(await Bun.file(path.join(newDir, "deleted.txt")).text()).toBe("committed\n");
-			expect(await Bun.file(path.join(newDir, "unstaged-deleted.txt")).text()).toBe("committed\n");
 			expect(await Bun.file(path.join(newDir, "untracked.txt")).exists()).toBe(false);
 			await expectSourceUnchanged();
 		} finally {
@@ -1311,7 +1309,6 @@ describe("wave 3 commands", () => {
 			await Bun.write(path.join(repoDir, "main-only.txt"), "main\n");
 			worktreeGit(repoDir, "add", "-A");
 			worktreeGit(repoDir, "commit", "-qm", "main tip");
-			const sourceTip = worktreeGit(repoDir, "rev-parse", "HEAD");
 			const expectSourceUnchanged = await dirtyWorktreeSource(repoDir);
 			fakeSessionManager._cwd = repoDir;
 
@@ -1319,7 +1316,6 @@ describe("wave 3 commands", () => {
 			const branchDir = fakeSessionManager.getCwd();
 			expect(path.dirname(branchDir)).toBe(path.dirname(repoDir));
 			expect(worktreeGit(branchDir, "rev-parse", "HEAD")).toBe(existingTip);
-			expect(worktreeGit(branchDir, "rev-parse", "HEAD")).not.toBe(sourceTip);
 			expect(await Bun.file(path.join(branchDir, "main-only.txt")).exists()).toBe(false);
 			expect(worktreeGit(branchDir, "status", "--porcelain")).toBe("");
 			await expectSourceUnchanged();

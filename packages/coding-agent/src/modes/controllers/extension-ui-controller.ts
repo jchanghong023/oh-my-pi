@@ -263,7 +263,7 @@ export class ExtensionUiController {
 			refreshTranscript: ids => this.ctx.refreshTranscriptPresentation(new Set(ids)),
 			getLinkClicksAvailable: extensionLinkClicksAvailable,
 			setStatus: (key, text) => this.setHookStatus(key, text),
-			setWorkingMessage: message => this.ctx.setWorkingMessage(message),
+			setWorkingMessage: message => this.ctx.setWorkingMessage(message, false),
 			setWidget: (key, content, options) => this.setHookWidget(key, content, options),
 			setOwnedWidget: (owner, key, content, options) => this.setHookWidget(key, content, options, owner),
 			setTitle: title => setExtensionTerminalTitle(title),

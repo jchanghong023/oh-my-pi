@@ -8,7 +8,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { presentNarrationAsAnswer } from "@oh-my-pi/pi-ai/utils/narration";
-import { $flag, logger, postmortem, sanitizeText, sleepUntil } from "@oh-my-pi/pi-utils";
+import { $flag, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import { HINDSIGHT_NOTICE_SOURCE } from "../hindsight/state";
 import type { MCPManager } from "../mcp/manager";
 import { resolveMCPTimeoutMs } from "../mcp/timeout";
@@ -21,7 +21,7 @@ import { CREDENTIAL_DISABLED_NOTICE_SOURCE } from "../session/credential-disable
 import { isSilentAbort } from "../session/messages";
 import { flushTelemetryExport } from "../telemetry-export";
 import { parseSlashCommand, parseSubcommand } from "../slash-commands/helpers/parse";
-import type { SlashCommandRuntime } from "../slash-commands/types";
+import type { ParsedSlashCommand, SlashCommandRuntime } from "../slash-commands/types";
 import { SPOTLIGHT_NOTICE_SOURCE } from "../spotlight/session";
 import { reconnectMcpManagerServer } from "../mcp/oauth-reauth";
 import {
@@ -44,8 +44,6 @@ export interface PrintModeOptions {
 	messages?: string[];
 	/** Explicit CLI command submitted alongside, but kept separate from, the stdin/@file data. */
 	initialCommand?: string;
-	/** An initial command was submitted with piped input or an explicit @file argument, even an empty file. */
-	initialHasCompanions?: boolean;
 	/** First message composed from stdin/@file and any merged CLI text; never parsed as a command or template. */
 	initialMessage?: string;
 	/** Images to attach to the initial message */
@@ -68,6 +66,22 @@ export const PRINT_MODE_ERROR_ADVISOR_DRAIN_TIMEOUT_MS = 30_000;
 const MAX_TIMER_MS = 2_147_483_647;
 /** Exit status of a run the cost gate stopped (`--max-cost` / `session.maxCost` reached). */
 export const PRINT_MODE_COST_CAP_EXIT_CODE = 3;
+
+/** Recognize only commands supported by the headless runtime. */
+export function parsePrintBuiltinCommand(message: string): ParsedSlashCommand | null {
+	const parsed = parseSlashCommand(message);
+	switch (parsed?.name) {
+		case "compact":
+		case "handoff":
+		case "retry":
+		case "todoloop":
+			return parsed;
+		case "mcp":
+			return parseSubcommand(parsed.args).verb === "reauth" ? parsed : null;
+		default:
+			return null;
+	}
+}
 
 /** Sanitize untrusted text (server names, errors) into one stderr-safe line. */
 function singleLine(text: string): string {
@@ -200,7 +214,6 @@ async function runPrintModeCore(
 		mode,
 		messages = [],
 		initialCommand,
-		initialHasCompanions = false,
 		initialMessage,
 		initialImages,
 		printThoughts,
@@ -319,7 +332,6 @@ async function runPrintModeCore(
 	// failed `/mcp reauth` must not exit 0, or scripts treat a failed
 	// reauthorization as success.
 	let builtinFailed = false;
-	let builtinCostCapped = false;
 	// Whether any input reached the model as a prompt this invocation. A run
 	// where every input was consumed locally creates no assistant turn, so the
 	// persisted previous turn must not be reprinted or its old stop reason
@@ -327,53 +339,21 @@ async function runPrintModeCore(
 	let admittedAgentTurn = false;
 	// The session's cost-cap refusal when the last admitted turn started; a newer one stopped that turn.
 	let costCapRefusalBeforeTurn = session.costCapRefusal;
-	// The print-mode-dispatched commands. Only commands whose runtime hooks
-	// are real in the headless runtime belong here. `/todoloop` is consumed
-	// only to report that it requires a TUI. Commands whose hooks would be
-	// stubs (`/reload-plugins` and friends) stay undispatched, and so does
-	// `/stats`: its dashboard server is in-process (`Bun.serve` inside this
-	// one-shot run), so launching it would open a browser tab that dies with
-	// the process and report a success the run cannot deliver. Keeping the
-	// process alive until the dashboard closes is a separate design
-	// decision; until then `/stats` keeps the historic prompt-the-literal
-	// behavior of every undispatched command.
-	// Matched with the dispatcher's own parser, so `/compact:focus` and
-	// `/compact focus` are treated alike; `/mcp` dispatches only `reauth`.
-	const PRINT_DISPATCHED_COMMANDS: Record<string, true> = {
-		compact: true,
-		handoff: true,
-		retry: true,
-		team: true,
-		todoloop: true,
-	};
+	// Unsupported commands are sent literally: print mode has no perpetual UI host,
+	// browser dashboard or interactive plugin reload hooks.
 	/**
 	 * Dispatch a CLI-authored message as a local command, if it is one.
 	 * Only CLI-authored input (`initialCommand` and `messages`) is ever
-	 * dispatched; merged stdin/@file data is never command syntax. Team and
-	 * TodoLoop consume the whole submission, including any companion data.
+	 * dispatched; merged stdin/@file data is never command syntax. TodoLoop
+	 * consumes the whole submission, including any companion data.
 	 * Commands outside the dispatched list keep the historic behavior of
 	 * prompting the model with the literal text.
 	 */
-	const dispatchCliMessage = async (
-		message: string,
-		hasCompanions: boolean,
-	): Promise<false | "local" | "standalone"> => {
-		const parsed = parseSlashCommand(message);
-		const dispatched =
-			parsed !== null &&
-			(parsed.name === "mcp"
-				? parseSubcommand(parsed.args).verb === "reauth"
-				: Object.hasOwn(PRINT_DISPATCHED_COMMANDS, parsed.name));
-		if (!dispatched) return false;
+	const dispatchCliMessage = async (message: string): Promise<false | "local" | "standalone"> => {
+		const parsed = parsePrintBuiltinCommand(message);
+		if (!parsed) return false;
 		const { executeAcpBuiltinSlashCommand } = await import("../slash-commands/acp-builtins");
-		const consumed = parsed.name === "team" || parsed.name === "todoloop" ? "standalone" : "local";
-		if (parsed.name === "team" && hasCompanions) {
-			writeStderrLine(
-				"Error: /team does not accept piped input or @file attachments. Include context in the explicit question.",
-			);
-			builtinFailed = true;
-			return consumed;
-		}
+		const consumed = parsed.name === "todoloop" ? "standalone" : "local";
 		// `/retry` schedules its model turn outside `promptTurn`
 		// (`session.retry()` posts the continuation as a post-prompt task),
 		// so run `promptTurn`'s pre-turn prep BEFORE the command executes:
@@ -388,43 +368,14 @@ async function runPrintModeCore(
 			// reported, consumed without executing, and the run exits 1.
 			return consumed;
 		}
-		if (parsed.name === "team" && strict) {
-			const question = parsed.args.trim();
-			if (question && question !== "configure" && !(await checkMcpReadiness())) return consumed;
-		}
 		const refusalBeforeCommand = session.costCapRefusal;
-		const runtime = builtinRuntimeFor();
-		const deadline = parsed.name === "team" ? options.deadline : undefined;
-		const deadlineAbort = deadline === undefined ? undefined : new AbortController();
-		const deadlineReason = "--max-time reached before the Team discussion ended.";
-		if (deadlineAbort && deadline !== undefined) {
-			if (deadline <= Date.now()) deadlineAbort.abort(deadlineReason);
-			else {
-				void sleepUntil(deadline, deadlineAbort.signal).then(
-					() => deadlineAbort.abort(deadlineReason),
-					() => {},
-				);
-			}
-			runtime.signal = AbortSignal.any([shutdownSignal, deadlineAbort.signal]);
-		}
-		const result = await (
-			parsed.name === "team"
-				? import("../jch-commands/team").then(({ handleTeamCommand }) =>
-						handleTeamCommand(parsed, runtime, mode === "text"),
-					)
-				: executeAcpBuiltinSlashCommand(message, runtime)
-		).finally(() => deadlineAbort?.abort());
-		if (deadlineAbort?.signal.reason === deadlineReason) {
-			writeStderrLine(`Error: ${deadlineReason}`);
-			builtinFailed = true;
-		}
+		const result = await executeAcpBuiltinSlashCommand(message, builtinRuntimeFor());
 		if (result === false || "prompt" in result) {
 			writeStderrLine(`Error: /${parsed.name} cannot be run in print mode.`);
 			builtinFailed = true;
 			return consumed;
 		}
-		if (result.costCapped) builtinCostCapped = true;
-		else if (result.failed) builtinFailed = true;
+		if (result.failed) builtinFailed = true;
 		// A builtin that scheduled a real agent turn (`/retry`) admitted that
 		// turn: its answer (and stop reason) belong to this run.
 		if (result.agentInvoked) {
@@ -557,8 +508,8 @@ async function runPrintModeCore(
 		);
 	};
 
-	const runCliMessage = async (message: string, hasCompanions = false): Promise<boolean> => {
-		const dispatched = await dispatchCliMessage(message, hasCompanions);
+	const runCliMessage = async (message: string): Promise<boolean> => {
+		const dispatched = await dispatchCliMessage(message);
 		if (dispatched) {
 			readinessDirty = true;
 			return dispatched === "standalone";
@@ -567,8 +518,7 @@ async function runPrintModeCore(
 		return false;
 	};
 
-	const consumedInitialContext =
-		initialCommand !== undefined && (await runCliMessage(initialCommand, initialHasCompanions));
+	const consumedInitialContext = initialCommand !== undefined && (await runCliMessage(initialCommand));
 	if (!consumedInitialContext && !strictMCPFailure && initialMessage !== undefined) {
 		await promptTurn(initialMessage, { images: initialImages, runCommands: false, expandPromptTemplates: false });
 	}
@@ -727,5 +677,5 @@ async function runPrintModeCore(
 
 	await stderrTail;
 	if (terminalFailure || durabilityFailure || strictMCPFailure || builtinFailed || asyncWaitExpired) return 1;
-	return costCapped || builtinCostCapped ? PRINT_MODE_COST_CAP_EXIT_CODE : 0;
+	return costCapped ? PRINT_MODE_COST_CAP_EXIT_CODE : 0;
 }

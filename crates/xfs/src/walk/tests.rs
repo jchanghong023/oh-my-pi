@@ -450,6 +450,7 @@ async fn stopping_a_walk_closes_its_job_queue() {
 		&Options::default(),
 		keep,
 		false,
+		false,
 		None,
 		None,
 	)
@@ -881,13 +882,13 @@ async fn follow_links_resolves_targets_and_drops_cycles() {
 	let cache = leaked_cache(1 << 20);
 	let opts = Options { follow_links: true, ..Default::default() };
 	let filter = |_: &mut Worker<'_>, _: &mut Entry<'_>| Action::Continue;
-	collect_in(&Fs::native(), root, &opts, true, filter, Some(cache))
+	collect_in(&Fs::native(), root, &opts, true, filter, Some(cache), false)
 		.await
 		.expect("fill");
 	std::fs::remove_file(root.join("link")).expect("unlink");
 	symlink("a", &root.join("link"));
 	settle();
-	let got = collect_in(&Fs::native(), root, &opts, true, filter, Some(cache))
+	let got = collect_in(&Fs::native(), root, &opts, true, filter, Some(cache), false)
 		.await
 		.expect("cached");
 	let below: Vec<String> = got
@@ -929,7 +930,7 @@ async fn cached_matches_fresh(
 	opts: &Options,
 ) -> Vec<String> {
 	let fresh = paths(root, opts).await;
-	let cached = collect_in(&Fs::native(), root, opts, true, |_, _| Action::Continue, Some(cache))
+	let cached = collect_in(&Fs::native(), root, opts, true, |_, _| Action::Continue, Some(cache), false)
 		.await
 		.expect("cached collect");
 	let cached: Vec<String> = cached.iter().map(|entry| lossy(&entry)).collect();
@@ -1014,12 +1015,12 @@ async fn cache_never_serves_fresh_listings() {
 	let opts = Options::default();
 	let filter = |_: &mut Worker<'_>, _: &mut Entry<'_>| Action::Continue;
 	for i in 0..20 {
-		collect_in(&Fs::native(), tmp.path(), &opts, true, filter, Some(cache))
+		collect_in(&Fs::native(), tmp.path(), &opts, true, filter, Some(cache), false)
 			.await
 			.expect("fill");
 		let name = format!("d/f{i:02}");
 		std::fs::write(tmp.path().join(&name), "").expect("write");
-		let got = collect_in(&Fs::native(), tmp.path(), &opts, true, filter, Some(cache))
+		let got = collect_in(&Fs::native(), tmp.path(), &opts, true, filter, Some(cache), false)
 			.await
 			.expect("cached");
 		assert!(got.iter().any(|entry| entry.path == name.as_bytes()), "iteration {i}");

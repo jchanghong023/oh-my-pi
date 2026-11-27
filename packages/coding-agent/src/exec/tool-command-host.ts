@@ -73,7 +73,7 @@ export function createToolCommandHandler(options: {
 	session: ToolSession;
 	toolCallId: string;
 	signal?: AbortSignal;
-	context?: AgentToolContext;
+	context?: AgentToolContext | ((invocationId: string) => AgentToolContext | undefined);
 	/** A dispatch finished (help or execute), in invocation order; complete text pages may bypass the Bash preview cap. */
 	onDispatch?: (dispatch: ToolCommandDispatch, index: number, completePage?: CompleteToolCommandPage) => void;
 	/** A running dispatch reported partial details. */
@@ -125,7 +125,7 @@ export function createToolCommandHandler(options: {
 								if (partial.details) onProgress(partial.details, index);
 							}
 						: undefined,
-					context,
+					typeof context === "function" ? context(invocationId) : context,
 				);
 				dispatch = outcome.dispatch;
 				throwIfAborted(signal);

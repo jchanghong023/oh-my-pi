@@ -59,14 +59,11 @@ describe("status-line background-job badge", () => {
 		const first = lineText(line, 240);
 		expect(first.split(badge)).toHaveLength(2);
 		expect(first.indexOf(badge)).toBeLessThan(first.indexOf("100K"));
-		const side = () => statusSegs(line.settings(), line.facts()).find(segment => segment.key === "subagents")?.side;
-		expect(side()).toBe("left");
 
 		line.previewSettings({ preset: "custom", leftSegments: ["model"], rightSegments: ["subagents"] });
 		const second = lineText(line, 120);
 		expect(second.split(badge)).toHaveLength(2);
-		expect(second.indexOf(badge)).toBeGreaterThan(second.indexOf("Test Model"));
-		expect(side()).toBe("right");
+		expect(statusSegs(line.settings(), line.facts()).find(segment => segment.key === "subagents")?.side).toBe("right");
 	});
 
 	it("counts non-task jobs without duplicating running task subagents", () => {

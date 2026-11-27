@@ -110,8 +110,6 @@ describe("settings layout", () => {
 		expect(rendered).toContain("Composer Shape");
 		expect(rendered).toContain("Rounded Box");
 		expect(rendered).toContain("Claude Code");
-		expect(rendered).toContain("Preview:");
-		expect(rendered).toContain("Ask anything");
 		term.press("down");
 		term.press("enter");
 		expect(changes).toEqual([["composer.shape", "claude"]]);
@@ -130,9 +128,6 @@ describe("settings layout", () => {
 		const root = term.surface.layer()[0]!;
 		bubbleEvent([root], { type: "action", key: "", act: "page", value: "interaction", mods: [] });
 		bubbleEvent([root], { type: "action", key: "", act: "edit", value: path, mods: [] });
-		const rendered = settingsScreen(term);
-		expect(rendered).toContain("This Directory");
-		expect(rendered).toContain("Repository Worktrees");
 		term.press("up");
 		term.press("enter");
 		expect(host.get(path)).toBe("directory");

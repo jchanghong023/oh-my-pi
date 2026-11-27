@@ -30,6 +30,7 @@ export class LiveSteeringChannel implements LiveSteering {
 	readonly accepted: AgentMessage[] = [];
 	/** Steering taken from the queue but not delivered; always queued after {@link accepted}. */
 	readonly deferred: AgentMessage[] = [];
+	onAccepted?: (messages: readonly AgentMessage[]) => void;
 	readonly #queue: LiveSteeringQueue;
 
 	constructor(queue: LiveSteeringQueue) {
@@ -78,6 +79,7 @@ export class LiveSteeringChannel implements LiveSteering {
 				if (settled) return;
 				settled = true;
 				this.accepted.push(...messages);
+				this.onAccepted?.(messages);
 			},
 			reject: () => {
 				if (settled) return;

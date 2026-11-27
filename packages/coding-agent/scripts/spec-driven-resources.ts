@@ -123,8 +123,13 @@ export async function assertOpenSpecRuntime(root: string): Promise<void> {
 	}
 }
 
+interface SpecDrivenArchive {
+	bytes: Uint8Array;
+	sourceFingerprint: string;
+}
+
 /** Prepare once per build invocation; npm, binary and source preparation share this packer. */
-export async function buildSpecDrivenArchive(): Promise<Uint8Array> {
+export async function buildSpecDrivenArchive(): Promise<SpecDrivenArchive> {
 	const sourceFingerprint = await specDrivenSourceFingerprint();
 	await using runtime = await prepareOpenSpecRuntime();
 	await using staging = await TempDir.create("@omp-spec-driven-staging-");
@@ -168,13 +173,12 @@ export async function buildSpecDrivenArchive(): Promise<Uint8Array> {
 		header[155] = 0x20;
 		offset += 512 * (1 + Math.ceil(size / 512));
 	}
-	return Bun.gzipSync(tar, { level: 9 });
+	return { bytes: Bun.gzipSync(tar, { level: 9 }), sourceFingerprint };
 }
 
 /** Bun's file loader emits a real asset for npm bundles and embeds it in executables. */
-export async function createSpecDrivenArchivePlugin(archive: Uint8Array): Promise<BunPlugin> {
-	const sha256 = crypto.createHash("sha256").update(archive).digest("hex");
-	const sourceFingerprint = await specDrivenSourceFingerprint();
+export function createSpecDrivenArchivePlugin({ bytes, sourceFingerprint }: SpecDrivenArchive): BunPlugin {
+	const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
 	return {
 		name: "omp-spec-driven-archive",
 		target: "bun",
@@ -192,7 +196,7 @@ export async function createSpecDrivenArchivePlugin(archive: Uint8Array): Promis
 				namespace: "omp-spec-driven-archive",
 			}));
 			build.onLoad({ filter: /.*/, namespace: "omp-spec-driven-archive" }, () => ({
-				contents: archive,
+				contents: bytes,
 				loader: "file",
 			}));
 		},
@@ -200,8 +204,8 @@ export async function createSpecDrivenArchivePlugin(archive: Uint8Array): Promis
 }
 
 if (import.meta.main) {
-	const archive = await buildSpecDrivenArchive();
+	const { bytes } = await buildSpecDrivenArchive();
 	const output = path.resolve(import.meta.dir, "../dist/spec-driven-resources.tar.gz");
-	await Bun.write(output, archive);
+	await Bun.write(output, bytes);
 	process.stdout.write(`Prepared spec-driven resources: ${output}\n`);
 }

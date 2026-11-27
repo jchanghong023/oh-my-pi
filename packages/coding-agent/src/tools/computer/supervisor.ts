@@ -218,7 +218,7 @@ export class ComputerSupervisor implements ComputerController {
 	/** A worker was started, so its sessions may have counted stops under the key. */
 	#started = false;
 	#closed = false;
-	#nativeClose?: PromiseWithResolvers<void>;
+	#nativeClose?: PromiseWithResolvers<void> & { pending: boolean };
 	#strictCloseRequested = false;
 	#strictCloseCall?: Promise<void>;
 	#unsubscribeMessage?: () => void;
@@ -387,13 +387,20 @@ export class ComputerSupervisor implements ComputerController {
 
 	#handleMessage(message: ComputerWorkerOutbound): void {
 		if (message.type === "closed") {
-			this.#nativeClose?.resolve();
+			const closed = this.#nativeClose;
+			if (closed) {
+				closed.pending = false;
+				closed.resolve();
+			}
 			return;
 		}
 		if (message.type === "close-failed") {
 			const closed = this.#nativeClose;
 			if (message.retryable) this.#nativeClose = undefined;
-			closed?.reject(errorFromPayload(message.error));
+			if (closed) {
+				closed.pending = false;
+				closed.reject(errorFromPayload(message.error));
+			}
 			return;
 		}
 		if (message.type === "ready") {
@@ -597,7 +604,11 @@ export class ComputerSupervisor implements ComputerController {
 
 	async #workerFailed(error: Error): Promise<void> {
 		logger.warn("Computer worker failed", { error: error.message });
-		this.#nativeClose?.reject(error);
+		const closed = this.#nativeClose;
+		if (closed?.pending) {
+			this.#nativeClose = undefined;
+			closed.reject(error);
+		}
 		await this.#terminate(error);
 	}
 
@@ -649,7 +660,7 @@ export class ComputerSupervisor implements ComputerController {
 				this.#strictCloseCall = undefined;
 				throw error;
 			});
-			// Bound this caller, not the close handshake. A later call can still receive its final result.
+			// Bound the caller without allowing a second concurrent termination.
 			return withTimeout(
 				this.#strictCloseCall,
 				this.#timeouts.strictCloseMs ?? STRICT_CLOSE_TIMEOUT_MS,
@@ -666,7 +677,11 @@ export class ComputerSupervisor implements ComputerController {
 	async #closeStrict(): Promise<void> {
 		const worker = this.#worker;
 		if (worker) {
-			await this.#requestNativeClose(worker);
+			await withTimeout(
+				this.#requestNativeClose(worker, true),
+				this.#timeouts.strictCloseMs ?? STRICT_CLOSE_TIMEOUT_MS,
+				"Timed out closing the native computer session",
+			);
 			await this.#terminate(new ToolError("Computer session closed"), true);
 		}
 		this.#forgetEscapeStops();
@@ -701,13 +716,14 @@ export class ComputerSupervisor implements ComputerController {
 		}
 	}
 
-	#requestNativeClose(worker: ComputerWorkerHandle): Promise<void> {
-		if (this.#nativeClose) return this.#nativeClose.promise;
-		const closed = Promise.withResolvers<void>();
-		this.#nativeClose = closed;
+	#requestNativeClose(worker: ComputerWorkerHandle, resend = false): Promise<void> {
+		const existing = this.#nativeClose;
+		if (existing && (!resend || !existing.pending)) return existing.promise;
+		const closed = (this.#nativeClose ??= { ...Promise.withResolvers<void>(), pending: true });
 		try {
 			worker.send({ type: "close" });
 		} catch (error) {
+			if (this.#nativeClose === closed) this.#nativeClose = undefined;
 			closed.reject(error);
 		}
 		return closed.promise;

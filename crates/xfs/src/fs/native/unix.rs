@@ -112,9 +112,10 @@ pub(crate) fn list(
 	dir: &Handle,
 	detail: Detail,
 	children: u32,
+	strict: bool,
 	out: &mut Listing,
 ) -> io::Result<()> {
-	sys::list(s, dir.as_raw_fd(), detail, children, out)
+	sys::list(s, dir.as_raw_fd(), detail, children, strict, out)
 }
 
 pub(crate) fn open_file_at(

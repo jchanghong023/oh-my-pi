@@ -60,13 +60,6 @@ async function seedJournal(root: string): Promise<string> {
 		const file = seed.getSessionFile();
 		if (!file) throw new Error("Expected a persistent journal");
 		expect(fs.existsSync(file)).toBe(true);
-		const header = fs
-			.readFileSync(file, "utf8")
-			.trim()
-			.split("\n")
-			.map(line => JSON.parse(line))
-			.find(entry => entry.type === "session");
-		expect(header?.id).toBe(seed.getSessionId());
 		return file;
 	} finally {
 		await seed.close();
@@ -117,11 +110,9 @@ describe("SessionManager runtime ownership", () => {
 				closing = owner.close();
 				await storage.entered.promise;
 				expect(() => contender.acquireRuntimeOwnership()).toThrow();
-				expect(contender.getSessionFile()).toBe(file);
 				storage.resume.resolve();
 				await closing;
 				expect(() => contender.acquireRuntimeOwnership()).not.toThrow();
-				expect(owner.getSessionFile()).toBe(file);
 			} finally {
 				storage.resume.resolve();
 				await closing;

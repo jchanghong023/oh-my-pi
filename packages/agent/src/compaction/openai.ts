@@ -16,6 +16,7 @@
  */
 
 import { attach, create, Flag, MissingApiKeyError, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { mergeHeaders } from "@oh-my-pi/pi-ai/providers/anthropic-headers";
 import { getCodexAttestationHeader } from "@oh-my-pi/pi-ai/providers/openai-codex-attestation";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
 import {
@@ -51,7 +52,6 @@ import {
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
 	normalizeResponsesToolCallId,
-	resolveRequestAuthBearer,
 	stripOpenAIResponsesInternalMetadataForReplay,
 	stripOpenAIResponsesOutputOnlyStatusesForReplay,
 	truncateResponseItemId,
@@ -75,7 +75,9 @@ import { prepareBedrockCompactionRequest } from "./bedrock";
 import {
 	applyExplicitCompactionAuth,
 	isOpenAiRemoteCompactionApi,
+	normalizeCompactionRequestAuth,
 	parseResponsesCompactionUsage,
+	resolveCodexCompactionBearer,
 	type ResponsesCompactionUsage,
 	remoteCompactionPolicyModel,
 } from "./compaction-v2-streaming";
@@ -898,14 +900,15 @@ export async function requestOpenAiRemoteCompaction(
 	},
 ): Promise<OpenAiRemoteCompactionResponse> {
 	model = await withResolvedHeaders(model, signal);
-	if (opts?.requestAuth !== undefined) apiKey = opts.requestAuth.apiKey?.trim() ?? "";
+	const requestAuth = normalizeCompactionRequestAuth(opts?.requestAuth);
+	if (requestAuth !== undefined) apiKey = requestAuth.apiKey?.trim() ?? "";
 	let fetchImpl: FetchImpl = opts?.fetch ?? fetch;
 	if (isBedrockOpenAIUrl(model.baseUrl)) {
 		({
 			model,
 			apiKey,
 			fetch: fetchImpl,
-		} = await prepareBedrockCompactionRequest(model, apiKey, opts?.fetch, signal, opts?.requestAuth));
+		} = await prepareBedrockCompactionRequest(model, apiKey, opts?.fetch, signal, requestAuth));
 	}
 	const endpoint = resolveOpenAiCompactEndpoint(model);
 	const requestModel = resolveOpenAiCompactModel(model);
@@ -946,7 +949,7 @@ export async function requestOpenAiRemoteCompaction(
 	const isAzureOpenAiResponses = (model.remoteCompaction?.api ?? model.api) === "azure-openai-responses";
 	const isCodexResponses =
 		model.provider === "openai-codex" || (model.remoteCompaction?.api ?? model.api) === "openai-codex-responses";
-	const headers: Record<string, string> = isAzureOpenAiResponses
+	let headers: Record<string, string> = isAzureOpenAiResponses
 		? {
 				"content-type": "application/json",
 				"api-key": apiKey,
@@ -976,20 +979,30 @@ export async function requestOpenAiRemoteCompaction(
 	}
 	applySessionHeader(headers, model.compat, opts?.sessionId);
 
-	let accountId: string | undefined;
+	if (requestAuth !== undefined) {
+		const explicit = new Headers(mergeHeaders(headers));
+		applyExplicitCompactionAuth(
+			explicit,
+			requestAuth,
+			isAzureOpenAiResponses ? "api-key" : "Authorization",
+			apiKey ? (isAzureOpenAiResponses ? apiKey : `Bearer ${apiKey}`) : undefined,
+		);
+		headers = Object.fromEntries(explicit);
+	} else if (isCodexResponses) {
+		headers = mergeHeaders(headers);
+	}
+
 	// Codex endpoints require additional auth headers
 	if (isCodexResponses) {
 		// Keep transport loading on the actual Codex request path, not compaction policy inspection.
 		const { createOpenAICodexCompatibilityMetadata } =
 			await import("@oh-my-pi/pi-ai/providers/openai-codex-responses");
-		const bearer = opts?.requestAuth === undefined ? apiKey : resolveRequestAuthBearer(opts.requestAuth);
+		const bearer = resolveCodexCompactionBearer(headers, requestAuth === undefined ? apiKey : "");
 		if (!bearer) throw new MissingApiKeyError(model.provider);
-		accountId =
-			getHeaderCaseInsensitive(opts?.requestAuth?.headers, OPENAI_HEADERS.ACCOUNT_ID)?.trim() ||
-			getCodexAccountId(bearer);
-		if (accountId) {
-			headers[OPENAI_HEADERS.ACCOUNT_ID] = accountId;
-		}
+		const configuredAccount = getHeaderCaseInsensitive(headers, OPENAI_HEADERS.ACCOUNT_ID)?.trim();
+		const accountId =
+			(requestAuth === undefined ? undefined : configuredAccount) || getCodexAccountId(bearer) || configuredAccount;
+		if (accountId) headers = mergeHeaders(headers, { [OPENAI_HEADERS.ACCOUNT_ID]: accountId });
 		applyCodexResidencyHeader(headers, bearer);
 		const attestation = await getCodexAttestationHeader(accountId);
 		if (attestation) {
@@ -1025,18 +1038,13 @@ export async function requestOpenAiRemoteCompaction(
 			request.include = Array.from(new Set([...(request.include ?? []), "reasoning.encrypted_content"]));
 		}
 	}
-	let requestHeaders: Headers | Record<string, string> = headers;
-	if (opts?.requestAuth !== undefined) {
-		const explicit = new Headers(headers);
-		applyExplicitCompactionAuth(explicit, opts.requestAuth, apiKey, isAzureOpenAiResponses, accountId);
-		requestHeaders = explicit;
-	}
+	const requestHeaders = requestAuth !== undefined ? new Headers(mergeHeaders(headers)) : headers;
 
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
 		headers: requestHeaders,
 		body: stringifyJson(isCodexResponses ? withCodexRoutingFieldsFirst(request) : request),
-		redirect: opts?.requestAuth !== undefined ? "error" : undefined,
+		redirect: requestAuth !== undefined ? "error" : undefined,
 		signal: ptree.combineSignals(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 	});
 
@@ -1083,6 +1091,27 @@ export async function requestOpenAiRemoteCompaction(
 	return { provider: model.provider, replacementHistory, compactionItem, ...(usage ? { usage } : {}) };
 }
 
+function isRemoteChatCompletionsEndpoint(endpoint: string): boolean {
+	let pathname = endpoint;
+	try {
+		pathname = new URL(endpoint).pathname;
+	} catch {
+		// Keep the raw endpoint for relative/custom fetch implementations.
+	}
+	return /\/chat\/completions\/?$/.test(pathname);
+}
+
+/** Independent summarizers do not accept the inference model's credentials. */
+export function usesRemoteSummaryModelCredentials(endpoint: string, model?: Model): boolean {
+	if (!model || model.transport === "pi-native" || !isRemoteChatCompletionsEndpoint(endpoint)) return false;
+	try {
+		const origin = new URL(model.baseUrl).origin;
+		return origin !== "null" && new URL(endpoint).origin === origin;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Generic remote-compaction POST. Two wire shapes are auto-selected by
  * endpoint suffix so a single `compaction.remoteEndpoint` setting can point at
@@ -1093,10 +1122,10 @@ export async function requestOpenAiRemoteCompaction(
  * HTTP 400 `"'messages' is required"`, compaction silently fell back to
  * local summarization, and context grew unbounded.
  *
- * On chat-completions endpoints the model's request headers are resolved for
- * each call, its wire id is sent (llama.cpp requires it), and `opts.apiKey` is
- * forwarded as `Authorization: Bearer`. Custom summarizers receive no model
- * credentials. `opts.onPayload` can inspect or replace either request body.
+ * On same-origin chat-completions endpoints the model's request headers are
+ * resolved for each call and `opts.apiKey` is forwarded as `Authorization: Bearer`.
+ * All chat-completions endpoints receive the model's wire id (llama.cpp requires
+ * it). Independent summarizers receive no model credentials.
  * Callers wrap this in `withAuth` so 401s force-refresh through the standard
  * credential rotation policy.
  */
@@ -1126,24 +1155,29 @@ export async function requestRemoteCompaction(
 		logger.info("Remote compaction summary request started", { ...fields, result: "started" });
 		let failureBodyLength: number | undefined;
 		try {
-			let endpointPath = endpoint;
-			try {
-				endpointPath = new URL(endpoint).pathname;
-			} catch {
-				// Keep the raw endpoint for relative/custom fetch implementations.
-			}
-			const isChatCompletions = /\/chat\/completions\/?$/.test(endpointPath);
+			const isChatCompletions = isRemoteChatCompletionsEndpoint(endpoint);
+			const useModelCredentials = usesRemoteSummaryModelCredentials(endpoint, opts?.model);
 			const headers = new Headers({ "content-type": "application/json" });
-			if (isChatCompletions) {
-				if (opts?.apiKey) headers.set("Authorization", `Bearer ${opts.apiKey}`);
+			let hasModelHeaders = false;
+			if (useModelCredentials) {
+				if (opts?.apiKey) {
+					headers.set("Authorization", `Bearer ${opts.apiKey}`);
+					hasModelHeaders = true;
+				}
 				const model = opts?.model;
 				const configuredHeaders = model ? (await withResolvedHeaders(model, signal)).headers : undefined;
 				// `set` replaces case-insensitively, so a configured `authorization` overrides the default bearer.
 				if (configuredHeaders) {
-					for (const name in configuredHeaders) headers.set(name, configuredHeaders[name]!);
+					for (const name in configuredHeaders) {
+						headers.set(name, configuredHeaders[name]!);
+						hasModelHeaders = true;
+					}
 				}
-				if (opts?.requestAuth !== undefined) {
-					applyExplicitCompactionAuth(headers, opts.requestAuth, opts.requestAuth.apiKey?.trim() ?? "", false);
+				const requestAuth = normalizeCompactionRequestAuth(opts?.requestAuth);
+				if (requestAuth !== undefined) {
+					const key = requestAuth.apiKey?.trim();
+					applyExplicitCompactionAuth(headers, requestAuth, "Authorization", key ? `Bearer ${key}` : undefined);
+					hasModelHeaders = true;
 				}
 			}
 
@@ -1165,7 +1199,7 @@ export async function requestRemoteCompaction(
 				method: "POST",
 				headers,
 				body: stringifyJson(body),
-				redirect: isChatCompletions && opts?.requestAuth !== undefined ? "error" : undefined,
+				redirect: hasModelHeaders ? "error" : undefined,
 				signal: ptree.combineSignals(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 			});
 			if (!response.ok) {

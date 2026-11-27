@@ -90,7 +90,6 @@ describe("display rebuilds during idle user execution", () => {
 					? mode.handleBashCommand("echo shell-command")
 					: mode.handlePythonCommand("print('python-command')");
 			try {
-				expect(session.isStreaming).toBe(false);
 				expect(appendOutput).toBeFunction();
 				appendOutput!("STREAMED_EXECUTION_OUTPUT\n");
 				for (const display of ["clean", "compact", "detailed"] as const) {

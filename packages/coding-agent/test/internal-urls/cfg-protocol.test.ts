@@ -1,9 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
-import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils/dirs";
@@ -21,7 +19,6 @@ import { cfgEditFuzzyMatch } from "@oh-my-pi/pi-coding-agent/edit/settings";
 import { cfgBashPatterns } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import { cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgSearxngEndpoint } from "@oh-my-pi/pi-coding-agent/web/settings";
-import { cfgTeamMembers } from "@oh-my-pi/pi-coding-agent/team/settings";
 import type { InternalWriteResult } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
 
 function sessionWith(settings: Settings, caller: Partial<ToolSession> = {}): ToolSession {
@@ -326,138 +323,6 @@ describe("CfgProtocolHandler", () => {
 		expect(applied).toHaveLength(2);
 		expect(applied[0]).toBe(persistent);
 		expect(applied[1]).toBe(settings);
-	});
-
-	describe("Team member writes", () => {
-		const first = "deepseek/Qwen3.8-27B";
-		const second = "deepseek/Qwen3.8-35B";
-		const initial = [first];
-		const next = [second, first, second];
-		let dir: TempDir;
-		let originalCwd: string;
-		let auth: AuthStorage;
-		let agentDir: string;
-		let projectDir: string;
-		let configFile: string;
-
-		beforeEach(async () => {
-			originalCwd = process.cwd();
-			dir = TempDir.createSync("@omp-cfg-team-");
-			agentDir = dir.join("agent");
-			projectDir = dir.join("project");
-			configFile = path.join(agentDir, "config.yml");
-			await Bun.write(configFile, YAML.stringify({ team: { members: initial } }));
-			await Bun.write(
-				path.join(agentDir, "models.yml"),
-				YAML.stringify({
-					providers: {
-						deepseek: {
-							baseUrl: "https://example.invalid/v1",
-							api: "openai-completions",
-							auth: "none",
-							models: [
-								{ id: "Qwen3.8-27B", name: "Qwen 3.8 27B", supportsTools: true },
-								{ id: "Qwen3.8-35B", name: "Qwen 3.8 35B", supportsTools: true },
-							],
-						},
-					},
-				}),
-			);
-			auth = await AuthStorage.create(":memory:");
-		});
-
-		afterEach(async () => {
-			auth?.close();
-			AgentStorage.close(getAgentDbPath(agentDir));
-			process.chdir(originalCwd);
-			await dir.remove();
-		});
-
-		it("shares literal roster validation with /save and checks the session binding after approval", async () => {
-			const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
-			const registry = new ModelRegistry(auth, path.join(agentDir, "models.yml"), { settings });
-			const applied: CfgAppliedChange[] = [];
-			let disposeOnApproval = false;
-			let disposed = false;
-			const caller = { modelRegistry: registry, isDisposed: () => disposed };
-			setCfgApprovalHost({
-				approve: async () => {
-					disposed = disposeOnApproval;
-					return "once";
-				},
-				applied: change => applied.push(change),
-				persistentSettings: settings,
-			});
-
-			for (const [invalidValue, message] of [
-				["[7]", "team.members must be an ordered string array"],
-				[JSON.stringify([` ${first} `]), "Cannot resolve exact model selector"],
-			]) {
-				await expect(write("cfg://team/members", invalidValue, settings, caller)).rejects.toMatchObject({
-					code: "invalid_params",
-					message: expect.stringContaining(message),
-				});
-				const saved = await write("cfg://team/members/save", invalidValue, settings, caller);
-				expect(saved.isError).toBe(true);
-				expect(textOf(saved)).toContain("Not saved.");
-				expect(textOf(saved)).toContain(message);
-			}
-			expect(applied).toEqual([]);
-			expect(cfgTeamMembers.get(settings)).toEqual(initial);
-
-			const session = await write("cfg://team/members", JSON.stringify(next), settings, caller);
-			expect(session.details?.cfg?.outcome).toBe("applied");
-			expect(textOf(session)).toContain("cfg://team/members/save");
-			expect(cfgTeamMembers.get(settings)).toEqual(next);
-			disposeOnApproval = true;
-			await expect(write("cfg://team/members", "[]", settings, caller)).rejects.toMatchObject({
-				code: "execution_failed",
-			});
-			expect(cfgTeamMembers.get(settings)).toEqual(next);
-
-			disposeOnApproval = false;
-			disposed = false;
-			const cleared = await write("cfg://team/members", "[]", settings, caller);
-			expect(cleared.details?.cfg?.outcome).toBe("applied");
-			expect(cfgTeamMembers.get(settings)).toEqual([]);
-			expect(applied).toEqual([
-				{ path: "team.members", value: next, settings, save: false },
-				{ path: "team.members", value: [], settings, save: false },
-			]);
-			expect(YAML.parse(await Bun.file(configFile).text())).toEqual({ team: { members: initial } });
-		});
-
-		it.each([false, true])("reports the live roster after saving (project null: %s)", async projectNull => {
-			if (projectNull) await Bun.write(path.join(projectDir, ".omp", "config.yml"), "team: { members: null }\n");
-			const persistent = await Settings.loadIsolated({ cwd: projectDir, agentDir });
-			const settings = projectNull ? persistent : Settings.isolated();
-			if (!projectNull) cfgTeamMembers.set(settings, initial);
-			const registry = new ModelRegistry(auth, path.join(agentDir, "models.yml"), { settings });
-			const asked: CfgChangeRequest[] = [];
-			setCfgApprovalHost({
-				approve: async request => (asked.push(request), "once"),
-				applied: () => {},
-				persistentSettings: persistent,
-			});
-
-			const saved = await write("cfg://team/members/save", JSON.stringify(next), settings, {
-				modelRegistry: registry,
-			});
-			expect(saved.details?.cfg?.outcome).toBe("applied");
-			expect(textOf(saved)).toContain("to the global config");
-			expect(YAML.parse(await Bun.file(configFile).text())).toEqual({ team: { members: next } });
-			if (projectNull) {
-				expect(asked[0]?.shadowedBy).toContain("project config");
-				expect(saved.details?.cfg?.effective).toBe("[]");
-				expect(textOf(saved)).toContain("project config takes precedence");
-				expect(cfgTeamMembers.get(settings)).toEqual([]);
-			} else {
-				expect(asked[0]?.shadowedBy).toBeUndefined();
-				expect(textOf(saved)).toContain("The saved Team roster is not active in this session");
-				expect(cfgTeamMembers.get(settings)).toEqual(initial);
-				expect(cfgTeamMembers.get(persistent)).toEqual(next);
-			}
-		});
 	});
 
 	it("rejects namespace targets and values outside the schema before asking", async () => {

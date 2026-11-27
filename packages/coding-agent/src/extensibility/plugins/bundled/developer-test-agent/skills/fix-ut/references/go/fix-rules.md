@@ -31,9 +31,9 @@ go vet ./...
 go test -gcflags=all=-l -run NONE -count=1 ./...
 
 # 覆盖率测量（产物输出到临时目录）
-COV_DIR="/tmp/ut-go"; mkdir -p "$COV_DIR"
+COV_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ut-go.XXXXXX") || exit 1
 go test -gcflags=all=-l -coverprofile="$COV_DIR/cov.txt" -run TestFuncName -count=1
-go tool cover "-func=$COV_DIR/cov.txt" | grep -E "FuncName$"
+go tool cover "-func=$COV_DIR/cov.txt" | awk 'NF >= 3 && $(NF-1) == "FuncName"'
 
 # Race检测
 go test -gcflags=all=-l -race -run TestFuncName -count=1
@@ -41,16 +41,10 @@ go test -gcflags=all=-l -race -run TestFuncName -count=1
 
 ### 环境清理
 
-验证完成后，删除覆盖率临时目录：
-
-```powershell
-# Windows (PowerShell)
-Remove-Item "$env:TEMP\ut-go" -Recurse -Force -ErrorAction SilentlyContinue
-```
+验证完成后，仅删除本次 `mktemp` 创建的目录。同一次 Bash 调用中执行：
 
 ```bash
-# Unix (bash)
-rm -rf /tmp/ut-go
+rm -rf -- "${COV_DIR:?}"
 ```
 
 ## 修复循环限制

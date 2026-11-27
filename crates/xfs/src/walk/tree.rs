@@ -328,7 +328,7 @@ async fn list(
 		}
 	}
 	let error = match session
-		.list_into(&dir, spec.detail, spec.children, &mut listing)
+		.list_into(&dir, spec.detail, spec.children, false, &mut listing)
 		.await
 	{
 		Ok(()) => None,

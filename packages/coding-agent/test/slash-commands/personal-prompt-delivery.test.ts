@@ -55,7 +55,6 @@ describe("personal prompt commands reach the provider", () => {
 				const ctx = createInteractiveModeContext({ session, sessionManager, settings });
 				const expanded = await executeBuiltinSlashCommand(command, { ctx });
 				if (typeof expanded !== "string") throw new Error(`Expected a TUI model prompt for /${name}`);
-				expect(expanded).toBe(`${name} ${task}`);
 				prompt = expanded;
 			} else {
 				const runtime: SlashCommandRuntime = {

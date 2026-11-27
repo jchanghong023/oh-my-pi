@@ -16,7 +16,7 @@ import type { LiveToolOutputPreview, LiveToolOutputSnapshot } from "../session/a
 import { isToolOutputRow, mayBeCoveredByFileDiff, toolOutputSource } from "../session/live-tool-output-text";
 import { unwrapHashlineHeaderPath } from "../tools/hashline-format";
 import { formatPathRelativeToCwd } from "../tools/path-utils";
-import { isGroupedHeader, isMatchRow } from "../ui/tools/grouped-output";
+import { classifyGroupedLines, isGroupedHeader, isMatchRow } from "../ui/tools/grouped-output";
 import { wrapTextWithAnsi } from "../utils/text-width";
 import { compactToolPreviewInfo } from "./compact-thinking-preview";
 import { cfgDisplayMode } from "./settings";
@@ -61,12 +61,36 @@ function selectOutputRows(
 		}
 		return { lines: [...priority, ...tail.slice(priority.length - budget)], diagnosticCount: priority.length };
 	}
+	if (state === "completed" && toolName === "grep") {
+		const raw = output.split("\n");
+		if (raw.length <= budget) {
+			const rows = wrapOutputRows(output, width);
+			if (rows.length <= budget) return { lines: rows, diagnosticCount: 0 };
+		}
+		const groups = classifyGroupedLines(raw);
+		const hits: string[] = [];
+		let header: string | undefined;
+		let shownHeader: string | undefined;
+		for (let i = 0; i < raw.length && hits.length < budget; i++) {
+			const group = groups[i]!;
+			const line = raw[i]!;
+			if (group.kind === "file") header = `# ${group.path}`;
+			else if (group.kind === "dir") header = line;
+			if (!isMatchRow(line)) continue;
+			const prefix = header !== undefined && header !== shownHeader ? truncateToWidth(header, width) : "";
+			if (prefix && budget - hits.length < 2) break;
+			const wrapped = wrapOutputRows(line, width);
+			if (wrapped.length === 0) continue;
+			if (prefix) hits.push(prefix);
+			hits.push(...wrapped.slice(0, budget - hits.length));
+			shownHeader = header;
+		}
+		if (hits.length > 0) return { lines: hits, diagnosticCount: 0 };
+		if (header !== undefined) return { lines: [truncateToWidth(header, width)], diagnosticCount: 0 };
+	}
 	const rows = wrapOutputRows(output, width);
-	if (state === "completed" && (toolName === "grep" || toolName === "glob")) {
-		const isHit =
-			toolName === "grep"
-				? (row: string) => isMatchRow(row)
-				: (row: string) => row.trim() !== "" && !isGroupedHeader(row);
+	if (state === "completed" && toolName === "glob") {
+		const isHit = (row: string) => row.trim() !== "" && !isGroupedHeader(row);
 		const hits = rows.filter(isHit);
 		if (hits.length > 0)
 			return { lines: [...hits, ...rows.filter(row => !isHit(row))].slice(0, budget), diagnosticCount: 0 };

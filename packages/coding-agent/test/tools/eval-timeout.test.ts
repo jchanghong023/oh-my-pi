@@ -61,7 +61,8 @@ describe("EvalTool timeout semantics", () => {
 			.filter((block): block is { type: "text"; text: string } => block.type === "text")
 			.map(block => block.text)
 			.join("\n");
-		expect(text).toContain("[timed out after 1s; JS worker killed, state gone]");
+		expect(text).toContain("timed out after 1s");
+		expect(text).toContain("JS worker killed, state gone");
 		expect(text).not.toContain("inactivity");
 		expect(text).not.toContain("never");
 

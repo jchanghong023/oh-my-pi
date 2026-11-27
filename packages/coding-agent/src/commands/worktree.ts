@@ -106,16 +106,18 @@ export default class Worktree extends Command {
 			return;
 		}
 
-		await Settings.init({ cwd: getProjectDir() });
+		const cwd = flags.cwd ?? getProjectDir();
+		await Settings.init({ cwd });
 		if (args.action === "clear") {
 			const { failed } = await clearWorktrees({
 				all: flags.all ?? false,
 				dryRun: flags["dry-run"] ?? false,
 				json: flags.json ?? false,
+				cwd,
 			});
 			if (failed > 0) process.exitCode = 1;
 			return;
 		}
-		await listWorktrees({ json: flags.json ?? false });
+		await listWorktrees({ json: flags.json ?? false, cwd });
 	}
 }

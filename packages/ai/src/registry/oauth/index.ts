@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { authPolicyFor, providerDisabledReason, providerLoginWarning } from "@oh-my-pi/pi-catalog/compat/auth";
-import type { CredentialsApi, OAuthRefreshReason } from "../../auth/types";
+import type { OAuthRefreshReason } from "../../auth/types";
 import * as AIError from "../../error";
 import { jwtExpiryMs, NEVER_EXPIRES } from "../engine/common";
 import { getProviderDefinition, PROVIDER_REGISTRY } from "../registry";
@@ -19,8 +19,9 @@ export * from "./anthropic";
 export * from "./device-code";
 export type * from "./types";
 
-// Keep historical login targets available for credential management; filter only the login choices.
-// Label built-in logins that carry account risks.
+// A provider whose login carries an account risk (`login-warning`) says so in its label.
+// One turned off in its auth rules (`disabled "<reason>"`) is filtered out at list time,
+// since the end user may opt back in (see setUnpausedProviders).
 const builtInOAuthProviders: OAuthProviderInfo[] = PROVIDER_REGISTRY.filter(
 	provider => provider.login && provider.showInLoginList !== false,
 ).map(provider => ({
@@ -246,40 +247,23 @@ export async function getOAuthApiKey(
 	return { newCredentials: creds, apiKey };
 }
 
-/** Registered OAuth providers, including providers paused by their auth rules. */
-export function getAllOAuthProviders(): OAuthProviderInfo[] {
+/**
+ * Get list of OAuth providers.
+ */
+export function getOAuthProviders(): OAuthProviderInfo[] {
+	// Extension-registered logins are listed as-is: registering one is the end user's choice,
+	// even under an id the auth rules pause (see providerPauseReason).
 	const customProviders = Array.from(customOAuthProviders.values(), provider => ({
 		id: provider.id,
 		name: provider.name,
 		available: true,
 		storeCredentialsAs: provider.storeCredentialsAs,
 	}));
-	// Credential management includes paused targets; only login choices filter them.
-	const builtIns = builtInOAuthProviders.filter(provider => !customOAuthProviders.has(provider.id));
+	// A built-in entry an extension took over is listed once, as the extension's; a paused one not at all.
+	const builtIns = builtInOAuthProviders.filter(
+		provider => !customOAuthProviders.has(provider.id) && providerPauseReason(provider.id) === undefined,
+	);
 	return [...builtIns, ...customProviders];
-}
-
-/** Credential management follows stored provider ids, even after a login is removed. */
-export function getStoredOAuthProviders(credentials: Pick<CredentialsApi, "list">): OAuthProviderInfo[] {
-	const known = new Map(getAllOAuthProviders().map(provider => [provider.id, provider]));
-	const stored = new Map<string, OAuthProviderInfo>();
-	for (const { provider } of credentials.list(undefined, { includePaused: true })) {
-		if (stored.has(provider)) continue;
-		const entry = known.get(provider);
-		const directEntry = entry && (entry.storeCredentialsAs ?? entry.id) === provider ? entry : undefined;
-		stored.set(
-			provider,
-			directEntry?.available ? directEntry : { id: provider, name: directEntry?.name ?? provider, available: true },
-		);
-	}
-	return [...stored.values()];
-}
-
-/**
- * Get the OAuth providers currently offered for login.
- */
-export function getOAuthProviders(): OAuthProviderInfo[] {
-	return getAllOAuthProviders().filter(provider => providerPauseReason(provider.id) === undefined);
 }
 
 /** Provider id that stores `providerId`'s credentials: login aliases (`openai-codex-device`) map to their target (`openai-codex`). */

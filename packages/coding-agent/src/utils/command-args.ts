@@ -6,8 +6,7 @@
  * stays one argument; `don't stop` splits into `don't`, `stop`). `strict` applies shell-style
  * quoting and escapes instead and throws on an unterminated quote or trailing backslash.
  * `literalBackslashesAfter` keeps path separators in the value after that option,
- * while allowing an unquoted backslash to escape a space or tab unless it separates a
- * trailing path separator from the next long option.
+ * while allowing an unquoted backslash to escape a space or tab.
  */
 export function parseCommandArgs(
 	argsString: string,
@@ -27,7 +26,7 @@ export function parseCommandArgs(
 			const literal = after !== undefined && args.at(-1) === after;
 			if (!literal && next === undefined) throw new Error("Incomplete command escape.");
 			const escape = literal
-				? inQuote === null && (next === " " || next === "\t") && !/^[ \t]+--/u.test(argsString.slice(i + 1))
+				? inQuote === null && (next === " " || next === "\t")
 				: inQuote === null || next === '"' || next === "\\" || next === "$" || next === "`";
 			if (next !== undefined && escape) {
 				current += next;

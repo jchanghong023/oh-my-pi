@@ -8,7 +8,6 @@
  * @see https://datatracker.ietf.org/doc/html/rfc8927
  */
 
-import { formatLocalRefPointer } from "@oh-my-pi/omptype";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { JTDPrimitive } from "./jtd-utils.js";
 import {
@@ -35,16 +34,8 @@ const primitiveMap: Record<JTDPrimitive, string> = {
 	uint32: "integer",
 };
 
-export class InvalidJTDReferenceError extends Error {
-	constructor(message = 'JTD "ref" must be a string naming a definition') {
-		super(message);
-		this.name = "InvalidJTDReferenceError";
-	}
-}
-
 function convertSchema(schema: unknown): unknown {
 	if (schema === null || typeof schema !== "object") return {};
-	if (isJTDRef(schema) && typeof schema.ref !== "string") throw new InvalidJTDReferenceError();
 	const converted = convertSchemaForm(schema);
 	return "nullable" in schema && schema.nullable === true ? { anyOf: [converted, { type: "null" }] } : converted;
 }
@@ -102,7 +93,7 @@ function convertSchemaForm(schema: unknown): unknown {
 		const result: Record<string, unknown> = {
 			type: "object",
 			properties,
-			additionalProperties: "additionalProperties" in schema && schema.additionalProperties === true,
+			additionalProperties: false,
 		};
 
 		if (required.length > 0) {
@@ -139,10 +130,7 @@ function convertSchemaForm(schema: unknown): unknown {
 
 	// Ref form: { ref: "MyType" } → { $ref: "#/$defs/MyType" }
 	if (isJTDRef(schema)) {
-		if (!schema.ref.isWellFormed()) {
-			throw new InvalidJTDReferenceError('JTD "ref" must not contain an unpaired UTF-16 surrogate');
-		}
-		return { $ref: formatLocalRefPointer(["$defs", schema.ref]) };
+		return { $ref: `#/$defs/${schema.ref}` };
 	}
 
 	// Empty form: {} → {} (accepts anything)
@@ -181,24 +169,10 @@ const jtdKeywords: Record<string, true> = {
 /** JTD sub-schema maps, recursed by {@link isJTDDocument}. `metadata` stays opaque: it holds arbitrary user data. */
 const jtdSchemaMaps = ["properties", "optionalProperties", "definitions", "mapping"] as const;
 
-/** A ref form has no other form keywords; definitions are only allowed at the document root. */
-function isJTDReferenceForm(schema: Record<string, unknown>, allowDefinitions = false): boolean {
-	if (!Object.hasOwn(schema, "ref")) return false;
-	for (const key in schema) {
-		if (!Object.hasOwn(schema, key)) continue;
-		if (key === "ref" || key === "nullable" || key === "metadata" || (allowDefinitions && key === "definitions")) {
-			continue;
-		}
-		return false;
-	}
-	return true;
-}
-
 /**
  * Check that `schema` and every sub-schema it reaches stay inside the JTD grammar
  * (RFC 8927 §2): known keywords only, `type` limited to the JTD primitives, and the
- * scalar keywords carrying their declared value types. A `ref` value is checked
- * during conversion once the node is known to be JTD.
+ * scalar keywords carrying their declared value types.
  *
  * Used to resolve documents whose root parses as both formats. JSON Schema reaches
  * here through keywords JTD never defines (`items`, `required`, `$ref`, `anyOf`, …)
@@ -207,7 +181,6 @@ function isJTDReferenceForm(schema: Record<string, unknown>, allowDefinitions = 
  */
 function isJTDDocument(schema: unknown): boolean {
 	if (!isRecord(schema)) return false;
-	if (Object.hasOwn(schema, "ref") && !isJTDReferenceForm(schema)) return false;
 
 	for (const key in schema) {
 		if (!Object.hasOwn(schema, key)) continue;
@@ -218,6 +191,7 @@ function isJTDDocument(schema: unknown): boolean {
 	if ("enum" in schema && !(Array.isArray(schema.enum) && schema.enum.every(value => typeof value === "string"))) {
 		return false;
 	}
+	if ("ref" in schema && typeof schema.ref !== "string") return false;
 	if ("discriminator" in schema && typeof schema.discriminator !== "string") return false;
 	if ("nullable" in schema && typeof schema.nullable !== "boolean") return false;
 	if ("additionalProperties" in schema && typeof schema.additionalProperties !== "boolean") return false;
@@ -255,7 +229,7 @@ export function isJTDSchema(schema: unknown): boolean {
 	if ("values" in obj) return true;
 	if ("optionalProperties" in obj) return true;
 	if ("discriminator" in obj) return true;
-	if (isJTDReferenceForm(obj, true)) return true;
+	if ("ref" in obj) return true;
 
 	// JTD type primitives (JSON Schema doesn't have int32, float64, etc.)
 	if (typeof obj.type === "string" && Object.hasOwn(jtdOnlyPrimitiveTypes, obj.type)) {
@@ -278,7 +252,7 @@ function isUnambiguousJTDSchema(schema: unknown): boolean {
 	if (isRecord(schema.elements) || isRecord(schema.values) || isRecord(schema.optionalProperties)) {
 		return true;
 	}
-	if (isJTDReferenceForm(schema)) return true;
+	if (typeof schema.ref === "string") return true;
 	if (typeof schema.type === "string" && Object.hasOwn(jtdOnlyPrimitiveTypes, schema.type)) {
 		return true;
 	}
@@ -391,13 +365,7 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
 export function jtdToJsonSchema(schema: unknown): unknown {
 	if (isJTDSchema(schema)) {
 		// convertSchema is recursive; re-walking its JSON Schema output caused #1345.
-		const converted = convertSchema(schema) as Record<string, unknown>;
-		if (isRecord(schema) && isRecord(schema.definitions)) {
-			converted.$defs = Object.fromEntries(
-				Object.entries(schema.definitions).map(([name, definition]) => [name, convertSchema(definition)]),
-			);
-		}
-		return converted;
+		return convertSchema(schema);
 	}
 	return normalizeJsonSchemaNode(schema);
 }

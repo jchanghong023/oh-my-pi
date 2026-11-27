@@ -128,11 +128,6 @@ describe("InputController.handleFollowUp image forwarding", () => {
 				await firstStarted.promise;
 				await Bun.sleep(0);
 				expect(prompt).toHaveBeenCalledTimes(1);
-				expect(prompt).toHaveBeenNthCalledWith(
-					1,
-					"[Image #1] look at this",
-					expect.objectContaining({ streamingBehavior: "followUp", images: [image] }),
-				);
 				preflight.resolve();
 				// The second prompt starts even while the first admitted response remains pending.
 				await secondStarted.promise;
@@ -143,7 +138,6 @@ describe("InputController.handleFollowUp image forwarding", () => {
 				);
 				if (rejects) {
 					await first;
-					expect(showError).toHaveBeenCalledWith("queue rejected");
 					expect(editor.expandedText()).toBe("[Image #1] look at this\n\nunsent draft");
 					expect(editor.pendingImages).toEqual([image]);
 					expect(editor.pendingImageLinks).toEqual(["local://draft.png"]);

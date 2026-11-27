@@ -244,18 +244,18 @@ async function collectSessionIds(sessionFile: string | undefined): Promise<Set<s
 	return ids;
 }
 
-/** Scan the configured and active destinations independently, without listing aliases twice. */
-async function* listLogDirectories(configured: string, active: string) {
-	const distinct = path.relative(configured, active) !== "";
-	const dirs = distinct ? [configured, active] : [configured];
+/** Scan the configured and fallback destinations independently, without listing aliases twice. */
+async function* listLogDirectories(configured: string, fallback?: string) {
+	const distinct = fallback !== undefined && path.relative(configured, fallback) !== "";
+	const dirs = distinct ? [configured, fallback] : [configured];
 	const seen = new Set<string>();
 	for (const dir of dirs) {
 		try {
-			const realDir = distinct ? await fs.realpath(dir) : dir;
+			const realDir = await fs.realpath(dir);
 			if (seen.has(realDir)) continue;
 			const entries = await fs.readdir(realDir, { withFileTypes: true });
 			seen.add(realDir);
-			yield { dir: realDir, entries, fallback: distinct && dir === active };
+			yield { dir: realDir, entries, fallback: distinct && dir === fallback };
 		} catch {
 			// One destination can be inaccessible while the other is readable.
 		}
@@ -276,15 +276,15 @@ async function collectSameDayLogs(
 	logsDir?: string,
 ): Promise<{ tails: string; sessionLines: string }> {
 	logger.flush();
-	// Resolve after flushing: the buffered write may have selected a fallback.
+	// Include the profile's fallback even when a prior failure has since cleared.
 	const configuredDir = logsDir ?? logger.getConfiguredLogsDir();
-	const activeDir = logsDir ?? logger.getCurrentLogsDir();
+	const fallbackDir = logsDir === undefined ? logger.getFallbackLogsDir() : undefined;
 	// Log files are named with the local day (see localDay / RotatingFileSink),
 	// so match them with the local day too — the UTC key misses the live log
 	// between local midnight and UTC midnight.
 	const today = localDay(new Date());
 	const sameDay: Array<{ filePath: string; mtimeMs: number; fallback: boolean }> = [];
-	for await (const { dir, entries, fallback } of listLogDirectories(configuredDir, activeDir)) {
+	for await (const { dir, entries, fallback } of listLogDirectories(configuredDir, fallbackDir)) {
 		for (const entry of entries) {
 			if (!entry.isFile()) continue;
 			const match = LOG_FILE_PATTERN.exec(entry.name);
@@ -340,21 +340,20 @@ async function collectSameDayLogs(
 const LOG_FILE_PATTERN = new RegExp(`^${APP_NAME}\\.(\\d{4}-\\d{2}-\\d{2})\\.\\d+\\.log(?:\\.\\d+)?$`);
 
 export async function createDebugLogSource(): Promise<DebugLogSource> {
-	// Flushing can recover a buffered write to a fallback before we snapshot older files.
+	// Flushing can create a fallback file before we snapshot older files.
 	logger.flush();
 	const configuredDir = logger.getConfiguredLogsDir();
-	const activeDir = logger.getCurrentLogsDir();
-	const includesFallback = path.relative(configuredDir, activeDir) !== "";
+	const fallbackDir = logger.getFallbackLogsDir();
 	const currentPath = logger.getCurrentLogPath();
-	const todayPath = includesFallback ? await fs.realpath(currentPath).catch(() => currentPath) : currentPath;
-	const olderFiles: Array<{ filePath: string; date: string }> = [];
-	for await (const { dir, entries } of listLogDirectories(configuredDir, activeDir)) {
+	const todayPath = await fs.realpath(currentPath).catch(() => currentPath);
+	const olderFiles: Array<{ filePath: string; date: string; fallback: boolean }> = [];
+	for await (const { dir, entries, fallback } of listLogDirectories(configuredDir, fallbackDir)) {
 		for (const entry of entries) {
 			if (!entry.isFile()) continue;
 			const match = LOG_FILE_PATTERN.exec(entry.name);
 			if (!match) continue;
 			const filePath = path.join(dir, entry.name);
-			if (path.relative(todayPath, filePath) !== "") olderFiles.push({ filePath, date: match[1] });
+			if (path.relative(todayPath, filePath) !== "") olderFiles.push({ filePath, date: match[1], fallback });
 		}
 	}
 	olderFiles.sort((a, b) => b.date.localeCompare(a.date));
@@ -371,14 +370,14 @@ export async function createDebugLogSource(): Promise<DebugLogSource> {
 		const slice = olderFiles.slice(cursor, cursor + count);
 		cursor += slice.length;
 		const chunks: string[] = [];
-		for (const { filePath } of slice.reverse()) {
+		for (const { filePath, fallback } of slice.reverse()) {
 			try {
 				const content = await readLastLines(filePath, MAX_LOG_LINES);
 				if (content.length > 0) {
 					chunks.push(content);
 				}
 			} catch (err) {
-				if (!includesFallback && !isEnoent(err)) {
+				if (!fallback && !isEnoent(err)) {
 					throw err;
 				}
 			}

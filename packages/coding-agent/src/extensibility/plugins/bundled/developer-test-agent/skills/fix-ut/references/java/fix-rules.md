@@ -18,10 +18,10 @@
 node "{SKILL_DIR}/scripts/java/extract-maven-config.js" "{projectDir}"
 ```
 
-- `settingsPath` 非空时传 `-s "{settingsPath}"`；`mavenProperties` 中每个 `-Dkey=value` 单独作为 Maven CLI 参数，含空格时给整个参数加引号。
+- `settingsPath` 非空时传 `-s "{settingsPath}"`；将 `mavenProperties` JSON 数组逐项放入 Bash 数组 `mavenArgs`，保留每个 `-Dkey=value` 的完整值。
 - `vmOptions` 非空时将原值存入 Bash 变量 `vmOptions`，通过命令级 `MAVEN_OPTS` 追加到已有 JVM 选项，不放入 Maven CLI。例如：
   ```bash
-  MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }$vmOptions" mvn test -q -Dtest="{ClassName}" -s "{settingsPath}" {mavenProperties}
+  MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }$vmOptions" mvn test -q -Dtest="{ClassName}" -s "{settingsPath}" "${mavenArgs[@]}"
   ```
   三个字段独立可选：缺少哪个就省略对应设置。
 - **无配置时**：`mvn test -q -Dtest="{ClassName}"`

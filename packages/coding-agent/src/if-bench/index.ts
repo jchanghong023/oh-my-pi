@@ -108,7 +108,7 @@ export async function runIfBenchCommand(
 
 	const runtime = await (deps.createRuntime
 		? deps.createRuntime()
-		: createDefaultBenchRuntime({ offline: offlineFromEnv() }));
+		: createDefaultBenchRuntime({ offline: offlineFromEnv() || undefined }));
 	try {
 		const targets = await resolveBenchTargets(command.models, runtime.modelRegistry, runtime.settings, writeStderr);
 		board?.log(

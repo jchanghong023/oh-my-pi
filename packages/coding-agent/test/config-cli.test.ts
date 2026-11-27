@@ -29,11 +29,10 @@ async function runCliProcess(args: string[], env: NodeJS.ProcessEnv): Promise<Cl
 	return { exitCode, output, error };
 }
 
-beforeEach(async () => {
+beforeEach(() => {
 	resetSettingsForTest();
 	testAgentDir = TempDir.createSync("@omp-config-cli-");
 	setAgentDir(testAgentDir.path());
-	await Bun.write(testAgentDir.join("config.yml"), "{}\n");
 });
 
 afterEach(async () => {
@@ -55,32 +54,26 @@ afterEach(async () => {
 });
 
 describe("config CLI schema coverage", () => {
-	it.each([
-		["{}", {}],
-		["collapseChangelog: false\nstartup: {}\nother: keep\n", { startup: {}, other: "keep" }],
-		[
-			'"startup.changelogMode": expanded\ncollapseChangelog: false\nstartup: {}\nother: keep\n',
-			{ startup: {}, other: "keep" },
-		],
-		["{startup: {? changelogMode}, other: keep}\n", { startup: {}, other: "keep" }],
-	] satisfies [string, Record<string, unknown>][])(
-		"resets a nested setting through the real CLI for %j",
-		async (source, expected) => {
-			const file = testAgentDir!.join("config.yml");
-			await Bun.write(file, source);
-			const result = await runCliProcess(["config", "reset", "startup.changelogMode", "--json"], {
-				PI_CODING_AGENT_DIR: testAgentDir!.path(),
-			});
-			expect(result.exitCode).toBe(0);
-			expect(JSON.parse(result.output).value).toBe("summary");
-			expect(YAML.parse(await Bun.file(file).text())).toEqual(expected);
-			const reread = await runCliProcess(["config", "get", "startup.changelogMode", "--json"], {
-				PI_CODING_AGENT_DIR: testAgentDir!.path(),
-			});
-			expect(reread.exitCode).toBe(0);
-			expect(JSON.parse(reread.output).value).toBe("summary");
-		},
-	);
+	it("creates a missing config.yml on set and removes the setting on reset", async () => {
+		const dir = testAgentDir!;
+		const file = dir.join("config.yml");
+		const env = { PI_CODING_AGENT_DIR: dir.path(), PI_CONFIG_FILES: "" };
+		expect(await Bun.file(file).exists()).toBe(false);
+
+		const set = await runCliProcess(["config", "set", "temperature", "0.7", "--json"], env);
+		expect(set.exitCode, set.error).toBe(0);
+		expect(JSON.parse(set.output)).toEqual({ key: "temperature", value: 0.7 });
+		const config = YAML.parse(await Bun.file(file).text()) as Record<string, unknown>;
+		expect(config).toHaveProperty("temperature", 0.7);
+
+		delete config.temperature;
+		const otherSettings = { ...config, custom: { retained: ["one", "two"] } };
+		await Bun.write(file, YAML.stringify({ ...otherSettings, temperature: 0.7 }));
+		const reset = await runCliProcess(["config", "reset", "temperature", "--json"], env);
+		expect(reset.exitCode, reset.error).toBe(0);
+		expect(JSON.parse(reset.output)).toEqual({ key: "temperature", value: -1 });
+		expect(YAML.parse(await Bun.file(file).text())).toEqual(otherSettings);
+	});
 
 	it("renders record settings as JSON and with record type in text output", async () => {
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -119,7 +112,6 @@ describe("config CLI schema coverage", () => {
 		await Bun.write(
 			file,
 			[
-				"# Keep provider settings",
 				"providers:",
 				"  tinyModel: lfm2.5-350m",
 				"  maxInFlightRequests: {openai: 2}",
@@ -134,7 +126,6 @@ describe("config CLI schema coverage", () => {
 		expect(saved.exitCode).toBe(0);
 		expect(JSON.parse(saved.output)).toEqual({ key: "modelRoles", value });
 		const source = await Bun.file(file).text();
-		expect(source).toContain("# Keep provider settings");
 		expect(YAML.parse(source)).toEqual({ providers: { maxInFlightRequests: { openai: 2 } }, modelRoles: value });
 		const reread = await runCliProcess(["config", "get", "modelRoles", "--json"], env);
 		expect(reread.exitCode).toBe(0);

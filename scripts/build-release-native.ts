@@ -6,7 +6,6 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { installFile } from "../packages/natives/scripts/installed-file";
 import { nativesPackageVersion, stampNativeVersion } from "./stamp-native-version";
 import { ensureWindowsBuildTools } from "./windows-build-tools";
 
@@ -136,13 +135,17 @@ export async function buildReleaseNative(): Promise<string> {
 	const compiled = path.join(targetDir, target, "local", linux ? "libpi_natives.so" : "pi_natives.dll");
 	await fs.mkdir(outputDir, { recursive: true });
 	const destination = path.join(outputDir, filename);
-	await installFile(compiled, destination, {
-		allowUnlinkFallback: true,
-		prepare: async staged => {
-			if (linux) await inspectLinuxAbi(staged, env);
-			await stampNativeVersion(staged, await nativesPackageVersion());
-		},
-	});
+	const staged = `${destination}.tmp.${process.pid}`;
+	try {
+		await fs.copyFile(compiled, staged);
+		await fs.chmod(staged, 0o644);
+		if (linux) await inspectLinuxAbi(staged, env);
+		await stampNativeVersion(staged, await nativesPackageVersion());
+		await fs.rename(staged, destination);
+	} catch (error) {
+		await fs.unlink(staged).catch(() => {});
+		throw error;
+	}
 	console.log(`Native release complete: ${destination} (${((performance.now() - start) / 1000).toFixed(1)}s)`);
 	return destination;
 }

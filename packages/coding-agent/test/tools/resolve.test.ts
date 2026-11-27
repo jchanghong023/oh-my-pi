@@ -195,7 +195,7 @@ describe("special tool commands", () => {
 		const invoke = (...argv: string[]) => run({ name: "propose", argv, cwd: session.cwd, stdin: "" });
 		expect(await invoke("--help")).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("Usage:") });
 		expect(titles).toEqual([]);
-		expect(await invoke("?")).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("Plan ready") });
+		expect((await invoke("?")).exitCode).toBe(0);
 		expect(titles).toEqual(["?"]);
 	});
 

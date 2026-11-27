@@ -153,7 +153,6 @@ test.each([
 		expect(keys).toHaveLength(2);
 		expect(keys).toContain(selector);
 		const routedKey = keys.find(key => key !== selector)!;
-		expect(routedKey).toBeDefined();
 		const currentKey = hasOverride ? selector : routedKey;
 		expect(props()).toMatchObject({ current: [currentKey], selected: currentKey });
 

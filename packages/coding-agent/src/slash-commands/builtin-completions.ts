@@ -504,25 +504,28 @@ export function buildLocalFileArgumentCompletions(
 	};
 }
 
+// On POSIX a backslash is part of the name and must survive caller quoting.
+function useDirectorySlashes(value: string): string {
+	return path.sep === "\\" ? value.replaceAll("\\", "/") : value;
+}
+
 function buildDirectoryCompletionDisplayValue(
 	prefix: string,
 	isAbsolute: boolean,
 	absoluteValue: string,
 	cwd: string,
 ): string {
-	// Preserve the user's prefix style where possible, but always return a
-	// value that /move can resolve (absolute or relative) without escaping.
 	const normalized = path.normalize(absoluteValue);
 
 	if (prefix === "~" || prefix.startsWith("~/")) {
 		const homeRelative = path.relative(os.homedir(), normalized);
-		return `~/${homeRelative.replaceAll("\\", "/")}/`;
+		return `~/${useDirectorySlashes(homeRelative)}/`;
 	}
 	// Absolute stays absolute, including Windows drive paths (`C:/…`, `C:\…`).
 	if (isAbsolute) {
-		return `${normalized.replaceAll("\\", "/")}/`;
+		return `${useDirectorySlashes(normalized)}/`;
 	}
-	const relative = path.relative(cwd, normalized).replaceAll("\\", "/");
+	const relative = useDirectorySlashes(path.relative(cwd, normalized));
 	// The project directory itself: `""` would render as `/`, the filesystem root.
 	if (relative === "") return "./";
 	return prefix.startsWith("./") ? `./${relative}/` : `${relative}/`;

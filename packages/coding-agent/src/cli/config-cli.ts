@@ -10,8 +10,6 @@ import chalk from "@oh-my-pi/pi-utils/chalk";
 import { orderedSettings } from "../config/all-settings";
 import { type AnySetting, lookup } from "../config/registry";
 import { Settings, settings } from "../config/settings";
-import type { TeamConfigSaveResult } from "../team/config-types";
-import { cfgTeamMembers } from "../team/settings";
 import { initXdg } from "./commands/init-xdg";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 
@@ -121,14 +119,7 @@ export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 		console.error(chalk.red("--scope applies to `config list` only"));
 		process.exit(1);
 	}
-	const editing = cmd.action === "set" || cmd.action === "reset";
-	try {
-		await Settings.init({ existingConfigOnly: editing });
-	} catch (error) {
-		if (!editing) throw error;
-		console.error(chalk.red("User configuration cannot be safely read; nothing was saved."));
-		process.exit(1);
-	}
+	await Settings.init();
 
 	switch (cmd.action) {
 		case "list":
@@ -281,54 +272,6 @@ function handleGet(key: string | undefined, flags: { json?: boolean }): void {
 	console.log(formatValue(value));
 }
 
-async function saveTeamMembers(value: unknown, expectedRevision: string): Promise<TeamConfigSaveResult> {
-	const [
-		{ ModelRegistry },
-		{ initializeOfflineModelCommand, loadCliExtensionProviders },
-		{ AuthStorage },
-		{ loadEffectiveAuthAccountPolicyConfig },
-		{ TeamConfigError, TeamConfigService },
-		{ getAgentDbPath },
-	] = await Promise.all([
-		import("../config/model-registry"),
-		import("../sdk"),
-		import("../session/auth-storage"),
-		import("../session/auth-broker-config"),
-		import("../team/config"),
-		import("@oh-my-pi/pi-utils/dirs"),
-	]);
-	const scope = Settings.instance;
-	const { accountPolicies, defaultReservePct } = await loadEffectiveAuthAccountPolicyConfig({ settings: scope });
-	// Configuration must not contact a broker or refresh a provider. Recover the same local catalog caches as startup.
-	const auth = await AuthStorage.create(getAgentDbPath(scope.getAgentDir()), { accountPolicies, defaultReservePct });
-	try {
-		await auth.credentials.reload();
-		await initializeOfflineModelCommand(scope);
-		const registry = new ModelRegistry(auth, undefined, { settings: scope });
-		// Like default TUI startup, the standalone command must not discover ambient extensions.
-		await loadCliExtensionProviders(registry, scope, scope.getCwd(), {
-			discoverModels: false,
-			disableExtensionDiscovery: true,
-		});
-		await registry.hydrateCredentialScopedModelCaches();
-		await registry.refreshRuntimeProviders("offline");
-		const service = new TeamConfigService({ getSettings: () => scope, getModelRegistry: () => registry });
-		return await service.saveTeamConfig(value, expectedRevision);
-	} catch (error) {
-		if (error instanceof TeamConfigError) {
-			const data = error.data;
-			if (data?.write.status === "saved") console.error("Write committed to the global config.");
-			else if (data) console.error(`Team write status: ${data.write.status}.`);
-			if (data?.effectiveNote && data.effectiveNote !== error.message) console.error(data.effectiveNote);
-			if (error.code === "invalid_params")
-				console.error("Team CLI validation uses only local credentials and cached model metadata.");
-		}
-		throw error;
-	} finally {
-		auth.close();
-	}
-}
-
 async function handleSet(key: string | undefined, value: string | undefined, flags: { json?: boolean }): Promise<void> {
 	if (!key || value === undefined) {
 		console.error(chalk.red(`Usage: ${APP_NAME} config set <key> <value>`));
@@ -343,14 +286,9 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 		process.exit(1);
 	}
 
-	let teamSave: TeamConfigSaveResult | undefined;
 	try {
-		const parsed = def.setting.parse(value);
-		def.setting.assertWritable(parsed);
-		const snapshot = await settings.readUserSetting(def.path);
-		if (snapshot.revision === null) throw new Error("User configuration cannot be safely read; nothing was saved.");
-		if (def.path === cfgTeamMembers.id) teamSave = await saveTeamMembers(parsed, snapshot.revision);
-		else await settings.saveUserSetting(def.path, parsed, snapshot.revision);
+		def.setting.set(settings, def.setting.parse(value));
+		await settings.flush();
 	} catch (err) {
 		console.error(chalk.red(String(err)));
 		process.exit(1);
@@ -358,16 +296,9 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 
 	// Report the value written to config.yml. When another layer or an environment variable still
 	// supplies the effective value, say which instead of echoing its value as if it had been set.
-	const saved = teamSave ? teamSave.config.userMembers?.map(slot => slot.rawSelector) : globalValue(def.setting);
+	const saved = globalValue(def.setting);
 	const redacted = def.setting.isCredential && !!saved;
-	const shadow = teamSave
-		? teamSave.effectiveMatchesRequested
-			? undefined
-			: (shadowingSource(def.setting, teamSave.config.source ?? undefined) ?? {
-					json: { effectiveMatchesRequested: false },
-					message: teamSave.effectiveNote,
-				})
-		: shadowingSource(def.setting);
+	const shadow = shadowingSource(def.setting);
 
 	if (flags.json) {
 		console.log(
@@ -384,8 +315,7 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 			`${currentTheme().symbols.symbol("status.success")} Set ${def.path} = ${redacted ? REDACTED : formatValue(saved)}`,
 		),
 	);
-	if (shadow?.message)
-		console.log(chalk.yellow(`${currentTheme().symbols.symbol("status.warning")} ${shadow.message}`));
+	if (shadow) console.log(chalk.yellow(`${currentTheme().symbols.symbol("status.warning")} ${shadow.message}`));
 }
 
 /** Value `setting` holds in the global config layer — what `config set` wrote. */
@@ -396,10 +326,8 @@ function globalValue(setting: AnySetting): unknown {
 }
 
 /** Where the effective value comes from when it is not the global config (or the default), if anywhere. */
-function shadowingSource(
-	setting: AnySetting,
-	provenance = setting.provenance(settings),
-): { json: Record<string, string>; message: string } | undefined {
+function shadowingSource(setting: AnySetting): { json: Record<string, string>; message: string } | undefined {
+	const provenance = setting.provenance(settings);
 	switch (provenance) {
 		case "global":
 		case "default":
@@ -448,11 +376,11 @@ async function handleReset(key: string | undefined, flags: { json?: boolean }): 
 		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
 		process.exit(1);
 	}
+
 	try {
-		// Explicit CAS persistence cannot silently discard a conflicting edit and report success.
-		const snapshot = await settings.readUserSetting(def.path);
-		if (snapshot.revision === null) throw new Error("User configuration cannot be safely read; nothing was reset.");
-		await settings.saveUserSetting(def.path, undefined, snapshot.revision);
+		// Remove the key rather than writing the default, so later default changes still apply.
+		def.setting.unset(settings);
+		await settings.flush();
 	} catch (err) {
 		console.error(chalk.red(String(err)));
 		process.exit(1);

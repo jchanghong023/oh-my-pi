@@ -233,7 +233,17 @@ export class RotatingFileSink {
 				this.#notifyFailure(failure, stage);
 			}
 			// Drop only this failed batch to bound memory; later writes still try.
-			this.#activeBytes = this.#fd === undefined ? 0 : this.#activeBytes - this.#pendingBytes;
+			if (this.#directory !== this.configuredDirectory) {
+				// A fallback that can no longer write must not pin the sink.
+				this.#closeFd();
+				this.#directory = this.configuredDirectory;
+				this.#activePath = undefined;
+				this.#activeDay = undefined;
+				this.#activeIndex = 0;
+				this.#activeBytes = 0;
+			} else {
+				this.#activeBytes = this.#fd === undefined ? 0 : this.#activeBytes - this.#pendingBytes;
+			}
 			this.#pending = "";
 			this.#pendingBytes = 0;
 			clearTimeout(this.#flushTimer);

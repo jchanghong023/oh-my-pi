@@ -79,7 +79,6 @@ const isolatedEnvKeys = [
 	"PI_CODING_AGENT_DIR",
 	"OMP_PROFILE",
 	"PI_PROFILE",
-	"OMP_SKILLS_DIR",
 ] as const;
 const originalEnv: Record<string, string | undefined> = Object.fromEntries(
 	isolatedEnvKeys.map(key => [key, process.env[key]]),
@@ -107,7 +106,6 @@ beforeAll(async () => {
 	}
 	delete process.env.CLAUDE_CONFIG_DIR;
 	delete Bun.env.CLAUDE_CONFIG_DIR;
-	restoreEnvValue("OMP_SKILLS_DIR", undefined);
 	setAgentDir(path.join(isolatedHome, ".omp", "agent"));
 });
 
@@ -205,7 +203,7 @@ describe("skills", () => {
 			expect(skills.map(s => s.name)).toEqual(expectedFixtureSkillOrder);
 		});
 
-		it("loads OMP_SKILLS_DIR in addition to user skills and gives shared skills the bare name", async () => {
+		it("ignores the retired OMP_SKILLS_DIR in execution and inventory", async () => {
 			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-skills-"));
 			const sharedDir = path.join(root, "shared");
 			const customDir = path.join(root, "custom");
@@ -237,31 +235,27 @@ describe("skills", () => {
 				};
 				const loaded = await loadSkills(options);
 				expect(loaded.skills.find(skill => skill.name === "shared-priority")?.filePath).toBe(
-					path.join(sharedDir, "shared-priority", "SKILL.md"),
+					path.join(customDir, "shared-priority", "SKILL.md"),
 				);
-				expect(loaded.skills.find(skill => skill.name === "shared-only")?.description).toBe(
-					"Only in shared directory",
-				);
-				expect(loaded.skills.find(skill => skill.name === "shared-priority")?._source?.providerName).toBe("Shared");
+				expect(loaded.skills.some(skill => skill.filePath.startsWith(sharedDir))).toBe(false);
+				expect(loaded.skills.find(skill => skill.name === "shared-priority")?._source?.providerName).toBe("Custom");
 				expect(loaded.skills.find(skill => skill.name === "agents/shared-priority")?.filePath).toBe(
 					path.join(userDir, "SKILL.md"),
-				);
-				expect(loaded.skills.find(skill => skill.name === "custom/shared-priority")?.filePath).toBe(
-					path.join(customDir, "shared-priority", "SKILL.md"),
 				);
 				expect(loaded.skills.find(skill => skill.name === "native/shared-priority")?.filePath).toBe(
 					path.join(projectDir, "shared-priority", "SKILL.md"),
 				);
 				const disabledOptions = {
 					...options,
-					disabledExtensions: ["skill:custom/shared-priority"],
+					disabledExtensions: ["skill:native/shared-priority"],
 				};
 				const catalog = await loadSkillCatalog(disabledOptions);
-				expect(catalog.skills.find(skill => skill.name === "custom/shared-priority")?.disabledReason).toBe(
+				expect(catalog.skills.some(skill => skill.filePath.startsWith(sharedDir))).toBe(false);
+				expect(catalog.skills.find(skill => skill.name === "native/shared-priority")?.disabledReason).toBe(
 					"item-disabled",
 				);
 				expect((await loadSkills(disabledOptions)).skills.map(skill => skill.name)).toEqual(
-					loaded.skills.map(skill => skill.name).filter(name => name !== "custom/shared-priority"),
+					loaded.skills.map(skill => skill.name).filter(name => name !== "native/shared-priority"),
 				);
 				const masterDisabled = await loadSkillCatalog({ ...options, enabled: false });
 				expect(masterDisabled.skills.map(skill => skill.name)).toEqual(loaded.skills.map(skill => skill.name));
@@ -273,7 +267,6 @@ describe("skills", () => {
 				} finally {
 					scanDisabled.mockRestore();
 				}
-				restoreEnvValue("OMP_SKILLS_DIR", path.join(root, "missing"));
 				const fallback = await loadSkills({ ...options, customDirectories: [], enablePiProject: false });
 				expect(fallback.skills.find(skill => skill.name === "shared-priority")?.filePath).toBe(
 					path.join(userDir, "SKILL.md"),
@@ -285,59 +278,45 @@ describe("skills", () => {
 			}
 		});
 
-		it("keeps a Shared Skillshare package ahead of a custom copy and preserves containment", async () => {
-			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-skillshare-"));
-			const name = "shared-package";
+		it("keeps a custom override ahead of a Skillshare package without changing package containment", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-custom-skillshare-"));
+			const name = "installed-package";
 			const storeDir = getSkillStorePath("test", name, "1.0.0");
-			const sharedDir = path.join(root, "shared");
 			const customDir = path.join(root, "custom");
-			const aliasDir = path.join(sharedDir, name);
 			const customSkill = path.join(customDir, name, "SKILL.md");
-			const previousShared = process.env.OMP_SKILLS_DIR;
 			const options = { ...DISABLE_ALL_BUILTIN_SKILLS, cwd: root, customDirectories: [customDir] };
-			let linked = false;
 			try {
 				await fs.mkdir(path.join(root, ".git"));
 				await fs.mkdir(storeDir, { recursive: true });
-				await fs.mkdir(sharedDir);
 				await fs.mkdir(path.dirname(customSkill), { recursive: true });
 				const integrity = "sha512-test";
 				await fs.writeFile(path.join(storeDir, STORE_INTEGRITY_FILE), integrity);
 				await fs.writeFile(path.join(storeDir, "SKILL.md"), "---\ndescription: Installed package\n---\nInstalled.");
 				await writeSkillsLock(path.join(root, ".omp", SKILLS_LOCK_FILE), {
 					version: 1,
-					skills: { "@test/shared-package": { version: "1.0.0", integrity, resolved: "/tarball" } },
+					skills: { [`@test/${name}`]: { version: "1.0.0", integrity, resolved: "/tarball" } },
 				});
 				await fs.writeFile(customSkill, "---\ndescription: Custom version\n---\nCustom.");
-				await fs.symlink(storeDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
-				linked = true;
-
-				expect((await loadSkills(options)).skills.find(skill => skill.name === name)?.filePath).toBe(customSkill);
-				restoreEnvValue("OMP_SKILLS_DIR", sharedDir);
 				const canonicalStore = await fs.realpath(storeDir);
 				const { skills } = await loadSkillCatalog(options);
-				expect(skills.map(skill => skill.name)).toEqual([`custom/${name}`, name]);
-				expect(skills.find(skill => skill.name === name)).toMatchObject({
+				expect(skills).toHaveLength(2);
+				expect(skills.find(skill => skill.name === name)?.filePath).toBe(customSkill);
+				expect(skills.find(skill => skill._source.provider === "skillshare")).toMatchObject({
 					filePath: path.join(canonicalStore, "SKILL.md"),
 					containRoot: canonicalStore,
-					_source: { provider: "skillshare", providerName: "Shared" },
+					_source: { provider: "skillshare" },
 				});
-				expect(skills.find(skill => skill.name === `custom/${name}`)?.filePath).toBe(customSkill);
 			} finally {
-				restoreEnvValue("OMP_SKILLS_DIR", previousShared);
-				if (linked) await fs.unlink(aliasDir);
 				await removeWithRetries(storeDir);
 				await removeWithRetries(root);
 			}
 		});
 
-		it("coalesces offline shared/custom roots per load and refreshes added or removed skills", async () => {
-			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-offline-shared-"));
-			const shared = path.join(root, "shared");
-			const other = path.join(root, "other");
+		it("coalesces offline custom roots per load and refreshes added or removed skills", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-offline-custom-"));
+			const custom = path.join(root, "custom");
 			const platform = process.platform;
 			const previousOffline = process.env.OMP_OFFLINE;
-			const previousShared = process.env.OMP_SKILLS_DIR;
 			const writeSkill = async (directory: string, name: string) => {
 				await fs.mkdir(path.join(directory, name), { recursive: true });
 				await Bun.write(
@@ -345,62 +324,51 @@ describe("skills", () => {
 					`---\nname: ${name}\ndescription: ${name}\n---\nBody`,
 				);
 			};
-			await writeSkill(shared, "original");
-			await writeSkill(other, "other");
-			await fs.mkdir(path.join(shared, "added"));
+			await writeSkill(custom, "original");
+			await fs.mkdir(path.join(custom, "added"));
 			Object.defineProperty(process, "platform", { value: "linux" });
 			restoreEnvValue("OMP_OFFLINE", " TrUe ");
-			restoreEnvValue("OMP_SKILLS_DIR", shared);
 			const readdir = spyOn(nodeFs.promises, "readdir");
 			const options = {
 				...DISABLE_ALL_BUILTIN_SKILLS,
 				cwd: root,
-				customDirectories: [shared, path.join(shared, "."), `${shared}${path.sep}`],
+				customDirectories: [custom, `${custom}${path.sep}.${path.sep}`, `${custom}${path.sep}`],
 			};
 			try {
 				await fs.mkdir(path.join(root, ".git"));
 				resetCapabilities();
 				const catalog = await loadSkillCatalog(options);
 				expect(catalog.skills.map(skill => skill.name)).toEqual(["original"]);
-				expect(catalog.skills[0]._source.providerName).toBe("Shared");
-				expect(readdir.mock.calls.filter(([dir]) => String(dir) === shared)).toHaveLength(1);
+				expect(catalog.skills[0]._source.providerName).toBe("Custom");
+				expect(readdir.mock.calls.filter(([dir]) => String(dir) === custom)).toHaveLength(1);
 
-				await writeSkill(shared, "added");
-				await fs.unlink(path.join(shared, "original", "SKILL.md"));
+				await writeSkill(custom, "added");
+				await fs.unlink(path.join(custom, "original", "SKILL.md"));
 				resetCapabilities();
 				expect((await loadSkills(options)).skills.map(skill => skill.name)).toEqual(["added"]);
-
-				restoreEnvValue("OMP_SKILLS_DIR", undefined);
-				expect(
-					(await loadSkills({ ...options, customDirectories: [other] })).skills.map(skill => skill.name),
-				).toEqual(["other"]);
 			} finally {
 				readdir.mockRestore();
 				Object.defineProperty(process, "platform", { value: platform });
 				restoreEnvValue("OMP_OFFLINE", previousOffline);
-				restoreEnvValue("OMP_SKILLS_DIR", previousShared);
 				resetCapabilities();
 				await removeWithRetries(root);
 			}
 		});
 
-		it("refreshes the contents of a one-level shared root", async () => {
-			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-refresh-"));
-			const previousShared = process.env.OMP_SKILLS_DIR;
-			const previousOffline = process.env.OMP_OFFLINE;
-			const filePath = path.join(root, "shared", "visible", "SKILL.md");
-			const body = (text: string) => `---\nname: visible\ndescription: Shared refresh\n---\n${text}\n`;
+		it("refreshes the contents of a one-level custom root", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-custom-refresh-"));
+			const custom = path.join(root, "custom");
+			const filePath = path.join(custom, "visible", "SKILL.md");
+			const body = (text: string) => `---\nname: visible\ndescription: Custom refresh\n---\n${text}\n`;
 			try {
 				await fs.mkdir(path.dirname(filePath), { recursive: true });
 				await fs.writeFile(filePath, body("First revision"));
-				await fs.mkdir(path.join(root, "shared", "group", "nested"), { recursive: true });
+				await fs.mkdir(path.join(custom, "group", "nested"), { recursive: true });
 				await fs.writeFile(
-					path.join(root, "shared", "group", "nested", "SKILL.md"),
+					path.join(custom, "group", "nested", "SKILL.md"),
 					"---\nname: nested\ndescription: Must not recurse\n---\nNested\n",
 				);
-				restoreEnvValue("OMP_OFFLINE", undefined);
-				restoreEnvValue("OMP_SKILLS_DIR", path.join(root, "shared"));
-				const options = { ...DISABLE_ALL_BUILTIN_SKILLS, cwd: root };
+				const options = { ...DISABLE_ALL_BUILTIN_SKILLS, cwd: root, customDirectories: [custom] };
 				const first = await loadSkills(options);
 				expect(first.skills.map(skill => skill.name)).toEqual(["visible"]);
 				const handler = new SkillProtocolHandler();
@@ -415,30 +383,25 @@ describe("skills", () => {
 				expect(
 					(await loadSkills({ ...options, includeSkills: ["visible"], ignoredSkills: ["vis*"] })).skills,
 				).toEqual([]);
-				restoreEnvValue("OMP_SKILLS_DIR", "   ");
-				expect((await loadSkills(options)).skills).toEqual([]);
 			} finally {
-				restoreEnvValue("OMP_SKILLS_DIR", previousShared);
-				restoreEnvValue("OMP_OFFLINE", previousOffline);
 				resetCapabilities();
 				await removeWithRetries(root);
 			}
 		});
 
-		// Force the custom directory to complete before Shared; priority cannot depend on IO completion.
-		it("scans shared and custom roots concurrently while preserving Shared precedence", async () => {
-			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-concurrent-"));
-			const shared = path.join(root, "shared");
-			const custom = path.join(root, "custom");
-			const previousShared = process.env.OMP_SKILLS_DIR;
-			const releaseShared = Promise.withResolvers<void>();
-			const customStarted = Promise.withResolvers<void>();
+		// Force the second directory to finish first; priority cannot depend on I/O completion.
+		it("scans custom roots concurrently while preserving configuration order", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-custom-concurrent-"));
+			const first = path.join(root, "first");
+			const second = path.join(root, "second");
+			const releaseFirst = Promise.withResolvers<void>();
+			const secondScanned = Promise.withResolvers<void>();
 			const scanSkills = discoveryHelpers.scanSkillsFromDir;
 			let restoreScanner: (() => void) | undefined;
 			try {
 				for (const [directory, description] of [
-					[shared, "Shared winner"],
-					[custom, "Custom loser"],
+					[first, "First configured version"],
+					[second, "Second configured version"],
 				]) {
 					await fs.mkdir(path.join(directory, "same"), { recursive: true });
 					await fs.writeFile(
@@ -446,30 +409,34 @@ describe("skills", () => {
 						`---\nname: same\ndescription: ${description}\n---\n${description}\n`,
 					);
 				}
-				restoreEnvValue("OMP_SKILLS_DIR", shared);
 				const scanner = spyOn(discoveryHelpers, "scanSkillsFromDir").mockImplementation(
 					async (context, options) => {
-						if (options.dir === shared) await releaseShared.promise;
+						if (options.dir === first) await releaseFirst.promise;
 						const result = await scanSkills(context, options);
-						if (options.dir === custom) customStarted.resolve();
+						if (options.dir === second) secondScanned.resolve();
 						return result;
 					},
 				);
 				restoreScanner = () => scanner.mockRestore();
-				const pending = loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, cwd: root, customDirectories: [custom] });
-				await customStarted.promise;
-				releaseShared.resolve();
+				const pending = loadSkills({
+					...DISABLE_ALL_BUILTIN_SKILLS,
+					cwd: root,
+					customDirectories: [first, second],
+				});
+				await secondScanned.promise;
+				releaseFirst.resolve();
 				const loaded = await pending;
 				expect(loaded.skills.find(skill => skill.name === "same")).toMatchObject({
-					description: "Shared winner",
-					filePath: path.join(shared, "same", "SKILL.md"),
-					_source: { providerName: "Shared" },
+					description: "First configured version",
+					filePath: path.join(first, "same", "SKILL.md"),
+					_source: { providerName: "Custom" },
 				});
-				expect(loaded.skills.find(skill => skill.name === "custom/same")?.description).toBe("Custom loser");
+				expect(loaded.skills.find(skill => skill.name === "second/same")?.description).toBe(
+					"Second configured version",
+				);
 			} finally {
-				releaseShared.resolve();
+				releaseFirst.resolve();
 				restoreScanner?.();
-				restoreEnvValue("OMP_SKILLS_DIR", previousShared);
 				resetCapabilities();
 				await removeWithRetries(root);
 			}
@@ -519,97 +486,6 @@ describe("skills", () => {
 				await removeWithRetries(root);
 			}
 		});
-
-		for (const sharedRootKind of ["direct", "junction", "renamed-skill"] as const) {
-			it(`keeps Shared priority when OMP_SKILLS_DIR aliases the agents root (${sharedRootKind})`, async () => {
-				const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-agents-alias-"));
-				const name = `shared-agents-${sharedRootKind}`;
-				const agentsRoot = path.join(isolatedHome, ".agents", "skills");
-				const agentsSkillDir = path.join(agentsRoot, name);
-				const nativeSkillDir = path.join(isolatedHome, ".omp", "agent", "skills", name);
-				const sharedAlias = path.join(root, "shared");
-				const nativeName = `agent/${name}`;
-				const previous = process.env.OMP_SKILLS_DIR;
-				let linkedPath: string | undefined;
-				try {
-					await fs.mkdir(path.join(root, ".git"));
-					for (const [directory, body] of [
-						[agentsSkillDir, "Run the shared agents implementation."],
-						[nativeSkillDir, "Run the private native implementation."],
-					] as const) {
-						await fs.mkdir(directory, { recursive: true });
-						await fs.writeFile(
-							path.join(directory, "SKILL.md"),
-							`---\n${sharedRootKind === "renamed-skill" ? "" : `name: ${name}\n`}description: Aliased shared skill\n---\n${body}\n`,
-						);
-					}
-					if (sharedRootKind === "junction") {
-						await fs.symlink(agentsRoot, sharedAlias, process.platform === "win32" ? "junction" : "dir");
-						linkedPath = sharedAlias;
-					} else if (sharedRootKind === "renamed-skill") {
-						await fs.mkdir(sharedAlias);
-						const aliasSkillDir = path.join(sharedAlias, "alias");
-						await fs.symlink(agentsSkillDir, aliasSkillDir, process.platform === "win32" ? "junction" : "dir");
-						linkedPath = aliasSkillDir;
-					}
-					restoreEnvValue("OMP_SKILLS_DIR", sharedRootKind === "direct" ? agentsRoot : sharedAlias);
-					const options = {
-						...DISABLE_ALL_BUILTIN_SKILLS,
-						enablePiUser: true,
-						enableAgentsUser: true,
-						cwd: root,
-					};
-					const { skills } = await loadSkills(options);
-					const handler = new SkillProtocolHandler();
-					const shared = await handler.resolve(parseInternalUrl(`skill://${name}`)!, { skills });
-					expect(shared.content).toContain("Run the shared agents implementation.");
-					expect(skills.map(skill => skill.name).sort()).toEqual([nativeName, name].sort());
-					expect(skills.find(skill => skill.name === name)?._source?.providerName).toBe("Shared");
-					if (sharedRootKind === "renamed-skill") {
-						await expect(
-							handler.locate(parseInternalUrl("skill://alias")!, { skills }, { localOnly: true }),
-						).rejects.toThrow("Unknown skill: alias");
-					}
-					const native = await handler.resolve(parseInternalUrl(`skill://${nativeName}`)!, { skills });
-					expect(native.content).toContain("Run the private native implementation.");
-
-					const catalog = await loadSkillCatalog(options);
-					expect(catalog.skills.map(skill => skill.name).sort()).toEqual([nativeName, name].sort());
-					expect(catalog.skills.find(skill => skill.name === name)?._source.providerName).toBe("Shared");
-					expect(catalog.skills.find(skill => skill.name === nativeName)?.filePath).toBe(
-						path.join(nativeSkillDir, "SKILL.md"),
-					);
-
-					// Filters consume the same names after admission, regardless of how the
-					// roots alias. Exercise that behavior once with the renamed directory.
-					if (sharedRootKind === "renamed-skill") {
-						const included = { ...options, includeSkills: [nativeName] };
-						expect((await loadSkills(included)).skills.map(skill => skill.name)).toEqual([nativeName]);
-						const includedCatalog = await loadSkillCatalog(included);
-						expect(includedCatalog.skills.find(skill => skill.name === name)?.disabledReason).toBe(
-							"skill-config",
-						);
-
-						const nativeDisabled = { ...options, disabledExtensions: [`skill:${nativeName}`] };
-						expect((await loadSkills(nativeDisabled)).skills.map(skill => skill.name)).toEqual([name]);
-						// Bare-name disables apply to all versions, unlike a namespaced disable.
-						const sharedDisabled = { ...options, disabledExtensions: [`skill:${name}`] };
-						const disabledCatalog = await loadSkillCatalog(sharedDisabled);
-						expect(disabledCatalog.skills.map(skill => skill.disabledReason)).toEqual([
-							"item-disabled",
-							"item-disabled",
-						]);
-						expect((await loadSkills(sharedDisabled)).skills).toEqual([]);
-					}
-				} finally {
-					restoreEnvValue("OMP_SKILLS_DIR", previous);
-					if (linkedPath) await fs.unlink(linkedPath);
-					await removeWithRetries(agentsSkillDir);
-					await removeWithRetries(nativeSkillDir);
-					await removeWithRetries(root);
-				}
-			});
-		}
 
 		for (const disabledReason of ["user-opt-in", "provider-disabled"] as const) {
 			it(`does not scan inactive Claude roots during execution (${disabledReason}), but retains their inventory`, async () => {
@@ -732,7 +608,6 @@ describe("skills", () => {
 				await install("1.0.0");
 				const skills = await refreshSkills();
 				const original = skills.find(skill => skill.name === "plugin-upgrade")!;
-				expect(original?._source?.origin).toBe("claude");
 
 				// The new path has a different length, so the registry's signature
 				// changes even on filesystems with coarse timestamps. Keep the old file.

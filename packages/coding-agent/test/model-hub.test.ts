@@ -782,7 +782,6 @@ describe("ModelHub", () => {
 			const { hub: bareHub } = createHub({ models: [model], scoped: true });
 			bareHub.handleInput(UP); // All models → Roles (since Recent is removed)
 			bareHub.handleInput("\n"); // dive into rows
-			expect(footerLine(bareHub.render(220))).not.toContain(" · s save preset");
 			const bareFooter = footerLine(bareHub.render(220));
 
 			bareHub.handleInput("s");

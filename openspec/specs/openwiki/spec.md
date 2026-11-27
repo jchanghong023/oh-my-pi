@@ -2,133 +2,122 @@
 
 ## Purpose
 
-OpenWiki 随 OMP 一体发行，复用 OMP 模型和认证生成、更新仓库 Wiki，通过内置工具按需只读检索，并兼容已有 Wiki 数据。
+OpenWiki 随 OMP 发行，复用 OMP 模型和认证生成、更新仓库 Wiki，并提供按需只读查询，兼容已有数据。
 
 ## Requirements
 
 ### Requirement: 仓库 Wiki 命令与功能边界
 
-`omp openwiki` MUST be repo-only. Query via OMP's built-in tools; no personal mode/KB, external connectors, MCP or other Agent integration.
+`omp openwiki` MUST 仅用于仓库 Wiki。查询走内置工具，不提供个人知识库、外部连接器、MCP 或其他 Agent 集成。无操作显示帮助；不支持的操作（含 `search`、`read`）报错，不进入聊天或隐式生成。
 
 #### Scenario: 显式生成和更新
-- **WHEN** `omp openwiki [code] --init` or `omp openwiki [code] --update`
-- **THEN** generate/update with OMP models. `--language`: explicit > `zh-CN`. Missing `openwiki/INSTRUCTIONS.md`: create empty; else preserve.
+
+- **WHEN** 执行 `omp openwiki [code] --init` 或 `--update`
+- **THEN** 使用 OMP 模型；`--language` 优先，默认 `zh-CN`。仅在缺少 `openwiki/INSTRUCTIONS.md` 时创建空文件。
 
 #### Scenario: 只读预览生成和更新
-- **WHEN** `--dry-run`
-- **THEN** init/update only: repo, per-phase default role/explicit selector, snapshot candidates, comparable changed paths, existing page scope. Mark runtime discovery/auth selectors unverified; model plans final pages, candidates not exhaustive reads. No model calls, Wiki/state/instruction/telemetry writes or side effects.
 
-|Input|Contract|
-|---|---|
-|No operation / unsupported (incl. `search`, `read`)|Repo help / error respectively; no legacy chat/implicit generation.|
-|`link [directory]`; `workspace use <workspace>`, `workspace current`, `workspace clear`; `visualize [path] [--port <port>] [--no-open] [--export <dir>]`|Expose native commands within OMP.|
-|Telemetry|No public OpenWiki telemetry; explicit `--telemetry-file` local only: `disabled: true`, `sent: false`. OMP telemetry unchanged. Generation follows OMP offline/log rules.|
+- **WHEN** 对 init/update 使用 `--dry-run`
+- **THEN** 显示仓库、各阶段默认角色／显式 selector、快照候选、可比较的变更路径和现有页面范围。实际模型发现和认证未核验，页面由模型最终决定，候选不等于完整读取清单。不调用模型、不写文件或状态、不产生副作用。
+
+保留原生 `link [directory]`、`workspace use <workspace>`／`current`／`clear` 与 `visualize [path] [--port <port>] [--no-open] [--export <dir>]`。禁用 OpenWiki 公网遥测；显式 `--telemetry-file` 仅本地写 `disabled: true`、`sent: false`。OMP 遥测不变，生成遵循 OMP 的离线及日志规则。
 
 ### Requirement: OpenWiki 源码归属与合并发行
 
-MUST embed the `vendor/openwiki` gitlink (`https://github.com/jchanghong023/openwiki.git`), not a substitute. OMP owns wiring/build/references, not a second knowledge core, storage implementation, model policy or installer.
+MUST 使用父仓固定的 [`vendor/openwiki` 子模块](https://github.com/jchanghong023/openwiki.git)。OMP 只负责接入、构建和引用，不另建知识核心、存储、模型策略或安装器。
 
 #### Scenario: 正式发行与本地构建
-- **WHEN** building Windows x64/Linux glibc x64 OMP
-- **THEN** release: explicitly init obtainable parent gitlink, no floating branch/package; missing code/deps/assets fails. Local: dirty submodule allowed, no forced reset/release claim.
 
-OMP install/update bundles OpenWiki code, runtime dependencies (incl. SQLite/FTS5), agent Skill/prompts (incl. repo Mermaid guidance), browser assets and third-party licenses. Follow [release rules](../fork-runtime/spec.md#requirement-发布-ci-的触发并发与权限), [acceptance](../fork-maintenance/spec.md#requirement-按风险选择验证和报告证据); no new platform, separate package, npm/Nix release or auto-release grant. Clean install: in-process, no standalone package/home, dev checkout, `node_modules`, extra Node/Bun, CLI/Agent/MCP/gateway processes or runtime downloads. Git/browser helpers allowed; generation needs reachable model.
+- **WHEN** 构建 Windows x64／Linux glibc x64 发行版
+- **THEN** 使用父仓锁定提交，源码、依赖或资源缺失即失败；本地构建允许子模块有改动，不强制重置、不视为正式发行。
+- **AND** 随 OMP 安装和更新交付运行依赖、技能／提示词、浏览器资源和第三方许可。全新安装可进程内运行，不另装包、运行时或服务，不依赖开发 checkout 或运行时下载；可用 Git／浏览器辅助程序，生成仍需可达模型。
+
+OpenWiki 随 OMP [通过 CNB 一体交付](../fork-runtime/spec.md#requirement-cnb-精确输入缓存与四附件交付)，不单独发布。验收遵循[维护规格](../fork-maintenance/spec.md#requirement-按风险选择验证和报告证据)。
 
 ### Requirement: 使用 OMP 模型与认证
 
-Both phases MUST use OMP auth/endpoints/provider limits/request policy and model-tool-model calls; no OpenWiki provider/list/credentials/login/gateway. Model/effort run-local.
+规划和页面生成 MUST 复用 OMP 认证、端点、Provider 限制和请求策略，支持模型调用工具后继续生成，不设 OpenWiki 专用模型目录、登录或网关。
 
-|Phase|Precedence|
+| 阶段 | 选择优先级 |
 |---|---|
-|Page|`--modelId`/`--model-id` (shared explicit) > current profile `default`|
-|Planner|`--planner-model` > shared explicit > `plan` > `default` only if `plan` unset; no auto `task`|
+| 页面 | `--modelId`／`--model-id` > 当前 profile 的 `default` |
+| 规划 | `--planner-model` > 共享显式模型 > `plan`；仅 `plan` 未设时回退 `default`，不选 `task` |
 
 #### Scenario: 单独指定规划模型
-- **WHEN** `--planner-model` on init/update
-- **THEN** override planner model/effort only. Equal selectors share instance; else reuse factory. Pages share instance. `--debug`: both actual IDs. Persist shared/page model; no checkpoint format change.
 
-OMP-normalized selector effort; honor `off`; no forced unspecified effort/provider session `auto`. Internal/supported auth-free models: OMP config, not generic creds alone. `OMP_OFFLINE`: configured reachable internal model only; no online discovery/auth wizard/connector. Read/browse credential-free. Resolution/auth/tool support/call failure/cancel: report, release resources, no fallback/switch.
+- **WHEN** 使用 `--planner-model`
+- **THEN** 仅覆盖本次规划模型及 effort；按 OMP selector 解析，尊重 `off`，不强加 effort 或 `auto`。调试显示两阶段实际模型 ID，持久化仍记共享／页面模型，不改变检查点格式。
+
+内网和免认证模型仍由 OMP 配置。离线只用已配置且可达的内网模型，不联网发现或登录；读取浏览不需模型凭据。解析、认证、工具能力或调用失败，以及取消时，如实报告并释放资源，不擅自切换模型。
 
 ### Requirement: 复用原生生成编排与恢复
 
-Embedded generation MUST use OpenWiki's durable lifecycle, not OMP Task. Page/run success depends on respective persisted state, not Agent claim/exit.
+生成 MUST 沿用 OpenWiki 的持久化生命周期，不走 OMP Task。页面和整次运行以各自已持久化的状态判定完成，不凭 Agent 声明或退出。
 
 #### Scenario: 原有页面并行行为
-- **WHEN** concurrent page commits
-- **THEN** write owned pages only; preserve other in-flight pages/verification. No new cross-process lock; per-run dedup only.
 
-`--help` and no-arg help: `OPENWIKI_PAGE_CONCURRENCY` default `1`, range `1–8`, setup/run examples: csh/tcsh session `setenv`; PowerShell user-persistent `[Environment]::SetEnvironmentVariable`, then new terminal.
-
-|State|OMP contract|
-|---|---|
-|Incremental|Git clean cannot mask incomplete/invalid evidence. Track only root `AGENTS.md`, `openwiki/INSTRUCTIONS.md`. With baseline: effective content changes only. Without: nonempty `INSTRUCTIONS.md` or changed unignored Git-visible `AGENTS.md`; prior nonempty→empty undetectable. No whole-repo per-file baseline.|
-|Interrupted/partial/finalization failure|Native same-checkout resume. Distinguish partial failure/interruption. Failed/skipped page: nonzero; uncovered incomplete, no partial global success baseline advance. No new state machine/required specific checkpoint.|
-
-Finalization: DOM-free Mermaid structure checks only (flowchart node labels/reserved words, sequence/compound state blocks). Definite error: preserve body as plaintext, log reason. Unhandled syntax/types intact. No generator parser/jsdom.
+- **WHEN** 页面并行生成、失败或恢复
+- **THEN** 每项只提交所属页面，不影响在途页面和验证；单次运行去重，不另加跨进程锁。中断或部分失败可在同一 checkout 原生恢复；失败或跳过页面以非零退出，不推进全局成功基线。
+- **AND** 帮助说明 `OPENWIKI_PAGE_CONCURRENCY` 默认 1、范围 1–8。增量执行不因 Git 干净而忽略未完成状态。指令变更仅跟踪根 `AGENTS.md` 和 `openwiki/INSTRUCTIONS.md`：有基线看有效内容差异；无基线看非空 Wiki 指令或 Git 可见的根指令变更，不追溯之前已清空的 Wiki 指令。
+- **AND** 收尾只做无 DOM 的 Mermaid 结构检查：流程图节点标签／保留字、时序图和复合状态块。确认有错时保留正文为纯文本并记录原因，未覆盖的语法照原样保留。
 
 ### Requirement: OMP 内置只读查询工具
 
-MUST embed `openwiki_search`, `openwiki_read`, `openwiki_list_workspaces`, `openwiki_list_wikis`: in-process read-only, no MCP/models/Wiki, Claims or registry writes. No chat generation tools/restricted allowlist expansion.
+`openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`、`openwiki_list_wikis` MUST 进程内只读运行，不调用模型或 MCP，不改 Wiki、Claims 或注册表，不扩大受限会话权限。
 
 #### Scenario: 按设置启用或关闭内置查询
-- **WHEN** `openwiki.tools.enabled` changes
-- **THEN** sync session tools/prompts per allowlist and mount below; CLI unchanged:
 
-|Permission|Mount|
-|---|---|
-|Unset/`false` (normal/offline default)|None; explicit lists cannot bypass. Disable removes all four.|
-|`true`, unrestricted, `tools.commands` on + built-in Bash|Discoverable Bash commands, dispatch not file write.|
-|`true`, unrestricted, `tools.commands` off or built-in Bash absent|Top-level tools.|
+- **WHEN** `openwiki.tools.enabled` 变化
+- **THEN** 同步更新会话工具与提示。默认关闭（含离线），显式工具列表不能绕过；允许使用时，若 `tools.commands` 启用且有内置 Bash，挂为 Bash 命令，否则挂为顶层工具。CLI 不变。
 
-|Query state|Contract|
+| 查询 | 契约 |
 |---|---|
-|Search/read|Tool docs: nonempty query, integer limit, relative hints with count cap (rank only). Split each `results[].ref` at `#` → anchor-free `page` + nonempty `sections`. Combine only same Wiki/page; keep `wiki` only if returned. Include complete result-to-read JSON example; preserve API and normalization.|
-|Bad input/ref or no Wiki|Native error class; no substitute read. Bad field: location/constraints, not raw validator JSON alone. Missing page: echo path, suggest re-search. Mixed page/anchor: `page`/`sections` split. Unknown section: page/bad anchor, ≤20 available anchors, flag truncation.|
-|Chinese/natural language/mixed IDs|Adjacent Han terms, not scattered chars; partial multi-term matches. Equal hint rank: contiguous original Chinese > punctuation-separated. English/single chars; original snippets/full Markdown sections.|
-|List|Repo-context workspaces or reachable specified workspace members; profile IDs/selection.|
+| 搜索与读取 | 查询非空、limit 为整数、相对路径提示限量且只影响排序。将结果 `ref` 拆为不带锚点的 `page` 和 `sections`；只合并同一 Wiki／页面的节，结果有 `wiki` 才传入。工具文档保留完整示例。 |
+| 错误 | 保留原生错误分类，指出字段及约束，不用替代读取。缺页报告路径并建议重搜；页和锚点混写时提示拆分；未知节列出页面、坏锚点和最多 20 个可用锚点并标明是否截断。 |
+| 匹配 | 支持中英文、单字及混合标识符。中文连续词优先于标点拆开的同排名结果，不按散字拼词；支持部分多词命中，保留原始片段和完整 Markdown 小节。 |
+| 列表 | 列当前仓库上下文的工作区，或指定工作区内可访问成员，沿用 profile 标识和选择。 |
 
 ### Requirement: 按需检索仓库 Wiki
 
-MUST query only on request/evidence need. Unrelated tasks: no auto list/read/preload repo/linked Wiki, generation or visualization.
+MUST 仅按请求或证据需要查询，不为无关任务自动列出、预读、生成或可视化 Wiki。
 
 #### Scenario: 概览调研优先使用已有 Wiki
-- **WHEN** architecture/feature overview/cross-module task, Wiki not excluded/known absent, search available, not source-first
-- **THEN** before answer/exploration/delegation reuse session sections, else `openwiki_search`; no workspace list first. For full sections use refs via available `openwiki_read`; no guessed pages/quickstart as tool. Enough evidence: no duplicate Wiki delegation.
 
-Named file/symbol/error, edit/current behavior or major Wiki claim: source first (no forced query); source wins, verify claims. Search unavailable, Wiki excluded/absent, `invalid_state`, empty/stale/conflicting result: use source; no block/implicit generation. Default prompt uses actual mount; no required unavailable tools.
+- **WHEN** 需要架构、功能概览或跨模块调查，Wiki 可用且未被排除
+- **THEN** 先复用会话已有小节，否则先搜索、不先列工作区；用结果引用读全文，不猜页面或重复委派。具名文件、符号、错误、编辑、现行行为或重大 Wiki 主张以源码为先；Wiki 不可用、为空、过时或冲突时转查源码，不阻塞或隐式生成。
 
 ### Requirement: 保留跨仓库工作区链接
 
-OMP MUST retain cross-repo search/read via local named workspaces and their membership/active selection, without personal sources or a cross-repo graph promise.
+MUST 保留本地命名工作区及跨仓库只读查询，不引入个人数据源或承诺跨仓库图谱。
 
 #### Scenario: 管理并使用仓库工作区
-- **WHEN** `omp openwiki link` with active workspace selected
-- **THEN** resolve linked repos via active workspace; unresolved ambiguity: `workspace_required`, no unrelated choice. Moved/missing/inaccessible Wiki: identifiable error, no substitute.
 
-Isolate registry/cache/user state by effective `OMP_CONFIG_ROOT`/profile per [OMP rules](../fork-runtime/spec.md#requirement-安装与运行), default fallback; offline same root. No parallel standalone home/`OPENWIKI_CONFIG_DIR` or standalone rule change. No required legacy read/migration/takeover, legacy registry edit/delete/empty overwrite on read error, or KB/connector/credential imports. Switches leave repo data/formats intact.
+- **WHEN** 使用 `omp openwiki link` 或访问链接仓库
+- **THEN** 按活动工作区解析，歧义报 `workspace_required`；Wiki 移动、缺失或不可访问时明确报错，不选替代项。注册表、缓存和用户状态按[配置根与 profile](../fork-runtime/spec.md#requirement-安装与运行)隔离，离线规则相同；不使用独立配置目录、不接管或迁移旧配置。切换不改仓库数据。
 
 ### Requirement: 保留已有仓库 Wiki 数据格式
 
-MUST preserve repo `openwiki/`, Claims, page manifest, checkpoint formats/identity. Unreadable: error, no silent clear/empty overwrite/rebuild.
+MUST 保留 `openwiki/`、Claims、页面清单及检查点的格式和身份。不可读时报错，不静默清空、覆盖或重建。
 
 #### Scenario: 接续已有 Wiki 和 Claims
-- **WHEN** update/resume/query existing Wiki
-- **THEN** reuse pages/Claims/progress. Init may replace output; retain instructions per [init](#scenario-显式生成和更新).
+
+- **WHEN** 更新、恢复或查询已有 Wiki
+- **THEN** 复用页面、Claims 和进度。init 可替换生成结果，但按[初始化规则](#scenario-显式生成和更新)保留已有指令。
 
 ### Requirement: 原有可视化与静态导出
 
-MUST retain visualization/export: default loopback, static HTTP, no `file://` promise.
+MUST 保留实时浏览和静态导出。实时服务默认监听回环；导出支持 HTTP 子路径和相对资源，不承诺 `file://`。两者仅用随包离线资源，不下载、不依赖 CDN、外部字体或开发缓存。相关源码、生成器、依赖、许可或资源内容改变时须重新生成；仅 OMP 版本、无关锁文件或路径改变不使资源失效。
 
 #### Scenario: 实时浏览与关闭
-- **WHEN** `omp openwiki visualize`, then stop service or exit owning command
-- **THEN** 显示实页，Wiki 变化可触发刷新；如实报启动/刷新故障。退出释放监听、刷新和监视资源，不中断其他宿主任务。
 
-`--export <dir>`: HTTP subpath/relative assets, no Agent/MCP/generator. Live/export use bundled assets offline, no CDN/external fonts/downloads/dev-cache substitute. OpenWiki source, asset generator, actual relevant deps, license or browser asset content change: reject stale assets, require regen. OMP version/unrelated locks/checkout path alone: valid.
+- **WHEN** 执行 `omp openwiki visualize`，随后停止或退出
+- **THEN** 显示实际页面，Wiki 变化可刷新，启动及刷新失败如实报告。退出释放本次监听和监视，不影响其他宿主任务。导出不依赖 Agent、MCP 或生成器服务。
 
 ### Requirement: 默认接入不安装外部 OpenWiki 链路
 
-Entry MUST NOT implicitly add standalone install/run or dependent auto-update workflows, pull connectors, create/edit `CLAUDE.md`. Don't delete/overwrite/run user workflows or require workflows/instructions for built-in install/auth/run. Built-in exclusions/init/telemetry MUST NOT disable/remove standalone CLI/MCP/personal/other entries.
+MUST NOT 隐式安装或运行独立版、拉取连接器、添加自动更新工作流或改 `CLAUDE.md`。不修改、执行或依赖用户工作流，不移除或禁用独立版能力。
 
 #### Scenario: 显式生成维护指令区块
-- **WHEN** explicit init/update, not [preview](#scenario-只读预览生成和更新)
-- **THEN** write `openwiki/`; create/refresh marked root `AGENTS.md` OpenWiki block (Wiki location/read-only query). Keep outside text; malformed/duplicate markers error without edits.
+
+- **WHEN** 显式 init/update（不含[预览](#scenario-只读预览生成和更新)）
+- **THEN** 写入 `openwiki/`，在根 `AGENTS.md` 创建或刷新有标记的 Wiki 区块，仅说明位置和只读查询。保留区块外内容；标记不合法或重复时拒绝改动。

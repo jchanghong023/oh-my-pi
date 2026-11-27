@@ -624,13 +624,13 @@ function contextHistoryIdentity(message: AgentMessage): string {
 /**
  * Hooks that construct fresh objects lose the index preserved by object spread.
  * Recover it from a unique message identity, never from the output position:
- * a hook can insert, filter, or reorder messages in the same pass. Tool
- * results from distinct calls can share a millisecond timestamp.
+ * a hook can insert, filter, or reorder messages in the same pass. Distinct
+ * user messages may share a timestamp; compare their content in that case.
  */
 function restoreContextHistoryIndices(previousMessages: AgentMessage[], nextMessages: AgentMessage[]): void {
 	if (nextMessages.every(message => getContextHistoryIndex(message) !== undefined)) return;
 	const claimed = new Set<number>();
-	const replacements = new Map<string, { message: AgentMessage; historyIndex?: number | null } | null>();
+	const replacements = new Map<string, AgentMessage[]>();
 	for (const message of nextMessages) {
 		if (!message) continue;
 		const index = getContextHistoryIndex(message);
@@ -639,22 +639,54 @@ function restoreContextHistoryIndices(previousMessages: AgentMessage[], nextMess
 			continue;
 		}
 		const key = contextHistoryIdentity(message);
-		replacements.set(key, replacements.has(key) ? null : { message });
+		const group = replacements.get(key);
+		if (group) group.push(message);
+		else replacements.set(key, [message]);
 	}
 	if (replacements.size === 0) return;
-
+	const sources = new Map<string, AgentMessage[]>();
 	for (const message of previousMessages) {
 		if (!message) continue;
-		const replacement = replacements.get(contextHistoryIdentity(message));
-		if (!replacement) continue;
-		const index = getContextHistoryIndex(message);
-		// A previous insertion or a second source with this identity makes the
-		// match ineligible, as does an index that survives elsewhere in the output.
-		replacement.historyIndex =
-			replacement.historyIndex === undefined && index !== undefined && !claimed.has(index) ? index : null;
+		const key = contextHistoryIdentity(message);
+		if (!replacements.has(key)) continue;
+		const group = sources.get(key);
+		if (group) group.push(message);
+		else sources.set(key, [message]);
 	}
-	for (const replacement of replacements.values()) {
-		if (replacement?.historyIndex != null) setContextHistoryIndex(replacement.message, replacement.historyIndex);
+	const assign = (target: AgentMessage, source: AgentMessage) => {
+		const index = getContextHistoryIndex(source);
+		if (index !== undefined && !claimed.has(index)) {
+			setContextHistoryIndex(target, index);
+			claimed.add(index);
+		}
+	};
+	for (const [key, group] of replacements) {
+		const matches = sources.get(key);
+		if (!matches) continue;
+		if (group.length === 1 && matches.length === 1) {
+			assign(group[0], matches[0]);
+			continue;
+		}
+		const targets = group.filter(message => message.role === "user");
+		if (targets.length === 0) continue;
+		const available = matches.filter(message => message.role === "user").filter(message => {
+			const index = getContextHistoryIndex(message);
+			return index === undefined || !claimed.has(index);
+		});
+		if (targets.length === 1 && available.length === 1) {
+			assign(targets[0], available[0]);
+			continue;
+		}
+		for (const [position, target] of targets.entries()) {
+			const match = available.findIndex(source => Bun.deepEquals(source.content, target.content));
+			if (
+				match !== -1 &&
+				available.findLastIndex(source => Bun.deepEquals(source.content, target.content)) === match &&
+				!targets.some((other, index) => index !== position && Bun.deepEquals(other.content, target.content))
+			) {
+				assign(target, available[match]);
+			}
+		}
 	}
 }
 

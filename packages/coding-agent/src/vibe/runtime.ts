@@ -34,7 +34,7 @@ import { MCPManager } from "../mcp/manager";
 import vibeTurnResultTemplate from "../prompts/tools/vibe-turn-result.md" with { type: "text" };
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import type { NativeChildSessionHooks } from "../sdk";
+import { hasNativeChildSessionHooks, type NativeChildSessionHooks } from "../sdk";
 import { SessionManager, SessionPersistenceIndeterminateError } from "../session/session-manager";
 import { getBundledAgent } from "../task/agents";
 import { type ExecutorOptions, runSubagentFollowUpTurn, runSubprocess } from "../task/executor";
@@ -152,6 +152,8 @@ interface VibeRecord {
 	state: VibeSessionState;
 	/** Cold-restored transcript without the live authority required to send another turn. */
 	readOnlyHistory?: boolean;
+	/** A session switch must retain the original host-bound reviver for this worker. */
+	requiresLiveHost?: boolean;
 	createdAt: number;
 	lastActivityAt: number;
 	/** One-line gist of the latest activity (intent, tool, or result preview). */
@@ -765,10 +767,11 @@ export class VibeSessionRegistry {
 				existing.sessionFile === childSessionFile;
 			const existingIsResumable =
 				existingMatchesWorker && (existing.status === "idle" || existing.status === "parked");
-			const blockedByCollision = Boolean(existing && !existingIsResumable);
+			const warmWorkerSettling = !child.canColdRevive && existingMatchesWorker && existing.status === "running";
+			const blockedByCollision = Boolean(existing && !existingIsResumable && !warmWorkerSettling);
 			const hasWarmSession =
 				existing &&
-				existingIsResumable &&
+				(existingIsResumable || warmWorkerSettling) &&
 				!existing.history?.executionEnded &&
 				(existing.session !== null || AgentLifecycleManager.global().has(spawn.id, existing));
 			const readOnlyHistory =
@@ -801,6 +804,7 @@ export class VibeSessionRegistry {
 				modelRole,
 				state: readOnlyHistory ? "dead" : "idle",
 				readOnlyHistory,
+				requiresLiveHost: !child.canColdRevive,
 				createdAt: spawn.createdAt,
 				lastActivityAt: candidate.lastActivityAt,
 				lastActivity: readOnlyHistory
@@ -869,6 +873,8 @@ export class VibeSessionRegistry {
 			modelOverride,
 			modelRole,
 			state: "starting",
+			requiresLiveHost:
+				hasNativeChildSessionHooks(hooks) || sessionLocalProtocolOptions(session)?.allowCrossAgentReads === false,
 			createdAt,
 			lastActivityAt: createdAt,
 			queue: [],
@@ -1064,25 +1070,41 @@ export class VibeSessionRegistry {
 			if (record.turn && manager) manager.cancel(record.turn.jobId, { ownerId: record.ownerId });
 		}
 		const deadline = Date.now() + this.#teardownGraceMs;
-		const cleanup = teardown.map(entry => ({
-			...entry,
-			releaseTask: entry.ref ? this.#trackAgentRelease(entry.record.id, entry.ref, "detach") : undefined,
-			jobTask: entry.job ? this.#trackJobSettlement(entry.record, entry.job) : undefined,
-		}));
+		const cleanup = teardown.map(entry => {
+			const { record, ref, job } = entry;
+			const jobTask = job ? this.#trackJobSettlement(record, job) : undefined;
+			const preserveReviver = record.requiresLiveHost && record.childSessionFile && !record.readOnlyHistory;
+			const parkTask = preserveReviver
+				? trackVibeTeardown(
+						Promise.resolve(jobTask?.promise).then(() => {
+							if (this.#records.has(scopeKey(scope, record.id))) return;
+							const parked = this.#registeredAgent(record);
+							if (parked?.status === "idle") return AgentLifecycleManager.global().park(record.id);
+						}),
+						error => logger.warn("vibe: failed to park host-bound worker", { id: record.id, error: String(error) }),
+					)
+				: undefined;
+			return {
+				...entry,
+				releaseTask: ref && !preserveReviver ? this.#trackAgentRelease(record.id, ref, "detach") : undefined,
+				jobTask,
+				parkTask,
+			};
+		});
 		await waitForVibeTeardown(
-			cleanup.flatMap(entry => [entry.releaseTask, entry.jobTask].filter(task => task !== undefined)),
+			cleanup.flatMap(entry => [entry.releaseTask, entry.jobTask, entry.parkTask].filter(task => task !== undefined)),
 			deadline,
 		);
-		for (const { record, ref, releaseTask, job, jobTask } of cleanup) {
+		for (const { record, ref, releaseTask, job, jobTask, parkTask } of cleanup) {
 			if (ref && releaseTask) this.#finishAgentRelease(record.id, ref, releaseTask, "detach");
 			if (job && jobTask?.status() === "pending") {
 				logger.warn("vibe: timed out waiting for cancelled worker turn; cleanup continues in the background", {
 					id: record.id,
 					jobId: job.id,
 				});
-				this.#continueSuspendedCleanup(scope, record, jobTask);
+				if (!parkTask) this.#continueSuspendedCleanup(scope, record, jobTask);
 			}
-			if (this.#records.has(scopeKey(scope, record.id))) continue;
+			if (parkTask || this.#records.has(scopeKey(scope, record.id))) continue;
 			const lateRef = this.#registeredAgent(record);
 			if (lateRef && lateRef !== ref) {
 				await this.#releaseRefWithinDeadline(record.id, lateRef, deadline, "detach");

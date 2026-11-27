@@ -7,6 +7,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { getModelPricingStatus, modelsAreEqual, routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
@@ -15,6 +16,7 @@ import { ensureSqliteLockShim, isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
 import { bindAgentMesh } from "./irc/mesh";
 import {
 	APP_NAME,
+	directoryExists,
 	directoryIsMissing,
 	getAgentDir,
 	getLogPath,
@@ -42,7 +44,6 @@ import {
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
-import { parseSlashCommand } from "./slash-commands/helpers/parse";
 import { KeybindingsManager } from "./config/keybindings/keybindings";
 import { formatKeyHint } from "./ui/keys/hints";
 import type { SessionPickerOptions } from "./modes/view-model/apps/session-picker";
@@ -179,7 +180,6 @@ import {
 	cfgMarketplaceAutoUpdate,
 	cfgSetupVersion,
 	cfgStartupChangelogMode,
-	cfgStartupCheckUpdate,
 	cfgStartupQuiet,
 	cfgStartupSetupWizard,
 	cfgStartupShowSplash,
@@ -194,7 +194,6 @@ import {
 	cfgTuiVimMode,
 	cfgTuiMaxFps,
 	cfgTuiMotion,
-	cfgUpdateChannel,
 } from "./modes/settings";
 import {
 	cfgDefaultThinkingLevel,
@@ -222,9 +221,6 @@ type RunRpcMode = (session: AgentSession, options?: RpcModeOptions) => Promise<n
 async function loadInteractiveModeConstructor() {
 	return (await import("./modes/interactive-mode")).InteractiveMode;
 }
-
-// Opt-in only; keep the update command graph out of ordinary startup.
-const loadUpdateCli = () => import("./cli/update-cli");
 
 type SessionPicker = (
 	sessions: SessionInfo[],
@@ -441,7 +437,7 @@ export async function submitInteractiveInput(
 		| "optimisticSkillMessagePending"
 		| "restoreDroppedPrompt"
 	> &
-		Partial<Pick<InteractiveMode, "loopPrompt" | "pauseLoop">>,
+		Partial<Pick<InteractiveMode, "captureLoopPause" | "loopPrompt" | "pauseLoop">>,
 	session: Pick<
 		AgentSession,
 		"model" | "buildUserSkillPrompt" | "prompt" | "promptCustomMessage" | "resume" | "isStreaming"
@@ -502,16 +498,29 @@ export async function submitInteractiveInput(
 		} else if (isKnownSkillCommand(skillHost, input.text)) {
 			// Resubmitted skill text must dispatch through the skill path, or the
 			// model receives a literal `/skill:` token.
-			await invokeSkillCommandFromText(skillHost, input.text, streamingBehavior, {
-				images: input.images,
-				imageLinks: input.imageLinks,
-				optimistic: true,
-				propagateErrors: true,
-				...(input.goalAutoOrchestrateInitialId
-					? { goalAutoOrchestrateInitialId: input.goalAutoOrchestrateInitialId }
-					: {}),
-				followUps: input.followUps,
-			});
+			const pauseLoop = mode.captureLoopPause?.(input.text);
+			let pending: Promise<boolean> | undefined;
+			let forwarded = false;
+			try {
+				await invokeSkillCommandFromText(skillHost, input.text, streamingBehavior, {
+					images: input.images,
+					imageLinks: input.imageLinks,
+					optimistic: true,
+					propagateErrors: true,
+					...(input.goalAutoOrchestrateInitialId
+						? { goalAutoOrchestrateInitialId: input.goalAutoOrchestrateInitialId }
+						: {}),
+					followUps: input.followUps,
+					onPromptAdmitted: pauseLoop
+						? prompt => {
+								pending = prompt;
+							}
+						: undefined,
+				});
+				forwarded = !pauseLoop || (await pending) === true;
+			} finally {
+				if (!forwarded) pauseLoop?.();
+			}
 		} else {
 			let forwarded = false;
 			try {
@@ -558,7 +567,10 @@ interface AcpSessionHandle {
 	setToolUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 }
 
-type AcpSessionFactory = (cwd: string, options?: { interactivePrompts?: boolean }) => Promise<AcpSessionHandle>;
+type AcpSessionFactory = (
+	cwd: string,
+	options?: { interactivePrompts?: boolean; forkSourcePath?: string },
+) => Promise<AcpSessionHandle>;
 
 const API_KEY_REQUIRES_MODEL =
 	"--api-key requires a model to be specified via --model, --provider/--model, or --models";
@@ -678,8 +690,6 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 			if (nextOptions.model) bindApiKey(nextOptions.model.provider, apiKey);
 		}
 
-		const nextSessionManager = SessionManager.create(cwd, args.sessionDir);
-		const agentId = `acp:${nextSessionManager.getSessionId()}`;
 		// `baseOptions.titleSystemPrompt` is resolved from the launch cwd; an ACP
 		// host can open `session/new` for any client-supplied workspace, so
 		// re-discover `TITLE_SYSTEM.md` against THIS session's `cwd` to keep the
@@ -700,23 +710,32 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 		// Like every top-level session, it holds process-wide effects (`worktree.base`, request
 		// limits, …) on its own project's settings until disposed; its requests redact credentials
 		// per that project's `secrets.enabled` regardless of which session holds the effects.
-		const { session: nextSession, setToolUIContext } = await args.createSession({
-			...nextOptions,
-			cwd,
-			sessionManager: nextSessionManager,
-			settings: nextSettings,
-			authStorage: args.authStorage,
-			modelRegistry: args.modelRegistry,
-			agentId,
-			// ACP defers the `ask` capability and reserve-policy confirmation until
-			// client capabilities are known, without enabling other UI-only behavior.
-			interactivePrompts: factoryOptions?.interactivePrompts,
-			deferUsageReserveConfirmation: true,
-			enableMCP: false,
-			titleSystemPrompt,
-			eventBus,
-			preloadedExtensions: trustedExtensions,
-		});
+		const nextSessionManager = factoryOptions?.forkSourcePath
+			? await SessionManager.forkFrom(factoryOptions.forkSourcePath, cwd, args.sessionDir)
+			: SessionManager.create(cwd, args.sessionDir);
+		const agentId = `acp:${nextSessionManager.getSessionId()}`;
+		const { session: nextSession, setToolUIContext } = await args
+			.createSession({
+				...nextOptions,
+				cwd,
+				sessionManager: nextSessionManager,
+				settings: nextSettings,
+				authStorage: args.authStorage,
+				modelRegistry: args.modelRegistry,
+				agentId,
+				// ACP defers the `ask` capability and reserve-policy confirmation until
+				// client capabilities are known, without enabling other UI-only behavior.
+				interactivePrompts: factoryOptions?.interactivePrompts,
+				deferUsageReserveConfirmation: true,
+				enableMCP: false,
+				titleSystemPrompt,
+				eventBus,
+				preloadedExtensions: trustedExtensions,
+			})
+			.catch(async (error: unknown) => {
+				await nextSessionManager.close().catch(() => {});
+				throw error;
+			});
 		const runner = nextSession.extensionRunner;
 		const reparsedArgs = applyExtensionFlags(
 			runner
@@ -772,7 +791,6 @@ async function runInteractiveMode(
 	session: AgentSession,
 	version: string,
 	notifs: (InteractiveModeNotify | null)[],
-	versionCheckPromise: Promise<string | undefined> | undefined,
 	initialMessages: string[],
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 	lspServers: LspStartupServerInfo[] | undefined,
@@ -880,10 +898,6 @@ async function runInteractiveMode(
 		await logger.time("InteractiveMode.renderInitialMessages", () =>
 			mode.renderInitialMessages({ preserveExistingChat: true }),
 		);
-		// A resolved version check must not insert its banner into a partial transcript.
-		void versionCheckPromise?.then(newVersion => {
-			if (newVersion && cfgStartupCheckUpdate.get(settings)) mode.showNewVersionNotification(newVersion);
-		});
 
 		const advisorConfigWarnings = session.getAdvisorConfigWarnings();
 		if (advisorConfigWarnings.length > 0) {
@@ -2096,6 +2110,22 @@ export async function runRootCommand(
 		// Mark the promise as handled so a synchronous failure does not surface as an unhandled-rejection
 		// warning before we reach the await site below.
 		pluginPreloadPromise.catch(() => {});
+		// Keep explicitly requested plugin directories visible even when ambient
+		// extensions are suppressed. Pin them before a resume can change cwd.
+		const explicitPluginRoots =
+			parsedArgs.noExtensions &&
+			!parsedArgs.noTools &&
+			!parsedArgs.trustedExtensions?.length &&
+			parsedArgs.pluginDirs?.length
+				? (
+						await Promise.all(
+							parsedArgs.pluginDirs.map(async dir => {
+								const resolved = path.resolve(dir);
+								return (await directoryExists(resolved)) ? resolved : undefined;
+							}),
+						)
+					).filter(dir => dir !== undefined)
+				: [];
 
 		// Trusted files load as exact module paths, never as package roots whose
 		// sibling hooks/tools/commands/MCP content could be discovered implicitly.
@@ -2105,7 +2135,7 @@ export async function runRootCommand(
 			// `tools/`, `commands/`, `rules/`, `prompts/`, and `.mcp.json` sub-trees.
 			// Explicit roots remain authorized under `--no-extensions`; only ambient
 			// extension discovery is disabled.
-			const cliExtensions = [...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
+			const cliExtensions = [...explicitPluginRoots, ...(parsedArgs.extensions ?? []), ...(parsedArgs.hooks ?? [])];
 			injectOmpExtensionCliRoots(cliExtensions, home, getProjectDir(), {
 				mode: parsedArgs.noExtensions ? "explicit-only" : "merge",
 				replace: true,
@@ -2238,7 +2268,6 @@ export async function runRootCommand(
 			cfgWebSearchEnabled.override(settingsInstance, false);
 			cfgBrowserEnabled.override(settingsInstance, false);
 			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
-			cfgStartupCheckUpdate.override(settingsInstance, false);
 			cfgStartupSetupWizard.override(settingsInstance, false);
 			cfgTuiAutoGraph.override(settingsInstance, "off");
 			cfgTuiTitleState.override(settingsInstance, false);
@@ -2680,6 +2709,9 @@ export async function runRootCommand(
 				settingsInstance,
 				startupWarning,
 			);
+			if (explicitPluginRoots.length > 0) {
+				options.additionalExtensionPaths = [...explicitPluginRoots, ...(options.additionalExtensionPaths ?? [])];
+			}
 			options.authStorage = authStorage;
 			options.modelRegistry = modelRegistry;
 			options.hasUI = isInteractive || mode === "rpc-ui";
@@ -2814,6 +2846,9 @@ export async function runRootCommand(
 		};
 
 		if (mode === "acp") {
+			// ACP sessions each own their manager; the launch-only manager will not be bound to one.
+			await sessionManager?.close();
+			delete sessionOptions.sessionManager;
 			// ACP binds extensions per `session/new`, and any of them may own a flag
 			// the bootstrap parse rejected, so pending invalid enum values are
 			// normally settled by the per-session factory. With discovery off and no
@@ -3123,9 +3158,12 @@ export async function runRootCommand(
 
 			// Only the first explicit CLI message may enter local dispatch without a
 			// model. stdin and @file content are prompt data, not command syntax.
-			const startsWithLocalCommand =
-				!isInteractive && (mode === "text" || mode === "json") && initialArgs.messages[0]?.startsWith("/") === true;
-			if (!isInteractive && !session.model && !startsWithLocalCommand) {
+			const firstMessage = initialArgs.messages[0];
+			const firstCommandName =
+				!isInteractive && (mode === "text" || mode === "json") && firstMessage?.startsWith("/")
+					? (await import("./modes/print-mode")).parsePrintBuiltinCommand(firstMessage)?.name
+					: undefined;
+			if (!isInteractive && !session.model && firstCommandName === undefined) {
 				if (modelRegistryError) {
 					process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
 				}
@@ -3169,16 +3207,11 @@ export async function runRootCommand(
 				process.exit(1);
 			}
 
-			// Isolate explicit Team and exact TodoLoop submissions from their stdin/@file
-			// data. Print mode settles the command and its context as one submission.
-			const firstMessage = initialArgs.messages[0] ?? "";
-			const firstCommandName = startsWithLocalCommand ? parseSlashCommand(firstMessage)?.name : undefined;
+			// Isolate exact TodoLoop submissions from their stdin/@file data.
+			// Print mode settles the command and its context as one submission.
+			// Other recognized commands need separate dispatch only without a model.
 			const initialCommand =
-				startsWithLocalCommand &&
-				(!session.model ||
-					firstCommandName === "team" ||
-					(firstCommandName === "todoloop" &&
-						(await import("./slash-commands/acp-builtins")).isTuiOnlyTodoLoopCommand(firstMessage)))
+				firstCommandName !== undefined && (!session.model || firstCommandName === "todoloop")
 					? initialArgs.messages.shift()
 					: undefined;
 			const { initialMessage, initialImages } = buildInitialMessage({
@@ -3209,14 +3242,6 @@ export async function runRootCommand(
 					input: rpcInput,
 				});
 			} else if (isInteractive) {
-				const versionCheckPromise = cfgStartupCheckUpdate.get(settingsInstance)
-					? loadUpdateCli()
-							.then(({ checkForNewVersion }) =>
-								checkForNewVersion(VERSION, cfgUpdateChannel.get(settingsInstance)),
-							)
-							.catch(() => undefined)
-					: undefined;
-
 				const modelScopeNotification = buildModelScopeNotification(
 					scopedModels,
 					cfgStartupQuiet.get(settingsInstance),
@@ -3242,7 +3267,6 @@ export async function runRootCommand(
 						session,
 						VERSION,
 						notifs,
-						versionCheckPromise,
 						initialArgs.messages,
 						setToolUIContext,
 						lspServers,
@@ -3281,7 +3305,6 @@ export async function runRootCommand(
 					mode,
 					messages: initialArgs.messages,
 					initialCommand,
-					initialHasCompanions: initialArgs.fileArgs.length > 0 || pipedInput !== undefined,
 					initialMessage,
 					initialImages,
 					printThoughts: initialArgs.printThoughts,

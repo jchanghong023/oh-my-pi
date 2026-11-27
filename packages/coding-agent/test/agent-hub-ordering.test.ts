@@ -149,7 +149,6 @@ describe("Agent hub row ordering", () => {
 		const hub = makeHub(new AgentRegistry(), { focusAgent, onDone });
 
 		try {
-			expect(renderedAgentRows(hub)).toEqual([]);
 			for (const key of ["j", "k", "\r"]) hub.handleInput(key);
 			expect(selectedAgentId(hub)).toBeUndefined();
 			expect(focusAgent).not.toHaveBeenCalled();

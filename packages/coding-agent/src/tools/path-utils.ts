@@ -684,9 +684,7 @@ async function probeInternalUrlTarget(
 	url: string,
 	filesystem: InternalUrlFilesystem,
 	requireDirectory = false,
-	assertTarget?: (target: string) => Promise<void>,
 ): Promise<boolean> {
-	await assertTarget?.(url);
 	try {
 		const stat = await filesystem.stat(url);
 		// A missing JSON field stats as a file of the "null" sentinel. Readers keep
@@ -698,11 +696,7 @@ async function probeInternalUrlTarget(
 	}
 }
 
-async function internalUrlEntryResolves(
-	entry: string,
-	filesystem: InternalUrlFilesystem,
-	assertTarget?: (target: string) => Promise<void>,
-): Promise<boolean> {
+async function internalUrlEntryResolves(entry: string, filesystem: InternalUrlFilesystem): Promise<boolean> {
 	const router = InternalUrlRouter.instance();
 	const peeledUrl = router.split(expandPath(entry)).path;
 	if (router.isGlob(peeledUrl)) {
@@ -715,11 +709,11 @@ async function internalUrlEntryResolves(
 		if (parsedUrl?.glob !== undefined) {
 			const rawGlobTail = peeledUrl.slice(parsedUrl.basePath.length);
 			if (splitTopLevelDelimitedPath(rawGlobTail, "semicolon").length === 1) {
-				return probeInternalUrlTarget(parsedUrl.basePath, filesystem, true, assertTarget);
+				return probeInternalUrlTarget(parsedUrl.basePath, filesystem, true);
 			}
 		}
 	}
-	return probeInternalUrlTarget(peeledUrl, filesystem, false, assertTarget);
+	return probeInternalUrlTarget(peeledUrl, filesystem);
 }
 
 export async function splitDelimitedPathEntry(
@@ -737,7 +731,6 @@ export async function splitDelimitedPathEntry(
 		 * URL cannot select an extra file.
 		 */
 		mixedLocalPaths?: InternalUrlFilesystem;
-		assertTarget?: (target: string) => Promise<void>;
 	} = {},
 ): Promise<string[] | null> {
 	const normalizedEntry = normalizePathLikeInput(entry);
@@ -763,9 +756,7 @@ export async function splitDelimitedPathEntry(
 		if (parts.every(isUrlPart)) return parts;
 		// No resolve cache: a URL that does resolve is read again during the search.
 		// Only mixed `;` lists pay that second read, including ssh:// and mcp://.
-		return (await internalUrlEntryResolves(normalizedEntry, options.mixedLocalPaths, options.assertTarget))
-			? null
-			: parts;
+		return (await internalUrlEntryResolves(normalizedEntry, options.mixedLocalPaths)) ? null : parts;
 	}
 	if (isInternalUrlPath(normalizedEntry)) {
 		// A `;` list of internal URLs (`local://44.log;local://43.log`) names
@@ -848,7 +839,6 @@ export async function expandDelimitedPathEntries(
 		splitter?: PathEntrySplitter;
 		exclusionParts?: boolean;
 		mixedLocalPaths?: InternalUrlFilesystem;
-		assertTarget?: (target: string) => Promise<void>;
 	} = {},
 ): Promise<string[]> {
 	const expanded: string[] = [];
@@ -1104,7 +1094,6 @@ async function resolveSearchPathItems(
 	filesystem: InternalUrlFilesystem,
 	suffixGlob?: string,
 	fanOutFileItems = false,
-	assertTarget?: (target: string) => Promise<void>,
 ): Promise<ResolvedMultiSearchPath | undefined> {
 	if (pathItems.length < 1) {
 		return undefined;
@@ -1115,7 +1104,6 @@ async function resolveSearchPathItems(
 		pathItems.map(async item => {
 			const parsedPath = await parseSearchPathPreferringLiteral(item, cwd);
 			const absoluteBasePath = resolveSearchBase(parsedPath.basePath, cwd);
-			await assertTarget?.(absoluteBasePath);
 			const { type } = await filesystem.stat(absoluteBasePath);
 			return { raw: item, parsedPath, absoluteBasePath, type, isUrl: router.canHandle(absoluteBasePath) };
 		}),
@@ -1193,9 +1181,8 @@ export async function resolveExplicitSearchPaths(
 	filesystem: InternalUrlFilesystem,
 	suffixGlob?: string,
 	fanOutFileItems = false,
-	assertTarget?: (target: string) => Promise<void>,
 ): Promise<ResolvedMultiSearchPath | undefined> {
-	return resolveSearchPathItems([...new Set(pathItems)], cwd, filesystem, suffixGlob, fanOutFileItems, assertTarget);
+	return resolveSearchPathItems([...new Set(pathItems)], cwd, filesystem, suffixGlob, fanOutFileItems);
 }
 
 async function resolveFindPatternItems(
@@ -1267,13 +1254,11 @@ export async function partitionExistingPaths(
 	cwd: string,
 	splitter: (item: string) => { basePath: string },
 	filesystem: InternalUrlFilesystem,
-	assertTarget?: (target: string) => Promise<void>,
 ): Promise<PartitionedPaths> {
 	const settled = await Promise.all(
 		items.map(async item => {
 			const { basePath } = splitter(item);
 			const target = resolveSearchBase(basePath, cwd);
-			await assertTarget?.(target);
 			try {
 				await filesystem.stat(target);
 				return { item, exists: true } as const;
@@ -1465,8 +1450,6 @@ export interface ToolScopeOptions {
 	internalUrlAction: string;
 	/** Filesystem every scope path resolves through; the native search must get its `shellFilesystem()`. */
 	filesystem: InternalUrlFilesystem;
-	/** Check the actual roots and exact files before filesystem preparation. */
-	assertTarget?: (target: string) => Promise<void>;
 	/** Collect absolute paths of immutable external materializations. */
 	trackImmutableSources?: boolean;
 	/** Refuse internal URLs whose files tools may not write ({@link InternalUrlRouter.fileWritable}); rewrite tools. */
@@ -1518,7 +1501,7 @@ export function searchPathTier(args: unknown): ToolTier {
  *  5. stat the resolved base path through `filesystem` so callers can branch on directory vs file scope.
  */
 export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<ToolScopeResolution> {
-	const { rawPaths: inputs, cwd, internalUrlAction, assertTarget } = opts;
+	const { rawPaths: inputs, cwd, internalUrlAction } = opts;
 	const normalizedRawPaths = inputs.map(normalizePathLikeInput);
 	if (normalizedRawPaths.some(rawPath => rawPath.length === 0)) {
 		throw new ToolError("Search scope entries must be non-empty paths or globs");
@@ -1581,20 +1564,7 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 	let missingPaths: string[] = [];
 	let effectivePaths = resolvedPathInputs;
 	if (resolvedPathInputs.length > 1) {
-		// Only URL probes may materialize contents here. Host file targets are checked
-		// below after the execution parser has disambiguated literal names from glob bases.
-		const assertUrlTarget = assertTarget
-			? async (target: string) => {
-					if (internalRouter.canHandle(target)) await assertTarget(target);
-				}
-			: undefined;
-		const partition = await partitionExistingPaths(
-			resolvedPathInputs,
-			cwd,
-			parseSearchPath,
-			opts.filesystem,
-			assertUrlTarget,
-		);
+		const partition = await partitionExistingPaths(resolvedPathInputs, cwd, parseSearchPath, opts.filesystem);
 		if (partition.valid.length === 0) {
 			throw new ToolError(`Path not found: ${partition.missing.join(", ")}`);
 		}
@@ -1611,7 +1581,6 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 	if (effectivePaths.length === 1) {
 		const parsedPath = await parseSearchPathPreferringLiteral(effectivePaths[0] ?? ".", cwd);
 		searchPath = resolveSearchBase(parsedPath.basePath, cwd);
-		await assertTarget?.(searchPath);
 		globFilter = parsedPath.glob;
 		bareGlob = isBareSearchGlob(effectivePaths[0]!, parsedPath);
 		scopePath = formatPathRelativeToCwd(searchPath, cwd);
@@ -1622,7 +1591,6 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 			opts.filesystem,
 			undefined,
 			opts.fanOutFileTargets === true,
-			assertTarget,
 		);
 		if (!multiSearchPath) {
 			throw new ToolError("`paths` must contain at least one path or glob");

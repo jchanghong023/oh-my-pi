@@ -284,7 +284,9 @@ pub struct VcsOwnedPatchPathResult {
 	pub path:           String,
 	#[napi(ts_type = "\"applied\" | \"unchanged\" | \"failed\"")]
 	pub status:         String,
-	pub actual_version: Either<String, Null>,
+	/// Raw digest, `null` when absent, or omitted when it could not be read.
+	#[napi(ts_type = "string | null")]
+	pub actual_version: Option<Either<String, Null>>,
 }
 /// Partial writes are retained and reported, never silently rolled back.
 #[napi(object)]
@@ -552,7 +554,9 @@ impl From<core::OwnedPatchResult> for VcsOwnedPatchResult {
 				.map(|item| VcsOwnedPatchPathResult {
 					path:           item.path,
 					status:         item.status,
-					actual_version: item.actual_version.map_or(Either::B(Null), Either::A),
+					actual_version: item
+						.actual_version
+						.map(|version| version.map_or(Either::B(Null), Either::A)),
 				})
 				.collect(),
 			complete:   v.complete,
@@ -1425,7 +1429,7 @@ impl VcsGitRepo {
 		index_path: String,
 		signal: Option<Unknown>,
 	) -> Promise<()> {
-		blocking("vcs.stageFilesIntoIndex", self.inner.clone(), signal, move |repo| {
+		blocking_mutation("vcs.stageFilesIntoIndex", self.inner.clone(), signal, move |repo| {
 			repo.stage_files_into_index(&files, Path::new(&index_path))
 		})
 	}

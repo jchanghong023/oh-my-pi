@@ -162,11 +162,13 @@ function normalizeOllamaHostEnv(value: string | undefined): string | undefined {
 	}
 }
 
-export function getImplicitOllamaEndpoint(): { baseUrl: string; env?: string } {
+export function getImplicitOllamaEndpoint(): { baseUrl: string; env?: string; invalidEnv?: string } {
 	const baseUrl = Bun.env.OLLAMA_BASE_URL?.trim();
 	if (baseUrl) return { baseUrl, env: "OLLAMA_BASE_URL" };
-	const host = normalizeOllamaHostEnv(Bun.env.OLLAMA_HOST);
-	return host ? { baseUrl: host, env: "OLLAMA_HOST" } : { baseUrl: DEFAULT_OLLAMA_BASE_URL };
+	const configuredHost = Bun.env.OLLAMA_HOST?.trim();
+	const host = normalizeOllamaHostEnv(configuredHost);
+	if (host) return { baseUrl: host, env: "OLLAMA_HOST" };
+	return { baseUrl: DEFAULT_OLLAMA_BASE_URL, invalidEnv: configuredHost ? "OLLAMA_HOST" : undefined };
 }
 
 export function getOllamaContextLengthOverride(): number | undefined {
@@ -200,6 +202,7 @@ export interface DiscoveryProviderConfig {
 	remoteCompaction?: RemoteCompactionConfig<Api>;
 	discovery: ProviderDiscovery;
 	optional?: boolean;
+	invalidEndpointEnv?: string;
 	/**
 	 * Extra roots probed in order when `baseUrl` yields no reachable server.
 	 * Only the implicit llama.cpp provider sets this, so both its legacy (8080)

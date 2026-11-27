@@ -200,8 +200,7 @@ describe("BashTool execution results", () => {
 		expect(end.isError).toBe(true);
 		const block = end.result.content[0];
 		expect(block.type).toBe("text");
-		expect(typeof block.text).toBe("string");
-		expect(block.text).toContain("[cancelled]");
+		expect(block.text).toMatch(/\[cancelled\]/u);
 	});
 
 	it("returns a success result with no exit-code detail for a zero exit", async () => {

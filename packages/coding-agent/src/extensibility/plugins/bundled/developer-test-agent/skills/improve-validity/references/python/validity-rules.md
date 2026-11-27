@@ -67,4 +67,4 @@
 | dict仅检查key | 添加value相等断言 |
 | 异常suppress用raises | 改为验证正常返回和副作用 |
 | Exception子类属性假设 | 验证类定义了该属性，否则用.args[0] |
-| bound method用is比较 | 用__name__比较或assert_called_once_with |
+| bound method用`is`或仅用名称比较 | 分别用`is`比较`__self__`（接收者）和`__func__`（函数） |

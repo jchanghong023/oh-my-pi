@@ -374,8 +374,18 @@ impl ExtProc for Relayed {
 		self.child.signal_wave(sig, pids, extra, groups)
 	}
 
-	fn record_wave_signal(&mut self, sig: Signal, wave: &crate::proctree::SignalWave) {
-		self.child.record_wave_signal(sig, wave);
+	fn record_wave_signal(
+		&mut self,
+		sig: Signal,
+		groups: bool,
+		wave: Option<&crate::proctree::SignalWave>,
+	) {
+		self.child.record_wave_signal(sig, groups, wave);
+	}
+
+	#[cfg(unix)]
+	fn continue_stopped(&mut self) -> io::Result<()> {
+		self.child.continue_stopped()
 	}
 
 	fn pgid(&self) -> Option<u32> {

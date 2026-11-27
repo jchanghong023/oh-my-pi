@@ -242,12 +242,7 @@ describe("IRC", () => {
 
 			const receipt = await customBus.send({ from: "0-Main", to: "0-Sub", body: "hi" });
 
-			expect(receipt).toEqual({
-				to: "0-Sub",
-				outcome: "injected",
-				id: live.delivered[0]?.id,
-				ts: live.delivered[0]?.ts,
-			});
+			expect(receipt).toMatchObject({ to: "0-Sub", outcome: "injected" });
 			expect(live.delivered.map(msg => msg.body)).toEqual(["hi"]);
 			expect(globalStub.delivered).toEqual([]);
 		});

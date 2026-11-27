@@ -39,7 +39,8 @@ Functions that register callbacks (e.g., gt.link(callback)) create closures that
 2. functools.partial verification: When the target wraps a method in partial:
    callback = mock_link.call_args[0][0]
    assert isinstance(callback, functools.partial)
-   assert callback.func.__name__ == method_name
+   assert callback.func.__self__ is expected_method.__self__
+   assert callback.func.__func__ is expected_method.__func__
    assert callback.keywords == expected_kwargs
 
 3. weakref.proxy handling:
@@ -47,7 +48,7 @@ Functions that register callbacks (e.g., gt.link(callback)) create closures that
    - Use ClassName.__new__(ClassName) + manual attribute assignment instead
    - When testing proxy-based callbacks, use real objects and verify through the proxy interface
 
-4. Bound method identity: Never use is for bound method arguments from mock.call_args - identity always fails. Use __name__ comparison or assert_called_once_with.
+4. Bound method identity: Compare receiver (`__self__`) and function (`__func__`) with `is`, not the bound method object or its name.
 
 ### Common Mistakes
 - Mocking the result queue without triggering registered callbacks - the closure body remains untested

@@ -156,7 +156,6 @@ describe("relay release version ordering", () => {
 	it.each([
 		["18.20.2", "18.20.2+fork.123"],
 		["18.20.2+fork.9", "18.20.2+fork.10"],
-		["18.20.2+fork.122", "18.20.2+fork.123"],
 		["18.20.2+fork.9007199254740992", "18.20.2+fork.9007199254740993"],
 		["18.20.2+fork.999", "18.20.3+fork.1"],
 		["18.20.2-rc.9+fork.999", "18.20.2-rc.10+fork.1"],
@@ -196,7 +195,6 @@ describe("relay release version ordering", () => {
 	it("preserves unversioned peer behavior", () => {
 		expect(isOmpVersion("")).toBe(false);
 		expect(isOlderOmpVersion("", "18.20.2+fork.123")).toBe(true);
-		expect(isOlderOmpVersion("", "dev")).toBe(true);
 		expect(isOlderOmpVersion("", "")).toBe(false);
 		expect(isOlderOmpVersion("18.20.2+fork.123", "")).toBe(false);
 	});

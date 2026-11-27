@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { isJsonSchemaValueValid, toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { adaptSchemaForStrict, isJsonSchemaValueValid, toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { procmgr, TempDir } from "@oh-my-pi/pi-utils";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "../../src/config/settings";
@@ -571,20 +571,20 @@ describe("proc:// background jobs", () => {
 		const file = path.join(temp.path(), "keep.txt");
 		await Bun.write(file, "keep this");
 		const write = new WriteTool(toolSession(temp.path(), undefined, { launch: false }));
-		const error = await rejectionMessage(write.execute("missing-content", write.parameters.assert({ path: file })));
-		expect(error).toMatch(/not (?:run|executed)/i);
-		expect(error).toContain('"path"');
-		expect(error).toContain('"content"');
+		expect(() => write.parameters.assert({ path: file })).toThrow("content");
 		expect(await Bun.file(file).text()).toBe("keep this");
 		await write.execute("empty-file", { path: file, content: "" });
 		expect(await Bun.file(file).text()).toBe("");
 	});
 
-	it("keeps optional content for internal targets without accepting null", () => {
+	it("never offers strict-mode providers a nullable content", () => {
 		const write = new WriteTool(toolSession(process.cwd(), undefined, { launch: false }));
-		const schema = toolWireSchema(write);
-		expect(isJsonSchemaValueValid(schema, { path: "proc://bg_1/kill" })).toBe(true);
-		expect(isJsonSchemaValueValid(schema, { path: "keep.txt", content: null })).toBe(false);
+		const strict = adaptSchemaForStrict(toolWireSchema(write), true);
+		expect(strict.strict).toBe(true);
+		expect(isJsonSchemaValueValid(strict.schema, { path: "proc://bg_1/kill", content: "" })).toBe(true);
+		expect(isJsonSchemaValueValid(strict.schema, { path: "proc://bg_1/kill" })).toBe(false);
+		// An optional `content` became `anyOf: [string, null]` here, and models filled the null.
+		expect(isJsonSchemaValueValid(strict.schema, { path: "keep.txt", content: null })).toBe(false);
 	});
 
 	it("shows a running task's progress in the proc:// listing and its own read, but not a bash job's", async () => {
@@ -787,7 +787,6 @@ describe("bash services via proc://", () => {
 				},
 				{ id: name, ownerId: "Main" },
 			);
-			expect(collisionId).toBe(name);
 			const ambiguous = `both job ${name} and service ${name}`;
 			await expect(proc.resolve(parseInternalUrl(`proc://${name}`), { session })).rejects.toThrow(ambiguous);
 			for (const [suffix, content] of [
@@ -830,7 +829,7 @@ describe("bash services via proc://", () => {
 				pty: false,
 			});
 			expect(replaced.content[0]?.type === "text" ? replaced.content[0].text : "").toContain("REPLACED");
-			const stopped = await write.execute("kill", write.parameters.assert({ path: `proc://${name}/kill` }));
+			const stopped = await write.execute("kill", { path: `proc://${name}/kill`, content: "" });
 			expect(stopped.details?.proc).toMatchObject({ action: "stop", daemon: { key: name } });
 		} finally {
 			await manager.dispose();

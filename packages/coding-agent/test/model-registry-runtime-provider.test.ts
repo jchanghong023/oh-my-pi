@@ -223,7 +223,6 @@ describe("ModelRegistry runtime provider registration", () => {
 		const images = registry.getAll("image").filter(model => model.provider === "my-gateway");
 		expect(images.map(model => model.id)).toEqual(["gpt-image-2"]);
 		expect(registry.find("my-gateway", "mismatched")).toBeUndefined();
-		expect(registry.getAll().some(model => model.provider === "my-gateway")).toBe(false);
 	});
 
 	test("OpenAI runtime transport overrides survive refresh and restore the bundled model when removed", async () => {

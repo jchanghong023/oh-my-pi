@@ -550,6 +550,7 @@ async function runLspWritethrough(
 	// there (the caller already wrote `content` when `contentAlreadyWritten`).
 	let diskContent = contentAlreadyWritten ? content : undefined;
 	let pendingWrite: Promise<void> | undefined;
+	let pendingFormat: ReturnType<typeof formatContent> | undefined;
 	const writeContent = async (value: string, writeSignal?: AbortSignal) => {
 		writeSignal?.throwIfAborted();
 		pendingWrite = (async () => {
@@ -650,11 +651,10 @@ async function runLspWritethrough(
 				// Custom linters operate on on-disk input; the shared pre-write also
 				// supports implementations that inspect the file before formatting.
 				if (diskContent !== content) await writeContent(content, operationSignal);
-				const [formattedContent, capturedVersions] = await Promise.all([
-					formatContent(dst, content, cwd, customLinterServers, operationSignal),
-					minVersionsPromise,
-				]);
+				pendingFormat = formatContent(dst, content, cwd, customLinterServers, operationSignal);
+				const [formattedContent, capturedVersions] = await Promise.all([pendingFormat, minVersionsPromise]);
 				operationSignal?.throwIfAborted();
+				pendingFormat = undefined;
 				finalContent = formattedContent.content;
 				minVersions = capturedVersions;
 				if (formattedContent.failed) {
@@ -729,6 +729,16 @@ async function runLspWritethrough(
 			} catch {
 				// The fallback commit below reports write failures.
 			}
+		}
+		if (pendingFormat) {
+			// Custom formatters can mutate the file directly. Drain the process and
+			// account for any bytes it wrote before fallback, journaling, or unlock.
+			try {
+				await pendingFormat;
+			} catch {
+				// Even a failed formatter may have written bytes.
+			}
+			diskContent = await fs.promises.readFile(dst, "utf8");
 		}
 		if (signal?.aborted && diskContent !== undefined) {
 			// Do not write a late formatter result. Report the bytes that landed so

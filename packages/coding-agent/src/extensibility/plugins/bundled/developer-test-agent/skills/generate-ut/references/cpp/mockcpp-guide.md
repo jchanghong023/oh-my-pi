@@ -106,19 +106,22 @@ int GetMax(int a, int b) {
     return a > b ? a : b;
 }
 
+int GetMaxStub(int a, int b) {
+    return a + b;
+}
+
 TEST_F(TestFunc, TestCase) {
     EXPECT_EQ(3, GetMax(2, 3));
     
     // 修改返回值
     MOCKER(&GetMax).stubs().will(returnValue(0));
     EXPECT_EQ(0, GetMax(2, 3));
-    
-    // 使用桩函数替换
-    MOCKER(&GetMax).stubs().will(invoke(GetMaxStub));
-    
-    // 校验调用次数
-    MOCKER(&GetMax).expects(once()).will(returnValue(0));
-    
+    GlobalMockObject::reset();
+
+    // 使用桩函数替换并校验调用次数
+    MOCKER(&GetMax).expects(once()).will(invoke(GetMaxStub));
+    EXPECT_EQ(5, GetMax(2, 3));
+
     GlobalMockObject::verify();
 }
 ```
@@ -164,7 +167,7 @@ TEST_F(TestFunc, TestCase) {
     MOCKER_CPP(&Calculator::Add)
         .stubs()
         .will(invoke(AddStub));
-    EXPECT_EQ(103, calc.Add(2, 3));
+    EXPECT_EQ(105, calc.Add(2, 3));
     GlobalMockObject::verify();
 }
 ```

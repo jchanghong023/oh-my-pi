@@ -15,13 +15,14 @@ import * as path from "node:path";
 import { logger, readLines, withTimeout } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import { ToolAbortError, ToolError } from "../../tool-errors";
-import { gracefulKillTreeOnce } from "../attach";
+import { gracefulKillTreeOnce, killTreeOnce } from "../attach";
 import type { TernInputStep } from "../tern/keys";
 import { TernSocketClient, type TernTransport, type TernTransportEvents } from "../tern/wire";
 import { WebKitViewer } from "./viewer";
 
 /** How long a host may take to exit after its stdin closed before its process tree is killed. */
 const EXIT_GRACE_MS = 2_000;
+const STRICT_EXIT_GRACE_MS = 1_000;
 /** How long the host's last output may trail its exit (or its exit trail the end of its output). */
 const DRAIN_MS = 250;
 /**
@@ -343,15 +344,16 @@ export class WebKitHost {
 			const child = this.#transport.child;
 			if (!child) return;
 			const grace = Promise.withResolvers<boolean>();
-			const timer = setTimeout(() => grace.resolve(false), EXIT_GRACE_MS);
+			const timer = setTimeout(() => grace.resolve(false), strict ? STRICT_EXIT_GRACE_MS : EXIT_GRACE_MS);
 			const exited = await Promise.race([child.exited.then(() => true), grace.promise]);
 			clearTimeout(timer);
 			if (exited) return;
 			logger.debug("WebKit host did not exit after its input closed; killing it", { pid: child.pid });
-			await gracefulKillTreeOnce(child.pid);
+			if (strict) await killTreeOnce(child.pid);
+			else await gracefulKillTreeOnce(child.pid);
 			// Signal delivery is not exit/reaping; callers may start a replacement immediately.
-			if (options?.strict) {
-				await withTimeout(child.exited, EXIT_GRACE_MS, "Timed out terminating WebKit host");
+			if (strict) {
+				await withTimeout(child.exited, STRICT_EXIT_GRACE_MS, "Timed out terminating WebKit host");
 			} else {
 				await child.exited;
 			}

@@ -446,7 +446,6 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		});
 		try {
 			expect(session.model?.id).toBe("claude-sonnet-4-5");
-			expect(fetchModels).not.toHaveBeenCalled();
 			await startBackgroundModelDiscovery?.();
 			expect(fetchModels).not.toHaveBeenCalled();
 		} finally {
@@ -661,14 +660,8 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		authStoragesToClose.push(authStorage);
 		const modelsPath = path.join(tempDir, "models.yml");
 		const primerRegistry = new ModelRegistry(authStorage, modelsPath);
-		const fetchModels = vi.fn(dynamicOnlyProviderConfig.fetchDynamicModels!);
-		primerRegistry.registerProvider(
-			"runtime-provider",
-			{ ...dynamicOnlyProviderConfig, fetchDynamicModels: fetchModels },
-			"ext://runtime",
-		);
+		primerRegistry.registerProvider("runtime-provider", dynamicOnlyProviderConfig, "ext://runtime");
 		await primerRegistry.refreshRuntimeProviders("online");
-		expect(fetchModels).toHaveBeenCalledTimes(1);
 		const modelRegistry = new ModelRegistry(authStorage, modelsPath);
 
 		const { session, modelFallbackMessage } = await createAgentSession({

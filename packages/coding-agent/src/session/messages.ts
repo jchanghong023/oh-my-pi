@@ -1142,6 +1142,7 @@ const convertCache = new WeakMap<AgentMessage, ConvertMemoEntry>();
 interface ConvertArrayMemo {
 	generation: number;
 	includeInterruptedThinking: boolean;
+	activeGoalAutopilotId: string | null | undefined;
 	length: number;
 	output: Message[];
 	tail: AgentMessage | undefined;
@@ -1305,8 +1306,17 @@ function convertMessageAt(
 	index: number,
 	includeInterruptedThinking: boolean,
 	convert: (m: AgentMessage, interruptedNext: boolean) => Message[],
+	activeGoalAutopilotId?: string | null,
 ): readonly Message[] {
 	const m = messages[index];
+	if (
+		activeGoalAutopilotId !== undefined &&
+		m.role === "custom" &&
+		m.customType === "goal-auto-orchestrate-context" &&
+		(activeGoalAutopilotId === null || !isRecord(m.details) || m.details.goalId !== activeGoalAutopilotId)
+	) {
+		return NO_LLM_MESSAGES;
+	}
 	// Check the assistant's original neighbor even when the reader cannot see
 	// the quote: that marker still requires stripping the incomplete run.
 	if (m.role === "assistant") {
@@ -1340,12 +1350,23 @@ export interface ContextViewMessage {
  * disable its cache shortcuts, a cost every request would pay even when
  * `/context` is never opened.
  */
-export function convertMessagesForContextView(messages: AgentMessage[], model?: Model): ContextViewMessage[] {
+export function convertMessagesForContextView(
+	messages: AgentMessage[],
+	model?: Model,
+	activeGoalAutopilotId?: string | null,
+): ContextViewMessage[] {
 	const modelMessages = wrapSteeringForModel(messages);
 	const includeInterruptedThinking = model !== undefined && readerIncludesThinking(model);
 	const result: ContextViewMessage[] = [];
 	for (let sourceIndex = 0; sourceIndex < modelMessages.length; sourceIndex++) {
-		for (const message of convertMessageAt(modelMessages, sourceIndex, includeInterruptedThinking, convertOne)) {
+		const fragment = convertMessageAt(
+			modelMessages,
+			sourceIndex,
+			includeInterruptedThinking,
+			convertOne,
+			activeGoalAutopilotId,
+		);
+		for (const message of fragment) {
 			const replay = toProviderReplayMessage(message);
 			if (replay) result.push({ message: replay, sourceIndex, convertedIndex: result.length });
 		}
@@ -1388,14 +1409,19 @@ export function isUserAuthoredMessage(message: AgentMessage): boolean {
  * {@link convertMessageAt}; it stays separate so the index mapping `/context`
  * needs adds no cost here.
  */
-export function convertToLlm(messages: AgentMessage[], model?: Model): Message[] {
+export function convertToLlm(
+	messages: AgentMessage[],
+	model?: Model,
+	activeGoalAutopilotId?: string | null,
+): Message[] {
 	const len = messages.length;
 	const includeInterruptedThinking = model !== undefined && readerIncludesThinking(model);
 	const memo = convertArrayCache.get(messages);
 	const reusable =
 		memo !== undefined &&
 		memo.generation === convertGeneration &&
-		memo.includeInterruptedThinking === includeInterruptedThinking;
+		memo.includeInterruptedThinking === includeInterruptedThinking &&
+		memo.activeGoalAutopilotId === activeGoalAutopilotId;
 	const tail = len > 0 ? messages[len - 1] : undefined;
 
 	// Exact-repeat: same array, same length, same trailing identity → reuse the
@@ -1434,7 +1460,7 @@ export function convertToLlm(messages: AgentMessage[], model?: Model): Message[]
 	let prefixOutputLen = 0;
 	for (let i = start; i < len; i++) {
 		if (i === len - 1) prefixOutputLen = out.length;
-		const fragment = convertMessageAt(messages, i, includeInterruptedThinking, convertOneCached);
+		const fragment = convertMessageAt(messages, i, includeInterruptedThinking, convertOneCached, activeGoalAutopilotId);
 		for (const msg of fragment) out.push(msg);
 	}
 	if (len === 0) prefixOutputLen = 0;
@@ -1444,6 +1470,7 @@ export function convertToLlm(messages: AgentMessage[], model?: Model): Message[]
 	convertArrayCache.set(messages, {
 		generation: convertGeneration,
 		includeInterruptedThinking,
+		activeGoalAutopilotId,
 		length: len,
 		output: out,
 		tail,

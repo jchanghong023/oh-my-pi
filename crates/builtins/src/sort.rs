@@ -6204,7 +6204,8 @@ fn sort_by<'a>(unsorted: &mut Vec<Line<'a>>, settings: &GlobalSettings, line_dat
 		#[cfg(not(target_os = "wasi"))]
 		Parallelism::Pool(pool) => pool.install(|| sort_parallel(unsorted)),
 		#[cfg(not(target_os = "wasi"))]
-		Parallelism::Global if rayon_global_pool_available() => sort_parallel(unsorted),
+		// Small chunks do not need a process-wide worker pool.
+		Parallelism::Global if unsorted.len() > 20 && rayon_global_pool_available() => sort_parallel(unsorted),
 		_ if stable => unsorted.sort_by(cmp),
 		_ => unsorted.sort_unstable_by(cmp),
 	};

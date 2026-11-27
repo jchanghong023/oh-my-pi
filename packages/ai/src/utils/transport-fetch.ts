@@ -15,8 +15,12 @@ const lazyCoworkFetch: FetchImpl = async (input, init) => {
 
 /** Stamped on a fetch already built by {@link transportFetch}. */
 const TRANSPORT_FETCH = Symbol("omp.transportFetch");
+const EXPLICIT_AUTH_FETCH = Symbol("omp.explicitAuthFetch");
 
-type TransportFetch = FetchImpl & { [TRANSPORT_FETCH]?: true | (() => TransportFetch) };
+type TransportFetch = FetchImpl & {
+	[TRANSPORT_FETCH]?: true | (() => TransportFetch);
+	[EXPLICIT_AUTH_FETCH]?: true;
+};
 
 /**
  * The one fetch every inference request goes through. Per call it applies, in
@@ -123,6 +127,17 @@ export function withTransportFetch<T extends Pick<StreamOptions, "fetch" | "requ
 	model: Model<Api>,
 	options: T,
 ): T {
-	const fetch = transportFetch(model, options.fetch, undefined, options.requestAuth !== undefined);
+	let fetch = transportFetch(model, options.fetch, undefined, options.requestAuth !== undefined) as TransportFetch;
+	if (options.requestAuth !== undefined && !fetch[EXPLICIT_AUTH_FETCH]) {
+		const base = fetch;
+		const guarded: TransportFetch = (input, init) => {
+			const redirect = init?.redirect ?? (input instanceof Request ? input.redirect : "follow");
+			return base(input, redirect === "follow" ? { ...init, redirect: "error" } : init);
+		};
+		if (base.preconnect) guarded.preconnect = base.preconnect;
+		guarded[TRANSPORT_FETCH] = true;
+		guarded[EXPLICIT_AUTH_FETCH] = true;
+		fetch = guarded;
+	}
 	return fetch === options.fetch ? options : { ...options, fetch };
 }

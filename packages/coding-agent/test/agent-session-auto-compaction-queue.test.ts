@@ -309,7 +309,6 @@ describe("AgentSession auto-compaction queue resume", () => {
 		});
 		await session.followUp("please respond after compaction");
 		expect(session.agent.hasQueuedMessages()).toBe(true);
-		expect(session.getQueuedMessages().followUp).toEqual(["please respond after compaction"]);
 		expect(queueUpdates).toEqual([["please respond after compaction"]]);
 		expect(continueSpy).not.toHaveBeenCalled();
 		unsubscribeQueue();

@@ -86,6 +86,8 @@ export function streamOpenAIAnthropicShim(
 
 				const innerStream = streamAnthropic(anthropicModel, context, {
 					apiKey,
+					requestAuth: options?.requestAuth,
+					requestAuthPrepared: options?.requestAuthPrepared,
 					temperature: options?.temperature,
 					topP: options?.topP,
 					topK: options?.topK,
@@ -129,6 +131,8 @@ export function streamOpenAIAnthropicShim(
 				const reasoningEffort = options?.reasoning;
 				const innerStream = streamOpenAICompletions(openaiModel, context, {
 					apiKey,
+					requestAuth: options?.requestAuth,
+					requestAuthPrepared: options?.requestAuthPrepared,
 					temperature: options?.temperature,
 					topP: options?.topP,
 					topK: options?.topK,

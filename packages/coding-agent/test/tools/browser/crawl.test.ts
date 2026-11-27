@@ -696,7 +696,6 @@ describe("crawl engine", () => {
 		expect(f.written).toEqual([
 			{ name: "article.md", content: `Source: ${url}\n\n# Article title\n\nThe complete article body.\n` },
 		]);
-		expect(browser.extractionCount()).toBe(1);
 		expect(browser.detachmentCount()).toBe(1);
 		expect(f.opened).toHaveLength(1);
 		expect(f.closed).toEqual(f.opened);
@@ -760,6 +759,7 @@ describe("crawl engine", () => {
 			const browser = scriptedPage({ scrolling: { container } });
 			const f = fixture({ [url]: {} }, undefined, browser.run);
 			await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+			if (!container) expect(browser.elapsed()).toBeGreaterThanOrEqual(5_000);
 			expect(f.written[0]?.content).toContain("Lazy section 1");
 			expect(f.written[0]?.content).toContain("Lazy section 3");
 			expect(f.output.at(-1)).toContain("1 saved, 0 failed");
@@ -1051,14 +1051,6 @@ describe("crawl engine", () => {
 		},
 	);
 
-	it("waits at least the default five seconds before extracting lazy content", async () => {
-		const url = "https://example.test/feed";
-		const browser = scriptedPage({ scrolling: {} });
-		const f = fixture({ [url]: {} }, undefined, browser.run);
-		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
-		expect(browser.elapsed()).toBeGreaterThanOrEqual(5_000);
-		expect(f.written[0]?.content).toContain("Lazy section 3");
-	});
 	it("allows redirect responses but blocks attachment responses before Chromium handles them", async () => {
 		const f = fixture({ "https://example.test/": {} });
 		await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);

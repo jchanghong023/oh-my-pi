@@ -11,7 +11,6 @@ export const FORK_SETTING_DEFAULTS: ReadonlyMap<string, ForkSettingDefault> = ne
 	["mnemopi.embeddingVariant", "multilingual"],
 	["recap.enabled", false],
 	["skills.enableCodexUser", true],
-	["startup.checkUpdate", false],
 	["startup.setupWizard", false],
 	["statusLine.compactThinkingLevel", false],
 	["stt.language", "zh-CN"],

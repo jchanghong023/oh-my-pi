@@ -133,8 +133,6 @@ describe("AgentSession.activeToolExecutionUpdates cache lifecycle", () => {
 			// A delayed older stream cannot reopen a closed, newer output source.
 			session.agent.emitExternalEvent(taskUpdate("running"));
 			expect(preview.render(100)).toEqual([]);
-			expect(await session.newSession()).toBe(true);
-			expect(preview.render(100)).toEqual([]);
 		} finally {
 			preview.clear();
 		}

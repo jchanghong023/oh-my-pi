@@ -2325,9 +2325,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#releaseCredentialRefreshLeaseStmt.finalize();
 		this.#getCredentialStateStmt.finalize();
 		this.#holdsCredentialRefreshLeaseStmt.finalize();
-		// Force-close: bun's plain close() leaves the file handle open on
-		// Windows whenever any prepared statement (ours or a sharing owner's)
-		// was never finalized, which blocks temp-dir cleanup with EBUSY.
-		this.#db.close(true);
+		this.#db.close();
 	}
 }

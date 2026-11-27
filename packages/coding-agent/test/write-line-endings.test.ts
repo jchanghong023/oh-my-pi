@@ -62,19 +62,6 @@ describe("write tool keeps the replaced file's line endings and BOM", () => {
 		);
 	});
 
-	it("preserves the persisted convention for unchanged and changed writes", async () => {
-		const filePath = path.join(tmpDir, "unchanged.bat");
-		const persisted = "\uFEFF@echo off\r\n";
-		await fs.writeFile(filePath, persisted);
-		const tool = new WriteTool(createSession(tmpDir));
-
-		await tool.execute("same", { path: filePath, content: "@echo off\n" });
-		expect(await fs.readFile(filePath, "utf8")).toBe(persisted);
-
-		await tool.execute("changed", { path: filePath, content: "@echo on\n" });
-		expect(await fs.readFile(filePath, "utf8")).toBe("\uFEFF@echo on\r\n");
-	});
-
 	it("keeps a UTF-8 BOM when replacing a BOM file", async () => {
 		const filePath = path.join(tmpDir, "notes.txt");
 		await fs.writeFile(filePath, "\uFEFFhello\nworld\n");

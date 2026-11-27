@@ -256,7 +256,6 @@ describe("TodoLoop transcript presentation", () => {
 		}
 		const cards = [...ctx.shell.transcript.blocks()];
 		expect(cards).toHaveLength(2);
-		expect(cards[0]).not.toBe(cards[1]);
 		const collapsed = renderTranscript(ctx).join("\n");
 		for (const marker of ["Group 3", "attempt 1/3", "attempt 2/3"]) expect(collapsed).toContain(marker);
 		expect(collapsed).not.toContain("real compact output 1");

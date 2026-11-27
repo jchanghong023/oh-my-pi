@@ -2841,6 +2841,14 @@ export class SessionManager {
 		return { oldSessionFile, newSessionFile: this.#sessionFile };
 	}
 
+	/** Copy local artifacts for transcript keys without interpreting keys relative to the host's current cwd. */
+	copySessionArtifacts(sourceSessionFile: string, destinationSessionFile: string): Promise<void> {
+		return copySessionArtifacts(
+			path.resolve(this.#artifactBaseDir, sourceSessionFile),
+			path.resolve(this.#artifactBaseDir, destinationSessionFile),
+		);
+	}
+
 	/** Move the session to a new working directory. */
 	async moveTo(newCwd: string, targetSessionDir?: string): Promise<void> {
 		const resolvedCwd = path.resolve(newCwd);

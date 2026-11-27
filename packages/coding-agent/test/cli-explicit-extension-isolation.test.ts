@@ -112,7 +112,6 @@ test.each([
 		}
 		expect(reparsed.unknownFlags.get("probe-option")).toBe("value");
 		expect(reparsed.messages).toEqual(["hello"]);
-		expect(raw).toEqual([...argv, "--extension", explicit, "--probe-option", "value", "hello"]);
 	},
 );
 

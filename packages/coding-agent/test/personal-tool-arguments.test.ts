@@ -80,9 +80,35 @@ describe("tool argument failure feedback", () => {
 		try {
 			await Bun.write(path.join(root, "keep.txt"), "must remain");
 			const tool = new WriteTool({ cwd: root, settings: Settings.isolated() } as ToolSession);
-			await expect(
-				tool.execute("missing-content", { path: "keep.txt", i: "accidentally placed body" } as never),
-			).rejects.toThrow('Retry with separate JSON fields "path" and "content"');
+			const model = createMockModel({
+				responses: [
+					{
+						content: [
+							{
+								type: "toolCall",
+								id: "missing-content",
+								name: "write",
+								arguments: { path: "keep.txt", i: "accidentally placed body" },
+							},
+						],
+					},
+					{ content: ["done"] },
+				],
+			});
+			const messages = await agentLoop(
+				[{ role: "user", content: "perform the requested write", timestamp: 1 }],
+				{ systemPrompt: [""], messages: [], tools: [tool] },
+				{ model: model.model, convertToLlm: messages => messages as never },
+				undefined,
+				model.stream,
+			).result();
+			const result = messages.find(
+				(message): message is ToolResultMessage =>
+					message.role === "toolResult" && message.toolCallId === "missing-content",
+			);
+			expect(result?.isError).toBe(true);
+			expect(text(result!)).toContain('Validation failed for tool "write"');
+			expect(text(result!)).toContain("content");
 			expect(await Bun.file(path.join(root, "keep.txt")).text()).toBe("must remain");
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });

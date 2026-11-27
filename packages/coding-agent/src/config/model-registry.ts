@@ -591,7 +591,7 @@ export class ModelRegistry {
 	#hydratedCredentialSignatures = new Map<string, string>();
 	#configuredDiscoveryInFlight: Map<
 		DiscoveryProviderConfig,
-		Map<ModelRefreshStrategy, Promise<ConfiguredModelDiscoveryResult>>
+		Map<string, Promise<ConfiguredModelDiscoveryResult>>
 	> = new Map();
 	#policyReapply?: Promise<void>;
 	#policyReapplyRequested = false;
@@ -2761,13 +2761,14 @@ export class ModelRegistry {
 			if (!disabledProviders.has(provider)) this.#keylessProviders.add(provider);
 		}
 		if (!configuredProviders.has("ollama") && !disabledProviders.has("ollama")) {
-			const { baseUrl, env } = getImplicitOllamaEndpoint();
+			const { baseUrl, env, invalidEnv } = getImplicitOllamaEndpoint();
 			this.#discoverableProviders.push({
 				provider: "ollama",
 				api: "openai-responses",
 				baseUrl,
 				discovery: { type: "ollama" },
-				optional: env === undefined,
+				optional: env === undefined && invalidEnv === undefined,
+				invalidEndpointEnv: invalidEnv,
 			});
 			this.#keylessProviders.add("ollama");
 			this.#implicitLocalProviders.add("ollama");
@@ -3051,7 +3052,11 @@ export class ModelRegistry {
 										!this.#implicitProviderEndpointEnv.has(provider.provider)));
 							return {
 								provider,
-								...(await this.#discoverProviderModelsCoalesced(provider, cacheOnly ? "offline" : strategy)),
+								...(await this.#discoverProviderModelsCoalesced(
+									provider,
+									cacheOnly ? "offline" : strategy,
+									intranet,
+								)),
 							};
 						}),
 					);
@@ -3314,21 +3319,23 @@ export class ModelRegistry {
 	#discoverProviderModelsCoalesced(
 		providerConfig: DiscoveryProviderConfig,
 		strategy: ModelRefreshStrategy,
+		rejectRedirects: boolean,
 	): Promise<ConfiguredModelDiscoveryResult> {
 		let providerInFlight = this.#configuredDiscoveryInFlight.get(providerConfig);
-		const inFlight = providerInFlight?.get(strategy);
+		const key = rejectRedirects ? `${strategy}-no-redirect` : strategy;
+		const inFlight = providerInFlight?.get(key);
 		if (inFlight) return inFlight;
 
 		providerInFlight ??= new Map();
-		const discovery = this.#discoverProviderModels(providerConfig, strategy).finally(() => {
-			if (providerInFlight.get(strategy) === discovery) {
-				providerInFlight.delete(strategy);
+		const discovery = this.#discoverProviderModels(providerConfig, strategy, rejectRedirects).finally(() => {
+			if (providerInFlight.get(key) === discovery) {
+				providerInFlight.delete(key);
 				if (providerInFlight.size === 0) {
 					this.#configuredDiscoveryInFlight.delete(providerConfig);
 				}
 			}
 		});
-		providerInFlight.set(strategy, discovery);
+		providerInFlight.set(key, discovery);
 		this.#configuredDiscoveryInFlight.set(providerConfig, providerInFlight);
 		return discovery;
 	}
@@ -3397,6 +3404,7 @@ export class ModelRegistry {
 	async #discoverProviderModels(
 		providerConfig: DiscoveryProviderConfig,
 		strategy: ModelRefreshStrategy,
+		rejectRedirects: boolean,
 	): Promise<ConfiguredModelDiscoveryResult> {
 		const cacheProviderId = this.#configuredDiscoveryCacheProviderId(providerConfig);
 		const cached = readModelCache<Api>(cacheProviderId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
@@ -3435,7 +3443,7 @@ export class ModelRegistry {
 				const requestConfig = { ...providerConfig, headers: resolvedHeaders };
 				const models = this.#applyProviderModelOverrides(
 					providerId,
-					await discoverModelsByProviderType(requestConfig, this.#discoveryContext()),
+					await discoverModelsByProviderType(requestConfig, this.#discoveryContext(rejectRedirects)),
 				);
 				this.#lastDiscoveryWarnings.delete(providerId);
 				return models.map(toModelSpec);
@@ -3504,9 +3512,11 @@ export class ModelRegistry {
 		};
 	}
 
-	#discoveryContext(): DiscoveryContext {
+	#discoveryContext(rejectRedirects: boolean): DiscoveryContext {
 		return {
-			fetch: this.#fetch,
+			fetch: rejectRedirects
+				? (input, init) => this.#fetch(input, { ...init, redirect: "error" })
+				: this.#fetch,
 			getBearerApiKeyResolver: async provider => {
 				const apiKey = await this.getApiKeyForProvider(provider);
 				if (!isDiscoveryBearerApiKey(apiKey)) {
@@ -3537,15 +3547,18 @@ export class ModelRegistry {
 			url,
 			error,
 		});
-		// An env var silently redirected a built-in provider the user never
-		// configured; a log line alone leaves its failures untraceable.
-		const endpointEnv = this.#implicitProviderEndpointEnv.get(providerConfig.provider);
+		// Explicit env configuration can change where or why discovery was attempted.
+		const endpointEnv =
+			providerConfig.invalidEndpointEnv ?? this.#implicitProviderEndpointEnv.get(providerConfig.provider);
 		if (endpointEnv && baseUrl && url) {
 			const provider = providerConfig.provider;
 			// The endpoint env var may embed `user:pass@`, and fetch errors can echo it.
 			const detail = error.replaceAll(baseUrl, url).replace(URL_USERINFO_RE, "$1").replace(/\s+/g, " ").trim();
+			const source = providerConfig.invalidEndpointEnv
+				? `default after invalid ${endpointEnv}`
+				: `from ${endpointEnv}`;
 			this.#configWarnings.push(
-				`Built-in ${provider} provider: model discovery at ${url} (from ${endpointEnv}) failed. Fix or unset ${endpointEnv}, or add "${provider}" to disabledProviders. Error: ${detail}`,
+				`Built-in ${provider} provider: model discovery at ${url} (${source}) failed. Fix or unset ${endpointEnv}, or add "${provider}" to disabledProviders. Error: ${detail}`,
 			);
 		}
 	}

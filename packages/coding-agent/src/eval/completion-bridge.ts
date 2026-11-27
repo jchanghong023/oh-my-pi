@@ -333,7 +333,7 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 	// identity in those cases and preserve the tier's existing effort policy.
 	const exactSelector =
 		exact &&
-		(tier === "slow" || exact.thinkingLevel === undefined) &&
+		(tier !== "default" || exact.thinkingLevel === undefined) &&
 		(`${exact.provider}/${exact.id}` === routedSelector ||
 			(exact.provider === primary.model.provider &&
 				modelRegistry.find(exact.provider, exact.id)?.id === primary.model.id))

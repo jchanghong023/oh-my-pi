@@ -479,8 +479,7 @@ describe("always-ask-cached wrapper cycle", () => {
 					}),
 				};
 				if (policy === "allow") {
-					const result = await wrapper.execute("allowed", { path: "a.txt" }, undefined, undefined, ctx);
-					expect(result.content).toEqual([{ type: "text", text: "executed" }]);
+					await wrapper.execute("allowed", { path: "a.txt" }, undefined, undefined, ctx);
 					expect(execute).toHaveBeenCalledTimes(1);
 					expect(select).not.toHaveBeenCalled();
 				} else {

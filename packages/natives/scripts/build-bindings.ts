@@ -10,13 +10,11 @@
 import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { isPidAlive } from "@oh-my-pi/pi-utils/pid";
 import { $ } from "bun";
 import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/host-detect";
 import { stampNativeVersion } from "../../../scripts/stamp-native-version";
 import { ensureWindowsBuildTools } from "../../../scripts/windows-build-tools";
 import { generateEnumExports } from "./gen-enums";
-import { installFile } from "./installed-file";
 
 const repoRoot = path.join(import.meta.dir, "../../..");
 const rustDir = path.join(repoRoot, "crates/natives");
@@ -54,38 +52,55 @@ async function resolveBuiltAddonPath(outputDir: string, canonicalFilename: strin
 	);
 }
 
-async function installGeneratedBindings(outputDir: string): Promise<void> {
-	for (const filename of ["index.d.ts", "index.js"]) {
-		const sourcePath = path.join(outputDir, filename);
-		const destPath = path.join(nativeDir, filename);
+async function cleanupStaleTemps(dir: string): Promise<void> {
+	try {
+		const entries = await fs.readdir(dir);
+		for (const entry of entries) {
+			if (entry.includes(".tmp.") || entry.includes(".old.") || entry.includes(".new.")) {
+				await fs.unlink(path.join(dir, entry)).catch(() => {});
+			}
+		}
+	} catch {
+		// Directory might not exist yet.
+	}
+}
+
+async function installBinary(src: string, dest: string): Promise<void> {
+	const tempPath = `${dest}.tmp.${process.pid}`;
+	await fs.copyFile(src, tempPath);
+	try {
+		// Atomic rename leaves any loaded inode valid on Linux/macOS.
+		await fs.rename(tempPath, dest);
+	} catch {
+		// On Windows, loaded DLLs cannot be overwritten via rename.
 		try {
-			await installFile(sourcePath, destPath, { allowUnlinkFallback: true });
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			throw new Error(`Failed to install generated ${filename}: ${message}`);
+			await fs.unlink(dest);
+		} catch (unlinkErr) {
+			if ((unlinkErr as NodeJS.ErrnoException).code !== "ENOENT") {
+				await fs.unlink(tempPath).catch(() => {});
+				const isWindows = process.platform === "win32";
+				throw new Error(
+					`Cannot replace ${path.basename(dest)}${isWindows ? " (file may be in use - close any running processes)" : ""}: ${(unlinkErr as Error).message}`,
+				);
+			}
+		}
+		try {
+			await fs.rename(tempPath, dest);
+		} catch (finalErr) {
+			await fs.unlink(tempPath).catch(() => {});
+			throw new Error(`Failed to install ${path.basename(dest)}: ${(finalErr as Error).message}`);
 		}
 	}
 }
 
-async function cleanupStaleAddonBackups(): Promise<void> {
-	const entries = await fs.readdir(nativeDir, { withFileTypes: true });
-	const stale = [];
-	for (const entry of entries) {
-		if (!entry.isFile()) continue;
-		const match = /^(pi_natives\.win32-[\w-]+\.node)\.old\.([1-9]\d*)$/.exec(entry.name);
-		if (!match || isPidAlive(Number(match[2]))) continue;
-		stale.push({ name: entry.name, target: match[1], pid: match[2] });
-	}
-	if (stale.length === 0) return;
-
-	// Re-scan after checking the installers have exited. Failed rollback
-	// retains both the old addon and its same-PID staged replacement.
-	const current = await fs.readdir(nativeDir, { withFileTypes: true });
-	for (const { name, target, pid } of stale) {
-		const stagedPrefix = `${target}.tmp.${pid}.`;
-		if (!current.some(entry => entry.name === target && entry.isFile())) continue;
-		if (current.some(entry => entry.name.startsWith(stagedPrefix))) continue;
-		await fs.unlink(path.join(nativeDir, name)).catch(() => {});
+async function installGeneratedBindings(outputDir: string): Promise<void> {
+	const sourcePath = path.join(outputDir, "index.d.ts");
+	const destPath = path.join(nativeDir, "index.d.ts");
+	try {
+		await fs.copyFile(sourcePath, destPath);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		throw new Error(`Failed to install generated index.d.ts: ${message}`);
 	}
 }
 
@@ -119,7 +134,7 @@ export async function buildBindings(): Promise<void> {
 	console.log(`Building omp-natives bindings for ${process.platform}-${process.arch}${variantSuffix} (local)…`);
 
 	await fs.mkdir(nativeDir, { recursive: true });
-	if (process.platform === "win32") await cleanupStaleAddonBackups().catch(() => {});
+	await cleanupStaleTemps(nativeDir);
 	await fs.mkdir(path.join(nativeDir, ".build"), { recursive: true });
 	const buildOutputDir = await fs.mkdtemp(
 		path.join(nativeDir, ".build", `${process.platform}-${process.arch}-${effectiveVariant ?? "default"}-local-`),
@@ -189,11 +204,10 @@ export async function buildBindings(): Promise<void> {
 		await stampNativeVersion(builtAddonPath, version);
 		if (builtAddonPath !== canonicalAddonPath) {
 			console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
-			await installFile(builtAddonPath, canonicalAddonPath, { allowUnlinkFallback: true });
+			await installBinary(builtAddonPath, canonicalAddonPath);
 		}
-		// Finalize outside nativeDir so comparisons see only the final bytes.
-		await generateEnumExports(buildOutputDir);
 		await installGeneratedBindings(buildOutputDir);
+		await generateEnumExports();
 		console.log("Bindings build complete.");
 	} finally {
 		await fs.rm(buildOutputDir, { recursive: true, force: true });

@@ -109,7 +109,8 @@ export function coveredCells(rows: readonly string[], k: number): number {
 }
 
 /** Screen rows `row` takes once a terminal rewraps it at `columns`. */
-export function reflowHeight(row: string, columns: number): number {
+export function reflowHeight(row: string, columns: number, covered = 0): number {
+	if (covered > 0 && Bun.stripANSI(row).trim() === "") return 1;
 	// Unstyled fill was removed by normalizeRow. Styled fill is written and can reflow too.
 	return Math.max(1, Math.ceil(visibleWidth(row) / Math.max(1, columns)));
 }

@@ -158,6 +158,7 @@ test.each([
 		type: "bash",
 		status: "failed",
 		label: "run checks",
+		durationMs: 3000,
 		timedOut: true,
 		errorText: trailing ? `first line\nlast line\n\n${notice}` : `${notice}\n\nfirst line\nlast line`,
 	} as const;

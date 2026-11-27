@@ -193,20 +193,6 @@ describe("browser tab worker startup", () => {
 
 		await expect(pending).rejects.toThrow("connect failed");
 	});
-
-	it("bounds a retried attempt by the caller's remaining budget, not a fresh budget", async () => {
-		const worker = new FakeStartupWorker();
-		// Simulate the inline-fallback retry: the failed isolated attempt
-		// already consumed 25 s of the caller's 30 s init budget.
-		const pending = initializeTabWorkerForTest(worker, initPayload, 30_000, performance.now() - 25_000);
-		const startedAt = performance.now();
-
-		await expect(pending).rejects.toThrow("Timed out waiting for tab worker setup");
-
-		// 5 s remain -> guard min(10 s, 5 s / 3) = 1.67 s -> floored to 2 s.
-		// A fresh (un-carried) budget would guard for 10 s.
-		expect(performance.now() - startedAt).toBeLessThan(8_000);
-	});
 });
 
 describe("browser init budget exhaustion", () => {

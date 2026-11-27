@@ -225,7 +225,7 @@ async fn native_listing_spans_several_buffers() {
 		assert!(got.is_sorted_by(|a, b| a.0 < b.0), "{detail:?}: duplicates");
 		let dir = s.open_dir(&tmp.0).await.unwrap();
 		let mut out = Listing::default();
-		s.list_into(&dir, detail, 0, &mut out).await.unwrap();
+		s.list_into(&dir, detail, 0, false, &mut out).await.unwrap();
 		assert_eq!(out.len(), 2500);
 	}
 }

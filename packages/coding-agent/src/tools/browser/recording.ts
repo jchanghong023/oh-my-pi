@@ -666,43 +666,47 @@ export class RecordingController {
 		const dir = path.dirname(active.path);
 		await fs.mkdir(dir, { recursive: true });
 		const videoPath = path.join(dir, `.omp-recording-${crypto.randomUUID()}${path.extname(active.path)}`);
-		let bytes: number;
+		const contactSheet = active.options.contactSheet ? `${active.path}.contact.png` : undefined;
+		const stagedSheet = contactSheet ? `${videoPath}.contact.png` : undefined;
 		try {
 			await encodeRecording(active, videoPath, durationMs, context.signal);
-			bytes = (await fs.stat(videoPath)).size;
+			const bytes = (await fs.stat(videoPath)).size;
+			let image: Awaited<ReturnType<typeof resizeImage>> | undefined;
+			if (stagedSheet) {
+				const sheet = await buildChangedFrameContactSheetPng(
+					videoPath,
+					{
+						outputPath: stagedSheet,
+						fps: active.options.fps,
+						threshold: active.options.contactSheetThreshold,
+						maxTiles: MAX_CONTACT_SHEET_TILES,
+					},
+					context.signal,
+				);
+				if (context.output) {
+					image = await resizeImage(
+						{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
+						{ excludeWebP: context.excludeWebP },
+					);
+				}
+			}
 			if (context.signal?.aborted) throw new AbortError(context.signal);
+			// Remove the previous sheet first so a failed rename cannot pair it with the new video.
+			if (contactSheet) await fs.rm(contactSheet, { force: true });
 			await fs.rename(videoPath, active.path);
+			if (stagedSheet && contactSheet) await fs.rename(stagedSheet, contactSheet);
+			if (image) context.output?.push({ type: "image", data: image.data, mimeType: image.mimeType });
+			return {
+				path: active.path,
+				durationMs,
+				frames: active.frames.length,
+				bytes,
+				...(contactSheet ? { contactSheet } : {}),
+			};
 		} finally {
 			await removeWithRetries(videoPath).catch(() => undefined);
+			if (stagedSheet) await removeWithRetries(stagedSheet).catch(() => undefined);
 		}
-		let contactSheet: string | undefined;
-		if (active.options.contactSheet) {
-			const sheet = await buildChangedFrameContactSheetPng(
-				active.path,
-				{
-					outputPath: `${active.path}.contact.png`,
-					fps: active.options.fps,
-					threshold: active.options.contactSheetThreshold,
-					maxTiles: MAX_CONTACT_SHEET_TILES,
-				},
-				context.signal,
-			);
-			if (context.output) {
-				const resized = await resizeImage(
-					{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
-					{ excludeWebP: context.excludeWebP },
-				);
-				context.output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
-			}
-			contactSheet = sheet.path;
-		}
-		return {
-			path: active.path,
-			durationMs,
-			frames: active.frames.length,
-			bytes,
-			...(contactSheet ? { contactSheet } : {}),
-		};
 	}
 
 	/** Finalize an active recording, then immediately begin another. */

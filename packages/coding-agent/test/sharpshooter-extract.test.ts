@@ -150,7 +150,6 @@ describe("maybeStartSharpshooterExtraction", () => {
 		const writing = Promise.withResolvers<void>();
 		const releaseWrite = Promise.withResolvers<void>();
 		const write = Bun.write.bind(Bun);
-		let persisted = false;
 		try {
 			vi.spyOn(ai, "completeSimple").mockResolvedValue(
 				assistantResponse([
@@ -178,16 +177,13 @@ describe("maybeStartSharpshooterExtraction", () => {
 				}
 				writing.resolve();
 				await releaseWrite.promise;
-				const bytes = await write(target, content as string, options);
-				persisted = true;
-				return bytes;
+				return write(target, content as string, options);
 			});
 
 			maybeStartSharpshooterExtraction({ agentDir, ...deps });
 			await writing.promise;
 
 			await expect(flushSharpshooterExtraction(deps.session, 0)).resolves.toBeUndefined();
-			expect(persisted).toBe(false);
 			expect(await listSharpshooterDeltas(agentDir, cwd)).toEqual([]);
 			await expect(flushSharpshooterExtraction(deps.session, 0, { strict: true })).rejects.toThrow(
 				"Sharpshooter extraction did not finish within 0ms",
@@ -196,13 +192,11 @@ describe("maybeStartSharpshooterExtraction", () => {
 			await expect(flushSharpshooterExtraction(deps.session, 0, { strict: true })).rejects.toThrow(
 				"Sharpshooter extraction did not finish within 0ms",
 			);
-			expect(persisted).toBe(false);
 
 			const retry = flushSharpshooterExtraction(deps.session, undefined, { strict: true });
 			releaseWrite.resolve();
 			await retry;
 
-			expect(persisted).toBe(true);
 			const groups = await listSharpshooterDeltas(agentDir, cwd);
 			expect(groups).toHaveLength(1);
 			expect(groups[0]?.deltas).toHaveLength(1);

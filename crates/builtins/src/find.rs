@@ -556,7 +556,18 @@ pub mod matchers {
 		};
 
 		use super::{Matcher, MatcherIO, WalkEntry};
-		use crate::host::ShellCommand;
+		use crate::host::{ShellCommand, normalize_shell_path};
+
+		/// Only resolve the expanded executable's Windows alias, not the
+		/// operand spellings or the directory supplied by `-execdir`.
+		fn shell_command(mut argv: Vec<OsString>) -> ShellCommand {
+			if let std::borrow::Cow::Owned(native) = normalize_shell_path(Path::new(&argv[0])) {
+				let original = std::mem::replace(&mut argv[0], native.into_os_string());
+				ShellCommand::new(argv).argv0(original)
+			} else {
+				ShellCommand::new(argv)
+			}
+		}
 
 		/// `{}` replacement for `-execdir`: the entry name relative to its parent.
 		fn execdir_arg(path: &Path) -> PathBuf {
@@ -639,7 +650,7 @@ pub mod matchers {
 				}
 				// GNU runs `-exec` in find's working directory, which is the
 				// shell's; `-execdir` moves to the entry's parent.
-				let mut command = ShellCommand::new(argv);
+				let mut command = shell_command(argv);
 				if self.exec_in_parent_dir
 					&& let Some(dir) = execdir_dir(file_info.path())
 				{
@@ -711,7 +722,7 @@ pub mod matchers {
 					.collect();
 				// `-exec ... +` runs in find's (the shell's) working directory;
 				// `-execdir` batches carry their directory.
-				let mut shell_command = ShellCommand::new(argv);
+				let mut shell_command = shell_command(argv);
 				if let Some(dir) = command.get_current_dir() {
 					shell_command = shell_command.current_dir(dir);
 				}

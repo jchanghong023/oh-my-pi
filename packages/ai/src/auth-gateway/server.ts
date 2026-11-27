@@ -410,6 +410,7 @@ class EmbeddedToolTurns {
 		const restored: Context["messages"] = [];
 		let restoredBoundary = 0;
 		let trailingReplay: readonly openaiResponses.ResponsesReplayPart[] | undefined;
+		let restoredCallIds: Map<string, string> | undefined;
 		const messages = context.messages;
 		let responsesSpan: EmbeddedResponsesSpan | undefined;
 		for (let index = 0; index < messages.length; index++) {
@@ -422,7 +423,7 @@ class EmbeddedToolTurns {
 				let start = 0;
 				while (
 					start < message.content.length &&
-					openaiResponses.isReplayedOutputPart(message.content[start], trailingReplay)
+					openaiResponses.isReplayedOutputPart(message.content[start], trailingReplay, "matched-message")
 				) {
 					start++;
 				}
@@ -430,6 +431,11 @@ class EmbeddedToolTurns {
 				if (start) message = { ...message, content: message.content.slice(start) };
 			}
 			trailingReplay = undefined;
+			if (message.role === "toolResult") {
+				const id = restoredCallIds?.get(message.toolCallId);
+				restored.push(id === undefined ? message : { ...message, toolCallId: id });
+				continue;
+			}
 			let key: string | undefined;
 			if (message.role === "assistant") {
 				if (responsesBoundaries) {
@@ -443,10 +449,21 @@ class EmbeddedToolTurns {
 			}
 			const turn = key === undefined ? undefined : this.#turns.get(key);
 			if (key === undefined || !turn || message.role !== "assistant") {
+				if (restoredCallIds && message.role === "assistant") {
+					for (const part of message.content) {
+						if (part.type === "toolCall") restoredCallIds.delete(part.id);
+					}
+				}
 				restored.push(message);
 				continue;
 			}
 			if (turn.replay) {
+				for (const part of turn.message.content) {
+					if (part.type !== "toolCall") continue;
+					const wireId = openaiResponses.wireCallId(part.id);
+					if (wireId !== part.id) (restoredCallIds ??= new Map()).set(wireId, part.id);
+					else restoredCallIds?.delete(wireId);
+				}
 				const replay = turn.replay;
 				// The Responses parser can spread one turn across assistant messages
 				// and can attach its first reasoning or call to an earlier message.

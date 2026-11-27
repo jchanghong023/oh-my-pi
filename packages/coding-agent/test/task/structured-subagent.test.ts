@@ -419,8 +419,7 @@ describe("structured subagent primitive", () => {
 		};
 		const capabilities: Partial<executorModule.ExecutorOptions>[] = [
 			{ subagentHooks: { beforeSpawn: async () => ({}), configureSession: async () => ({}) } },
-			{ onSessionCreated: () => {} },
-			{ localProtocolOptions: { allowCrossAgentReads: false, getReadIsolationRoots: () => ["/tmp"] } },
+			{ localProtocolOptions: { allowCrossAgentReads: false } },
 		];
 		try {
 			for (const capability of capabilities) {
@@ -1958,7 +1957,6 @@ describe("agent frontmatter structured opt-in", () => {
 					expect(Bun.spawnSync(["git", "commit", "-m", "fixture"], { cwd }).exitCode).toBe(0);
 					let configuredCwd: string | undefined;
 					let operatedCwd: string | undefined;
-					let configuredBeforeDispatch = false;
 					const observations: string[] = [];
 					let observedResult: SingleResult | undefined;
 					parent.subagentHooks = {
@@ -1969,7 +1967,6 @@ describe("agent frontmatter structured opt-in", () => {
 						}),
 						configureSession: async (_request, options) => {
 							configuredCwd = options.cwd;
-							configuredBeforeDispatch = true;
 							const probe: CustomTool = {
 								name: "scope_probe",
 								label: "Scope probe",
@@ -2041,7 +2038,6 @@ describe("agent frontmatter structured opt-in", () => {
 						}),
 					);
 					expect(settled.result.exitCode).toBe(0);
-					expect(configuredBeforeDispatch).toBe(true);
 					expect(configuredCwd).not.toBe(cwd);
 					expect(operatedCwd).toBe(configuredCwd);
 					expect(settled.result.output).toContain(

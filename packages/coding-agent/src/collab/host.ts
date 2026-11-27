@@ -984,14 +984,16 @@ export class CollabHost {
 			entryCount: snapshotEntries.json.length,
 			readOnly: canWrite ? undefined : true,
 		});
+		const liveTools = state.isStreaming ? this.#snapshotToolStarts() : [];
 		// Welcome, chunks and replayed asks are one queue entry: up to
 		// MAX_PENDING_UI_REQUESTS asks would exceed the peer's share on their own.
 		const replayed = canWrite ? [...this.#pendingUi.values()].filter(pending => !pending.responsePending) : [];
 		const asks = replayed.map(pending => encodeFrame({ t: "ui-request", request: pending.request }));
 		let retainedBytes = Buffer.byteLength(welcome);
 		for (const bytes of snapshotEntries.bytes) retainedBytes += bytes;
+		for (const start of liveTools) retainedBytes += Buffer.byteLength(start);
 		for (const ask of asks) retainedBytes += Buffer.byteLength(ask);
-		if (!socket.sendBatch(this.#welcomeBatch(welcome, snapshotEntries, asks), fromPeer, retainedBytes)) {
+		if (!socket.sendBatch(this.#welcomeBatch(welcome, snapshotEntries, liveTools, asks), fromPeer, retainedBytes)) {
 			// The guest applies nothing before a welcome, so record nothing for it either.
 			if (registered) this.#peers.set(fromPeer, registered);
 			else this.#peers.delete(fromPeer);
@@ -1084,14 +1086,55 @@ export class CollabHost {
 		return { json, bytes };
 	}
 
-	/** The welcome, its snapshot chunks, then the replayed asks, as one lazily drained batch. */
+	#snapshotToolStarts(): EncodedFrame[] {
+		const session = this.#ctx.session;
+		const state = session.agent.state;
+		if (state.pendingToolCalls.size === 0) return [];
+		const starts = new Map<string, LocalAgentSessionEvent>();
+		for (const id of state.pendingToolCalls) {
+			const call = session.getLiveToolOutputCall(id);
+			if (!call) continue;
+			starts.set(id, {
+				type: "tool_execution_start",
+				toolCallId: id,
+				toolName: call.toolName,
+				args: call.args,
+				intent: call.intent,
+			});
+		}
+		// The output preview cache may prune a still-running older call.
+		for (let i = state.messages.length - 1; i >= 0 && starts.size < state.pendingToolCalls.size; i--) {
+			const message = state.messages[i];
+			if (message.role !== "assistant") continue;
+			for (const call of message.content) {
+				if (call.type !== "toolCall" || !state.pendingToolCalls.has(call.id) || starts.has(call.id)) continue;
+				starts.set(call.id, {
+					type: "tool_execution_start",
+					toolCallId: call.id,
+					toolName: call.name,
+					args: call.arguments,
+					intent: call.intent,
+				});
+			}
+		}
+		const frames: EncodedFrame[] = [];
+		for (const id of state.pendingToolCalls) {
+			const start = starts.get(id);
+			if (start) frames.push(encodeEventFrame(serializeReplicatedEvent(start).json));
+		}
+		return frames;
+	}
+
+	/** Snapshot chunks, active tool rows, and replayed asks, as one lazily drained batch. */
 	*#welcomeBatch(
 		welcome: EncodedFrame,
 		entries: { json: string[]; bytes: number[] },
+		liveTools: readonly EncodedFrame[],
 		asks: readonly EncodedFrame[],
 	): Generator<EncodedFrame> {
 		yield welcome;
 		yield* this.#snapshotChunks(entries.json, entries.bytes);
+		yield* liveTools;
 		yield* asks;
 	}
 

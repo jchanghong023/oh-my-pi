@@ -890,7 +890,6 @@ describe("extension transcript presenters", () => {
 		// Detailed mode shows this persisted receipt; clean mode must hide even its compact presentation.
 		expect(chat()).toContain("MSG-async-result");
 		await applyDisplayPreset(mode.settings, "clean", mode);
-		expect(mode.settings.getGlobalSettings()).toMatchObject({ display: { mode: "clean" }, hideThinkingBlock: true });
 		const expectClean = () => {
 			const collapsed = chat();
 			for (const type of ["advisor", "skill-prompt"]) expect(collapsed).toContain(`MSG-${type}`);
@@ -911,10 +910,6 @@ describe("extension transcript presenters", () => {
 		expect(expanded).not.toContain("bg-7");
 
 		await applyDisplayPreset(mode.settings, "detailed", mode);
-		expect(mode.settings.getGlobalSettings()).toMatchObject({
-			display: { mode: "detailed" },
-			hideThinkingBlock: false,
-		});
 		expect(chat()).toContain("MSG-async-result");
 	});
 

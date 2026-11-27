@@ -24,7 +24,7 @@
 use std::{cmp::Ordering, fmt, path::Path};
 
 use crate::{
-	fs::{Detail, FileType, Fs},
+	fs::{Detail, FileType, Fs, is_dangling_link},
 	pattern::{Glob, PatternError},
 	walk::{self, Action, Entry, WalkError},
 };
@@ -174,7 +174,8 @@ pub struct GlobOptions {
 	pub sort_by_mtime:        bool,
 	/// Descend into `node_modules`; `None` does so when the pattern names it.
 	pub include_node_modules: Option<bool>,
-	/// Fail on any directory that cannot be opened or fully listed.
+	/// Fail on unreadable directories, entry metadata errors, or failed link
+	/// resolution, except for entries that vanish and dangling links.
 	pub strict_errors:        bool,
 	/// Traversal: `hidden`, `gitignore`, `follow_links`, `cache`, `workers`
 	/// are honoured; `.git` is pruned unless a pattern segment is `.git`, and
@@ -204,7 +205,7 @@ pub enum GlobError {
 	Pattern(PatternError),
 	/// The walk failed.
 	Walk(WalkError),
-	/// A directory could not be opened or fully listed during a strict walk.
+	/// Reading a directory or resolving a link failed during a strict glob.
 	Directory(walk::DirError),
 }
 
@@ -225,7 +226,8 @@ impl std::error::Error for GlobError {}
 ///
 /// # Errors
 /// A malformed pattern or an unreadable root.
-/// With [`GlobOptions::strict_errors`], directory errors also fail the glob.
+/// With [`GlobOptions::strict_errors`], traversal and link resolution errors
+/// also fail the glob.
 pub async fn glob(fs: &Fs, root: &Path, opts: &GlobOptions) -> Result<Vec<GlobMatch>, GlobError> {
 	let pattern = match opts.pattern.trim() {
 		"" => "*",
@@ -251,20 +253,26 @@ pub async fn glob(fs: &Fs, root: &Path, opts: &GlobOptions) -> Result<Vec<GlobMa
 			Detail::Minimal
 		},
 		max_depth: depth,
-		cache: opts.walk.cache && !opts.strict_errors,
 		..opts.walk.clone()
 	};
 	let file_type = opts.file_type;
-	let entries = walk::collect(fs, root, &wopts, !opts.sort_by_mtime, move |_, entry| {
-		if selector.matches(entry.path) && wanted(file_type, entry) {
-			return Action::Continue;
-		}
-		if entry.file_type == FileType::Dir && selector.prunes(entry.path) {
-			Action::SkipDir
-		} else {
-			Action::Skip
-		}
-	})
+	let entries = walk::collect_with_errors(
+		fs,
+		root,
+		&wopts,
+		!opts.sort_by_mtime,
+		opts.strict_errors,
+		move |_, entry| {
+			if selector.matches(entry.path) && wanted(file_type, entry) {
+				return Action::Continue;
+			}
+			if entry.file_type == FileType::Dir && selector.prunes(entry.path) {
+				Action::SkipDir
+			} else {
+				Action::Skip
+			}
+		},
+	)
 	.await
 	.map_err(GlobError::Walk)?;
 	if opts.strict_errors && !entries.errors().is_empty() {
@@ -273,7 +281,7 @@ pub async fn glob(fs: &Fs, root: &Path, opts: &GlobOptions) -> Result<Vec<GlobMa
 
 	let mut order: Vec<Entry<'_>> = entries.iter().collect();
 	if let Some(filter) = file_type.filter(|&filter| filter != FileType::Symlink) {
-		resolve_links(fs, root, filter, &mut order).await;
+		resolve_links(fs, root, filter, &mut order, opts.strict_errors).await?;
 	}
 	if opts.sort_by_mtime {
 		let limit = opts.max_results.unwrap_or(usize::MAX);
@@ -316,14 +324,24 @@ fn wanted(filter: Option<FileType>, entry: &Entry<'_>) -> bool {
 /// Rewrites each symlink kept for its target's type to describe the target
 /// (type, size, mtime); dangling links and links to the other type are
 /// dropped.
-async fn resolve_links(fs: &Fs, root: &Path, filter: FileType, order: &mut Vec<Entry<'_>>) {
+async fn resolve_links(
+	fs: &Fs,
+	root: &Path,
+	filter: FileType,
+	order: &mut Vec<Entry<'_>>,
+	strict: bool,
+) -> Result<(), GlobError> {
 	let mut session = fs.session();
 	let mut kept = Vec::with_capacity(order.len());
 	for mut entry in order.drain(..) {
 		if entry.file_type == FileType::Symlink {
 			let abs = fs.join(root, entry.path);
-			let Ok(info) = session.stat(&abs, true).await else {
-				continue;
+			let info = match session.stat(&abs, true).await {
+				Ok(info) => info,
+				Err(error) if strict && !is_dangling_link(&error) => {
+					return Err(GlobError::Directory(walk::DirError { path: abs, error }));
+				},
+				Err(_) => continue,
 			};
 			if info.file_type != Some(filter) {
 				continue;
@@ -335,6 +353,7 @@ async fn resolve_links(fs: &Fs, root: &Path, filter: FileType, order: &mut Vec<E
 		kept.push(entry);
 	}
 	*order = kept;
+	Ok(())
 }
 
 /// Newest first by millisecond, ties (and equal milliseconds) by path.

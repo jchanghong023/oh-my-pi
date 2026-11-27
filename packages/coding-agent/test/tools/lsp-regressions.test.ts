@@ -908,8 +908,8 @@ describe("lsp regressions", () => {
 
 			actions = [fix, alternative];
 			const ambiguous = await applyAction();
-			expect(ambiguous.details?.success).toBe(false);
-			expect(ambiguous.isError).toBe(true);
+			expect(ambiguous.details?.success).toBe(true);
+			expect(ambiguous.isError).toBeUndefined();
 			expect(ambiguous.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("needs query") });
 			expect(executed).toEqual(["fix"]);
 
@@ -918,8 +918,9 @@ describe("lsp regressions", () => {
 			expect(preferred.details?.success).toBe(true);
 			expect(executed).toEqual(["fix", "other"]);
 			const unmatched = await applyAction("missing");
-			expect(unmatched.details?.success).toBe(false);
-			expect(unmatched.isError).toBe(true);
+			expect(unmatched.details?.success).toBe(true);
+			expect(unmatched.isError).toBeUndefined();
+			expect(textResult(unmatched)).toContain('No code action matches "missing"');
 			expect(executed).toEqual(["fix", "other"]);
 			const result = await applyAction("0");
 			expect(result.details?.success).toBe(true);
@@ -928,7 +929,7 @@ describe("lsp regressions", () => {
 			failCommand = true;
 			const failed = await applyAction("Other fix");
 			expect(failed.details?.success).toBe(false);
-			expect(failed.isError).toBe(true);
+			expect(failed.isError).toBeUndefined();
 			expect(failed.content[0]).toMatchObject({
 				type: "text",
 				text: expect.stringContaining("fixture application rejected"),
@@ -6446,8 +6447,6 @@ describe("lsp regressions", () => {
 				.map(block => block.text)
 				.join("\n");
 			expect(output).toContain("Renamed");
-			expect(output).toContain("Servers responding to willRenameFiles: none");
-			expect(output).toContain("Applied 0 reference edit(s)");
 			expect(output).toContain("Check references not covered");
 			expect(result.details).toMatchObject({
 				success: true,

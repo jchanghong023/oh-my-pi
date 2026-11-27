@@ -97,6 +97,7 @@ export function captureSessionState(session: AgentSession): SessionMirrorState {
 		thinkingLevel: read.thinkingLevel(session),
 		sessionFile: read.sessionFile(session),
 		sessionId: read.sessionId(session),
+		liveToolOutputGeneration: session.liveToolOutputGeneration,
 		cwd: read.cwd(session),
 		artifactsDir: read.artifactsDir(session),
 		usageStatistics: read.usageStatistics(session),

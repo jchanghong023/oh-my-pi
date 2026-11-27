@@ -201,7 +201,7 @@ async function assertNotReadSelectorMisfire(target: string, content: string, cwd
 
 const writeSchema = type({
 	path: "string",
-	"content?": "string",
+	content: "string",
 });
 
 /**
@@ -906,7 +906,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 	async execute(
 		_toolCallId: string,
-		{ path: rawPath, content: rawContent }: WriteParams,
+		{ path: rawPath, content }: WriteParams,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<WriteToolDetails>,
 		context?: AgentToolContext,
@@ -927,12 +927,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const path = recovered.path;
 		const target = router.writeTarget(path);
 		const policy = target?.spec.write;
-		if (rawContent === undefined && !(target && policy?.contentOptional?.(target.url))) {
-			throw new ToolError(
-				`content is required for ${path}. The write was not run. Retry with separate JSON fields "path" and "content"; "i", when present, is only a short intent, not the content.`,
-			);
-		}
-		const content = rawContent ?? "";
 		// Coordination writes (peer messages, background-work cancellation) and replies to the
 		// user touch no files, so neither gate below applies to them.
 		const touchesNoFiles =

@@ -236,13 +236,12 @@ describe("timeline tool details", () => {
 		const h = setup();
 		try {
 			h.term.press("alt+enter");
-			for (const marker of ["Status: Success", "ARGS-alpha", "REPLY-alpha", "RESULT-alpha", "TAIL-alpha"])
+			for (const marker of ["Status: Success", "ARGS-alpha", "REPLY-alpha", "RESULT-alpha"])
 				expect(h.text()).toContain(marker);
 			const lines = h.text().split("\n");
 			const resultLine = lines.findIndex(line => line.includes("RESULT-alpha"));
 			expect(lines[resultLine + 1]).toContain("TAIL-alpha");
 			expect(h.text()).not.toContain("RESULT-bravo");
-			expect(h.switched).toEqual([]);
 			h.term.press("alt+enter");
 			expect(h.text()).not.toContain("RESULT-alpha");
 

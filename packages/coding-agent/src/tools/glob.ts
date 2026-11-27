@@ -26,7 +26,6 @@ import {
 	searchPathTier,
 } from "./path-utils";
 import { searchApprovalCacheTargets } from "./search-approval-targets";
-import { createTeamSearchTargetCheck } from "./team-read-isolation";
 import { toPathList } from "../utils/render-utils";
 import { ToolAbortError, throwIfAborted } from "./tool-errors";
 import { ToolError } from "./tool-errors";
@@ -235,14 +234,12 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 			// Internal URLs resolve inside the native walk, bounded by the tier this call was approved at.
 			const context = sessionResolveContext(this.session, { signal, containSkillPaths: true });
 			const tier = resolveToolTier(this, params);
-			const assertTarget = await createTeamSearchTargetCheck(this.session, context);
-			const urlFilesystem = new InternalUrlFilesystem({ context, tier, assertReadBacking: assertTarget });
+			const urlFilesystem = new InternalUrlFilesystem({ context, tier });
 			const rawPatternInputs = this.#customOps
 				? effectivePaths
 				: await expandDelimitedPathEntries(effectivePaths, this.session.cwd, {
 						splitter: parseFindPattern,
 						mixedLocalPaths: urlFilesystem,
-						assertTarget,
 					});
 			const rawPatterns = rawPatternInputs.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
 			const aliasResolvedPatterns = this.#rootPathAlias
@@ -268,7 +265,6 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 					this.session.cwd,
 					parseFindPattern,
 					urlFilesystem,
-					assertTarget,
 				);
 				if (partition.valid.length === 0) {
 					throw new ToolError(
@@ -305,7 +301,6 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 				if (target.searchPath === "/") {
 					throw new ToolError("Searching from root directory '/' is not allowed");
 				}
-				if (normalizedPatterns.length === 1 || this.#customOps) await assertTarget?.(target.searchPath);
 			}
 
 			const effectiveLimit = limit ?? DEFAULT_LIMIT;

@@ -216,13 +216,16 @@ fn a_deferred_host_command_runs_the_program_it_shadows() {
 	assert_eq!(String::from_utf8_lossy(&out.stdout), "126\n7\n7\n");
 }
 
-/// A PATH miss must not revive a string-only host command that rejected
-/// raw operands, even when its syntax normally defers to PATH.
+/// A PATH miss preserves the rejection by a string-only host command,
+/// even when its syntax normally defers to PATH.
 #[test]
-fn a_deferred_host_command_with_raw_arguments_stays_not_found() {
+fn a_deferred_host_command_with_raw_arguments_reports_rejection() {
 	let mut host =
 		FakeHost::new().with_path_deferral(|name: &BStr, _: &[BString]| name == b"find".as_slice());
 	host.countdown("find", 1, 7);
 	let out = run_script(host, b"PATH=/none; find /c $'\\xff'", &[], Fault::None);
-	assert_eq!(out.status, 127);
+	assert_eq!(out.status, 126);
+	assert!(
+		String::from_utf8_lossy(&out.stderr).contains("builtin cannot accept non-UTF-8 argument")
+	);
 }

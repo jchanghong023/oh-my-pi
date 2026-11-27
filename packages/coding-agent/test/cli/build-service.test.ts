@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import {
 	type BuildHost,
+	type BuildProduct,
 	downloadBuildFile,
 	fetchBuild,
 	isMuslLinuxForTest,
-	OMP_BUILD,
 	parseBuildAnswer,
 	resolveBuildHost,
 } from "@oh-my-pi/pi-coding-agent/cli/build-service";
@@ -13,6 +13,10 @@ import { TempDir, VERSION } from "@oh-my-pi/pi-utils";
 
 const fileName = "omp-darwin-arm64";
 const host: BuildHost = { target: "macos-arm64", asset: "darwin-arm64", windows: false };
+const product: BuildProduct = {
+	id: "fixture",
+	fileName: host => `omp-${host.asset}${host.windows ? ".exe" : ""}`,
+};
 const sha = (text: string) => Bun.SHA256.hash(text, "hex");
 
 /** A well-formed `latest` answer, with `overrides` merged over the top level. */
@@ -35,7 +39,7 @@ function answer(overrides: Record<string, unknown> = {}): Record<string, unknown
 
 describe("build service answers", () => {
 	it("keeps a complete file patch and the version the check named as installed", () => {
-		const parsed = parseBuildAnswer(answer(), OMP_BUILD, host, "18.8.8");
+		const parsed = parseBuildAnswer(answer(), product, host, "18.8.8");
 
 		expect(parsed).toEqual({
 			version: "18.8.9",
@@ -53,7 +57,7 @@ describe("build service answers", () => {
 
 	it("rejects answers that cannot be installed safely", () => {
 		const file = (fields: Record<string, unknown>) => ({ file: { ...(answer().file as object), ...fields } });
-		const parse = (body: Record<string, unknown>) => parseBuildAnswer(body, OMP_BUILD, host);
+		const parse = (body: Record<string, unknown>) => parseBuildAnswer(body, product, host);
 		expect(() => parse(answer(file({ sha256: sha("new").toUpperCase() })))).toThrow("invalid sha256");
 		expect(() => parse(answer(file({ sha256: "abc" })))).toThrow("invalid sha256");
 		expect(() => parse(answer(file({ size: 0 })))).toThrow("invalid size");
@@ -63,7 +67,7 @@ describe("build service answers", () => {
 	});
 
 	it("installs the whole file when the patch is incomplete or not a file patch", () => {
-		const parse = (body: Record<string, unknown>) => parseBuildAnswer(body, OMP_BUILD, host);
+		const parse = (body: Record<string, unknown>) => parseBuildAnswer(body, product, host);
 		const { url: _url, ...withoutUrl } = answer().patch as Record<string, unknown>;
 		expect(parse(answer({ patch: withoutUrl })).patch).toBeUndefined();
 		expect(parse(answer({ patch: { ...(answer().patch as object), format: "tree" } })).patch).toBeUndefined();
@@ -74,10 +78,10 @@ describe("build service answers", () => {
 });
 
 describe("build service targets", () => {
-	it("maps platform, architecture, and libc to the service target and omp's release file name", () => {
+	it("maps platform, architecture, and libc to the service target and the requested product's asset", () => {
 		const resolve = (platform: NodeJS.Platform, arch: string, musl: boolean) => {
 			const resolved = resolveBuildHost(platform, arch, musl);
-			return { target: resolved.target, fileName: OMP_BUILD.fileName(resolved, "18.8.9") };
+			return { target: resolved.target, fileName: product.fileName(resolved, "18.8.9") };
 		};
 		expect(resolve("darwin", "arm64", false)).toEqual({ target: "macos-arm64", fileName: "omp-darwin-arm64" });
 		expect(resolve("linux", "x64", true)).toEqual({ target: "linux-musl-x86_64", fileName: "omp-linux-musl-x64" });
@@ -121,6 +125,7 @@ describe("fetchBuild", () => {
 		const build = await fetchBuild(
 			{ channel: "canary" },
 			{
+				product,
 				host,
 				fromVersion: "18.8.8",
 				fetchImpl: async (input, init) => {
@@ -136,7 +141,7 @@ describe("fetchBuild", () => {
 
 		expect(requests).toHaveLength(1);
 		expect(requests[0].url).toBe(
-			"https://build.test/api/products/omp/latest/macos-arm64?channel=canary&from_version=18.8.8",
+			"https://build.test/api/products/fixture/latest/macos-arm64?channel=canary&from_version=18.8.8",
 		);
 		expect(requests[0].userAgent).toBe(`omp/${VERSION}`);
 		expect(requests[0].signal).toBeInstanceOf(AbortSignal);
@@ -150,6 +155,7 @@ describe("fetchBuild", () => {
 		await fetchBuild(
 			{ version: "18.8.9" },
 			{
+				product,
 				host,
 				fetchImpl: async input => {
 					url = String(input);
@@ -158,16 +164,16 @@ describe("fetchBuild", () => {
 			},
 		);
 
-		expect(url).toBe("https://build.stencil.so/api/products/omp/versions/18.8.9/macos-arm64");
+		expect(url).toBe("https://build.stencil.so/api/products/fixture/versions/18.8.9/macos-arm64");
 	});
 
 	it("names the target when nothing is published for it", async () => {
 		await expect(
 			fetchBuild(
 				{ channel: "stable" },
-				{ host, fetchImpl: async () => Response.json({ error: "no_build" }, { status: 404 }) },
+				{ product, host, fetchImpl: async () => Response.json({ error: "no_build" }, { status: 404 }) },
 			),
-		).rejects.toThrow("No omp stable build for macos-arm64 is published");
+		).rejects.toThrow("No fixture stable build for macos-arm64 is published");
 	});
 });
 

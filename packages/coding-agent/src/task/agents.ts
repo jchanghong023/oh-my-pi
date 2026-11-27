@@ -12,7 +12,6 @@ import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { t
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
 import securityReviewerMd from "../prompts/agents/security-reviewer.md" with { type: "text" };
-import specDrivenMd from "../prompts/agents/spec-driven.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
 import { AUTO_THINKING } from "../thinking/levels";
 
@@ -48,36 +47,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "reviewer.md", template: reviewerMd },
 	{ fileName: "security-reviewer.md", template: securityReviewerMd },
 	{ fileName: "developer-test-agent.md", template: developerTestAgentMd },
-	{
-		fileName: "spec-requirements.md",
-		frontmatter: {
-			name: "spec-requirements",
-			description:
-				"Controlled specification drafting and review; read-only investigation and structured document output",
-			tools: ["read", "find", "grep", "glob", "web_search", "yield"],
-		},
-		template: specDrivenMd,
-	},
-	{
-		fileName: "spec-planner.md",
-		frontmatter: {
-			name: "spec-planner",
-			description:
-				"Controlled planning from confirmed specifications and a selected reviewed candidate; no implementation",
-			tools: ["read", "find", "grep", "glob", "web_search", "yield"],
-		},
-		template: specDrivenMd,
-	},
-	{
-		fileName: "spec-executor.md",
-		frontmatter: {
-			name: "spec-executor",
-			description: "Implement an approved plan and verify it through native tasks",
-			tools: ["read", "find", "grep", "glob", "write", "edit", "task", "wait", "yield"],
-			spawns: "*",
-		},
-		template: specDrivenMd,
-	},
 	{
 		fileName: "task.md",
 		frontmatter: {

@@ -5,6 +5,8 @@ import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types"
 
 export type { AcpBuiltinSlashCommandResult } from "./types";
 
+const TUI_ONLY_REFUSED_NAMES: ReadonlySet<string> = new Set(["collab2", "todoloop"]);
+
 /**
  * All names (primary + aliases) reserved by ACP builtins with text handlers.
  * Used to filter out extensions that would shadow a builtin or its alias at
@@ -28,11 +30,11 @@ export function isTuiOnlyTodoLoopCommand(text: string): boolean {
  * advertised to ACP clients.
  */
 export function isAcpBuiltinShadowedName(name: string): boolean {
-	if (name === "todoloop" || ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
+	if (TUI_ONLY_REFUSED_NAMES.has(name) || ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
 	const colon = name.indexOf(":");
 	if (colon === -1) return false;
 	const prefix = name.slice(0, colon);
-	return prefix === "todoloop" || ACP_BUILTIN_RESERVED_NAMES.has(prefix);
+	return TUI_ONLY_REFUSED_NAMES.has(prefix) || ACP_BUILTIN_RESERVED_NAMES.has(prefix);
 }
 
 /**
@@ -57,7 +59,7 @@ export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = BUILTIN_SLASH_COMM
 /**
  * Dispatch a slash command in ACP/text mode. Returns:
  * - `false` when no text-mode builtin matched; the caller should forward
- *   the input as a prompt. Exact `/todoloop` invocations are refused locally.
+ *   the input as a prompt. Credential-bearing or explicitly refused TUI commands are consumed locally.
  * - `{ consumed: true }` when the command handled the input entirely.
  * - `{ prompt }` when the command was handled but a residual prompt should be
  *   sent to the model.
@@ -68,8 +70,8 @@ export async function executeAcpBuiltinSlashCommand(
 ): Promise<AcpBuiltinSlashCommandResult> {
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
-	if (parsed.name === "todoloop") {
-		return (await usage("/todoloop is only supported in the TUI.", runtime)) ?? { consumed: true };
+	if (TUI_ONLY_REFUSED_NAMES.has(parsed.name)) {
+		return (await usage(`/${parsed.name} is only supported in the TUI.`, runtime)) ?? { consumed: true };
 	}
 	const command = lookupBuiltinSlashCommand(parsed.name);
 	if (!command?.handle) return false;

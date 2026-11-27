@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getWorktreesDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getWorktreesDir, hashPath, isEnoent, resolveEquivalentPath } from "@oh-my-pi/pi-utils";
 import { hasLiveIsolationOwner, ISOLATION_OWNER_FILE, readRetainedMountBackend } from "../task/isolation-ownership";
 import { releaseOvnfsCheckout } from "../ovnfs/task-record";
 import type { ManagedWorktree } from "./backend";
@@ -11,6 +11,11 @@ import { OVNFS_RECORD_DIR } from "./ovnfs-records";
 
 type WorktreeKind = Exclude<ManagedWorktree["kind"], "ovnfs">;
 const TASK_ISOLATION_MOUNT_DIRS = ["m", "merged"] as const;
+
+/** Ownership marker in Git's admin directory, never in the user's checkout. */
+export function sessionWorktreeMarker(gitDir: string): string {
+	return path.join(gitDir, "omp-session-worktree");
+}
 
 interface DiskEntry {
 	path: string;
@@ -54,9 +59,60 @@ async function stopRetainedMount(dir: string): Promise<boolean> {
 	return false;
 }
 
-/** Discover entries in the OMP worktree directory, including legacy nested entries. */
-export async function managedGitWorktrees(): Promise<ManagedWorktree[]> {
-	return (await scanWorktrees()).map(entry => ({ ...entry, remove: () => removeEntry(entry) }));
+/** Discover entries in the managed base and session worktrees registered with the current repository. */
+export async function managedGitWorktrees(cwd?: string): Promise<ManagedWorktree[]> {
+	const entries = (await scanWorktrees()).map(entry => ({ ...entry, remove: () => removeEntry(entry) }));
+	const known = new Set(entries.map(entry => resolveEquivalentPath(entry.path)));
+	const repo = cwd === undefined ? null : vcs.git(cwd);
+	if (!repo) return entries;
+	const primary = repo.primaryRoot();
+	const commonDir = resolveEquivalentPath(repo.info().commonDir);
+	const adminRoot = path.join(commonDir, "worktrees");
+	const hashes = new Set([hashPath(primary), hashPath(resolveEquivalentPath(primary))]);
+	for (const wt of (await repo.worktrees()).slice(1)) {
+		const root = resolveEquivalentPath(wt.path);
+		if (known.has(root)) continue;
+		const belongsToRepo = (checkout: ReturnType<typeof vcs.requireGit>) => {
+			const info = checkout.info();
+			return (
+				resolveEquivalentPath(info.repoRoot) === root &&
+				resolveEquivalentPath(info.commonDir) === commonDir &&
+				path.relative(adminRoot, path.dirname(resolveEquivalentPath(info.gitDir))) === ""
+			);
+		};
+		const checkout = vcs.git(root);
+		if (!checkout || !belongsToRepo(checkout)) continue;
+		const gitDir = checkout.info().gitDir;
+		const marked = await Bun.file(sessionWorktreeMarker(gitDir)).exists();
+		const branch = wt.branch?.replace(/^refs\/heads\//, "");
+		if (!marked) {
+			// Before we recorded ownership, `/wt` used the branch's slug and the
+			// primary checkout's hash, plus a bounded numeric collision suffix.
+			if (!branch) continue;
+			const slug = branch.replaceAll(/[^A-Za-z0-9._-]+/g, "-");
+			const name = path.basename(root).replace(/-(?:[2-9]|[1-9]\d|100)$/, "");
+			if (![...hashes].some(hash => name === `${slug}-${hash}`)) continue;
+		}
+		known.add(root);
+		entries.push({
+			path: root,
+			kind: "pr-checkout",
+			parentRepo: primary,
+			branch,
+			remove: async () => {
+				const current = vcs.git(root);
+				if (
+					!current ||
+					!belongsToRepo(current) ||
+					current.info().gitDir !== gitDir ||
+					!(await repo.worktreeRemove(root, true))
+				) {
+					throw new Error(`Git refused to remove worktree ${root}`);
+				}
+			},
+		});
+	}
+	return entries;
 }
 
 async function removeEntry(entry: DiskEntry): Promise<void> {

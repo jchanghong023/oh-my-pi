@@ -23,8 +23,8 @@ async function ovnfsBackend(settings?: Settings): Promise<WorktreeBackend> {
 }
 
 /** List all OMP-owned entries, including the backend that tears each one down. */
-export async function managedWorktrees(): Promise<ManagedWorktree[]> {
-	const [git, ovnfs] = await Promise.all([gitWorktree.managed(), (await ovnfsBackend()).managed()]);
+export async function managedWorktrees(cwd?: string): Promise<ManagedWorktree[]> {
+	const [git, ovnfs] = await Promise.all([gitWorktree.managed(cwd), (await ovnfsBackend()).managed()]);
 	return [...git, ...ovnfs];
 }
 

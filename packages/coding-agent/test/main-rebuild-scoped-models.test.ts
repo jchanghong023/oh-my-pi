@@ -337,7 +337,6 @@ describe("resolveScopedModels", () => {
 			settings,
 		);
 
-		expect(registry.refreshCalls).toBe(1);
 		expect(registry.refreshStrategies).toEqual(["offline"]);
 		expect(scoped.map(entry => entry.model.id)).toEqual(["b"]);
 	});

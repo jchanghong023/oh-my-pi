@@ -59,8 +59,7 @@ When authorized to create or edit a contributor-submitted PR, follow the checkli
   	: new Worker(new URL("./<worker>.ts", import.meta.url).href, { type: "module" });
   ```
   When the process was started from the omp CLI — source `cli.ts`, npm-bundle `dist/cli.js`, or compiled binary — `workerHostEntry()` is `Bun.main` and the worker re-enters the single entry module, so no per-worker `--compile` entrypoints or bundle entries exist. Outside a CLI host (`bun test`, SDK embedding, standalone `omp-stats`) it returns `null` and the direct-module fallback loads the worker source. New worker kinds MUST add their selector to the dispatch table in `cli.ts` and keep the fallback branch.
-  History: `with { type: "file" }` only copied the entry as a raw asset (workers crashed silently in compiled binaries — issues #1011, #1027), and the later literal-path + extra-entrypoint pattern required keeping spawn literals and two build scripts in sync (issue #1150). The smoke probe below is the live validation of this contract.
-  Validate any new worker with the dedicated smoke probe: `omp --smoke-test` spawns the stats sync worker and the tiny-model subprocess, pings them, and exits. Run `bun run ci:test:smoke` for the source CLI; the separate `bun run ci:test:install-methods` exercises binary and tarball installs. Add a sibling smoke if the new worker is on a different module graph.
+  Validate new worker wiring with `omp --smoke-test`; add a sibling probe when a different module graph is not covered. `bun run ci:test:smoke` checks the source CLI; `bun run ci:test:install-methods` checks installed binaries and tarballs. Run `ci:test:*` only with explicit authorization for this task; otherwise report the unverified scope.
 
 ## Central Utilities
 
@@ -84,12 +83,12 @@ Use Bun APIs where they provide a cleaner alternative; fall back to `node:*` onl
 |Binary lookup|`$which("git")` from `@oh-my-pi/pi-utils`|`spawnSync(["which", "git"])`|
 |HTTP server|`Bun.serve()`|`http.createServer()`|
 |SQLite|`bun:sqlite`|`better-sqlite3`|
-|Hashing|`Bun.hash()`, `Bun.password.*`, WebCrypto|`node:crypto`|
+|Hashing|`Bun.hash()`, `Bun.password.hash(pw, "bcrypt")` / `.verify()`, WebCrypto|`node:crypto`|
 |Path resolution|`import.meta.dir`, `import.meta.path`|`fileURLToPath` dance|
 |JSON5|`Bun.JSON5.parse()` / `.stringify()`|`json5` package|
 |JSONL|`Bun.JSONL.parse()` / `.parseChunk()`|`text.split("\n").map(JSON.parse)`|
-|String width|`Bun.stringWidth()`|`get-east-asian-width`, custom|
-|Text wrapping|`Bun.wrapAnsi()`|custom ANSI-aware wrappers|
+|String width|`Bun.stringWidth(text, { countAnsiEscapeCodes: false })`|`get-east-asian-width`, custom|
+|Text wrapping|`Bun.wrapAnsi(text, width, { wordWrap, hard, trim })`|custom ANSI-aware wrappers|
 
 ### Process execution
 
@@ -98,7 +97,7 @@ Prefer Bun Shell (`` $`cmd` ``) for simple commands:
 ```typescript
 import { $ } from "bun";
 
-const result = await $`git status`.cwd(dir).quiet().nothrow();
+const result = await $`bun --version`.cwd(dir).quiet().nothrow();
 if (result.exitCode === 0) {
 	const text = result.text();
 }
@@ -174,13 +173,6 @@ for await (const line of readLines(stream)) {
 
 Manual reader loops only when the protocol requires it (SSE, streaming JSON-RPC).
 
-### Misc
-
-- **Sleep**: `await Bun.sleep(ms)`, never `new Promise(r => setTimeout(r, ms))`.
-- **Password hashing**: `Bun.password.hash(pw, "bcrypt")` / `Bun.password.verify(pw, hash)`.
-- **String width**: `Bun.stringWidth(text, { countAnsiEscapeCodes?: false })`.
-- **Wrapping**: `Bun.wrapAnsi(text, width, { wordWrap, hard, trim })`.
-
 ## Model/Provider Policy Lives in KDL
 
 **NEVER hard-code model- or provider-conditional policy in TypeScript.** No `id.includes("claude")`, no model-name regexes, no per-model lookup tables (effort ladders, pricing, context windows, modalities, API routing, quirk flags). All of it belongs in the KDL rule tree at `packages/catalog/src/compat/rules/`, compiled by `bun run gen:compat` into the committed `rules.json` and resolved at build time via `resolveModelPolicy`/`buildModel`.
@@ -198,7 +190,7 @@ Rules for TS code:
 - Discovery mappers map authoritative upstream fields as reported; seed neutral values only for fields the upstream omits or misreports **and** KDL explicitly owns via a correction axis (`input-modalities`, `cost-patch`, `limits-patch`, `context-window-floor`, thinking axes). Assert rule-owned corrections through `buildModel`; raw discovery specs remain the right assertion surface for parsing/normalization contracts.
 - An id that no selector can isolate gets an exact-id `models` residue rule with a comment — never a special case in TS.
 - Equal-rank rule overlaps throw `AmbiguousOverlapError` at resolve time; fix with an explicit `priority=` in KDL, not code.
-- After editing rules: `bun run gen:compat` and commit `rules.json` alongside the `.kdl` change.
+- After editing rules, run `bun run gen:compat` and include `rules.json` with the `.kdl` change.
 
 ## Generated Files
 
@@ -211,7 +203,7 @@ To change an entry, fix the source:
 - **Discovery/request plumbing** (endpoint shapes, auth, response parsing) → the mappers in `packages/catalog/src/provider-models/openai-compat.ts`.
 - **Generator wiring** (upstream merges, premium multipliers, post-processing order) → `packages/catalog/scripts/generate-models.ts`.
 
-Regenerate with `bun run gen:compat` and/or `bun run gen:models` and commit the generated files alongside the source change. Add a regression test against the **rule/descriptor/mapper**, not the bundled JSON, so it survives upstream metadata shifts.
+Regenerate with `bun run gen:compat` and/or `bun run gen:models` and deliver generated files with their sources. If a commit is authorized, include both in the same commit. Regression coverage must target the **rule, descriptor or mapper**, not bundled JSON; follow [Commands](#commands) for when new tests are authorized.
 
 ## Logging and CLI Output
 
@@ -225,7 +217,7 @@ logger.warn("Theme file invalid, using fallback", { path });
 logger.debug("LSP fallback triggered", { reason });
 ```
 
-Logs go to `~/.omp/logs/omp.YYYY-MM-DD.log` with automatic rotation; `bun test` processes write theirs to a per-user `omp-test-logs-<uid>/` under the OS temp dir instead. Standalone CLI commands that exit without entering the TUI MAY use `console.*` or process streams for intentional user-facing output. Keep structured stdout clean. This exception is semantic, not filename-based; shared code must use `logger` or an explicit output sink.
+Runtime log locations follow the [runtime spec](openspec/specs/fork-runtime/spec.md#requirement-可选性能数据根). `bun test` logs use the per-user `omp-test-logs-<uid>/` under the OS temp directory. Standalone commands that exit without entering the TUI may use `console.*` or streams for intentional output; keep structured stdout clean. Shared code must use `logger` or an explicit output sink.
 
 ## TUI Sanitization
 
@@ -279,46 +271,21 @@ Profiles live in the root `Cargo.toml`; `.cargo/config.toml` carries the setting
 |`profiling`|`release` codegen with symbols kept, for `perf`/`samply`/`Instruments`.|
 |`ci`|Thin LTO, no debuginfo, stripped.|
 
-**Never set `split-debuginfo = "off"` on a profile that has debuginfo.** On Mach-O the linker never merges DWARF into the executable — it writes a debug map (`N_OSO`) pointing at the `.o` files, and `"unpacked"` is what keeps those files. With `"off"` every backtrace frame in our own crates silently loses `file:line`; the `panicked at foo.rs:3` header still prints (that is `#[track_caller]`, not debuginfo), which makes the loss easy to miss. `ci` may use `"off"` only because it sets `debug = false`.
+**Never set `split-debuginfo = "off"` on a profile with debuginfo.** On Mach-O, debug information remains in the object files; use `"unpacked"` to retain file and line information. The `ci` profile may use `"off"` only because `debug = false`.
 
-`embed-metadata = false` (in `.cargo/config.toml`) keeps crate metadata in `.rmeta` instead of duplicating it into every rlib — measured 196 MB → 130 MB on a reqwest-sized graph at identical build times. Its accepted spelling is toolchain-coupled; keep it in sync with `rust-toolchain.toml`.
-
-Rejected, with measurements, so nobody re-litigates them: **sccache** (cannot cache incremental, bin, or proc-macro crates — measured slower than not using it), **mold** (ELF-only; no Mach-O support), and **`panic = "abort"` on `dev`** (Cargo ignores `panic` for the test profile, so the whole dep graph builds twice — 131 MB → 214 MB).
+Keep the toolchain-sensitive `embed-metadata = false` setting in `.cargo/config.toml` aligned with `rust-toolchain.toml`. Do not set `panic = "abort"` on `dev`; the test profile ignores it and rebuilds dependencies.
 
 ## Testing Guidance
 
-Test the contract the system exposes — not the easiest internal detail to assert.
-
-- Every new test must defend one **concrete, externally observable contract**: behavior, output shape, state transition, error mapping, or a regression-prone parsing boundary. If you cannot name the contract, do not add the test.
+Test an observable contract, not implementation shape. Name what the consumer would see if the test failed: a wrong result, missing state transition, broken wire format, or incorrect error. A regression test must trigger the original failure path and assert the corrected outcome.
 
 ### Good vs. bad test filter
 
-- **Name the failure mode.** Every test MUST state what a consumer observes if it regresses. Cannot name one? NEVER add it.
-- **Good: transformation.** One fixture MAY prove parse/render/normalize/encode/resolve behavior when output is computed, not echoed.
-- **Good: branch or boundary.** Distinct inputs, empty values, malformed input, version/provider routing, and state transitions MUST prove distinct outcomes.
-- **Good: external contract.** Exact bytes/shape MAY be asserted when a provider, parser, protocol, or persisted consumer reads them.
-- **Good: precedence or negative contract.** Keep explicit `false`/override-wins assertions and required absence only when they prevent a documented leak, downgrade, 400, or incompatible wire field.
-- **Good: regression.** A repro MUST trigger the prior real failure path and assert the corrected observable result.
-- **Bad: static echo.** NEVER test a constructor/builder merely copied a fixture or baked constant into an in-memory config/metadata field.
-- **Bad: success passthrough.** NEVER assert `fn(x) === x` when `x` was already supplied/declared valid; assert a transform, rejection, or downstream effect instead.
-- **Bad: wording/defaults.** NEVER assert prompt/UI boilerplate, a default literal, object existence, non-empty output, or length growth without a consumer contract.
-- **Bad: duplicate rows.** Parameterized/loop rows MUST each cover a distinct branch, provider/model path, or consumer contract; delete same-path duplicates.
-- **Metadata exception.** Exact metadata, identity, ordering, or `undefined` MAY remain only when a downstream consumer depends on it and the test establishes branch, precedence, negative-contract, wire, or regression evidence.
-- **Termination exception.** For cyclic/large inputs, assert a bounded output, surfaced error, or state change; bare `not.toThrow()` is insufficient.
-- No placeholder tests, tautologies, or "the code ran" assertions (`expect(true).toBe(true)`, bare `not.toThrow()`, non-empty string checks, length-grew checks, "prompt exists" checks without semantic assertion).
-- Prefer contract-level tests over implementation details. Avoid asserting internal helper wiring, field assignment, singleton identity, incidental ordering, prompt boilerplate, or passthrough option forwarding unless another component depends on that exact detail.
-- Don't duplicate coverage across abstraction levels. If an integration test already proves the behavior, drop the narrower unit test that restates it through mocks.
-- Tests **must be full-suite safe**, not just file-local safe. No long-lived file-wide mutations of `Bun.*`, `process.platform`, `process.env`, or `Bun.env` when a narrower seam exists. Prefer per-test `vi.spyOn(...)` with `vi.restoreAllMocks()` in `afterEach`. A test that passes alone but poisons later files is broken.
-- **Never use `mock.module()`**. Bun's `mock.module()` mutates the global module registry and leaks across files ([oven-sh/bun#12823](https://github.com/oven-sh/bun/issues/12823)). Use `spyOn` on the imported module object instead. For pass deps, import the pass and spy on `.run`. For package deps, namespace-import and spy on the exported function.
-- For lifecycle/stateful code, prefer one test per invariant or transition over several tiny tests asserting one field each from the same transition.
-- For error handling, trigger the real failure path and assert the surfaced contract — don't instantiate error classes directly or inspect internal metadata.
-- Smoke tests are acceptable only when they catch a failure mode narrower tests would miss. "Package boots" or "command starts" alone is not enough.
-- Assert exact strings, ordering, and formatting only when downstream code parses or depends on the exact bytes. Otherwise assert semantic content.
-- Compile-time guarantees → type checks/type tests, not runtime placeholders.
-- **Never source-grep.** A test that reads an implementation file (`.ts`/`.rs`/build script) and asserts on its _text_ — `expect(src).toContain("someCall()")`, `.toMatch(/import .../)`, `.not.toContain("oldName")`, or "comment must say X" — is banned. It tests how code _looks_, not what it _does_: it breaks on harmless refactors (comment reflow, rename, import reorder) and passes while the behavior is broken. Assert the observable contract instead (run the code, check output/state/error), use the runtime smoke probe for wiring you cannot exercise in-process, and enforce structural invariants (no value-import of X, no self-import) with a type test or an oxlint rule — never a string scan of the source. (Reading a file your code _wrote_ — apply-patch result, generated bundle, temp fixture — and asserting on that output is fine; that is behavior, not a source grep.)
-- Don't add tests for tiny low-risk changes unless they protect a real contract or fix a regression-prone edge case.
-- Prefer focused package-local verification for the changed area.
-- Place fork behavior coverage in the relevant upstream test directory or native suite and keep it discoverable by that suite. Do not add a fork-specific runner, discovery path, allowlist, or test entrypoint.
+- Cover distinct transformations, boundaries, or consumer paths. Use exact bytes, ordering, metadata, or absence only when a consumer depends on them. For large or cyclic inputs, assert a bounded result, surfaced error, or state change.
+- Do not substitute passthroughs, default literals, boilerplate, fixture echoes, object existence, or mere execution for a consumer assertion. Do not duplicate coverage across rows or abstraction levels. Smoke tests must catch failures that narrower tests cannot; compile-time guarantees belong in type checks or type tests.
+- Keep tests full-suite safe. Avoid file-wide mutations of Bun APIs, platform values, or environment variables. Never use `mock.module()`; prefer per-test `vi.spyOn()` and restore mocks in `afterEach`.
+- Never assert on source text. Test behavior through the normal entry point; enforce structural invariants with type checks or lint rules. Assertions on files the feature produces are valid.
+- Run focused upstream tests for the changed behavior. Keep fork coverage discoverable in the relevant upstream suite; do not add a fork-specific runner, path, allowlist, or entry point.
 
 ## Changelog
 
@@ -337,7 +304,6 @@ Location: `packages/*/CHANGELOG.md` (per package).
 - New entries always go under `## [Unreleased]`.
 - Entries are one line, brief, and user-facing: lead with what the user will see or can now do. Root-cause narration and implementation detail belong in the commit/PR, not the changelog.
 - Never modify already-released sections (e.g., `## [0.12.2]`) — they are immutable.
-- Don't flag changelog section order or formatting in reviews or PRs — `bun run release` runs `fix-changelogs` which normalizes everything automatically.
 
 **Attribution:**
 
@@ -346,14 +312,15 @@ Location: `packages/*/CHANGELOG.md` (per package).
 
 ## Releasing
 
-Fork releases require explicit user authorization and use the manual CI workflow on `main` as specified in [fork-runtime](openspec/specs/fork-runtime/spec.md). Do not use the upstream `bun run release` script for fork releases.
+Fork releases require explicit user authorization and use only [`bun run cnb`](openspec/specs/fork-runtime/spec.md#requirement-cnb-精确输入缓存与四附件交付). Do not publish to GitHub Releases or use the upstream `bun run release` script. Installation and updates use CNB only. OMP does not check for updates at startup; manual checks and updates are available only outside `OMP_OFFLINE`.
 
 ## Fork Requirements and Additional Runbooks
 
 - [已批准需求](openspec/specs/)是 fork 权威；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-runtime/spec.md#requirement-项目定位与使用场景)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证要求](openspec/specs/fork-maintenance/spec.md#requirement-按风险选择验证和报告证据)、[上游基线](openspec/specs/fork-upstream-baseline/spec.md)；适用的 fork 约束优先于上游通用约定。
-- 新增、修改、移动或删除文档（含 `AGENTS.md`、规格、README、指南和 changelog）前 MUST 获得用户对该文档范围的明确授权。代码改动授权或文档同步要求不等于文档写入授权；未经授权只读核对并报告需更新之处，不改文件。功能改动仍须核对[内网快启](docs-zh-CN/quick-start-intranet.md)；获授权后只同步受影响的用法和限制，不复写规格。
+- `docs/` MUST 与上游保持一致；只通过上游同步更新，NEVER 在该目录内新增、修改、移动或删除 fork 内容。Fork 专用指南放在 `docs-zh-CN/`，仍须遵守文档授权规则。
+- **文档变更须先确认。** 不得自行向需求文档或 `AGENTS.md` 添加需求、规则或其他内容。新增、修改、移动或删除任何文档（含需求文档、`AGENTS.md`、README、指南和 changelog）前，MUST 先取得用户对目标文档及变更范围的明确确认。代码改动授权或文档同步要求不等于文档写入授权；未经确认只读核对并报告，不改文件。获准后只改确认范围内的必要内容。功能改动仍须核对[内网快启](docs-zh-CN/quick-start-intranet.md)，确认后只同步受影响的用法和限制，不复写规格。
 - `OMP_OFFLINE` 是公司内网标记，不是宿主探测。不得据此扩大工具、URL 或审批限制，也不得推断内网 Git API 不可用或已获写入授权；见[运行规格](openspec/specs/fork-runtime/spec.md)。
-- OpenSpec 使用 `omp openspec ...`，无需独立 OpenSpec／Node；未初始化项目 MUST 先取得显式初始化授权。内置资源、旧 schema 迁移及 Superpowers 同步边界见[编排规格](openspec/specs/spec-driven-orchestration/spec.md)。
+- OpenSpec 使用 `omp openspec ...`，无需独立 OpenSpec／Node；未初始化项目 MUST 先取得显式初始化授权。内置 OpenSpec 与 Superpowers 的交付和使用边界见[编排规格](openspec/specs/spec-driven-orchestration/spec.md)。
 - `ask` 沿用上游 HTML 表单及宿主协议，不保留 `questions[]`；活跃 `/goal-autopilot` 的例外见[上游继承边界](openspec/specs/fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。
 - [个人命令规格](openspec/specs/personal-commands/spec.md)维护 `/workspace`、`/sketch`、Developer Test Agent、`/todoloop`、`/collab2` 等行为。`/workspace` 不是沙箱或审批模式；`/collab2` 只用于可信隔离内网。
 - Firefox 测试 MUST 使用本机真实 Firefox、Selenium＋geckodriver 与临时隔离 profile。记录实际版本及验证范围；NEVER 换用兼容实现、自动安装浏览器／驱动或改个人配置。本机验证不等于公司实机验证。

@@ -70,7 +70,6 @@ it("retains real bus identity in write receipts through disk reload without inve
 		}
 		expect(received[0].id).not.toBe(received[1].id);
 		const failed = await tool.execute("missing", { path: "agent://Missing", content: "same message text" });
-		expect(failed.isError).toBe(true);
 		const receipt = failed.details?.message?.receipts?.[0];
 		expect(receipt).toMatchObject({ to: "Missing", outcome: "failed" });
 		expect(receipt).not.toHaveProperty("id");

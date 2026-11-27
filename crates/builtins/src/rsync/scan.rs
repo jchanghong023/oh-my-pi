@@ -611,25 +611,33 @@ impl Scanner {
 		Ok(tree)
 	}
 
-	/// The cleaned absolute spelling of `name` under `base` (sender_source_full_path).
-	fn full_path_bytes(&self, base: u32, name: &[u8]) -> Vec<u8> {
-		let joined = if is_absolute_bytes(name) {
-			name.to_vec()
-		} else {
-			let mut b = path_bytes(&self.bases[base as usize].abs).into_owned();
-			b.push(b'/');
-			b.extend_from_slice(name);
-			b
+	/// The cleaned matching spelling of `name` and the namespace used for native I/O.
+	fn full_path_bytes(&self, base: u32, name: &[u8]) -> io::Result<(Vec<u8>, bool)> {
+		let base = &self.bases[base as usize].abs;
+		let clean = |bytes: &[u8]| {
+			paths::clean_local_fname_flags(bytes, CFN_COLLAPSE_DOT_DOT_DIRS | CFN_DROP_TRAILING_DOT_DIR)
+				.unwrap_or_else(|p| p)
 		};
-		paths::clean_local_fname_flags(&joined, CFN_COLLAPSE_DOT_DOT_DIRS | CFN_DROP_TRAILING_DOT_DIR)
-			.unwrap_or_else(|p| p)
+		if is_absolute_bytes(name) {
+			if cfg!(windows) {
+				// A rooted name without a drive does not inherit a verbatim base.
+				let path = join_name(base, name)?;
+				return Ok((clean(&path_bytes(&path)), is_verbatim(&path)));
+			}
+			return Ok((clean(name), false));
+		}
+		let mut joined = path_bytes(base).into_owned();
+		if !joined.ends_with(b"/") {
+			joined.push(b'/');
+		}
+		joined.extend_from_slice(name);
+		Ok((clean(&joined), is_verbatim(base)))
 	}
 
 	/// Confined resolution of `name`: the best anchor and the rest of the path below it.
 	fn anchor_for(&self, base: u32, name: &[u8]) -> io::Result<(Tree, Vec<u8>)> {
-		let full = self.full_path_bytes(base, name);
+		let (full, verbatim) = self.full_path_bytes(base, name)?;
 		let mut best: Option<&Anchor> = None;
-		let verbatim = is_verbatim(&self.bases[base as usize].abs);
 		for a in &self.anchors {
 			let len = a.full.len();
 			if full.starts_with(&a.full)
@@ -931,7 +939,9 @@ impl Scanner {
 
 	/// remember_sender_source_arg.
 	fn remember_arg(&mut self, name: &[u8], st: &St) {
-		let mut full = self.full_path_bytes(self.cur_base, name);
+		let Ok((mut full, verbatim)) = self.full_path_bytes(self.cur_base, name) else {
+			return;
+		};
 		let is_dir = mode_is_dir(st.mode);
 		if !is_dir {
 			let Some(slash) = memchr::memrchr(b'/', &full) else {
@@ -940,7 +950,7 @@ impl Scanner {
 			full.truncate(operand_parent_len(slash, paths::volume_root_len(&full)));
 		}
 		let base = &self.base().abs;
-		let native = if is_verbatim(base) {
+		let native = if verbatim {
 			join_name(base, &full)
 		} else {
 			bytes_path(&full).map(Path::to_path_buf)
@@ -971,22 +981,9 @@ impl Scanner {
 	fn filter_reader(&self) -> impl Fn(&[u8]) -> io::Result<Option<Vec<u8>>> + use<> {
 		let fs = self.ctx.fs.clone();
 		let base = self.base().abs.clone();
-		#[cfg(windows)]
-		let unc = path_bytes(&base).starts_with(b"//");
 		let insecure = self.ctx.opts.insecure_links;
 		let confine = self.ctx.opts.confine_root.as_ref().map(PathBuf::from);
 		move |p: &[u8]| -> io::Result<Option<Vec<u8>>> {
-			// The filter engine represents UNC matching paths with one leading slash.
-			#[cfg(windows)]
-			let path = if p.starts_with(b"/") && unc {
-				let mut unc = Vec::with_capacity(p.len() + 1);
-				unc.push(b'/');
-				unc.extend_from_slice(p);
-				join_name(&base, &unc)?
-			} else {
-				join_name(&base, p)?
-			};
-			#[cfg(not(windows))]
 			let path = join_name(&base, p)?;
 			let opts = paths::OperatorOpts { insecure, confine: confine.as_deref() };
 			let Ok(mut file) = paths::open_operator_file_with(&fs, &path, &opts) else {

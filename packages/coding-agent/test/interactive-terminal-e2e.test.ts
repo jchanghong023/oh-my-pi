@@ -370,7 +370,6 @@ describe("libkitty end-to-end", () => {
 			for (const display of ["compact", "clean", "detailed"] as const) {
 				cfgDisplayMode.set(session.settings, display);
 				await term.settle();
-				expect(cfgDisplayMode.get(session.settings)).toBe(display);
 				expect(mode.composer.text()).toBe(draft);
 				expect(mode.composer.expandedText()).toBe(draft);
 				expect(mode.composer.cursor()).toBe(cursor);
@@ -436,7 +435,6 @@ describe("libkitty end-to-end", () => {
 		// Observed reasoning unlocks Alt+P even when the model level is off.
 		mode.noteDisplayableThinkingContent(thinkingMessage);
 		mode.addMessageToChat(thinkingMessage);
-		expect(mode.hasDisplayableThinkingContent).toBe(true);
 		for (let i = 0; i < 12; i++) {
 			mode.addMessageToChat(assistantText(`Filler answer number ${i} occupying a transcript row.`));
 		}

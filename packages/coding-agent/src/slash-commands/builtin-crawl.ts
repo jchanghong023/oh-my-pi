@@ -1,5 +1,7 @@
+import * as path from "node:path";
 import { errorMessage, logger } from "@oh-my-pi/pi-utils";
 import { MAX_CRAWL_WAIT_SECONDS, runCrawl, type CrawlOptions } from "../tools/browser/crawl";
+import { expandTilde } from "../tools/path-utils";
 import { parseCommandArgs } from "../utils/command-args";
 import { commandConsumed, usage } from "./helpers/parse";
 import type { ParsedSlashCommand, SlashCommandRuntime, SlashCommandSpec } from "./types";
@@ -47,7 +49,7 @@ function parseCrawlOptions(args: string): CrawlOptions | "stop" {
 			continue;
 		}
 		const value = tokens[++i];
-		if (!value || value.startsWith("--")) throw new Error(`Missing value for ${flag}.`);
+		if (!value || (flag !== "--output" && value.startsWith("--"))) throw new Error(`Missing value for ${flag}.`);
 		if (flag === "--output") {
 			options.output = value;
 			continue;
@@ -127,6 +129,9 @@ async function handleCrawlCommand(command: ParsedSlashCommand, runtime: SlashCom
 	if (state.current) return usage("A crawl is already running in this session. Use /crawl stop first.", runtime);
 	if (state.closed || runtime.session.isDisposed || runtime.signal?.aborted)
 		return usage("Cannot start crawl: session or request is closed.", runtime);
+
+	// Resolve once while the command still owns its original workspace.
+	options.output = path.resolve(runtime.cwd, expandTilde(options.output));
 
 	const controller = new AbortController();
 	const completion = Promise.withResolvers<void>();

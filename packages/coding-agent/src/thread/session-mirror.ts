@@ -85,6 +85,8 @@ export interface SessionMirrorState {
 	thinkingLevel: ThinkingLevel | undefined;
 	sessionFile: string | undefined;
 	sessionId: string;
+	/** Increments even on a reload that keeps the same session id. */
+	liveToolOutputGeneration?: number;
 	cwd: string;
 	artifactsDir: string | null;
 	usageStatistics: UsageStatistics;
@@ -99,7 +101,7 @@ export interface SessionMirrorState {
 export type SessionStateField = keyof SessionMirrorState;
 
 /** Fields a worker can read on a session homed elsewhere (queued senders are only mirrored, never polled). */
-export type PeerStateField = Exclude<SessionStateField, "ircQueuedFrom">;
+export type PeerStateField = Exclude<SessionStateField, "ircQueuedFrom" | "liveToolOutputGeneration">;
 
 /** Change to a mirrored message list. */
 export type SessionMessagesDelta =

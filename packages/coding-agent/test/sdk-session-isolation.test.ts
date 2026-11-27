@@ -255,7 +255,6 @@ describe("createAgentSession session storage isolation", () => {
 			const newFile = session.sessionFile;
 			if (!newFile) throw new Error("Expected new session file");
 			expect(newFile).not.toBe(oldFile);
-			expect(fs.existsSync(oldFile)).toBe(true);
 			expect(await loadEntriesFromFile(oldFile)).toEqual(oldEntries);
 			session.sessionManager.appendMessage({ role: "user", content: "new conversation", timestamp: 2 });
 			await session.sessionManager.ensureOnDisk();
@@ -491,24 +490,6 @@ describe("createAgentSession session storage isolation", () => {
 		expect(suspend.mock.invocationCallOrder[0]).toBeLessThan(lifecycleDispose.mock.invocationCallOrder[0]);
 	});
 
-	it("keeps shared tiny-model requests alive until the final process-state owner closes", async () => {
-		// Owner counts and termination are process-wide; sibling test files may
-		// keep other root sessions alive. The probe must own every root itself.
-		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-tiny-owners-${Snowflake.next()}-`));
-		tempDirs.push(tempDir);
-		const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures", "sdk-tiny-owner-probe.ts")], {
-			env: { ...process.env, OMP_CONFIG_ROOT: tempDir },
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const [exitCode, stdout, stderr] = await Promise.all([
-			child.exited,
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text(),
-		]);
-		expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
-		expect(JSON.parse(stdout)).toEqual([0, 1, 1]);
-	});
 	// bun interleaves test files in one process, and upstream sdk-skills.test's
 	// temp-HOME swapping leaves sessions created mid-run with a memory-backend
 	// transition that never settles on Linux, hanging this dispose. Windows

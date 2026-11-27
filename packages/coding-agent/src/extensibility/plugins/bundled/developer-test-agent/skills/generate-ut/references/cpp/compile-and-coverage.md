@@ -76,9 +76,17 @@ g++ -std=c++20 \
 ### 策略C：完整手动编译
 
 ```bash
+mkdir -p build
+
 # 手动编译所有依赖（含覆盖率标志）
-g++ -std=c++20 -fprofile-arcs -ftest-coverage -c -I libs/googletest/googletest/include \
+g++ -std=c++20 -pthread -fprofile-arcs -ftest-coverage -c \
+    -I libs/googletest/googletest -I libs/googletest/googletest/include \
     libs/googletest/googletest/src/gtest-all.cc -o build/gtest_all.o
+
+# 测试已有 main 时，跳过此命令并从链接命令移除 build/gtest_main.o
+g++ -std=c++20 -pthread -fprofile-arcs -ftest-coverage -c \
+    -I libs/googletest/googletest/include \
+    libs/googletest/googletest/src/gtest_main.cc -o build/gtest_main.o
 
 # 编译测试文件和源文件
 g++ -std=c++20 -fprofile-arcs -ftest-coverage -c -I src -I libs/googletest/googletest/include \
@@ -88,8 +96,8 @@ gcc -std=c11 -fprofile-arcs -ftest-coverage -c -I src \
     src/source_file.c -o build/source_file.o
 
 # 链接
-g++ -std=c++20 \
-    build/test_file.o build/source_file.o build/gtest_all.o \
+g++ -std=c++20 -pthread \
+    build/test_file.o build/source_file.o build/gtest_all.o build/gtest_main.o \
     --coverage -lgcov -o build/test_runner
 # Windows/MinGW: 追加 -static，输出改为 build/test_runner.exe
 ```

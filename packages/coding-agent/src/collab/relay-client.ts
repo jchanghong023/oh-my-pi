@@ -123,6 +123,7 @@ export class CollabSocket {
 	#attempt = 0;
 	/** Terminal state: intentional close or fatal failure. Cleared by connect(). */
 	#closed = false;
+	#pendingNumberedClose?: Promise<void>;
 	/** Allows a previously joined guest to outlive room recreation races. */
 	#retryMissingRoom = false;
 	/** Set while a transient drop is being retried; the next open is a new room. */
@@ -206,7 +207,7 @@ export class CollabSocket {
 	onRoomRecreated?: () => void;
 
 	connect(): void {
-		if (this.#ws || this.#retryTimer) return;
+		if (this.#ws || this.#retryTimer || this.#pendingNumberedClose) return;
 		this.#closed = false;
 		this.#retryMissingRoom = false;
 		this.#hostReclaimUntil = undefined;
@@ -242,7 +243,7 @@ export class CollabSocket {
 	}
 
 	#sendOne(frame: CollabFrame | EncodedFrame, targetPeer: number, key?: string, advisory = false): boolean {
-		if (this.#closed) return false;
+		if (this.#closed || this.#pendingNumberedClose) return false;
 		let serialized: string;
 		try {
 			serialized = typeof frame === "string" ? frame : JSON.stringify(frame);
@@ -281,7 +282,7 @@ export class CollabSocket {
 	 * @returns whether the batch was admitted.
 	 */
 	sendBatch(frames: Iterable<CollabFrame | EncodedFrame>, targetPeer: number, retainedBytes: number): boolean {
-		if (this.#closed) return false;
+		if (this.#closed || this.#pendingNumberedClose) return false;
 		return this.#enqueueSend({
 			frames: frames[Symbol.iterator](),
 			targetPeer,
@@ -648,6 +649,7 @@ export class CollabSocket {
 		this.#stopHeartbeat();
 		const wasClosed = this.#closed;
 		this.#closed = true;
+		this.#pendingNumberedClose = undefined;
 		this.#retryMissingRoom = false;
 		const ws = this.#ws;
 		this.#ws = null;
@@ -812,7 +814,7 @@ export class CollabSocket {
 				return;
 			}
 			if (this.#opts.numberedRoom && this.#opts.role === "guest" && msg?.t === "room-closed") {
-				this.#failFatal("room closed");
+				this.#closeNumberedRoom("room closed");
 				return;
 			}
 			this.#applyPeerLifecycle(msg);
@@ -896,9 +898,9 @@ export class CollabSocket {
 	#handleClose(code: number, reason: string): void {
 		if (this.#closed) return;
 		if (this.#opts.numberedRoom) {
-			this.#closed = true;
-			this.#discardPendingSends();
-			this.onClose?.(RELAY_CLOSE_REASONS[code] ?? `connection lost (code ${code})`, false);
+			const closeReason = RELAY_CLOSE_REASONS[code] ?? `connection lost (code ${code})`;
+			if (this.#opts.role === "guest") this.#closeNumberedRoom(closeReason);
+			else this.#failFatal(closeReason);
 			return;
 		}
 		if (code === 4009 && this.#hostReclaimUntil !== undefined && Date.now() < this.#hostReclaimUntil) {
@@ -934,6 +936,27 @@ export class CollabSocket {
 		}
 		this.onClose?.(closeReason, true);
 		this.#scheduleRetry(this.#attempt++);
+	}
+
+	#closeNumberedRoom(reason: string): void {
+		if (this.#closed || this.#pendingNumberedClose) return;
+		// Freeze sends and new input while delivering records already received.
+		const draining = this.#recvChain;
+		this.#pendingNumberedClose = draining;
+		this.#discardPendingSends();
+		this.#stopHeartbeat();
+		const ws = this.#ws;
+		this.#ws = null;
+		try {
+			ws?.terminate();
+		} catch {
+			// Already closed.
+		}
+		void draining.then(() => {
+			if (this.#pendingNumberedClose !== draining) return;
+			this.#pendingNumberedClose = undefined;
+			this.#failFatal(reason);
+		});
 	}
 
 	/** Decryption failure: wrong key or corrupted frame. Never reconnect. */

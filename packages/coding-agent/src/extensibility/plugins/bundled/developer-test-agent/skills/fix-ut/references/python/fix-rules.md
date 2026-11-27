@@ -2,12 +2,14 @@
 
 ## 错误信息获取
 
+`$PYTHON` 为所选解释器：Windows 优先 `.venv/Scripts/python.exe`，Linux/macOS 优先 `.venv/bin/python`；如缺少模块，尝试父项目 .venv 或系统 Python。最多 2 次发现尝试。Bash 用 `"$PYTHON"`，PowerShell 用 `& $PYTHON`。
+
 ```bash
 # 运行测试获取错误
-.venv/Scripts/python.exe -m pytest <test_file> -v --tb=short --timeout=10
+"$PYTHON" -m pytest "<test_file>" -v --tb=short
 ```
 
-优先使用 `.venv/Scripts/python.exe`；如缺少模块，尝试父项目.venv或系统python。最多2次发现尝试。
+仅当所选环境的 `pytest --help` 列出 `--timeout` 时，才传 `--timeout=10`；否则使用 shell 工具的超时。
 
 ## 错误分类与修复策略
 
@@ -35,7 +37,7 @@
 
 | 错误类型 | 症状 | 修复策略 |
 |----------|------|----------|
-| 测试超时 | --timeout=10后超时 | mock所有阻塞原语（Event.wait、Queue.get、sleep） |
+| 测试超时 | 测试挂起，达到超时上限 | mock所有阻塞原语（Event.wait、Queue.get、sleep） |
 | while-loop死循环 | 测试挂起 | 用side_effect列表`[None, Exception()]`确保终止 |
 | Fixture冲突 | @patch与fixture顺序冲突 | 用`with patch(...)` context manager替代@patch装饰器 |
 | pytest.raises DID NOT RAISE | except块suppress而非re-raise | 验证函数正常返回而非用pytest.raises |
@@ -46,10 +48,10 @@
 
 ```bash
 # 语法验证
-.venv/Scripts/python.exe -c "import ast; ast.parse(open('<test_file>').read()); print('Syntax OK')"
+"$PYTHON" -c "import ast, sys; from pathlib import Path; ast.parse(Path(sys.argv[1]).read_bytes(), filename=sys.argv[1]); print('Syntax OK')" "<test_file>"
 
 # 测试验证
-.venv/Scripts/python.exe -m pytest <test_file> -v --tb=short --timeout=10
+"$PYTHON" -m pytest "<test_file>" -v --tb=short
 ```
 
 ## 修复循环限制

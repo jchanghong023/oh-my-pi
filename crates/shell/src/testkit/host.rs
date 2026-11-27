@@ -232,6 +232,10 @@ impl ExtProc for CountedExt {
 		self.ext.pid()
 	}
 
+	fn process(&self) -> Option<crate::proctree::Process> {
+		self.ext.process()
+	}
+
 	fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus> {
 		self.ext.poll_wait(cx)
 	}
@@ -246,8 +250,18 @@ impl ExtProc for CountedExt {
 		self.ext.signal_wave(sig, pids, extra, groups)
 	}
 
-	fn record_wave_signal(&mut self, sig: Signal, wave: &crate::proctree::SignalWave) {
-		self.ext.record_wave_signal(sig, wave);
+	fn record_wave_signal(
+		&mut self,
+		sig: Signal,
+		groups: bool,
+		wave: Option<&crate::proctree::SignalWave>,
+	) {
+		self.ext.record_wave_signal(sig, groups, wave);
+	}
+
+	#[cfg(unix)]
+	fn continue_stopped(&mut self) -> io::Result<()> {
+		self.ext.continue_stopped()
 	}
 
 	fn poll_event(&mut self, cx: &mut Context<'_>) -> Poll<crate::bash::ProcEvent> {

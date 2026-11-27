@@ -1691,11 +1691,11 @@ describe("compact latest live Output consumers", () => {
 		const terminal = h.previewView();
 		expect(terminal.head).toContain("Done · grep");
 		expect(terminal.body).toEqual([
+			"# src/",
 			"*12│alpha hit one",
 			"*14│alpha hit two",
 			"*16│alpha hit three",
 			"*17│alpha hit four",
-			"*18│alpha hit five",
 		]);
 		expect(terminal.nativeBody).toEqual(terminal.body);
 	});
@@ -1727,7 +1727,7 @@ describe("compact latest live Output consumers", () => {
 		source.mockReturnValue(previewFixture(wrapped));
 		const wrappedView = h.previewView();
 		expect(wrappedView.head).toContain("bash (grep)");
-		expect(wrappedView.body).toEqual(["*12│wrapped hit", "# src/", " 10│context", " 13│context after"]);
+		expect(wrappedView.body).toEqual(["# src/", " 10│context", "*12│wrapped hit", " 13│context after"]);
 		expect(wrappedView.nativeBody).toEqual(wrappedView.body);
 		const mixed = { ...wrapped, args: { command: "grep --pattern wrapped | cat" } };
 		source.mockReturnValue(previewFixture(mixed));
@@ -1846,7 +1846,6 @@ describe("compact latest live Output consumers", () => {
 			await live.emit({ type: "agent_end", messages: [] });
 			vi.advanceTimersByTime(2999);
 			if (view === "detached") await h.focus.focusAgent("FinishingWorker");
-			expect(h.ctx.viewSession.isStreaming).toBe(false);
 			for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("worker result");
 			vi.advanceTimersByTime(1);
 			expect(h.outputRows()).toEqual([[], []]);

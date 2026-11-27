@@ -523,13 +523,6 @@ export const writePresenter: ToolPresenter<WriteArgs, WriteDetails> = {
 			...(result.details?.resolvedPath ? { link: result.details.resolvedPath } : {}),
 			executable: head.badges?.some(b => b.text === "executable"),
 		};
-		if (result.isError)
-			return {
-				head,
-				tone: "error",
-				body: <ErrorText message={resultText(result)} />,
-				term,
-			};
 		const conflicts = result.details?.conflictChanges;
 		if (conflicts?.length && !partial) {
 			const body: JSXNode[] = [];
@@ -547,18 +540,41 @@ export const writePresenter: ToolPresenter<WriteArgs, WriteDetails> = {
 				body.push(<DiagnosticsSection diagnostics={diagnostics} />);
 				parts.push({ k: "diagnostics", diagnostics });
 			}
+			const error = result.isError ? resultText(result) : undefined;
+			if (error) {
+				body.unshift(<ErrorText message={error} />);
+				parts.unshift({ k: "error", text: error });
+			}
 			return {
 				head: { ...head, meta: undefined },
+				...(result.isError ? { tone: "error" as const } : {}),
 				body,
 				preview: "children",
 				term: {
 					look: "edit",
 					edit: {
-						cards: [{ kind: "card", title: "Write", path: raw, icon: "edit", body: parts, phase: "success" }],
+						cards: [
+							{
+								kind: "card",
+								title: "Write",
+								path: raw,
+								icon: "edit",
+								body: parts,
+								phase: result.isError ? "error" : "success",
+								...(result.details?.resolvedPath ? { link: { path: result.details.resolvedPath } } : {}),
+							},
+						],
 					} satisfies EditTerm,
 				},
 			};
 		}
+		if (result.isError)
+			return {
+				head,
+				tone: "error",
+				body: <ErrorText message={resultText(result)} />,
+				term,
+			};
 		const progress = resultText(result);
 		const figure = args ? writeFigure(args, result, state) : undefined;
 		return {

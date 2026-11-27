@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 
 import type { Settings } from "../config/settings";
-import { findSettingsContext, withActiveSettings } from "../config/settings-context";
+import { findSettingsContext, getActiveSettings, withActiveSettings } from "../config/settings-context";
 import { clearCache as clearFsCache, findRepoRoot, cacheStats as fsCacheStats, invalidate as invalidateFs } from "./fs";
 import type {
 	Capability,
@@ -124,9 +124,14 @@ export function boundSettings(): Settings | undefined {
 	return settingsHolds.at(-1)?.settings ?? inheritedBoundSettings;
 }
 
-/** SDK/session callers bind exact identity; path lookup is only for unbound discovery. */
+/** Exact async identity wins; a cwd alone must not override the process binding. */
 function scopedSettings(ctx?: LoadContext): Settings | undefined {
-	return findSettingsContext(ctx?.cwd, ctx?.agentDir) ?? boundSettings();
+	return (
+		getActiveSettings() ??
+		(ctx?.agentDir === undefined ? boundSettings() : undefined) ??
+		findSettingsContext(ctx?.cwd, ctx?.agentDir) ??
+		boundSettings()
+	);
 }
 
 /** Disabled provider IDs in effect for this discovery/session, else the unbound set. */

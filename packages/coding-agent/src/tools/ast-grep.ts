@@ -30,7 +30,6 @@ import {
 	searchPathTier,
 } from "./path-utils";
 import { searchApprovalCacheTargets } from "./search-approval-targets";
-import { createTeamSearchTargetCheck } from "./team-read-isolation";
 import { toPathList } from "../utils/render-utils";
 import { isRawSelector } from "./read-selector";
 import { capParseErrors, formatCodeFrameLine, formatParseErrors } from "../utils/render-utils";
@@ -219,12 +218,10 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			const scopedPaths = toPathList(params.path);
 			const rawPaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const resolveContext = sessionResolveContext(this.session, { signal });
-			const assertTarget = await createTeamSearchTargetCheck(this.session, resolveContext);
 			// Internal URLs resolve inside the native search, bounded by the tier this call was approved at.
 			const urlFilesystem = new InternalUrlFilesystem({
 				context: resolveContext,
 				tier: resolveToolTier(this, params),
-				assertReadBacking: assertTarget,
 			});
 			const filesystem = urlFilesystem.shellFilesystem();
 			const scope = await resolveToolSearchScope({
@@ -232,7 +229,6 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 				cwd: this.session.cwd,
 				internalUrlAction: "search",
 				filesystem: urlFilesystem,
-				assertTarget,
 				resolveExternalUrl: async rawPath => {
 					const target = parseReadUrlTarget(rawPath);
 					if (!target) return undefined;

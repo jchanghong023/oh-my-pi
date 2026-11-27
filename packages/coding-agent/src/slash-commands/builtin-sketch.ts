@@ -1,5 +1,6 @@
 import { mkdir, open, rm } from "node:fs/promises";
 import { dirname } from "node:path";
+import { isSsh } from "@oh-my-pi/pi-tui/driver/mux/detect";
 import { errorMessage, logger } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "../cli/args";
 import { InternalUrlRouter } from "../internal-urls/router";
@@ -7,6 +8,7 @@ import { compactImageMarkers, formatVisionMarker } from "../modes/view-model/pro
 import type { AgentSession } from "../session/agent-session";
 import { startSketchServer, type SketchServer } from "../sketch/server";
 import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
+import { imageAttachmentSource } from "../utils/image-source";
 import { openPath } from "../utils/open";
 import { restoreDetachedDraft } from "./helpers/draft";
 import type { ParsedSlashCommand, SlashCommandSpec, TuiSlashCommandRuntime } from "./types";
@@ -43,14 +45,18 @@ export function restoreSketchDraft(command: ParsedSlashCommand, runtime: TuiSlas
 	const refs = compactImageMarkers(currentText, composer.pendingImages.length);
 	const unreferenced = images.flatMap(image => {
 		const index = composer.pendingImages.indexOf(image);
-		return index >= 0 && refs && !refs.keep.includes(index) ? [formatVisionMarker("image", index + 1)] : [];
+		return index >= 0 && refs && !refs.keep.includes(index)
+			? [formatVisionMarker(imageAttachmentSource(image)?.kind ?? "image", index + 1)]
+			: [];
 	});
 	if (unreferenced.length)
 		composer.setCollapsedText([unreferenced.join(" "), currentText].filter(Boolean).join("\n\n"));
 	if (missing.length) {
 		restoreDetachedDraft(
 			composer,
-			missing.map((_, index) => formatVisionMarker("image", index + 1)).join(" "),
+			missing
+				.map(({ image }, index) => formatVisionMarker(imageAttachmentSource(image)?.kind ?? "image", index + 1))
+				.join(" "),
 			missing.map(item => item.image),
 			missing.map(item => item.link),
 		);
@@ -61,7 +67,7 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "sketch",
 		description: "Draw in a local browser canvas and attach the PNG to your draft",
-		handleTui: async (command, runtime) => {
+		handleTui: (command, runtime) => {
 			const { ctx } = runtime;
 			const { composer, session, sessionManager } = ctx;
 			restoreSketchDraft(command, runtime);
@@ -107,6 +113,13 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				composer.draftGeneration === draftGeneration &&
 				ctx.shell.focused() === focus;
 			state.current = owned;
+			const dispose = () => {
+				removeInput?.();
+				removeSessionChange?.();
+				ctx.setHookStatus(statusKey, undefined);
+				server?.close();
+				if (state.current === owned) state.current = undefined;
+			};
 			try {
 				server = startSketchServer(async (png, isOpen) => {
 					const ownsDraft = () => isOpen() && isCurrent();
@@ -167,22 +180,25 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				ctx.setHookStatus(statusKey, "Sketch open · Esc to cancel");
 				const copyRequested = requestOfflineBrowserUrlCopy(server.url);
 				const offline = offlineFromEnv();
-				const hint = copyRequested
-					? "attempted to copy the full URL; paste it into your browser's address bar or copy it manually"
-					: offline
-						? "offline mode does not launch a browser; open this URL manually"
-						: "open this URL if the browser does not launch";
+				const hint = isSsh(process.env)
+					? "open this URL in a browser on the remote host, or forward its port over SSH before opening it locally"
+					: copyRequested
+						? "attempted to copy the full URL; paste it into your browser's address bar or copy it manually"
+						: offline
+							? "offline mode does not launch a browser; open this URL manually"
+							: "open this URL if the browser does not launch";
 				ctx.showStatus(`Sketch canvas: ${server.url} (${hint})`);
 				if (!offline) openPath(server.url);
-				await server.result;
+				// The canvas owns its lifetime; never hold the input queue open for it.
+				void server.result.finally(dispose).catch(error => {
+					logger.warn("Sketch canvas cleanup failed", { error: errorMessage(error) });
+				});
 			} catch (error) {
-				if (isCurrent()) ctx.showError(`Sketch failed: ${errorMessage(error)}`);
-			} finally {
-				removeInput?.();
-				removeSessionChange?.();
-				ctx.setHookStatus(statusKey, undefined);
-				server?.close();
-				if (state.current === owned) state.current = undefined;
+				try {
+					if (isCurrent()) ctx.showError(`Sketch failed: ${errorMessage(error)}`);
+				} finally {
+					dispose();
+				}
 			}
 		},
 	},

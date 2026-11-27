@@ -201,12 +201,12 @@ For concurrency-based code paths (event loops, greenlets, threading, async frame
 
 ## super() MRO Patching
 
-When patching `super().method()` calls, the correct patching target is the class that actually defines the method in the MRO, which may not be the direct parent class:
+For `super().method()`, search the concrete instance's MRO after the class that contains the call. Patch the first class that defines `method` in that suffix:
 
 ```python
-# CORRECT: Verify MRO resolution before patching
-mro_targets = [c for c in TargetClass.__mro__ if 'method' in c.__dict__]
-ActualClass = mro_targets[0]  # The class that actually defines the method
+# TargetClass contains the super() call; instance is the receiver under test.
+mro = type(instance).__mro__
+ActualClass = next(cls for cls in mro[mro.index(TargetClass) + 1:] if 'method' in vars(cls))
 with patch.object(ActualClass, 'method', autospec=True) as mock_method:
     ...
 
@@ -291,11 +291,7 @@ del message.properties['correlation_id']
 
 ### Project Config Safety
 
-Do NOT modify project configuration files (`.coveragerc`, `setup.cfg`, `pyproject.toml`, etc.) during test generation. Instead:
-1. Use `coverage run --rcfile=NUL -m pytest` as the primary coverage approach (generates `.coverage` in CWD — must be cleaned up after measurement)
-2. Use `coverage json -o "$COV_DIR/coverage.json" --rcfile=NUL` to generate the JSON report to a temp directory (see `generation-rules.md` 覆盖率测量与清理 section for temp dir setup)
-3. If neither works, create a temporary config in `tests/` subdirectory -- never modify tracked files
-4. After measurement, clean up: delete temp directory and remove `.coverage` file from project directory (see `generation-rules.md` 环境清理 section)
+NEVER modify project configuration files (`.coveragerc`, `setup.cfg`, `pyproject.toml`) during test generation. Follow [generation-rules.md](./generation-rules.md#覆盖率测量与清理) for platform-specific coverage commands, isolated data files, and cleanup.
 
 ### side_effect + return_value Pattern
 
@@ -335,19 +331,18 @@ mock_method.assert_called_once_with(arg1, arg2, expected_exc)  # Fails: differen
 When testing generator functions with while loops that depend on internal state mutation (e.g., `threads.discard()`), mock `return_value` alone causes infinite loops because the mock always returns a value but never mutates the loop's termination condition. Use `side_effect` callbacks that mutate the generator's internal state, or use real objects for the loop control mechanism.
 
 ```python
-# CORRECT: side_effect that terminates the loop
-call_count = [0]
+# CORRECT: The generator runs `while pending:`; pass it this same list.
+pending = ['first', 'second', 'third']
 def mock_get_with_termination(*args, **kwargs):
-    call_count[0] += 1
-    if call_count[0] > 3:
-        raise StopIteration()  # Terminate the while loop
-    return ('message', None)
+    return (pending.pop(0), None)
 
 mock_queue.get.side_effect = mock_get_with_termination
 
 # AVOID: return_value alone causes infinite loop
 mock_queue.get.return_value = ('message', None)  # Loop never terminates
 ```
+
+NEVER raise `StopIteration` from a dependency to end a generator unless the generator catches it explicitly; an uncaught `StopIteration` becomes `RuntimeError`.
 
 ### Common Pitfalls
 

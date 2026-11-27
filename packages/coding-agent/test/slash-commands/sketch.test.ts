@@ -232,7 +232,6 @@ describe("native /sketch", () => {
 		const saved = InternalUrlRouter.instance().locateSync(source!.path, {
 			localProtocolOptions: { getArtifactsDir: () => dir, getSessionId: () => "sketch-owner" },
 		});
-		expect(saved).toBeDefined();
 		expect(Buffer.from(await Bun.file(saved!).arrayBuffer()).equals(PNG)).toBe(true);
 		expect(h.composer.pendingImageLinks[0]).toBe("file:///existing.png");
 		expect(h.prompt).not.toHaveBeenCalled();

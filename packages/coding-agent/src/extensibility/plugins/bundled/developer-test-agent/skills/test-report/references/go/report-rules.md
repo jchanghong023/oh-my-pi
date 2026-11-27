@@ -8,44 +8,45 @@
 
 ```powershell
 # Windows (PowerShell) - 创建临时目录
-$COV_DIR="$env:TEMP\ut-go"; New-Item -ItemType Directory -Force -Path $COV_DIR | Out-Null
+$COV_DIR = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Path $COV_DIR -ErrorAction Stop | Out-Null
 go test -gcflags=all=-l -coverprofile "$COV_DIR\cov.txt" -run TestFuncName -count=1
-go tool cover "-func=$COV_DIR\cov.txt" | Select-String "FuncName$"
+go tool cover "-func=$COV_DIR\cov.txt" | Select-String -CaseSensitive '\sFuncName\s+\d+(?:\.\d+)?%\s*$'
 go tool cover "-html=$COV_DIR\cov.txt" -o "$COV_DIR\coverage.html"
 ```
 
 ```bash
 # Unix (bash) - 创建临时目录
-COV_DIR="/tmp/ut-go"; mkdir -p "$COV_DIR"
+COV_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ut-go.XXXXXX") || exit 1
 go test -gcflags=all=-l -coverprofile="$COV_DIR/cov.txt" -run TestFuncName -count=1
-go tool cover -func="$COV_DIR/cov.txt" | grep -E "FuncName$"
+go tool cover -func="$COV_DIR/cov.txt" | awk 'NF >= 3 && $(NF-1) == "FuncName"'
 ```
 
 ### Windows注意事项
 
 1. 使用空格分隔标志：`go test -coverprofile cov.txt`
 2. 不使用 `.out` 扩展名：用 `.txt` 或 `.cov`
-3. `Select-String` 配合 `$` 锚点匹配函数名末尾
+3. 按函数列精确匹配；覆盖率百分比位于行尾。
 
 ### 覆盖率指标
 
-- 行覆盖率（主要指标）
-- 目标函数体覆盖率（>90%，严格超过）
+- 语句覆盖率（主要指标）：`go test -coverprofile` 和 `go tool cover -func` 的百分比按语句计算，NEVER 填为行覆盖率。未单独测量行覆盖率时标注无数据。
+- 目标函数体语句覆盖率（>90%，严格超过）
 
 **覆盖率边界规则**：>90%目标适用于**目标函数体**，不是下游私有方法。90.0%不够，必须严格超过90%。
 
 ### 环境清理
 
-覆盖率数据获取完成后，删除临时目录：
+覆盖率数据获取完成后，仅删除本次创建的临时目录。使用保存了 `COV_DIR` 的同一次 shell 调用。
 
 ```powershell
 # Windows (PowerShell)
-Remove-Item "$env:TEMP\ut-go" -Recurse -Force -ErrorAction SilentlyContinue
+if ($COV_DIR) { Remove-Item -LiteralPath $COV_DIR -Recurse -Force }
 ```
 
 ```bash
 # Unix (bash)
-rm -rf /tmp/ut-go
+rm -rf -- "${COV_DIR:?}"
 ```
 
 ## 测试质量评估与异常覆盖检测
@@ -77,9 +78,10 @@ rm -rf /tmp/ut-go
 报告应包含race检测结果：
 
 ```powershell
-go test -gcflags=all=-l -race -run TestFuncName -count=1
+go test -gcflags=all=-l -race -v -run '^TestFuncName$' -count=1
 ```
 
-- 通过：所有测试通过 `-race` 检测
-- 失败：存在数据竞争，需修复
-- 未运行：未执行race检测（标注⚠️）
+- 通过：仅当命令成功且选中的测试确有运行时，报告该范围未检测到数据竞争。NEVER 将 `-run` 的结果扩大到未运行的测试。
+- 数据竞争：仅当输出含 `WARNING: DATA RACE` 等 race 检测器诊断时报告。
+- 其他失败：单独报告断言、构建或环境错误；NEVER 仅凭非零退出码认定有竞争。
+- 未运行：命令未执行或没有测试实际运行（标注⚠️）。

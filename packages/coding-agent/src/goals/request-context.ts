@@ -11,6 +11,11 @@ export const GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE = "goal-auto-orchestrate";
 const orchestrateKeyword = MAGIC_KEYWORDS.find(keyword => keyword.id === "orchestrate")!;
 const renderGoalAutoOrchestrate = prompt.compile(goalAutoOrchestratePrompt.trim());
 
+/** The persisted notice is live only while this specific Autopilot goal is active. */
+export function activeGoalAutopilotContextId(state: LocalGoalModeState | undefined): string | null {
+	return state?.autoOrchestrate === true && state.enabled && state.goal.status === "active" ? state.goal.id : null;
+}
+
 /**
  * Render a durable, user-authority notice at initial admission or a committed
  * compaction boundary. Callers persist it in the ordinary message journal.

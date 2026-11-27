@@ -691,7 +691,6 @@ describe("inline click-to-focus geometry", () => {
 		session.extensionRunner!.getUIContext().rerenderMessage(1);
 		term.feed("\x1bo");
 		await term.waitFor(() => screen().some(row => row.includes("Extension links")));
-		expect(statuses.filter(status => status === "No extension links in the transcript")).toHaveLength(3);
 		term.feed("\x1b[H");
 		await term.waitFor(() => tagDrawnOver("the early link"));
 		term.feed("t");

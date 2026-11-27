@@ -382,8 +382,17 @@ pub(crate) async fn walk_sink<K: Sink>(
 	sink: K,
 ) -> Result<Walk<K::Out>, WalkError> {
 	let (tx, rx) = mpsc::channel(opts.parallelism(fs) * BATCHES_PER_WORKER);
-	let started =
-		parallel::start(fs, root, opts, sink, false, default_cache(fs, opts), Some(tx)).await?;
+	let started = parallel::start(
+		fs,
+		root,
+		opts,
+		sink,
+		false,
+		false,
+		default_cache(fs, opts),
+		Some(tx),
+	)
+	.await?;
 	Ok(Walk { rx, halt: started.halt })
 }
 
@@ -487,7 +496,23 @@ pub async fn collect<F>(
 where
 	F: Fn(&mut Worker<'_>, &mut Entry<'_>) -> Action + Send + Sync + 'static,
 {
-	collect_in(fs, root, opts, sorted, filter, default_cache(fs, opts)).await
+	collect_with_errors(fs, root, opts, sorted, false, filter).await
+}
+
+/// Like [`collect`], with optional reporting of per-entry metadata errors.
+pub(crate) async fn collect_with_errors<F>(
+	fs: &Fs,
+	root: &Path,
+	opts: &Options,
+	sorted: bool,
+	strict: bool,
+	filter: F,
+) -> Result<Collection, WalkError>
+where
+	F: Fn(&mut Worker<'_>, &mut Entry<'_>) -> Action + Send + Sync + 'static,
+{
+	let cache = if strict { None } else { default_cache(fs, opts) };
+	collect_in(fs, root, opts, sorted, filter, cache, strict).await
 }
 
 /// [`collect`] in path order, streamed while the walk runs.
@@ -511,7 +536,8 @@ where
 	F: Fn(&mut Worker<'_>, &mut Entry<'_>) -> Action + Send + Sync + 'static,
 {
 	let sink = parallel::CollectSink::new(parallel::BoxedKeep(Box::new(filter)));
-	let started = parallel::start(fs, root, opts, sink, true, default_cache(fs, opts), None).await?;
+	let started =
+		parallel::start(fs, root, opts, sink, true, false, default_cache(fs, opts), None).await?;
 	Ok(Ordered(parallel::InOrder::new(started)))
 }
 
@@ -555,12 +581,13 @@ async fn collect_in<F>(
 	sorted: bool,
 	filter: F,
 	cache: Option<&'static cache::Cache>,
+	strict: bool,
 ) -> Result<Collection, WalkError>
 where
 	F: Fn(&mut Worker<'_>, &mut Entry<'_>) -> Action + Send + Sync + 'static,
 {
 	let sink = parallel::CollectSink::new(filter);
-	let started = parallel::start(fs, root, opts, sink, sorted, cache, None).await?;
+	let started = parallel::start(fs, root, opts, sink, sorted, strict, cache, None).await?;
 	started.finished().await;
 	let out = started.into_outcome();
 	Ok(Collection { entries: out.entries, _arenas: out.arenas, errors: out.errors })

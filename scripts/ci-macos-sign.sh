@@ -26,12 +26,10 @@
 # cdhash on first assessment. `curl` downloads and Homebrew *formula* installs do
 # not set the quarantine bit, so they never invoke Gatekeeper; for an offline,
 # quarantined cask we would need a stapleable .pkg/.dmg wrapper (follow-up).
-# Apple's `codesign --verify --strict` and the launch check under the final
-# signature run on a macOS runner afterwards (release_smoke in
-# .github/workflows/ci.yml); notarization itself rejects a malformed signature
-# first.
+# Notarization rejects a malformed signature. The result can also be verified
+# on macOS with `codesign --verify --strict`.
 #
-# Credentials (GitHub Actions secrets; all five or none):
+# Optional credentials (all five or none):
 #   APPLE_CERTIFICATE_P12        base64 of the Developer ID Application .p12 bundle
 #   APPLE_CERTIFICATE_PASSWORD   password protecting that .p12
 #   APPLE_API_KEY_ID             App Store Connect API key id (the "Key ID")

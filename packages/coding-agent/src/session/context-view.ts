@@ -17,6 +17,7 @@ import {
 	toolSchemaFragments,
 } from "./context-usage";
 import { stringifyJson } from "@oh-my-pi/pi-utils";
+import { activeGoalAutopilotContextId } from "../goals/request-context";
 import type { AgentSession } from "./agent-session";
 import { computeSessionContextBreakdown } from "./context-usage-runtime";
 import { type ContextViewMessage, convertMessagesForContextView } from "./messages";
@@ -360,7 +361,11 @@ function appendAssistantMessageEntries(
 function appendMessageEntries(session: AgentSession, state: SnapshotBuildState): void {
 	const tokenizer = session.agent.tokenizer;
 	const sourceMessages = session.agent.state.messages;
-	const convertedMessages = convertMessagesForContextView(sourceMessages, session.model);
+	const convertedMessages = convertMessagesForContextView(
+		sourceMessages,
+		session.model,
+		activeGoalAutopilotContextId(session.getLocalGoalModeState()),
+	);
 	const latestSurvivingAssistantIndex = convertedMessages.findLastIndex(
 		({ message }) => message.role === "assistant" && isSurvivingAssistant(message, session.model ?? undefined),
 	);

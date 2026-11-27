@@ -7,16 +7,17 @@
 覆盖率产物统一输出到临时目录，避免污染项目目录。
 
 `{SKILL_DIR}` 替换为加载 `improve-coverage` 时返回的 baseDir；脚本路径加引号。
+`$PYTHON` 为项目解释器：Windows 优先 `.venv/Scripts/python.exe`，Linux/macOS 优先 `.venv/bin/python`。Bash 用 `"$PYTHON"`，PowerShell 用 `& $PYTHON`。
 
 ```powershell
 # Windows (PowerShell) - 创建临时目录
-$COV_DIR="$env:TEMP\ut-python"; New-Item -ItemType Directory -Force -Path $COV_DIR | Out-Null
+$COV_DIR = (New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString())) -ErrorAction Stop).FullName
 
 # 步骤1：运行覆盖率并保存同次 pytest -v 输出
-.venv/Scripts/python.exe -m coverage run --rcfile=NUL --branch -m pytest <test_file> -v *> "$COV_DIR\pytest-output.txt"
+& $PYTHON -m coverage run --rcfile=NUL "--data-file=$COV_DIR\.coverage" --branch -m pytest "<test_file>" -v *> "$COV_DIR\pytest-output.txt"
 
 # 步骤2：生成 JSON 报告到临时目录
-.venv/Scripts/python.exe -m coverage json -o "$COV_DIR\coverage.json" --rcfile=NUL
+& $PYTHON -m coverage json --rcfile=NUL "--data-file=$COV_DIR\.coverage" -o "$COV_DIR\coverage.json"
 
 # 步骤3：生成覆盖率上报缓存 JSON（写入 .codecovcli/cache/python_{className}.json）
 # {className} 为被测 Python 源文件名（不含 .py 扩展名，如 user_service）
@@ -25,13 +26,13 @@ node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" {className} "$COV_D
 
 ```bash
 # Unix (bash) - 创建临时目录
-COV_DIR="/tmp/ut-python"; mkdir -p "$COV_DIR"
+COV_DIR=$(mktemp -d) || exit 1
 
 # 步骤1：运行覆盖率并保存同次 pytest -v 输出
-.venv/bin/python -m coverage run --rcfile=/dev/null --branch -m pytest <test_file> -v > "$COV_DIR/pytest-output.txt" 2>&1
+"$PYTHON" -m coverage run --rcfile=/dev/null --data-file="$COV_DIR/.coverage" --branch -m pytest "<test_file>" -v > "$COV_DIR/pytest-output.txt" 2>&1
 
 # 步骤2：生成 JSON 报告到临时目录
-.venv/bin/python -m coverage json -o "$COV_DIR/coverage.json" --rcfile=/dev/null
+"$PYTHON" -m coverage json --rcfile=/dev/null --data-file="$COV_DIR/.coverage" -o "$COV_DIR/coverage.json"
 
 # 步骤3：生成覆盖率上报缓存 JSON（写入 .codecovcli/cache/python_{className}.json）
 # {className} 为被测 Python 源文件名（不含 .py 扩展名，如 user_service）
@@ -40,8 +41,10 @@ node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" {className} "$COV_D
 
 ### 方法2：pytest-cov（回退）
 
+沿用上述临时目录。PowerShell 中仅对此次调用设置 `COVERAGE_FILE` 为 `$COV_DIR/.coverage`，并沿用上方的日志重定向方式。
+
 ```bash
-.venv/Scripts/python.exe -m pytest <test_file> --cov=<source_module> --cov-report=term-missing --cov-report=json:"$COV_DIR/coverage.json" -v
+COVERAGE_FILE="$COV_DIR/.coverage" "$PYTHON" -m pytest "<test_file>" "--cov=<source_module>" --cov-report=term-missing "--cov-report=json:$COV_DIR/coverage.json" -v > "$COV_DIR/pytest-output.txt" 2>&1
 ```
 
 如coverage包缺失，尝试 `pip install coverage`。
@@ -72,10 +75,10 @@ node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" <模块名或源文
 
 ```bash
 # 仅覆盖率数据（测试结果字段填0）
-node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" user_service /tmp/ut-python/coverage.json
+node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" user_service "$COV_DIR/coverage.json"
 
 # 覆盖率数据 + 测试执行结果
-node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" user_service /tmp/ut-python/coverage.json /tmp/ut-python/pytest-output.txt
+node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" user_service "$COV_DIR/coverage.json" "$COV_DIR/pytest-output.txt"
 ```
 
 #### 输出文件
@@ -115,28 +118,24 @@ node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" user_service /tmp/u
 
 使用 `read` 加载 `skill://bundled-developer-test-agent/generate-ut`，将其返回的 baseDir 作为 `{GENERATE_SKILL_DIR}`，调用：
 ```bash
-.venv/Scripts/python.exe "{GENERATE_SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" <function_name> <start_line> <end_line> <source_file_path>
+"$PYTHON" "{GENERATE_SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" "<function_name>" "<start_line>" "<end_line>" "<source_file_path>"
 ```
 
 始终提供 `source_file_path` 防止跨文件污染，并在生成覆盖率报告的项目目录中运行解析脚本。找不到唯一的文件记录或函数范围内没有可执行行时，不视为覆盖率达标。
 
 ### 环境清理
 
-覆盖率测量完成后，删除临时目录及项目目录中可能残留的覆盖率中间产物：
+覆盖率测量完成后，仅删除本次创建的临时目录；不得修改或删除项目原有的 `.coverage`。
 
 ```powershell
 # Windows (PowerShell)
-Remove-Item "$env:TEMP\ut-python" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item ".coverage" -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath "$COV_DIR" -Recurse -Force
 ```
 
 ```bash
 # Unix (bash)
-rm -rf /tmp/ut-python
-rm -f .coverage
+rm -rf -- "$COV_DIR"
 ```
-
-**注意**：`coverage run` 会在当前工作目录生成 `.coverage` 二进制数据文件，即使 JSON 报告输出到临时目录，`.coverage` 文件仍会留在项目目录，必须显式清理。
 
 ### 覆盖率目标
 

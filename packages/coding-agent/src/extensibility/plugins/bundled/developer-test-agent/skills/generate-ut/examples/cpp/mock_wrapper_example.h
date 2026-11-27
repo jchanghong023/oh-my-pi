@@ -1,6 +1,6 @@
 /*
  * Description: 虚函数Mock包装层示例
- * 当被测代码依赖非虚函数时，需要创建Mock包装层
+ * 被测代码通过虚接口调用依赖；生产注入适配器，测试注入 Mock。
  */
 
 #ifndef MOCK_WRAPPER_EXAMPLE_H
@@ -46,27 +46,27 @@ public:
 };
 
 // ============================================================
-// 步骤3：创建适配器
+// 步骤3：创建包装原类的生产适配器
 // ============================================================
 
-class ServiceAdapter : public OriginalService {
+class ServiceAdapter : public MockServiceInterface {
 public:
-    explicit ServiceAdapter(MockServiceInterface* mock) : mock_(mock) {}
+    explicit ServiceAdapter(OriginalService& service) : service_(service) {}
 
     int32_t ProcessData(const std::string& data) override {
-        return mock_->ProcessData(data);
+        return service_.ProcessData(data);
     }
 
     int32_t SendRequest(const std::string& endpoint) override {
-        return mock_->SendRequest(endpoint);
+        return service_.SendRequest(endpoint);
     }
 
     bool IsConnected() const override {
-        return mock_->IsConnected();
+        return service_.IsConnected();
     }
 
 private:
-    MockServiceInterface* mock_;
+    OriginalService& service_;
 };
 
 // ============================================================
@@ -74,19 +74,24 @@ private:
 // ============================================================
 
 /*
-#include "mock/mock_service.h"
+#include "mock_wrapper_example.h"
+
+// 示例被测函数通过虚接口调用依赖。
+int32_t ProcessRequest(MockServiceInterface& service) {
+    return service.ProcessData("test");
+}
 
 class ServiceTest : public ::testing::Test {
 protected:
     MockService mockService;
-    ServiceAdapter adapter{&mockService};
+    // 测试直接注入 mockService；生产环境注入 ServiceAdapter。
 };
 
 TEST_F(ServiceTest, test_process_when_success_then_return_ok) {
-    EXPECT_CALL(mockService, ProcessData(_))
-        .WillOnce(Return(0));
+    EXPECT_CALL(mockService, ProcessData("test"))
+        .WillOnce(::testing::Return(0));
 
-    int32_t ret = adapter.ProcessData("test");
+    int32_t ret = ProcessRequest(mockService);
     EXPECT_EQ(ret, 0);
 
     ::testing::Mock::VerifyAndClearExpectations(&mockService);

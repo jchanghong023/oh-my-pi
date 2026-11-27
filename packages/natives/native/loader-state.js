@@ -323,12 +323,12 @@ function findPrivateNativeCacheFile(filePath, uid) {
 }
 
 /** Grammar cache I/O must not prevent using an otherwise usable addon. */
-function prepareNativeGrammarDir(ctx) {
+function prepareNativeGrammarDir(ctx, versionCacheReady) {
 	const grammarDir = path.join(ctx.nativesDir, "grammars");
 	if (ctx.offlineGrammarCacheUid === undefined) return grammarDir;
 	try {
 		const stat =
-			ctx.isCompiledBinary && ctx.offlineCacheUid !== undefined && ctx.addonCacheDir === ctx.nativesDir
+			versionCacheReady && ctx.isCompiledBinary && ctx.offlineCacheUid !== undefined && ctx.addonCacheDir === ctx.nativesDir
 				? preparePrivateCacheDirectory(ctx.nativesDir, grammarDir, ctx.offlineGrammarCacheUid)
 				: prepareLinuxPrivateCacheDirectory(grammarDir, ctx.offlineGrammarCacheUid);
 		return stat ? grammarDir : undefined;
@@ -609,7 +609,7 @@ function isEmbeddedAddonFileCurrent(targetPath, file, offlineCacheUid) {
 	}
 }
 
-function publishNativeFile(tempPath, targetPath) {
+function publishEmbeddedAddon(tempPath, targetPath) {
 	let retainTemp = false;
 	try {
 		fs.renameSync(tempPath, targetPath);
@@ -625,10 +625,11 @@ function publishNativeFile(tempPath, targetPath) {
 		}
 		if (process.platform !== "win32") throw error;
 
-		// Windows permits moving a mapped addon aside, but not overwriting it.
-		// This is needed for node_modules staging and for repairing a damaged cache file.
+		// Windows permits moving a mapped addon aside when its embedded cache
+		// copy needs repair, even though the file cannot be overwritten.
 		const backupPath = `${targetPath}.old.${process.pid}.${randomUUID()}`;
 		try {
+			if (!fs.lstatSync(targetPath).isFile()) throw error;
 			fs.renameSync(targetPath, backupPath);
 		} catch {
 			throw error;
@@ -675,7 +676,7 @@ function writeEmbeddedAddonFile(targetPath, content, mode) {
 		}
 		throw err;
 	}
-	return publishNativeFile(tempPath, targetPath);
+	return publishEmbeddedAddon(tempPath, targetPath);
 }
 
 /**
@@ -828,28 +829,12 @@ function maybeStageNodeModulesAddon(ctx, errors) {
 			continue;
 		}
 
-		const tempPath = `${targetPath}.tmp.${process.pid}.${randomUUID()}`;
 		try {
-			// Copy privately before publishing: CopyFileW can expose a partial
-			// destination to another cold starter and must never truncate a DLL
-			// that another process has already loaded.
-			fs.copyFileSync(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			errors.push(`staged addon copy (${filename}): ${message}`);
-			try {
-				fs.unlinkSync(tempPath);
-			} catch {
-				// Failed copies may leave a partial file.
-			}
-			continue;
-		}
-		try {
-			publishNativeFile(tempPath, targetPath);
+			fs.copyFileSync(sourcePath, targetPath);
 			stagedPath = stagedPath || targetPath;
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			errors.push(`staged addon publication (${filename}): ${message}`);
+			errors.push(`staged addon copy (${filename}): ${message}`);
 		}
 	}
 	return stagedPath;
@@ -1262,8 +1247,7 @@ export function loadNative() {
 			errors.push(`native addon cache (${ctx.versionedDir}): ${message}`);
 		}
 	}
-	const grammarDir =
-		versionCacheReady || ctx.nativesDir !== ctx.addonCacheDir ? prepareNativeGrammarDir(ctx) : undefined;
+	const grammarDir = prepareNativeGrammarDir(ctx, versionCacheReady);
 
 	const hasEmbedded = hasMatchingEmbeddedAddon(ctx);
 	const { primary: primaryEmbeddedFile, fallback: fallbackEmbeddedFile } = embeddedProbeFiles(ctx);
@@ -1282,14 +1266,14 @@ export function loadNative() {
 	for (const candidate of runtimeCandidates) {
 		// Extracted lazily, and never probed unless this build's copy is in place.
 		if (candidate === fallbackEmbeddedPath && !maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile)) continue;
-		if (ctx.offlineCacheUid !== undefined && path.dirname(candidate) === ctx.versionedDir) {
-			if (!versionCacheReady) continue;
-			if (!findPrivateNativeCacheFile(candidate, ctx.offlineCacheUid)) {
-				errors.push(`${candidate}: native addon file not found`);
-				continue;
-			}
-		}
 		try {
+			if (ctx.offlineCacheUid !== undefined && path.dirname(candidate) === ctx.versionedDir) {
+				if (!versionCacheReady) continue;
+				if (!findPrivateNativeCacheFile(candidate, ctx.offlineCacheUid)) {
+					errors.push(`${candidate}: native addon file not found`);
+					continue;
+				}
+			}
 			startupMarker(`native:require:${path.basename(candidate)}`);
 			const bindings = openNativeAddon(candidate);
 			validateLoadedBindings(ctx, bindings, candidate);
@@ -1318,6 +1302,7 @@ export function loadNative() {
 			startupMarker("native:loadNative:done");
 			return bindings;
 		} catch (err) {
+			if (err instanceof UnsafeLinuxCacheError) throw err;
 			const message = err instanceof Error ? err.message : String(err);
 			errors.push(`${candidate}: ${message}`);
 		}

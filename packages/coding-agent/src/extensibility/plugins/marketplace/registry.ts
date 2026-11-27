@@ -52,6 +52,7 @@ export function getMarketplacesCacheDir(): string {
 export async function removeRegisteredMarketplaceCache(
 	entry: MarketplaceRegistryEntry,
 	activeCacheDir: string,
+	options?: { repairMissingCatalog?: boolean },
 ): Promise<void> {
 	if (typeof entry.name !== "string" || !isValidNameSegment(entry.name) || typeof entry.catalogPath !== "string") {
 		return;
@@ -83,7 +84,12 @@ export async function removeRegisteredMarketplaceCache(
 			dir = path.join(dir, component);
 			if (!(await fs.lstat(dir)).isDirectory()) return;
 		}
-		if (!(await fs.lstat(catalogPath)).isFile()) return;
+		const catalogStat = await fs.lstat(catalogPath).catch(error => {
+			if (!options?.repairMissingCatalog || !isEnoent(error)) throw error;
+			return undefined;
+		});
+		if (catalogStat && !catalogStat.isFile()) return;
+		if (!catalogStat && entry.sourceType !== "git" && entry.sourceType !== "github") return;
 		if (
 			entry.sourceType === "local" &&
 			typeof entry.sourceUri === "string" &&
@@ -91,8 +97,10 @@ export async function removeRegisteredMarketplaceCache(
 		) {
 			return;
 		}
-		const catalog = tryParseJson<{ name: string }>(await fs.readFile(catalogPath, "utf8"));
-		if (catalog?.name !== entry.name) return;
+		if (catalogStat) {
+			const catalog = tryParseJson<{ name: string }>(await fs.readFile(catalogPath, "utf8"));
+			if (catalog?.name !== entry.name) return;
+		}
 		await fs.rm(checkout, { recursive: true, force: true });
 	} catch (err) {
 		if (!isEnoent(err) && !isEnotdir(err)) throw err;

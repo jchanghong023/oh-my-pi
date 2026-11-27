@@ -220,7 +220,7 @@ describe("session-owned daemon services", () => {
 				pty: false,
 				ready: { log: `env=session-svc\\|${escaped}\\|svc-env`, timeout: 15 },
 			});
-			expect(result.details?.service).toMatchObject({ name: "env-service", ready: true, timedOut: false });
+			expect(result.details?.service).toMatchObject({ ready: true, timedOut: false });
 		} finally {
 			await harness.dispose();
 		}

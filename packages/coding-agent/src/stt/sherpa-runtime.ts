@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import {
 	ensureRuntimeInstalled,
-	getTinyModelsCacheDir,
+	getAgentExecutableCacheDir,
 	resolveRuntimeModule,
 	type RuntimeInstallPhase,
 } from "@oh-my-pi/pi-utils";
@@ -87,7 +87,7 @@ export interface SherpaRuntime {
  */
 export async function loadSherpaRuntime(onPhase?: (phase: RuntimeInstallPhase) => void): Promise<SherpaRuntime> {
 	const runtimeDir = await ensureRuntimeInstalled({
-		runtimeDir: path.join(path.dirname(getTinyModelsCacheDir()), "stt-runtime", `sherpa-${SHERPA_VERSION}`),
+		runtimeDir: path.join(getAgentExecutableCacheDir(), "stt-runtime", `sherpa-${SHERPA_VERSION}`),
 		install: { dependencies: { [SHERPA_PACKAGE]: SHERPA_VERSION } },
 		probePackage: SHERPA_PACKAGE,
 		onPhase,

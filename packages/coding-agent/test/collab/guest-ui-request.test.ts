@@ -1298,7 +1298,6 @@ describe("guest HTML form race", () => {
 			const extrasNext = await nextUiRequest(guest);
 			if (extrasNext.request.kind !== "select") throw new Error(`expected select, got ${extrasNext.request.kind}`);
 			expect(extrasNext.request.checkedIndices).toEqual([1]);
-			expect(selectLabels(extrasNext)).toContain("Next →");
 			guest.socket.send({ t: "ui-response", reqId: extrasNext.request.reqId, value: "Next →" });
 
 			// A value breaking the form's rules is asked again with the reason; sending it again keeps it.

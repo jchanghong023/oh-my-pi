@@ -8,7 +8,8 @@ import {
 import { type ImageContent, toolWireSchema } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
-import { goalAutopilotRequest } from "../../goals/request-context";
+import { GoalAutopilotRequest } from "../../goals/request-context";
+import { GoalAutopilotCompletionRequest } from "../../goals/runtime";
 import type { ToolSession } from "../../tools";
 import { committedTodoPhases } from "../../tools/todo";
 import { isReplyWrite, toolResultReplies } from "../../session/transcript/reply-write";
@@ -72,6 +73,28 @@ export interface ToolBridgeOptions {
 	 * would draw them, so such calls fail instead of reporting a reply nobody sees.
 	 */
 	onReply?: (text: string) => void;
+}
+
+function evalToolContext(
+	options: ToolBridgeOptions,
+	toolCallId: string,
+	context = options.session.getToolContext?.(),
+): AgentToolContext | undefined {
+	if (!context) return undefined;
+	const scope = options.toolContext?.toolCall?.requestScope;
+	const requestScope =
+		(scope instanceof GoalAutopilotRequest || scope instanceof GoalAutopilotCompletionRequest) && scope.isCurrent()
+			? scope
+			: undefined;
+	return {
+		...context,
+		programmatic: true,
+		parentToolCallId: options.parentToolCallId,
+		// Carry authorization without joining the model response's tool/LSP batch.
+		toolCall: requestScope
+			? { batchId: toolCallId, index: 0, total: 0, toolCalls: [], requestScope }
+			: undefined,
+	};
 }
 
 type ToolValue =
@@ -257,7 +280,7 @@ async function dispatchSessionTool(name: string, args: unknown, options: ToolBri
 					toolCallId,
 					signal: options.signal,
 					cellTimeoutMs: options.cellTimeoutMs,
-					context: options.toolContext ?? options.session.getToolContext?.(),
+					context: evalToolContext(options, toolCallId, options.toolContext),
 				}),
 			);
 			return bridgeValueFromToolResult(
@@ -291,7 +314,7 @@ async function dispatchSessionTool(name: string, args: unknown, options: ToolBri
 		return await runEvalBudget(args, options);
 	}
 	if (name === EVAL_SHELL_BRIDGE_NAME) {
-		return await runEvalShell(args, options);
+		return await runEvalShell(args, { ...options, getToolContext: callId => evalToolContext(options, callId) });
 	}
 	if (name === EVAL_WAIT_BRIDGE_NAME) {
 		return await runEvalWait(args, options);
@@ -404,23 +427,12 @@ async function runSessionTool(
 		const result = await withBridgeTimeoutPause(isMcpTool ? undefined : options.emitStatus, async () => {
 			try {
 				// The script parses the result, so it gets the whole result, not the model's display of it.
-				const context = options.session.getToolContext?.();
-				const requestScope = goalAutopilotRequest(options.toolContext);
 				return await tool.execute(
 					toolCallId,
 					validatedArgs,
 					options.signal,
 					onUpdate,
-					context && {
-						...context,
-						programmatic: true,
-						parentToolCallId: options.parentToolCallId,
-						// Carry the authorization, but no loop-dispatched calls: bridged writes
-						// must not wait for or flush the model response's LSP batch.
-						...(requestScope && {
-							toolCall: { batchId: toolCallId, index: 0, total: 0, toolCalls: [], requestScope },
-						}),
-					},
+					evalToolContext(options, toolCallId),
 				);
 			} finally {
 				settled = true;

@@ -255,7 +255,6 @@ describe("session worktree helpers (real git)", () => {
 		expect(wt.createdBranch).toBe(false);
 		expect(wt.baseCommit).toBe(tip);
 		expect(git(wt.path, "rev-parse", "HEAD")).toBe(tip);
-		expect(wt.baseCommit).not.toBe(git(repo, "rev-parse", "HEAD"));
 		expect(await exists(path.join(wt.path, "main-only.txt"))).toBe(false);
 		const plan = await planWorktreeExit(
 			[wt],

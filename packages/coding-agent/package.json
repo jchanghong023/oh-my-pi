@@ -15,7 +15,10 @@
 		"url": "https://github.com/can1357/oh-my-pi/issues"
 	},
 	"license": "MIT",
-	"author": { "name": "Stencil Labs, Inc.", "url": "https://stencil.so" },
+	"author": {
+		"name": "Stencil Labs, Inc.",
+		"url": "https://stencil.so"
+	},
 	"contributors": [
 		"Mario Zechner"
 	],
@@ -501,14 +504,6 @@
 			"types": "./src/task/*.ts",
 			"import": "./src/task/*.ts"
 		},
-		"./team": {
-			"types": "./src/team/index.ts",
-			"import": "./src/team/index.ts"
-		},
-		"./team/*": {
-			"types": "./src/team/*.ts",
-			"import": "./src/team/*.ts"
-		},
 		"./tools": {
 			"types": "./src/tools/index.ts",
 			"import": "./src/tools/index.ts"
@@ -569,7 +564,7 @@
 		"gen:spec-driven-resources": "bun scripts/spec-driven-resources.ts",
 		"gen:bundle": "bun scripts/bundle-dist.ts",
 		"gen:rpc": "bun scripts/gen-rpc/index.ts",
-		"prepack": "bun run gen:export-viewer && bun run gen:bundle",
+		"prepack": "bun run gen:bundle",
 		"bench:guard": "bun scripts/bench-guard.ts"
 	},
 	"dependencies": {

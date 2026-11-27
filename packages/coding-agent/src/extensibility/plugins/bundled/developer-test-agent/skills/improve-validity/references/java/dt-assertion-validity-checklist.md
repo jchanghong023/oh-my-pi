@@ -16,7 +16,7 @@
 | 3 | 调用方法名为 expect | 检测是否调用了 `expect` 风格的方法（如 Spring MVC 测试） |
 | 4 | 调用方法名为 andExpect | 检测是否调用了 `andExpect` 风格的方法 |
 | 5 | Mockito/PowerMockito verify | 检测是否调用了 `Mockito.verifyXX`、`PowerMockito.verifyXX` 等 |
-| 6 | Native assert | 检测是否使用了 JDK 原生 `assert` 语句 |
+| 6 | Native assert | 仅在确认测试 JVM 为该类启用断言时计入原生 `assert`；否则改用 JUnit 断言 |
 | 7 | 匿名内部类中的断言 | 匿名内部类中是否包含上述 1–6 中的任意一种 |
 | 8 | expected 注解 | 测试注解中是否包含 `expected` 风格的注解（如 `@Test(expected = ...)`） |
 

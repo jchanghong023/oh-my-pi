@@ -119,6 +119,29 @@ interface VcsSnapshot {
 	readonly activeRepoRoot?: string;
 }
 
+/** Older Git addons have porcelain but no per-visibility-mask counts. */
+function porcelainChangeCounts(status: string): GitStatus {
+	const records = status.split("\0");
+	const paths = new Map<string, number>();
+	for (let i = 0; i < records.length; i++) {
+		const record = records[i]!;
+		if (record.length < 4 || record[2] !== " ") continue;
+		const xy = record.slice(0, 2);
+		if (/[RC]/.test(xy)) i++; // NUL-form rename/copy records carry a second path.
+		if (xy === "!!") continue;
+		const mask = xy === "??" ? 4 : Number(xy[0] !== " ") | (Number(xy[1] !== " ") << 1);
+		const path = record.slice(3);
+		paths.set(path, (paths.get(path) ?? 0) | mask);
+	}
+	const counts: [number, number, number, number, number, number, number, number] = [0, 0, 0, 0, 0, 0, 0, 0];
+	for (const mask of paths.values()) {
+		for (let enabled = 1; enabled < counts.length; enabled++) {
+			if (mask & enabled) counts[enabled] = counts[enabled]! + 1;
+		}
+	}
+	return counts;
+}
+
 /** See the module docs. */
 export class SessionStatusLine implements StatusLineModel {
 	readonly #revision = signal(0);
@@ -778,23 +801,26 @@ export class SessionStatusLine implements StatusLineModel {
 				// A colocated jj repository shows its own label; pull requests follow the git branch beneath it.
 				const operational = git ?? vcs.repo(gitCwd)?.asGit();
 				const prBranch = git ? branch : operational ? headBranch(operational.headSync()) : null;
-				// Older native addons expose the summary but not the visibility-mask counts.
 				const status =
 					typeof operational?.statusChangeCounts === "function"
 						? await operational.statusChangeCounts().catch(() => null)
-						: await (operational ?? repository)
-								.statusSummary()
-								.then(({ staged, unstaged, untracked }): GitStatus => [
-									0,
-									staged,
-									unstaged,
-									staged + unstaged,
-									untracked,
-									staged + untracked,
-									unstaged + untracked,
-									staged + unstaged + untracked,
-								])
-								.catch(() => null);
+						: operational
+							? await operational.statusPorcelain({ untracked: "all", nulTerminated: true })
+									.then(porcelainChangeCounts)
+									.catch(() => null)
+							: await repository
+									.statusSummary()
+									.then(({ staged, unstaged, untracked }): GitStatus => [
+										0,
+										staged,
+										unstaged,
+										staged + unstaged,
+										untracked,
+										staged + untracked,
+										unstaged + untracked,
+										staged + unstaged + untracked,
+									])
+									.catch(() => null);
 				const worktree = linkedWorktreeNames(git?.linkedWorktree());
 				// The default branch has no pull request of its own: no lookup for it.
 				const pr =

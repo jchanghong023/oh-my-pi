@@ -18,8 +18,6 @@ export class CustomToolAdapter<
 	declare description: string;
 	declare parameters: TParams;
 	readonly strict: boolean | undefined;
-	// Extension-authored tools always use standard schema validation.
-	readonly lenientArgValidation = false;
 	readonly loadMode: ToolLoadMode;
 
 	constructor(

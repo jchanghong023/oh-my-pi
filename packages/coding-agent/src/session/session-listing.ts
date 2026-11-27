@@ -784,12 +784,14 @@ export async function listSessionsForPicker(
 	sessionDir: string,
 	storage: SessionStorage,
 	pinnedIds: ReadonlySet<string>,
-	bucketMatchers?: ReadonlyMap<string, (recordedCwd: string) => boolean>,
+	siblings?: readonly string[] | ReadonlyMap<string, (recordedCwd: string) => boolean>,
 ): Promise<PickerListing> {
+	const bucketMatchers = siblings && "get" in siblings ? siblings : undefined;
 	let files: string[];
 	const currentDir = path.resolve(sessionDir);
 	try {
-		const siblingDirs = bucketMatchers && [...bucketMatchers.keys()].filter(dir => dir !== currentDir);
+		const siblingDirs =
+			siblings && "get" in siblings ? [...siblings.keys()].filter(dir => dir !== currentDir) : siblings;
 		files = await listSessionDirFiles(sessionDir, storage, siblingDirs);
 	} catch {
 		return settledListing([]);

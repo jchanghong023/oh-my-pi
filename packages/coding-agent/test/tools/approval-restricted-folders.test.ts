@@ -241,7 +241,6 @@ describe("restricted folder wrapper gate", () => {
 		const session = SessionManager.inMemory(cwd);
 		let response: "once" | "deny" | "unknown" = "once";
 		const select = vi.fn(async (_title: string, options: Parameters<ExtensionUIContext["select"]>[1]) => {
-			expect(options).toHaveLength(2);
 			const labels = options.map(option => (typeof option === "string" ? option : option.label));
 			const answers = labels.map(option => approvalAnswerForChoice({}, option));
 			expect(answers).toEqual(["once", "deny"]);

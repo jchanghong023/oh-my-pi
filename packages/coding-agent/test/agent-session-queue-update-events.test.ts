@@ -1,8 +1,11 @@
 /**
  * Contract: `AgentSession` emits a `queue_update` session event — the RPC-facing
- * snapshot mirrored by `getQueuedMessages()` — as displayable input is queued,
- * removed or delivered. Consumers render snapshots idempotently; repeated
- * snapshots must not obscure any intervening state transition.
+ * `{ steering, followUp }` snapshot mirrored by `getQueuedMessages()` — whenever
+ * the displayable steering/follow-up queue actually changes, and never repeats
+ * an unchanged snapshot. The agent's queue mutators (enqueue, dequeue on
+ * delivery, remove, clear/restore) all funnel through one internal signal;
+ * these tests prove the externally observable coalescing contract that signal
+ * produces, not the internal wiring.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
@@ -191,18 +194,18 @@ describe("AgentSession queue_update events", () => {
 
 		expect(streamingAtInject).toBe(true);
 		expect(removedFirst).toBe(true);
-		// Compare observable follow-up transitions, not repeated snapshots from
-		// other queue lifecycle notifications.
-		const followUps = updates.map(update => update.followUp);
-		expect(
-			followUps.filter(
-				(value, index) => index === 0 || JSON.stringify(value) !== JSON.stringify(followUps[index - 1]),
-			),
-		).toEqual([["first"], ["first", "second"], ["second"], []]);
+		// Enqueue both, then the removal, then the forced continuation turn
+		// dequeuing "second" for delivery — each step is one distinct snapshot.
+		expect(updates.map(update => update.followUp)).toEqual([["first"], ["first", "second"], ["second"], []]);
 		expect(updates.every(update => update.steering.length === 0)).toBe(true);
 
 		// get_state's RPC-facing snapshot is exactly the last emitted event.
 		expect(target.getQueuedMessages()).toEqual(updates.at(-1)!);
+
+		// No duplicate identical consecutive events.
+		for (let i = 1; i < updates.length; i++) {
+			expect(updates[i]).not.toEqual(updates[i - 1]);
+		}
 	});
 
 	it("never re-emits when a mutation leaves the displayable queue unchanged", async () => {

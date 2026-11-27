@@ -515,6 +515,10 @@ impl ExtProc for SignalsOnExit {
 		self.child.pid()
 	}
 
+	fn process(&self) -> Option<crate::proctree::Process> {
+		self.child.process()
+	}
+
 	fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus> {
 		let status = std::task::ready!(self.child.poll_wait(cx));
 		Signals::dispatch(&self.ctl, self.root);
@@ -543,8 +547,18 @@ impl ExtProc for SignalsOnExit {
 		self.child.signal_wave(sig, pids, extra, groups)
 	}
 
-	fn record_wave_signal(&mut self, sig: crate::bash::Signal, wave: &crate::proctree::SignalWave) {
-		self.child.record_wave_signal(sig, wave);
+	fn record_wave_signal(
+		&mut self,
+		sig: crate::bash::Signal,
+		groups: bool,
+		wave: Option<&crate::proctree::SignalWave>,
+	) {
+		self.child.record_wave_signal(sig, groups, wave);
+	}
+
+	#[cfg(unix)]
+	fn continue_stopped(&mut self) -> io::Result<()> {
+		self.child.continue_stopped()
 	}
 
 	fn signal(&mut self, sig: crate::bash::Signal) -> io::Result<()> {

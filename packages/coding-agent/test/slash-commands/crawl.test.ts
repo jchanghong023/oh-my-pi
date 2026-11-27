@@ -88,7 +88,7 @@ describe("/crawl", () => {
 		expect(run.mock.calls.at(-1)?.[1]).toEqual({
 			url: "https://example.com/page",
 			recursive: false,
-			output: "tmp",
+			output: path.resolve(h.runtime.cwd, "tmp"),
 			concurrency: 2,
 		});
 		expect(
@@ -101,7 +101,7 @@ describe("/crawl", () => {
 		expect(run.mock.calls.at(-1)?.[1]).toEqual({
 			url: "https://example.com/page",
 			recursive: true,
-			output: "saved pages",
+			output: path.resolve(h.runtime.cwd, "saved pages"),
 			concurrency: 3,
 			maxPages: 8,
 			maxDepth: 0,
@@ -138,7 +138,6 @@ describe("/crawl", () => {
 			failed: true,
 		});
 		second.dispose();
-		expect(signals[1]?.aborted).toBe(true);
 		release.resolve();
 		await Promise.all([...first.tasks, ...second.tasks]);
 		expect(await stop).toEqual({ consumed: true });

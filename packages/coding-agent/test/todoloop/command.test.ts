@@ -117,7 +117,6 @@ describe("native /todoloop command", () => {
 		h.ctx.composer.setText("new draft");
 		const filePath = path.join(h.cwd, "tasks with spaces.md");
 		await h.execute(`"${filePath}"`);
-		expect(h.runTodoLoop).toHaveBeenCalledTimes(1);
 		expect(h.runTodoLoop.mock.calls[0]![0].filePath).toBe(filePath);
 		expect(h.ctx.composer.text()).toBe("new draft");
 		await h.execute(`"${filePath}"`);

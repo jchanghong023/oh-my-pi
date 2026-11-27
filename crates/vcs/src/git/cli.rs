@@ -288,7 +288,7 @@ async fn run_raw(cwd: &Path, args: &[String], options: &RunOptions) -> Result<Ca
 	detach_from_terminal(cmd.as_std_mut());
 	let mut child = cmd.spawn().map_err(|err| spawn_error(cwd, err))?;
 	#[cfg(windows)]
-	let process_tree = match ProcessTree::new(child.id().expect("newly spawned git has a pid")) {
+	let process_tree = match ProcessTree::new(&child) {
 		Ok(tree) => tree,
 		Err(err) => {
 			let _ = child.start_kill();
@@ -787,7 +787,7 @@ mod windows_process {
 	use std::{
 		collections::{HashMap, HashSet},
 		io,
-		os::windows::io::OwnedHandle,
+		os::windows::io::{BorrowedHandle, OwnedHandle},
 		time::Duration,
 	};
 
@@ -807,6 +807,10 @@ mod windows_process {
 				sys::PROCESS_TERMINATE | sys::PROCESS_QUERY_LIMITED_INFORMATION | sys::SYNCHRONIZE,
 			)
 			.ok_or_else(io::Error::last_os_error)?;
+			Self::from_handle(pid, handle)
+		}
+
+		fn from_handle(pid: u32, handle: OwnedHandle) -> io::Result<Self> {
 			let created = sys::process_times(&handle)
 				.ok_or_else(io::Error::last_os_error)?
 				.0;
@@ -819,8 +823,14 @@ mod windows_process {
 	}
 
 	impl ProcessTree {
-		pub(super) fn new(pid: u32) -> io::Result<Self> {
-			Ok(Self { root: Process::open(pid)? })
+		pub(super) fn new(child: &tokio::process::Child) -> io::Result<Self> {
+			let pid = child.id().expect("newly spawned git has a pid");
+			let raw = child.raw_handle().expect("newly spawned git has a process handle");
+			// SAFETY: Tokio owns this live handle, and `child` is borrowed until
+			// duplication completes. The duplicate pins the root during cleanup
+			// without needing to reopen the process by PID.
+			let handle = unsafe { BorrowedHandle::borrow_raw(raw) }.try_clone_to_owned()?;
+			Ok(Self { root: Process::from_handle(pid, handle)? })
 		}
 
 		pub(super) async fn terminate(mut self, child: &mut tokio::process::Child) {

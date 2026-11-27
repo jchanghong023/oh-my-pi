@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { parseAlibabaTokenPlanCredential } from "@oh-my-pi/pi-catalog/wire/alibaba-token-plan";
+import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import { parseOtariCredential } from "@oh-my-pi/pi-catalog/wire/otari";
 import { getLogsDir, isBunTestRuntime, isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error/flags";
@@ -280,11 +281,11 @@ function sanitizeDump(dump: RawHttpRequestDump): RawHttpRequestDump {
 			if (declaredNames.has(name.toLowerCase())) headers[name] = "[redacted]";
 		}
 	}
-	return redactDeclaredCredentials({ ...request, url: redactUrlQuery(dump.url), headers }, dump);
+	return redactDeclaredCredentials({ ...request, url: redactUrlQuery(dump.url), headers }, dump, true);
 }
 
 /** Copy only branches containing declared credentials, never the entire request body. */
-function redactDeclaredCredentials<T>(value: T, dump: RawHttpRequestDump): T {
+function redactDeclaredCredentials<T>(value: T, dump: RawHttpRequestDump, preserveRootKeys = false): T {
 	const auth = dump.requestAuth;
 	if (!auth) return value;
 	const credentials = new Set<string>();
@@ -307,6 +308,8 @@ function redactDeclaredCredentials<T>(value: T, dump: RawHttpRequestDump): T {
 		} else if (dump.provider === "alibaba-token-plan") {
 			const token = parseAlibabaTokenPlanCredential(auth.apiKey)?.token;
 			if (token) addCredential(token);
+		} else if (dump.provider === "github-copilot") {
+			addCredential(parseGitHubCopilotApiKey(auth.apiKey).accessToken);
 		}
 	}
 	if (auth.headers) {
@@ -327,7 +330,7 @@ function redactDeclaredCredentials<T>(value: T, dump: RawHttpRequestDump): T {
 		}
 		return text;
 	};
-	const redact = (input: unknown): unknown => {
+	const redact = (input: unknown, preserveKeys = false): unknown => {
 		if (typeof input === "string") return redactText(input);
 		if (Array.isArray(input)) {
 			let result: unknown[] | undefined;
@@ -343,7 +346,7 @@ function redactDeclaredCredentials<T>(value: T, dump: RawHttpRequestDump): T {
 		if (!isRecord(input)) return input;
 		let result: Record<string, unknown> | undefined;
 		for (const key of Object.keys(input)) {
-			const nextKey = redactText(key);
+			const nextKey = preserveKeys ? key : redactText(key);
 			const next = redact(input[key]);
 			if (nextKey !== key || next !== input[key]) {
 				result ??= { ...input };
@@ -358,7 +361,7 @@ function redactDeclaredCredentials<T>(value: T, dump: RawHttpRequestDump): T {
 		}
 		return result ?? input;
 	};
-	return redact(value) as T;
+	return redact(value, preserveRootKeys) as T;
 }
 
 /**

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { errorMessage, getTinyModelsCacheDir } from "@oh-my-pi/pi-utils";
+import { errorMessage, getAgentExecutableCacheDir, getTinyModelsCacheDir } from "@oh-my-pi/pi-utils";
 import type {
 	AutomaticSpeechRecognitionOutput,
 	AutomaticSpeechRecognitionPipeline,
@@ -131,7 +131,7 @@ const sherpaRuntime = new MemoizedRuntime<SherpaRuntime>();
 
 function getSttRuntimeDir(): string {
 	const key = TRANSFORMERS_VERSION.replace(/[^A-Za-z0-9._-]/g, "_");
-	return path.join(path.dirname(getTinyModelsCacheDir()), "stt-runtime", `transformers-${key}`);
+	return path.join(getAgentExecutableCacheDir(), "stt-runtime", `transformers-${key}`);
 }
 
 async function loadPipelineOnDevice(

@@ -711,6 +711,8 @@ pub trait ExtProc: Send {
 	/// of a `StdioSpec::Pipe` stdout/stderr has delivered all bytes up to the
 	/// child's end of file into its [`FdRef`]: the engine reads a command
 	/// substitution's capture as soon as the exit is observed.
+	/// A host that opts into [`ExtProc::drain_output_at_exit`] on Unix waits
+	/// instead for the bytes written through the process's actual exit.
 	fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus>;
 	/// Poll for the next state change: a stop or continue the host observed
 	/// since the last poll (each reported once; a stop and continue both
@@ -722,6 +724,10 @@ pub trait ExtProc: Send {
 	fn poll_event(&mut self, cx: &mut Context<'_>) -> Poll<ProcEvent> {
 		self.poll_wait(cx).map(ProcEvent::Exited)
 	}
+	/// Report exit after delivering the output already written by this
+	/// process, without waiting for descendants to close its output streams.
+	#[cfg(unix)]
+	fn drain_output_at_exit(&mut self) {}
 	/// The OS process group the process was placed in when it leads or
 	/// joined one ([`PgroupSpec`]); `None` when it shares the shell's group
 	/// or the host has no process groups. A [`PgroupSpec::Job`] join the OS
@@ -751,8 +757,20 @@ pub trait ExtProc: Send {
 	) -> Option<crate::proctree::SignalWave> {
 		None
 	}
-	/// Record the result of [`ExtProc::signal_wave`] for this process.
-	fn record_wave_signal(&mut self, _sig: Signal, _wave: &crate::proctree::SignalWave) {}
+	/// Record the selected scope and, when available, the result of a wave.
+	fn record_wave_signal(
+		&mut self,
+		_sig: Signal,
+		_groups: bool,
+		_wave: Option<&crate::proctree::SignalWave>,
+	) {
+	}
+	/// Continue the stopped native child itself, not a measured operand it
+	/// supervises or any other members of its group.
+	#[cfg(unix)]
+	fn continue_stopped(&mut self) -> io::Result<()> {
+		self.signal_single(Signal::Cont)
+	}
 	/// Stop the process group (job pause).
 	fn stop(&mut self) -> io::Result<()>;
 	/// Continue after [`ExtProc::stop`].

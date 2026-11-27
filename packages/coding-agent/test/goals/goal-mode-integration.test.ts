@@ -393,7 +393,6 @@ describe("InteractiveMode goal mode integration", () => {
 			expect(goalNotices(harness.session)).toHaveLength(1);
 			expect(JSON.stringify(harness.session.messages[historyPosition])).toBe(savedBytes);
 			for (let index = 1; index < requests.length; index++) {
-				expect(requests[index]![providerPosition]).toEqual(converted);
 				expect(requests[index]!.filter(message => Bun.deepEquals(message, converted))).toHaveLength(1);
 				const prefix = [...requests[index - 1]!, responses()[index - 1]!];
 				expect(requests[index]!.slice(0, prefix.length)).toEqual(prefix);

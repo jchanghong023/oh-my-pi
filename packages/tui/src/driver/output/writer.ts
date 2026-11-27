@@ -779,7 +779,7 @@ export class FrameWriter {
 		let above = 0;
 		let total = 0;
 		for (let row = 0; row < this.#shown.length; row++) {
-			const rows = reflowHeight(this.#shown[row]!, columns);
+			const rows = reflowHeight(this.#shown[row]!, columns, coveredCells(this.#shown, row));
 			if (row < this.#cursorRow) above += rows;
 			total += rows;
 		}

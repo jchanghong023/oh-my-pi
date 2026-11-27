@@ -27,6 +27,18 @@ function outputError(error) {
   process.exit(1);
 }
 
+function findWindowsCodecheck() {
+  for (const entry of (process.env.PATH || '').split(path.delimiter)) {
+    const dir = entry.replace(/^"(.*)"$/, '$1');
+    if (!path.isAbsolute(dir)) continue;
+    for (const name of ['codecheck.exe', 'codecheck.cmd']) {
+      const launcher = path.join(dir, name);
+      if (fs.statSync(launcher, { throwIfNoEntry: false })?.isFile()) return launcher;
+    }
+  }
+  throw new Error('Codecheck is not installed on PATH');
+}
+
 function runCommand(args, cwd) {
   try {
     const commandOptions = {
@@ -38,8 +50,11 @@ function runCommand(args, cwd) {
       return execFileSync('codecheck', args, commandOptions);
     }
 
+    const launcher = findWindowsCodecheck();
+    if (launcher.endsWith('.exe')) return execFileSync(launcher, args, commandOptions);
+
     // npm 在 Windows 上使用 .cmd 启动器；通过环境变量传入带引号的参数。
-    const env = { ...process.env };
+    const env = { ...process.env, NoDefaultCurrentDirectoryInExePath: '1', OMP_CODECHECK_LAUNCHER: launcher };
     const commandArgs = args.map((arg, index) => {
       if (/["\r\n]/.test(arg)) {
         throw new Error('Invalid Windows command argument');
@@ -48,8 +63,10 @@ function runCommand(args, cwd) {
       env[name] = arg;
       return `"%${name}%"`;
     });
-    return execFileSync(process.env.ComSpec || 'cmd.exe', [
-      '/d', '/v:off', '/s', '/c', `"codecheck ${commandArgs.join(' ')}"`
+    const cmd = process.env.ComSpec || path.join(process.env.SystemRoot, 'System32', 'cmd.exe');
+    if (!path.isAbsolute(cmd)) throw new Error('Windows command interpreter must have an absolute path');
+    return execFileSync(cmd, [
+      '/d', '/v:off', '/s', '/c', `""%OMP_CODECHECK_LAUNCHER%" ${commandArgs.join(' ')}"`
     ], { ...commandOptions, env, windowsVerbatimArguments: true });
   } catch (e) {
     return null;
@@ -93,49 +110,43 @@ function filterAlarms(resultData) {
 }
 
 function runCodecheck(projectDir, testFileRelativePath) {
-  // Step 0: 通用初始化
-  const generalInitResult = runCommand(['init'], projectDir);
-  if (generalInitResult === null) {
-    outputError('codecheck init failed');
+  const lockDir = path.join(projectDir, '.dtagent-codecheck.lock');
+  try {
+    fs.mkdirSync(lockDir);
+  } catch (error) {
+    if (error.code === 'EEXIST') throw new Error(`Codecheck result is locked: ${lockDir}`);
+    throw error;
   }
-
-  // Step 1: 设置指定规则集
-  const configResult = runCommand(['config', 'rule-set-ids', RULE_SET_ID, '--type', CHECK_TYPE], projectDir);
-  if (configResult === null) {
-    outputError('config rule-set-ids failed');
-  }
-
-  // Step 2: 初始化指定规则集
-  const initResult = runCommand(['init', '--type', CHECK_TYPE], projectDir);
-  if (initResult === null) {
-    outputError('init failed');
-  }
-
-  // Step 3: 执行全量检查
-  const checkResult = runCommand(
-    ['fullcheck', '--files', testFileRelativePath, '--compiled', '--type', CHECK_TYPE],
-    projectDir
-  );
-  if (checkResult === null) {
-    outputError('fullcheck failed');
-  }
-
-  // Step 4: 解析结果文件
-  const resultFilePath = path.join(projectDir, '.codecheckcli', 'codecheck-result.json');
 
   let alarms;
   try {
-    const content = fs.readFileSync(resultFilePath, 'utf-8');
-    alarms = filterAlarms(JSON.parse(content));
-  } catch (e) {
-    outputError(`Failed to load Codecheck result: ${e.message}`);
-  }
+    if (runCommand(['init'], projectDir) === null) {
+      throw new Error('codecheck init failed');
+    }
+    if (runCommand(['config', 'rule-set-ids', RULE_SET_ID, '--type', CHECK_TYPE], projectDir) === null) {
+      throw new Error('config rule-set-ids failed');
+    }
+    if (runCommand(['init', '--type', CHECK_TYPE], projectDir) === null) {
+      throw new Error('init failed');
+    }
+    if (runCommand(
+      ['fullcheck', '--files', testFileRelativePath, '--compiled', '--type', CHECK_TYPE],
+      projectDir
+    ) === null) {
+      throw new Error('fullcheck failed');
+    }
 
-  outputResult({
-    success: true,
-    alarmCount: alarms.length,
-    alarms: alarms
-  });
+    try {
+      const resultFilePath = path.join(projectDir, '.codecheckcli', 'codecheck-result.json');
+      const content = fs.readFileSync(resultFilePath, 'utf-8');
+      alarms = filterAlarms(JSON.parse(content));
+    } catch (error) {
+      throw new Error(`Failed to load Codecheck result: ${error.message}`);
+    }
+  } finally {
+    fs.rmdirSync(lockDir);
+  }
+  outputResult({ success: true, alarmCount: alarms.length, alarms });
 }
 
 async function main() {

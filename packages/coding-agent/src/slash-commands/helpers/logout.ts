@@ -1,9 +1,4 @@
-import {
-	getAllOAuthProviders,
-	getOAuthCredentialProvider,
-	getStoredOAuthProviders,
-	type OAuthProviderInfo,
-} from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthCredentialProvider } from "@oh-my-pi/pi-ai/oauth";
 import type { AgentSession } from "../../session/agent-session";
 import type { AuthStorage, OAuthAccountIdentity, StoredAuthCredential } from "../../session/auth-storage";
 
@@ -111,126 +106,6 @@ export function toLogoutAccounts(
 		});
 }
 
-export interface LogoutCommandUI {
-	selectProvider(providers: readonly OAuthProviderInfo[]): Promise<string | undefined>;
-	selectAccount(provider: OAuthProviderInfo, accounts: LogoutAccount[]): Promise<number | undefined>;
-}
-
-export type LogoutCommandResult =
-	| { status: "cancelled" }
-	| { status: "skipped"; level: "info" | "warning" | "error"; message: string }
-	| { status: "removed"; account: LogoutAccount; remainingSource?: string };
-
-function noStoredLogoutResult(provider: string, source: string | undefined): LogoutCommandResult {
-	const suffix = source ? ` Current auth comes from ${source}; remove that source to log out.` : "";
-	return {
-		status: "skipped",
-		level: "error",
-		message: `Logout skipped: no stored credentials for ${provider}.${suffix}`,
-	};
-}
-
-/** Select and remove a stored credential from the terminal UI. */
-export async function logoutProviderForCommand(
-	session: Pick<
-		AgentSession,
-		"modelRegistry" | "sessionId" | "sessionGeneration" | "isDisposed" | "refreshScopedModels"
-	>,
-	providerId: string | undefined,
-	ui: LogoutCommandUI,
-): Promise<LogoutCommandResult> {
-	const modelRegistry = session.modelRegistry;
-	const sessionId = session.sessionId;
-	const generation = session.sessionGeneration;
-	const authStorage = modelRegistry.authStorage;
-	const isCurrentSession = () =>
-		!session.isDisposed &&
-		session.sessionGeneration === generation &&
-		session.sessionId === sessionId &&
-		session.modelRegistry === modelRegistry;
-	await authStorage.credentials.reload();
-	const storedProviders = getStoredOAuthProviders(authStorage.credentials);
-	let provider = providerId
-		? (getAllOAuthProviders().find(candidate => candidate.id === providerId) ??
-			storedProviders.find(candidate => candidate.id === providerId))
-		: undefined;
-	if (providerId && !provider) {
-		const source = authStorage.keys.describe(providerId, sessionId);
-		if (source !== undefined) return noStoredLogoutResult(providerId, source);
-		return { status: "skipped", level: "warning", message: `Unknown OAuth provider: ${providerId}` };
-	}
-	if (!provider) {
-		if (storedProviders.length === 0) {
-			return {
-				status: "skipped",
-				level: "info",
-				message: "No stored provider credentials to log out. Remove env or config auth at its source.",
-			};
-		}
-		const selectedProviderId = await ui.selectProvider(storedProviders);
-		if (selectedProviderId === undefined) return { status: "cancelled" };
-		provider = storedProviders.find(candidate => candidate.id === selectedProviderId);
-		if (!provider) {
-			return { status: "skipped", level: "error", message: "The selected logout provider is no longer available." };
-		}
-	}
-	// An explicit login alias follows its extension or built-in mapping. The
-	// picker already shows actual storage ids, including older shadowed ids.
-	const storageProvider = providerId ? getOAuthCredentialProvider(provider.id) : provider.id;
-	const accounts = storedLogoutAccounts(authStorage, storageProvider, sessionId);
-	if (accounts.length === 0) {
-		return noStoredLogoutResult(provider.id, authStorage.keys.describe(storageProvider, sessionId));
-	}
-	const selectedCredentialId = await ui.selectAccount(provider, accounts);
-	if (selectedCredentialId === undefined) return { status: "cancelled" };
-	const account = accounts.find(candidate => candidate.credentialId === selectedCredentialId);
-	if (!account) {
-		return { status: "skipped", level: "error", message: "The selected logout account is no longer available." };
-	}
-	const sessionChanged = {
-		status: "skipped",
-		level: "error",
-		message: "Logout cancelled: the session changed during account selection.",
-	} as const;
-	if (!isCurrentSession()) return sessionChanged;
-
-	await authStorage.credentials.reload();
-	if (!isCurrentSession()) return sessionChanged;
-	const { removed, remainingSource } = await removeStoredLogoutCredential(
-		modelRegistry,
-		storageProvider,
-		account.credentialId,
-		sessionId,
-		async () => {
-			if (isCurrentSession()) await session.refreshScopedModels();
-		},
-	);
-	if (!removed) {
-		return {
-			status: "skipped",
-			level: "error",
-			message: `Logout skipped: ${account.label} is no longer stored for ${provider.id}.`,
-		};
-	}
-	return { status: "removed", account, remainingSource };
-}
-
-export function formatLogoutCommandResult(
-	result: LogoutCommandResult,
-): { level: "info" | "warning" | "error"; message: string } | undefined {
-	if (result.status === "cancelled") return undefined;
-	if (result.status === "skipped") return result;
-	const lines = [
-		`Successfully logged out ${result.account.label} from ${result.account.provider}`,
-		// The active auth source can be an override or a sibling, not the deleted row.
-		"Credential removed from the credential store",
-	];
-	if (result.remainingSource) {
-		lines.push(`${result.account.provider} is still authenticated via ${result.remainingSource}`);
-	}
-	return { level: result.remainingSource ? "warning" : "info", message: lines.join("\n") };
-}
-
 /** Stored accounts `/logout` can remove for `provider`, active first. Reloads the store to see other processes' changes. */
 export async function listLogoutAccounts(
 	authStorage: AuthStorage,
@@ -239,11 +114,7 @@ export async function listLogoutAccounts(
 ): Promise<LogoutAccount[]> {
 	const provider = getOAuthCredentialProvider(loginProvider);
 	await authStorage.credentials.reload();
-	return storedLogoutAccounts(authStorage, provider, sessionId);
-}
-
-function storedLogoutAccounts(authStorage: AuthStorage, provider: string, sessionId: string): LogoutAccount[] {
-	return toLogoutAccounts(provider, authStorage.credentials.list(provider, { includePaused: true }), {
+	return toLogoutAccounts(provider, authStorage.credentials.list(provider), {
 		activeIdentity: authStorage.oauth.identity(provider, sessionId),
 		activeApiKey: authStorage.keys.source(provider)?.kind === "api_key",
 	});
@@ -260,21 +131,10 @@ export async function logoutCredential(
 	credentialId: number,
 ): Promise<{ removed: boolean; remainingSource?: string }> {
 	const provider = getOAuthCredentialProvider(loginProvider);
-	const { modelRegistry, sessionId } = session;
-	await modelRegistry.authStorage.credentials.reload();
-	return removeStoredLogoutCredential(modelRegistry, provider, credentialId, sessionId, () =>
-		session.refreshScopedModels(),
-	);
-}
-
-async function removeStoredLogoutCredential(
-	modelRegistry: AgentSession["modelRegistry"],
-	provider: string,
-	credentialId: number,
-	sessionId: string,
-	refreshScopedModels: () => Promise<void>,
-): Promise<{ removed: boolean; remainingSource?: string }> {
+	const modelRegistry = session.modelRegistry;
 	const authStorage = modelRegistry.authStorage;
+	// Reload so an id stored by another process is found, not reported missing.
+	await authStorage.credentials.reload();
 	if (!(await authStorage.credentials.removeById(provider, credentialId))) return { removed: false };
 	// Provider-scoped online refresh so the removed credential's stale
 	// endpoint/deployment models are invalidated deterministically; the
@@ -282,6 +142,6 @@ async function removeStoredLogoutCredential(
 	// authoritative cache row and keep showing models the credential
 	// unlocked (#5780). Other providers are left untouched.
 	await modelRegistry.refreshProvider(provider, "online");
-	await refreshScopedModels();
-	return { removed: true, remainingSource: authStorage.keys.describe(provider, sessionId) };
+	await session.refreshScopedModels();
+	return { removed: true, remainingSource: authStorage.keys.describe(provider, session.sessionId) };
 }

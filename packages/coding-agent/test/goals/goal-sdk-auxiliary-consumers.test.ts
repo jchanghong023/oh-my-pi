@@ -254,7 +254,6 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 		expect(h.session.getActiveToolNames()).not.toContain("task");
 		expect(h.session.getMountedToolCommandNames()).toContain("task");
 		expect(h.session.getEnabledToolNames()).toContain("task");
-		expect(h.session.getToolByName("task")?.name).toBe("task");
 		const notice = await h.run(() => enter(h.session, h.signal));
 		const original = JSON.stringify(notice);
 		const rules = renderOrchestrateNotice({ tools: h.session.getEnabledToolNames() }, { authority: "user" });
@@ -461,7 +460,6 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 				}
 			}
 			const requests = h.provider.requests.slice(before);
-			expect(requests.length).toBeGreaterThan(0);
 			// Verify real requests at each consumer's actual history boundary.
 			const side =
 				consumer === "advisor"

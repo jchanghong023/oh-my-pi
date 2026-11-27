@@ -1,6 +1,5 @@
 ---
 name: openspec-onboard
-disable-model-invocation: true
 description: Guided onboarding for OpenSpec - walk through a complete workflow cycle with narration and real codebase work. Also use when the user says "openspec onboard" or "opsx onboard".
 allowed-tools: Bash(omp openspec:*)
 license: MIT

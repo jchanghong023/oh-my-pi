@@ -15,7 +15,7 @@
 
 ## 编码误用禁令（3条）
 10. 禁止递归函数用assert_not_called：patching拦截递归调用。用call_count + 期望次数
-11. 禁止bound method用`is`比较：bound method identity总是失败。用`__name__`比较或assert_called_once_with
+11. 禁止用 `is` 比较绑定方法对象，或仅比较名称。分别用 `is` 比较 `__self__` 和 `__func__`。
 12. 禁止Exception子类假设命名属性：简单Exception子类存储在`.args`tuple。先验证类定义了该属性
 
 ## 代码修改禁令（2条）

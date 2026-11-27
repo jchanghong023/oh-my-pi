@@ -311,10 +311,31 @@ impl GitRepo {
 		) {
 			Err(err) if !self.is_reftable() && super::cli::prefers_in_process(&err) => {
 				let mut masks = HashMap::new();
-				self.status_porcelain_gix_each(
+				let index = self.status_porcelain_gix_each(
 					&StatusOptions { untracked: UntrackedMode::All, ..Default::default() },
 					|x, y, path, _| *masks.entry(path).or_default() |= status_mask(x, y),
 				)?;
+				// All seven porcelain conflict pairs occupy both columns. Use the
+				// same index the walk used: gitoxide's worktree iterator can skip
+				// adjacent conflicts when a path has only some of stages 1–3.
+				let mut last_conflict = None;
+				for entry in index.entries() {
+					if entry.stage() == gix::index::entry::Stage::Unconflicted {
+						continue;
+					}
+					let path = entry.path(&index);
+					if last_conflict == Some(path) {
+						continue;
+					}
+					last_conflict = Some(path);
+					let path: &[u8] = path.as_ref();
+					let mask = status_mask(b'U', b'U');
+					if let Some(old) = masks.get_mut(path) {
+						*old = mask;
+					} else {
+						masks.insert(path.to_vec(), mask);
+					}
+				}
 				Ok(status_mask_counts(masks))
 			},
 			result => result?.finish(),
@@ -376,7 +397,7 @@ impl GitRepo {
 		&self,
 		options: &StatusOptions,
 		mut emit: impl FnMut(u8, u8, Vec<u8>, Option<Vec<u8>>),
-	) -> Result<()> {
+	) -> Result<gix::worktree::IndexPersistedOrInMemory> {
 		let repo = self.gix()?;
 		let untracked = match options.untracked {
 			UntrackedMode::No => gix::status::UntrackedFiles::None,
@@ -384,14 +405,14 @@ impl GitRepo {
 			UntrackedMode::All => gix::status::UntrackedFiles::Files,
 		};
 		let platform = status_with_fresh_index(&repo, "git status")?.untracked_files(untracked);
-		let iter = platform
+		let mut iter = platform
 			.into_iter(options.pathspecs.iter().map(|path| path.as_bytes().into()))
 			.map_err(|err| Error::backend("git status", err))?;
 		let mut states = PorcelainStates::new();
 		// git emits tracked changes first, then untracked entries, each block
 		// sorted by path — not one merged sort.
 		let mut untracked_paths = BTreeSet::new();
-		for item in iter {
+		for item in iter.by_ref() {
 			let item = item.map_err(|err| Error::backend("git status", err))?;
 			use gix::status::{Item, index_worktree};
 			match item {
@@ -484,7 +505,9 @@ impl GitRepo {
 		) {
 			emit(x, y, path, old);
 		}
-		Ok(())
+		iter.into_outcome()
+			.map(|outcome| outcome.worktree_index)
+			.ok_or_else(|| Error::backend("git status", "incomplete gitoxide status walk"))
 	}
 
 	/// Count staged, unstaged, and untracked status entries.
@@ -640,7 +663,11 @@ impl GitRepo {
 			let Ok(pointer) = std::fs::read_to_string(dir.join("gitdir")) else {
 				continue;
 			};
-			let dotgit = PathBuf::from(pointer.trim());
+			let pointer = pointer.trim();
+			if pointer.is_empty() {
+				continue;
+			}
+			let dotgit = super::normalize_path(&dir.join(pointer));
 			let Some(root) = dotgit.parent().map(Path::to_owned) else {
 				continue;
 			};

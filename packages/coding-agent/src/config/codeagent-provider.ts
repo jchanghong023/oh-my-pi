@@ -1,3 +1,4 @@
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai/types";
 import { NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/auth-retry";
 import {
@@ -50,9 +51,13 @@ export class CodeAgentTokenCache {
 
 let cache: CodeAgentTokenCache | undefined;
 let models: Model<"openai-completions">[] | undefined;
+const codeAgentSeed = seedModels<"openai-completions">(CODEAGENT_PROVIDER_ID);
+const gatewayBaseUrl = codeAgentSeed[0]?.baseUrl;
+// Capture the built-in destination independently of mutable request models.
+const gatewayChatUrl = gatewayBaseUrl && `${gatewayBaseUrl.replace(/\/+$/, "")}/chat/completions`;
 
 export function getCodeAgentModels(): Model<"openai-completions">[] {
-	return (models ??= seedModels<"openai-completions">(CODEAGENT_PROVIDER_ID).map(spec => buildModel(spec)));
+	return (models ??= codeAgentSeed.map(spec => buildModel(spec)));
 }
 
 /** 注册表快照在正常 registry 启动读取一次；旧会话与旧模型对象共享活缓存。 */
@@ -115,8 +120,8 @@ export function streamCodeAgent(
 					headers.delete("x-api-key");
 					headers.delete("api-key");
 					headers.delete("x-auth-token");
-					if (token) headers.set("x-auth-token", token);
-					return baseFetch(input, { ...init, headers, redirect: init?.redirect ?? "error" });
+					if (token && input === gatewayChatUrl) headers.set("x-auth-token", token);
+					return baseFetch(input, { ...init, headers, redirect: "error" });
 				},
 			});
 			let replay = false;
@@ -128,6 +133,7 @@ export function streamCodeAgent(
 						!committed &&
 						!options?.signal?.aborted &&
 						event.reason !== "aborted" &&
+						!AIError.is(event.error.errorId, AIError.Flag.ContentBlocked) &&
 						next !== token;
 					logger.info("CodeAgent request failed", {
 						provider: CODEAGENT_PROVIDER_ID,

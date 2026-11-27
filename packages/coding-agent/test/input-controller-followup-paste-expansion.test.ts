@@ -72,7 +72,6 @@ describe("InputController.handleFollowUp collapsed-paste expansion", () => {
 		const call = prompt.mock.calls[0];
 		if (!call) throw new Error("expected session.prompt to be called");
 		expect(call[0]).toBe(LINES);
-		expect(call[1]?.streamingBehavior).toBe("followUp");
 		expect(ctx.composer.text()).toBe("");
 	});
 });

@@ -51,6 +51,7 @@ use super::{
 use crate::{
 	fs::{
 		Detail, Dir, FileId, FileInfo, FileType, Fs, IncompleteListing, Listing, Session,
+		is_dangling_link,
 		mounts::Fences,
 	},
 	ignore::{DirIgnores, Frame, Ignorer, Names, Sources},
@@ -399,18 +400,20 @@ impl Drop for Held {
 /// A directory waiting to be listed.
 struct Job {
 	/// Open parent to resolve the name against; `None` opens by path.
-	parent:   Option<Arc<Held>>,
+	parent:      Option<Arc<Held>>,
 	/// Walk-relative path; empty for the root.
-	rel:      Bytes,
+	rel:         Bytes,
 	/// Length of the final component of `rel`.
-	name_len: usize,
+	name_len:    usize,
+	/// Byte length of the last explicitly followed link path, or 0 for the root.
+	follow_base: usize,
 	/// The root is 0.
-	depth:    usize,
+	depth:       usize,
 	/// Child count from the parent's listing, 0 if unknown.
-	count:    u32,
-	frame:    Option<Arc<Frame>>,
+	count:       u32,
+	frame:       Option<Arc<Frame>>,
 	/// Sorted-collection slot.
-	out:      Option<Out>,
+	out:         Option<Out>,
 }
 
 /// One worker's scratch.
@@ -468,6 +471,7 @@ struct Ctx<K: Sink> {
 	/// Absolute root.
 	root:      PathBuf,
 	opts:      Options,
+	strict:    bool,
 	sink:      K,
 	ignorer:   Option<Ignorer>,
 	cache:     Option<&'static Cache>,
@@ -569,12 +573,14 @@ pub(super) struct Outcome {
 ///
 /// # Errors
 /// [`WalkError::Root`] when the root cannot be opened or listed.
+#[expect(clippy::too_many_arguments, reason = "walk source, sink, and listing modes")]
 pub(super) async fn start<K: Sink>(
 	fs: &Fs,
 	root: &Path,
 	opts: &Options,
 	sink: K,
 	sorted: bool,
+	strict: bool,
 	cache: Option<&'static Cache>,
 	tx: Option<mpsc::Sender<Batch<K::Out>>>,
 ) -> Result<Started<K>, WalkError> {
@@ -617,6 +623,7 @@ pub(super) async fn start<K: Sink>(
 			fs,
 			root: abs_root,
 			opts,
+			strict,
 			sink,
 			ignorer,
 			cache,
@@ -634,13 +641,14 @@ pub(super) async fn start<K: Sink>(
 		});
 		let root_slot = sorted.then(|| Arc::new(Slot::default()));
 		let root_job = Job {
-			parent:   None,
-			rel:      Bytes::EMPTY,
-			name_len: 0,
-			depth:    0,
-			count:    0,
-			frame:    root_frame,
-			out:      root_slot.clone().map(Out),
+			parent:      None,
+			rel:         Bytes::EMPTY,
+			name_len:    0,
+			follow_base: 0,
+			depth:       0,
+			count:       0,
+			frame:       root_frame,
+			out:         root_slot.clone().map(Out),
 		};
 		let rooted = ctx.list_dir(&mut st, root_job, Some(root_dir)).await;
 		let mut first = st.carry.take().filter(|_| !ctx.shared.halted());
@@ -875,19 +883,21 @@ impl<K: Sink> Ctx<K> {
 		job: Job,
 		opened: Option<Dir>,
 	) -> io::Result<Listed<K>> {
-		let Job { parent, rel: rel_bytes, name_len, depth, count, frame, out } = job;
+		let Job { parent, rel: rel_bytes, name_len, follow_base, depth, count, frame, out } = job;
 		// SAFETY: job paths live in scratch arenas, which the context keeps
 		// until the walk is finished.
 		let rel = unsafe { rel_bytes.get() };
 		#[cfg(test)]
 		seam::listing(rel_bytes);
-		let dir_job = DirJob { rel: rel_bytes, depth, out };
+		let follow = rel.len() == follow_base;
+		let dir_job = DirJob { rel: rel_bytes, follow_base, depth, out };
 		if let Some(cache) = self.cache {
 			join_into(&self.fs, &self.root, rel, &mut st.abs);
 			if let Some(cached) = cache
 				.lookup(
 					&mut st.session,
 					&st.abs,
+					follow,
 					self.ignorer.is_some(),
 					self.opts.cache_ttl,
 					&mut st.probe,
@@ -919,6 +929,18 @@ impl<K: Sink> Ctx<K> {
 				drop(parent);
 				opened?
 			},
+			(None, None) if self.cache.is_some() && !follow => {
+				// A cached listing has no parent handle. Reopen from the root
+				// or last explicitly followed link, refusing replacement links
+				// along the way, even if an ancestor's timed listing was stale.
+				join_into(&self.fs, &self.root, &rel[..follow_base], &mut st.abs);
+				let mut dir = st.session.open_dir(&st.abs).await?;
+				let tail = if follow_base == 0 { rel } else { &rel[follow_base + 1..] };
+				for name in tail.split(|&byte| byte == b'/') {
+					dir = st.session.open_child(&dir, name).await?;
+				}
+				dir
+			},
 			(None, None) => {
 				join_into(&self.fs, &self.root, rel, &mut st.abs);
 				st.session.open_dir(&st.abs).await?
@@ -943,13 +965,16 @@ impl<K: Sink> Ctx<K> {
 		let mut listing = std::mem::take(&mut st.listing);
 		let freshness = match st
 			.session
-			.list_into(&dir, self.opts.detail, count, &mut listing)
+			.list_into(&dir, self.opts.detail, count, self.strict, &mut listing)
 			.await
 		{
 			Ok(()) => freshness,
 			Err(error)
 				if IncompleteListing::is(&error)
-					&& (depth > 0 || !listing.is_empty() || error.kind() == io::ErrorKind::NotFound) =>
+					&& (self.strict
+						|| depth > 0
+						|| !listing.is_empty()
+						|| error.kind() == io::ErrorKind::NotFound) =>
 			{
 				self.report(rel_bytes, error);
 				// Incomplete listings must not hide the error on a cache hit.
@@ -990,7 +1015,16 @@ impl<K: Sink> Ctx<K> {
 		};
 		if let (Some(cache), Some(freshness)) = (self.cache, freshness) {
 			join_into(&self.fs, &self.root, rel, &mut st.abs);
-			cache.store(&mut st.session, &st.abs, &dir, freshness, &listing, names, ignores.as_ref());
+			cache.store(
+				&mut st.session,
+				&st.abs,
+				&dir,
+				follow,
+				freshness,
+				&listing,
+				names,
+				ignores.as_ref(),
+			);
 		}
 		let dir = Arc::new(dir);
 		let share = self.retained.load(Ordering::Relaxed) < MAX_RETAINED_DIRS;
@@ -1039,14 +1073,21 @@ impl<K: Sink> Ctx<K> {
 				continue;
 			}
 			let (mut file_type, mut size, mut mtime) = (record.file_type, record.size, record.mtime);
-			if file_type == FileType::Symlink && opts.follow_links {
-				let Some((target, info)) = follow(session, abs, &self.fs, &self.root, rel, name).await
-				else {
-					continue;
-				};
-				file_type = target;
-				size = (target == FileType::File).then_some(info.size);
-				mtime = Some(info.stamp.mtime);
+			let followed = file_type == FileType::Symlink && opts.follow_links;
+			if followed {
+				match follow(session, abs, &self.fs, &self.root, rel, name, self.strict).await {
+					Ok(Some((target, info))) => {
+						file_type = target;
+						size = (target == FileType::File).then_some(info.size);
+						mtime = Some(info.stamp.mtime);
+					},
+					Ok(None) => continue,
+					Err(error) => {
+						join_child_into(&self.fs, &self.root, rel, name, abs);
+						self.shared.errors.lock().push(DirError { path: abs.clone(), error });
+						continue;
+					},
+				}
 			}
 			let is_dir = file_type == FileType::Dir;
 			let kept = (K::COLLECTS || (is_dir && descend)).then(|| {
@@ -1128,6 +1169,7 @@ impl<K: Sink> Ctx<K> {
 				parent,
 				rel: bytes,
 				name_len: name.len(),
+				follow_base: if followed { path.len() } else { job.follow_base },
 				depth,
 				count: record.children,
 				frame: frame.cloned(),
@@ -1240,9 +1282,10 @@ impl<K: Sink> InOrder<K> {
 
 /// The parts of a job [`Ctx::emit`] needs.
 struct DirJob {
-	rel:   Bytes,
-	depth: usize,
-	out:   Option<Out>,
+	rel:         Bytes,
+	follow_base: usize,
+	depth:       usize,
+	out:         Option<Out>,
 }
 
 /// Resolves the symlink `name` in the walk-relative directory `dir` for
@@ -1255,32 +1298,39 @@ async fn follow(
 	root: &Path,
 	dir: &[u8],
 	name: &[u8],
-) -> Option<(FileType, FileInfo)> {
+	strict: bool,
+) -> io::Result<Option<(FileType, FileInfo)>> {
 	join_child_into(fs, root, dir, name, abs);
-	let info = session.stat(abs.as_path(), true).await.ok()?;
-	match info.file_type? {
-		FileType::File => Some((FileType::File, info)),
-		FileType::Dir => {
-			let target = session.identify(abs.as_path()).await.ok()?;
+	let info = match session.stat(abs.as_path(), true).await {
+		Ok(info) => info,
+		Err(error) if strict && !is_dangling_link(&error) => return Err(error),
+		Err(_) => return Ok(None),
+	};
+	match info.file_type {
+		Some(FileType::File) => Ok(Some((FileType::File, info))),
+		Some(FileType::Dir) => {
+			let target = match session.identify(abs.as_path()).await {
+				Ok(target) => target,
+				Err(error) if strict && !is_dangling_link(&error) => return Err(error),
+				Err(_) => return Ok(None),
+			};
 			// Cycles are rare and shallow: identify the enclosing directories
 			// only when a linked directory needs checking.
 			let mut up = dir;
 			loop {
 				join_into(fs, root, up, abs);
-				if session
-					.identify(abs.as_path())
-					.await
-					.is_ok_and(|id| id == target)
-				{
-					return None;
+				match session.identify(abs.as_path()).await {
+					Ok(id) if id == target => return Ok(None),
+					Err(error) if strict && !is_dangling_link(&error) => return Err(error),
+					_ => {},
 				}
 				if up.is_empty() {
-					return Some((FileType::Dir, info));
+					return Ok(Some((FileType::Dir, info)));
 				}
 				up = &up[..memchr::memrchr(b'/', up).unwrap_or(0)];
 			}
 		},
-		FileType::Symlink => None,
+		_ => Ok(None),
 	}
 }
 

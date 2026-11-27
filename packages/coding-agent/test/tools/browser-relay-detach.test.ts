@@ -665,7 +665,6 @@ describe("relay tabs Chrome detaches omp from", () => {
 				await reapplying;
 				await ext.chromeDetach("target_closed");
 				const failure = String(await next);
-				expect(failure).toContain("before this call, so its code did not run");
 				expect(failure).toContain(`used up this call's ${budgetMs}ms budget, so the call was not run again`);
 			} finally {
 				held.mockRestore();

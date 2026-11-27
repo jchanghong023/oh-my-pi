@@ -45,7 +45,7 @@ use bstr::{BStr, BString, ByteSlice};
 use omp_builtins::extras::{CommandRunner, CommandStatus, EnvChange, Fd, ShellCommand};
 use tokio_util::sync::CancellationToken;
 
-use super::{Child, ToolConfig, Turn};
+use super::{Child, Labels, ToolConfig, Turn};
 use crate::{
 	bash::{
 		CallOutcome, IntrinsicId, Lineage, ModeId, Platform, RunId, RunStdio, Script, ShellApi,
@@ -116,10 +116,9 @@ pub(super) struct Extra {
 	running:          Option<Running>,
 	/// The commands' subshells still running, with their replies.
 	runs:             Vec<Run>,
-	/// Labels of signalled commands that ended since the last turn.
+	/// Labels of ended signalled commands whose trees may still be live.
 	ended:            Vec<u32>,
-	/// Labels of ended signalled commands, for the next one: a utility
-	/// restarting its command for days holds one label, not one per run.
+	/// Labels that can be reused once the entire previous tree has ended.
 	spare:            Vec<u32>,
 }
 
@@ -133,6 +132,24 @@ impl Extra {
 			ended:   Vec::new(),
 			spare:   Vec::new(),
 		}
+	}
+
+	/// The immediate command's `Done` does not end its nested or background
+	/// tree. Keep that tree under the enclosing call, but never reuse its
+	/// label (and make it a target of the next run) while it is live.
+	pub(super) fn recycle(&mut self, labels: &mut Labels, is_live: impl Fn(u32) -> bool) {
+		self.ended.retain(|&label| {
+			let group = labels.group(label);
+			if group.iter().copied().any(&is_live) || labels.log.has_live(&group) {
+				return true;
+			}
+			if group.len() > 1 {
+				labels.release(&group[1..]);
+			}
+			labels.log.clear_records(&[label]);
+			self.spare.push(label);
+			false
+		});
 	}
 
 	pub(super) fn advance(
@@ -173,11 +190,6 @@ impl Extra {
 				.collect();
 			self.running = Some(Running { done, cancel, requests: received, env_names });
 		}
-		// The externals of an ended command are no longer its label's.
-		for label in self.ended.drain(..) {
-			turn.log.clear_records(&[label]);
-			self.spare.push(label);
-		}
 		let running = self.running.as_ref()?;
 		while let Ok(request) = running.requests.try_recv() {
 			match request {
@@ -196,7 +208,8 @@ impl Extra {
 					self.runs.push(Run { id, reply, own });
 				},
 				Request::Signal { id, signal } => {
-					// A command that ended already has no tree to signal.
+					// A command that ended is no longer a target, even if
+					// its previous tree is still finishing in the background.
 					let label = self
 						.runs
 						.iter()
@@ -493,9 +506,15 @@ struct Lookup {
 	config: ToolConfig,
 }
 
+enum Builtin {
+	Absent,
+	Ready,
+	RejectsRawArgs,
+}
+
 impl Lookup {
-	/// How `command` runs; `NotFound` when nothing has its name,
-	/// `PermissionDenied` when only files that cannot be executed have it.
+	/// How `command` runs; distinguish an unrepresentable builtin operand
+	/// from a missing command or a non-executable file.
 	fn program(&self, command: &ShellCommand) -> io::Result<Program> {
 		if command.source().is_some() {
 			return Ok(Program::Line);
@@ -514,7 +533,8 @@ impl Lookup {
 			};
 		}
 		let raw_args = command.args()[1..].iter().any(|arg| arg.to_str().is_none());
-		if self.builtin(BStr::new(name.as_encoded_bytes()), raw_args) {
+		let builtin = self.builtin(BStr::new(name.as_encoded_bytes()), raw_args);
+		if matches!(builtin, Builtin::Ready) {
 			return Ok(Program::Builtin);
 		}
 		let path = command
@@ -539,6 +559,12 @@ impl Lookup {
 				None => {},
 			}
 		}
+		if matches!(builtin, Builtin::RejectsRawArgs) {
+			return Err(io::Error::new(
+				io::ErrorKind::InvalidInput,
+				"builtin cannot accept non-UTF-8 argument",
+			));
+		}
 		let kind = if denied {
 			io::ErrorKind::PermissionDenied
 		} else {
@@ -547,25 +573,29 @@ impl Lookup {
 		Err(kind.into())
 	}
 
-	/// Whether `name` runs in-process: an engine intrinsic, a tool, an extra
-	/// this shell offers, a shell the engine runs itself (`env bash -c …`,
-	/// `xargs sh -c …`), or a session command of the run in flight
+	/// Whether `name` runs in-process, and can consume the original argv:
+	/// an intrinsic, a tool, an extra, an embedded shell or a session command
 	/// ([`PiHost::resolve`](crate::host::PiHost)).
-	fn builtin(&self, name: &BStr, raw_args: bool) -> bool {
+	fn builtin(&self, name: &BStr, raw_args: bool) -> Builtin {
 		if IntrinsicId::lookup(name, ModeId::Bash).is_some()
 			|| crate::sys::shebang::is_self_shell(name)
 		{
-			return true;
+			return Builtin::Ready;
 		}
-		if raw_args {
-			return self
-				.config
-				.lookup(name)
-				.is_some_and(super::accepts_raw_args);
+		if let Some(tool) = self.config.lookup(name) {
+			return if raw_args && !super::accepts_raw_args(tool) {
+				Builtin::RejectsRawArgs
+			} else {
+				Builtin::Ready
+			};
 		}
-		self.config.lookup(name).is_some()
-			|| self.config.native_extra(name).is_some()
-			|| self.config.commands.lookup(name).is_some()
+		if self.config.native_extra(name).is_none() && self.config.commands.lookup(name).is_none() {
+			Builtin::Absent
+		} else if raw_args {
+			Builtin::RejectsRawArgs
+		} else {
+			Builtin::Ready
+		}
 	}
 }
 
@@ -691,9 +721,11 @@ mod tests {
 		assert!(matches!(lookup.program(&command), Ok(Program::Builtin)));
 
 		let command = ShellCommand::new(vec!["xargs".into(), name.into()]);
-		assert!(
-			matches!(lookup.program(&command), Err(err) if err.kind() == io::ErrorKind::NotFound)
-		);
+		let Err(err) = lookup.program(&command) else {
+			panic!("xargs accepted a raw operand without an external alternative")
+		};
+		assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+		assert_eq!(err.to_string(), "builtin cannot accept non-UTF-8 argument");
 	}
 
 	#[test]

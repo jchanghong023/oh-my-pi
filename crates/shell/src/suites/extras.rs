@@ -96,6 +96,11 @@ async fn out(s: &mut Session, command: &str) -> String {
 	ran.stdout
 }
 
+/// APFS cannot create a new filename containing invalid UTF-8.
+fn rejects_raw_filename(error: &io::Error) -> bool {
+	cfg!(target_os = "macos") && matches!(error.raw_os_error(), Some(libc::EILSEQ | libc::EINVAL))
+}
+
 /// Native names and operands survive both ordinary dispatch and find's
 /// CommandRunner; a UTF-8 replacement-character lookalike must not run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -106,7 +111,11 @@ async fn native_command_names_and_nested_arguments_keep_bytes() {
 	let bin = dir.path().join("bin");
 	std::fs::create_dir(&bin).unwrap();
 	let name = std::ffi::OsStr::from_bytes(b"command-\xff");
-	std::fs::copy("/bin/sh", bin.join(name)).unwrap();
+	match std::fs::copy("/bin/sh", bin.join(name)) {
+		Ok(_) => {},
+		Err(error) if rejects_raw_filename(&error) => return,
+		Err(error) => panic!("copy native-named executable: {error}"),
+	}
 	symlink("/bin/false", bin.join(name.to_string_lossy().as_ref())).unwrap();
 	let mut s = session_in(dir.path(), &[]);
 
@@ -141,21 +150,32 @@ async fn native_dispatch_bypasses_functions_and_utf8_hash_entries() {
 
 	let dir = tempfile::tempdir().unwrap();
 	let raw = std::ffi::OsStr::from_bytes(b"command-\xff");
-	symlink("/bin/sh", dir.path().join(raw)).unwrap();
-	symlink("/bin/false", dir.path().join(raw.to_string_lossy().as_ref())).unwrap();
+	let native_name = match symlink("/bin/sh", dir.path().join(raw)) {
+		Ok(()) => true,
+		Err(error) if rejects_raw_filename(&error) => false,
+		Err(error) => panic!("link native-named executable: {error}"),
+	};
 	let mut s = session_in(dir.path(), &[]);
-	let cached = run(&mut s, "PATH=.; command-�").await;
-	assert_eq!(cached.status, 1, "the UTF-8 lookalike must be executable");
-	let defined = run(&mut s, "eval $'function command-\\xff { printf function; }'").await;
-	assert_eq!(defined.status, 0, "{}", defined.stderr);
-	for (command, expected) in [
-		("$'command-\\xff' -c 'printf %s \"$1\"' _ $'raw-\\xfe'", &b"raw-\xfe"[..]),
-		("timeout 5 /bin/sh -c 'printf %s \"$1\"' _ $'raw-\\xfe'", &b"raw-\xfe"[..]),
-		("nohup /bin/sh -c 'printf %s \"$1\"' _ $'raw-\\xfe'", &b"raw-\xfe"[..]),
+	if native_name {
+		symlink("/bin/false", dir.path().join(raw.to_string_lossy().as_ref())).unwrap();
+		let cached = run(&mut s, "PATH=.; command-�").await;
+		assert_eq!(cached.status, 1, "the UTF-8 lookalike must be executable");
+		let defined = run(&mut s, "eval $'function command-\\xff { printf function; }'").await;
+		assert_eq!(defined.status, 0, "{}", defined.stderr);
+	}
+	let direct = if native_name {
+		"$'command-\\xff' -c 'printf %s \"$1\"' _ $'raw-\\xfe'"
+	} else {
+		"/bin/sh -c 'printf %s \"$1\"' _ $'raw-\\xfe'"
+	};
+	for command in [
+		direct,
+		"timeout 5 /bin/sh -c 'printf %s \"$1\"' _ $'raw-\\xfe'",
+		"nohup /bin/sh -c 'printf %s \"$1\"' _ $'raw-\\xfe'",
 	] {
 		let result = run(&mut s, &format!("{command} > result")).await;
 		assert_eq!(result.status, 0, "{command}: {}", result.stderr);
-		assert_eq!(std::fs::read(dir.path().join("result")).unwrap(), expected, "{command}");
+		assert_eq!(std::fs::read(dir.path().join("result")).unwrap(), b"raw-\xfe", "{command}");
 	}
 }
 

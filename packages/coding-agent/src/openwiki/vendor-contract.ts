@@ -45,6 +45,7 @@ type Schema<T> = { parse(value: unknown): T };
 export interface OpenWikiVendor {
 	setEmbeddedOpenWikiHomeDir(directory: string): void;
 	resolveRepositoryRoot(candidate: string): Promise<string>;
+	readRepositoryRunState(root: string): Promise<{ language: string } | null>;
 	resolvePageConcurrency(): number;
 	parseCommand(argv: string[]): Command;
 	previewRepositoryFiles(

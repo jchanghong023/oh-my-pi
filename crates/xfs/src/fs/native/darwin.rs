@@ -21,7 +21,7 @@ use super::{
 	aligned_buf, is_dot_or_dot_dot, le16, le32, le64,
 	unix::{Scratch, nanos, openat_plain, type_of_dt, type_of_mode},
 };
-use crate::fs::{Detail, FileInfo, FileType, Listing, Stamp};
+use crate::fs::{Detail, FileInfo, FileType, IncompleteListing, Listing, Stamp};
 
 /// Directory opens and listings contend in the kernel: on APFS throughput
 /// peaks at 4–6 threads and collapses beyond 8.
@@ -79,13 +79,16 @@ pub(super) fn list(
 	dir: RawFd,
 	detail: Detail,
 	children: u32,
+	strict: bool,
 	out: &mut Listing,
 ) -> io::Result<()> {
 	let Scratch { buf, cname } = s;
 	let buf = aligned_buf(buf, LIST_BUF);
-	match detail {
-		Detail::Minimal => list_dirents(buf, cname, dir, out),
-		Detail::Full => list_bulk(buf, dir, children, out),
+	match (detail, strict) {
+		(Detail::Full, false) => list_bulk(buf, dir, children, out),
+		// The bulk listing can omit a record's metadata without reporting an
+		// entry error. Strict full listings inspect each entry explicitly.
+		_ => list_dirents(buf, cname, dir, detail, strict, out),
 	}
 }
 
@@ -93,9 +96,12 @@ fn list_dirents(
 	buf: &mut [u8],
 	cname: &mut Vec<u8>,
 	dir: RawFd,
+	detail: Detail,
+	strict: bool,
 	out: &mut Listing,
 ) -> io::Result<()> {
 	let mut base: libc::off_t = 0;
+	let mut incomplete = None;
 	loop {
 		// SAFETY: `buf` is writable for its whole length and `base` is a valid
 		// out-pointer.
@@ -109,7 +115,7 @@ fn list_dirents(
 		}
 		let n = n as usize;
 		if n == 0 {
-			return Ok(());
+			break;
 		}
 		let mut off = 0;
 		while off + DIRENT_NAME <= n {
@@ -128,22 +134,35 @@ fn list_dirents(
 				continue;
 			}
 			let dt = rec[DIRENT_TYPE];
-			let file_type = match type_of_dt(dt) {
-				Some(file_type) => file_type,
-				None
-					if dt == libc::DT_UNKNOWN
-						&& let Some(file_type) = stat_type(dir, cname, name) =>
-				{
-					file_type
-				},
-				None => continue,
+			let (file_type, size, mtime) = if detail == Detail::Full || dt == libc::DT_UNKNOWN {
+				match stat_entry(dir, cname, name) {
+					Ok(info) => {
+						let Some(file_type) = info.file_type else { continue };
+						let full = detail == Detail::Full;
+						let size = (full && file_type == FileType::File).then_some(info.size);
+						(file_type, size, full.then_some(info.stamp.mtime))
+					},
+					Err(error) => {
+						if strict && error.kind() != io::ErrorKind::NotFound {
+							incomplete.get_or_insert(error);
+						}
+						continue;
+					},
+				}
+			} else {
+				let Some(file_type) = type_of_dt(dt) else { continue };
+				(file_type, None, None)
 			};
-			out.push(name, file_type, None, None, 0);
+			out.push(name, file_type, size, mtime, 0);
 		}
 		let flags = u32::from_le_bytes(*buf.last_chunk().expect("listing buffer holds the EOF flag"));
 		if flags & GETDIRENTRIES64_EOF != 0 {
-			return Ok(());
+			break;
 		}
+	}
+	match incomplete {
+		Some(error) => Err(io::Error::new(error.kind(), IncompleteListing(error))),
+		None => Ok(()),
 	}
 }
 
@@ -240,21 +259,26 @@ fn list_bulk(buf: &mut [u8], dir: RawFd, count: u32, out: &mut Listing) -> io::R
 	}
 }
 
-/// Resolves an entry whose listing reported `DT_UNKNOWN`.
-fn stat_type(dir: RawFd, cname: &mut Vec<u8>, name: &[u8]) -> Option<FileType> {
+/// Metadata for an entry relative to the open directory, without following links.
+fn stat_entry(dir: RawFd, cname: &mut Vec<u8>, name: &[u8]) -> io::Result<FileInfo> {
 	cname.clear();
 	cname.extend_from_slice(name);
 	cname.push(0);
 	let mut st = MaybeUninit::<libc::stat>::uninit();
-	// SAFETY: `cname` is NUL-terminated and `st` is a valid out-pointer.
-	if unsafe {
-		libc::fstatat(dir, cname.as_ptr().cast(), st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW)
-	} != 0
-	{
-		return None;
+	loop {
+		// SAFETY: `cname` is NUL-terminated and `st` is a valid out-pointer.
+		if unsafe {
+			libc::fstatat(dir, cname.as_ptr().cast(), st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW)
+		} == 0
+		{
+			// SAFETY: `fstatat` succeeded and filled `st`.
+			return Ok(info_of(unsafe { st.assume_init_ref() }));
+		}
+		let error = io::Error::last_os_error();
+		if error.kind() != io::ErrorKind::Interrupted {
+			return Err(error);
+		}
 	}
-	// SAFETY: `fstatat` succeeded and filled `st`.
-	type_of_mode(unsafe { st.assume_init_ref() }.st_mode)
 }
 
 pub(super) fn stat_path(path: *const c_char, follow: bool) -> io::Result<FileInfo> {

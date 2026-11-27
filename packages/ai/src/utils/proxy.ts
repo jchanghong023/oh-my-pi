@@ -78,7 +78,7 @@ export function shouldBypassProxy(urlObj: URL): boolean {
 		.split(/[,\s]+/)
 		.map(r => r.trim())
 		.filter(Boolean);
-	const targetHost = urlObj.hostname.toLowerCase();
+	const targetHost = urlObj.hostname.toLowerCase().replace(/^\[|\]$/g, "");
 	const targetPort = urlObj.port || (urlObj.protocol === "https:" || urlObj.protocol === "wss:" ? "443" : "80");
 
 	for (const rule of rules) {
@@ -93,7 +93,7 @@ export function shouldBypassProxy(urlObj: URL): boolean {
 			const lastColon = ruleHost.lastIndexOf(":");
 			rulePort = ruleHost.slice(lastColon + 1);
 			ruleHost = ruleHost.slice(0, lastColon);
-		} else if (!ruleHost.includes("]") && ruleHost.includes(":")) {
+		} else if (ruleHost.indexOf(":") >= 0 && ruleHost.indexOf(":") === ruleHost.lastIndexOf(":")) {
 			const lastColon = ruleHost.lastIndexOf(":");
 			rulePort = ruleHost.slice(lastColon + 1);
 			ruleHost = ruleHost.slice(0, lastColon);
@@ -416,7 +416,12 @@ async function fetchWithSystemProxyRedirects(
 		let headers = options.headers ?? request?.headers;
 		if (headers && (crossOrigin || dropBody)) {
 			const updated = new Headers(headers);
-			if (crossOrigin) for (const name of CROSS_ORIGIN_HEADERS) updated.delete(name);
+			if (crossOrigin) {
+				for (const name of CROSS_ORIGIN_HEADERS) updated.delete(name);
+				for (const name of [...updated.keys()]) {
+					if (/key|token|secret|auth|credential|cookie/i.test(name)) updated.delete(name);
+				}
+			}
 			if (dropBody) for (const name of BODY_HEADERS) updated.delete(name);
 			headers = updated;
 		}

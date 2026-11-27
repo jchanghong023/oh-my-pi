@@ -17,7 +17,7 @@ import type {
 	Model,
 	ProviderSessionState,
 } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import type { BenchRuntime, BenchTarget, StreamSimpleFn } from "../cli/bench-runtime";
 import { formatModelSelectorValue } from "../config/model-selector";
 import { formatModelString } from "../config/model-resolver";
@@ -76,7 +76,7 @@ export interface IfBenchSummary {
 export interface IfBenchRunOptions {
 	targets: readonly BenchTarget[];
 	runtime: BenchRuntime;
-	cwd: string;
+	cwd?: string;
 	maxTurns: number;
 	arrayLength: number;
 	nyaMax: number;
@@ -307,7 +307,7 @@ async function requestTurn(
 		const stream = options.stream(model, context, {
 			apiKey,
 			sessionId,
-			cwd: options.cwd,
+			cwd: options.cwd ?? getProjectDir(),
 			promptCacheKey: sessionId,
 			maxTokens:
 				model.maxTokens !== null && Number.isFinite(model.maxTokens) && model.maxTokens > 0

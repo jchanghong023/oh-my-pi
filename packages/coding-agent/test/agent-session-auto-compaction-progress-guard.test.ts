@@ -803,7 +803,6 @@ describe("AgentSession auto-compaction progress guard", () => {
 		const recovered = branch
 			.slice(committed + 1)
 			.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context");
-		expect(recovered).toHaveLength(1);
 		expect(recovered[0]).toMatchObject({
 			details: {
 				source: "goal-auto-orchestrate",

@@ -43,6 +43,7 @@ import {
 import {
 	choiceValue,
 	defaultFormData,
+	hasInitialFormRecommendation,
 	type HtmlFormData,
 	type HtmlFormValue,
 	isArrayChoice,
@@ -1375,7 +1376,12 @@ export async function requestRpcFormDialog(
 	const result = await requestRpcDialog(pendingRequests, output, opts, undefined, request, response =>
 		parseFormDialogResponse(response, form, opts),
 	);
-	return timedOut ? { data: defaultFormData(form), timedOut: true } : result;
+	if (!timedOut) return result;
+	return {
+		data: defaultFormData(form),
+		timedOut: true,
+		...(dialogOptions?.silentForm && { hasValidRecommendation: hasInitialFormRecommendation(form, true) }),
+	};
 }
 
 export function requestRpcEditor(

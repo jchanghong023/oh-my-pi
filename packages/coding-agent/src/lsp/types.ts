@@ -304,7 +304,7 @@ export interface Hover {
  */
 export interface LinterClient {
 	/** Format file content. Returns formatted content. */
-	format(filePath: string, content: string): Promise<string>;
+	format(filePath: string, content: string, signal?: AbortSignal): Promise<string>;
 
 	/** Get diagnostics for a file. Content should already be written to disk. */
 	lint(filePath: string, signal?: AbortSignal): Promise<Diagnostic[]>;

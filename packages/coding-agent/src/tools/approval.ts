@@ -36,6 +36,8 @@ import { cfgToolsApproval, cfgToolsApprovalMode, cfgToolsRestrictedFolders } fro
 import {
 	approvalFolderListing,
 	type ApprovalFolderListing,
+	approvalLocalListingRoot,
+	approvalLocalMutationPath,
 	approvalTargetNamesFile,
 	approvalTreeSearchFolderKey,
 } from "./approval-targets";
@@ -595,10 +597,14 @@ function restrictionSubjects(
 	const subjects: { path: string; recursive: boolean }[] = [];
 	for (const target of reportedPaths ?? []) {
 		const treeFolder = approvalTreeSearchFolderKey(target);
-		const subject = treeFolder ?? target;
+		const listingRoot = approvalLocalListingRoot(target);
+		const subject = treeFolder ?? listingRoot ?? approvalLocalMutationPath(target) ?? target;
 		// Re-keyed: the path resolves symlinks and drops a directory key's trailing separator.
 		if (path.isAbsolute(subject)) {
-			subjects.push({ path: approvalCacheKeyForPath(subject), recursive: treeFolder !== undefined });
+			subjects.push({
+				path: approvalCacheKeyForPath(subject),
+				recursive: treeFolder !== undefined || listingRoot !== undefined,
+			});
 		}
 	}
 	if (targets.length > 0) return subjects;

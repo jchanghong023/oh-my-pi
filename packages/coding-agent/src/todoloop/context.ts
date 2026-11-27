@@ -21,10 +21,12 @@ interface ChangeMaterials {
 async function discoverChangeMaterials(filePath: string): Promise<ChangeMaterials | undefined> {
 	const changeDirectory = path.dirname(filePath);
 	const changesDirectory = path.dirname(changeDirectory);
+	const matches = (name: string, expected: string): boolean =>
+		(process.platform === "win32" ? name.toLowerCase() : name) === expected;
 	if (
-		path.basename(filePath) !== "tasks.md" ||
-		path.basename(changesDirectory) !== "changes" ||
-		path.basename(path.dirname(changesDirectory)) !== "openspec"
+		!matches(path.basename(filePath), "tasks.md") ||
+		!matches(path.basename(changesDirectory), "changes") ||
+		!matches(path.basename(path.dirname(changesDirectory)), "openspec")
 	) {
 		return undefined;
 	}
@@ -52,7 +54,7 @@ async function discoverChangeMaterials(filePath: string): Promise<ChangeMaterial
 		}
 		for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
 			const candidate = path.join(directory, entry.name);
-			if (entry.name === "spec.md") {
+			if (matches(entry.name, "spec.md")) {
 				await Bun.file(candidate).text();
 				materials.deltaSpecs.push(candidate);
 			} else if (entry.isDirectory()) {

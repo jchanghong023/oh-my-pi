@@ -1,5 +1,6 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
+import { isIP } from "node:net";
 import * as path from "node:path";
 import { $which, logger } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
@@ -48,8 +49,12 @@ type StatsDashboardProbe = "reusable" | "replaceable" | "occupied" | "unresponsi
  */
 export type StatsPortClaim = "bind" | "reuse" | "fallback";
 
+function dashboardProbeHost(hostname: string): string {
+	return hostname === "0.0.0.0" ? STATS_DASHBOARD_HOSTNAME : hostname === "::" ? "::1" : hostname;
+}
+
 async function probeStatsDashboard(port: number, hostname: string): Promise<StatsDashboardProbe> {
-	const probeHostname = hostname === "0.0.0.0" ? STATS_DASHBOARD_HOSTNAME : hostname === "::" ? "::1" : hostname;
+	const probeHostname = dashboardProbeHost(hostname);
 	const urlHostname = probeHostname.includes(":") ? `[${probeHostname}]` : probeHostname;
 	const signal = AbortSignal.timeout(STATS_PROBE_TIMEOUT_MS);
 	try {
@@ -171,26 +176,32 @@ async function findMacPortHolder(port: number): Promise<PortHolder | null> {
 	return { pid, image, commandLine: processInfo.exitCode === 0 ? processInfo.text().trim() : "" };
 }
 
-async function findWindowsPortHolder(port: number): Promise<PortHolder | null> {
+async function findWindowsPortHolder(port: number, hostname: string): Promise<PortHolder | null> {
+	const host = dashboardProbeHost(hostname);
+	const addressFamily = isIP(host);
+	// A hostname may resolve to multiple addresses; do not guess which one answered.
+	if (addressFamily === 0) return null;
+	const address = addressFamily === 6 ? URL.parse(`http://[${host}]`)?.hostname : host;
+	if (!address) return null;
+	const wildcard = addressFamily === 6 ? "[::]" : "0.0.0.0";
+	const endpoint = `${address}:${port}`;
+	const wildcardEndpoint = `${wildcard}:${port}`;
 	const netstat = $which("netstat");
 	if (!netstat) return null;
 
-	const result = await $`${netstat} -ano -p TCP`.quiet().nothrow();
+	const protocol = addressFamily === 6 ? "TCPv6" : "TCP";
+	const result = await $`${netstat} -ano -p ${protocol}`.quiet().nothrow();
 	if (result.exitCode !== 0) return null;
 
 	let pid: number | null = null;
 	for (const line of result.text().split("\n")) {
 		const fields = line.trim().split(/\s+/);
 		if (fields[0]?.toUpperCase() !== "TCP" || fields[3]?.toUpperCase() !== "LISTENING") continue;
-		const localAddress = fields[1];
-		if (!localAddress || Number.parseInt(localAddress.slice(localAddress.lastIndexOf(":") + 1), 10) !== port) {
-			continue;
-		}
-		const parsed = Number.parseInt(fields[4] ?? "", 10);
-		if (Number.isSafeInteger(parsed)) {
-			pid = parsed;
-			break;
-		}
+		if (fields[1] !== endpoint && fields[1] !== wildcardEndpoint) continue;
+		const parsed = Number(fields[4]);
+		if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
+		if (pid !== null && pid !== parsed) return null;
+		pid = parsed;
 	}
 	if (pid === null) return null;
 
@@ -213,10 +224,10 @@ async function findWindowsPortHolder(port: number): Promise<PortHolder | null> {
 	return { pid, image, commandLine: processInfo.exitCode === 0 ? processInfo.text().trim() : "" };
 }
 
-async function findPortHolder(port: number): Promise<PortHolder | null> {
+async function findPortHolder(port: number, hostname: string): Promise<PortHolder | null> {
 	if (process.platform === "linux") return findLinuxPortHolder(port);
 	if (process.platform === "darwin") return findMacPortHolder(port);
-	if (process.platform === "win32") return findWindowsPortHolder(port);
+	if (process.platform === "win32") return findWindowsPortHolder(port, hostname);
 	return null;
 }
 
@@ -252,8 +263,8 @@ async function terminatePortHolder(holder: PortHolder): Promise<void> {
  * Holders that cannot be positively identified as an omp stats dashboard, or
  * that refuse to stop, are left running and yield `"fallback"`.
  */
-async function reclaimStatsPort(port: number, probe: "replaceable" | "occupied"): Promise<StatsPortClaim> {
-	const holder = await findPortHolder(port);
+async function reclaimStatsPort(port: number, hostname: string, probe: "replaceable" | "occupied"): Promise<StatsPortClaim> {
+	const holder = await findPortHolder(port, hostname);
 	if (!holder || holder.pid === process.pid) {
 		logger.debug("Stats dashboard port holder not reclaimable", { port, holder });
 		return "fallback";
@@ -292,7 +303,7 @@ async function claimStatsPort(port: number, hostname: string, ifUnreachable: Sta
 			return "reuse";
 		case "replaceable":
 		case "occupied":
-			return reclaimStatsPort(port, probe);
+			return reclaimStatsPort(port, hostname, probe);
 		case "unresponsive":
 			// Busy or hung: a dashboard stalled mid-ingest must never be stopped.
 			return "fallback";

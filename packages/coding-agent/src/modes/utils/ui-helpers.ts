@@ -36,7 +36,6 @@ import {
 } from "../../session/transcript/transcript-render-helpers";
 import { parseForegroundCompaction, queueYieldCompaction } from "../../slash-commands/builtin-lifecycle";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
-import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import type { Shell, TranscriptBlock } from "../../ui/shell";
 import { NoticeLine, StatusNotice, StrippedToolCalls } from "../../ui/transcript/messages/notices";
@@ -76,7 +75,6 @@ import {
 import { ExecRun } from "../../ui/transcript/exec-run";
 import { continuesConversation, conversationPosition } from "./conversation-position";
 import { displaceableBy } from "./displaceable";
-import { UpdateNotice } from "../interactive/update-notice";
 
 /** What a history replay draws into and reads: the live mode, or a replica with a transcript of its own. */
 export type ReplayTarget = Pick<
@@ -1083,10 +1081,6 @@ export class UiHelpers {
 		);
 	}
 
-	showNewVersionNotification(newVersion: string): void {
-		this.ctx.present(() => jsx(UpdateNotice, { version: newVersion }));
-	}
-
 	/** Feed the queued-message band: the session's steering and follow-ups, plus the compaction queue. */
 	updatePendingMessagesDisplay(): void {
 		const queuedMessages = this.ctx.viewSession.getQueuedMessages() as QueuedMessages;
@@ -1123,6 +1117,7 @@ export class UiHelpers {
 			images: queuedImages,
 			...(options?.imageLinks?.some(link => link !== undefined) ? { imageLinks: options.imageLinks } : {}),
 			draftDetached: options?.draftDetached ?? !options?.preserveDraft,
+			...(options?.loopNEntry ? { loopNEntry: true } : {}),
 			...(options?.followUp ? { followUp: options.followUp } : {}),
 		});
 		if (options?.preserveDraft) this.ctx.composer.addToHistory(text);
@@ -1161,28 +1156,22 @@ export class UiHelpers {
 		};
 		requireOwner();
 		const command = parseSlashCommand(message.text)?.name;
-		let builtin: string | boolean;
-		try {
-			builtin = await executeBuiltinSlashCommand(message.text, {
-				ctx: this.ctx,
-				input:
-					message.images || message.imageLinks
-						? { images: message.images, imageLinks: message.imageLinks }
-						: undefined,
-				draftDetached: message.draftDetached,
-				followUp:
-					message.followUp ??
-					(message.mode === "followUp" &&
-					(command === "workspace" || command === "goal" || command === "goal-autopilot")
-						? conversationPosition(this.ctx.sessionManager)
-						: undefined),
-			});
-		} catch (error) {
-			if (!isOwnerVisible() || !message.draftDetached || command !== "team") throw error;
-			restoreDetachedDraft(this.ctx.composer, message.text, message.images, message.imageLinks);
-			this.ctx.showError(error instanceof Error ? error.message : String(error));
-			return true;
-		}
+		const builtin = message.loopNEntry
+			? false
+			: await executeBuiltinSlashCommand(message.text, {
+					ctx: this.ctx,
+					input:
+						message.images || message.imageLinks
+							? { images: message.images, imageLinks: message.imageLinks }
+							: undefined,
+					draftDetached: message.draftDetached,
+					followUp:
+						message.followUp ??
+						(message.mode === "followUp" &&
+						(command === "workspace" || command === "goal" || command === "goal-autopilot")
+							? conversationPosition(this.ctx.sessionManager)
+							: undefined),
+				});
 		if (builtin === true) {
 			if (isOwnerVisible()) this.#parkLoopOnLocalConsume(message.text, false);
 			return true;
@@ -1245,7 +1234,7 @@ export class UiHelpers {
 				return false;
 			}
 		}
-		if (this.ctx.isKnownSlashCommand(message.text)) {
+		if (!message.loopNEntry && this.ctx.isKnownSlashCommand(message.text)) {
 			const forwarded = await owner.prompt(message.text);
 			if (isOwnerVisible()) this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return !forwarded;
@@ -1356,6 +1345,7 @@ export class UiHelpers {
 		// started): a restore then leaves it out of the batch, and keeps its queued messages, instead
 		// of sending it again on the next flush — unless the prompt itself fails.
 		let firstPrompt: CompactionQueuedMessage | undefined;
+		let firstSettlement: Promise<boolean> | undefined;
 		/** Set once the first prompt is admitted: the messages it queued, or none if its turn started. */
 		let firstAdmitted: readonly AgentMessage[] | undefined;
 		let firstQueued: readonly AgentMessage[] = [];
@@ -1382,6 +1372,11 @@ export class UiHelpers {
 			const batch = queuedMessages.filter(
 				message => !completedCommands.has(message) && (!firstLeftOut || message !== firstPrompt),
 			);
+			if (nextCompaction && this.ctx.yieldCompaction === nextCompaction) {
+				this.ctx.yieldCompaction = undefined;
+				if (isOwnerVisible()) this.ctx.compactionQueueOrigin = nextCompaction;
+				batch.push(queue[end]);
+			}
 			setOwnerQueue([...batch, ...ownerQueue()]);
 			if (isOwnerVisible()) reportFailure(batch.length, error);
 		};
@@ -1393,6 +1388,7 @@ export class UiHelpers {
 				// The TUI dispatcher can recognize an attached-image command even when
 				// the raw text does not name a known command, e.g. /sketch[Image #1].
 				const deferPrompt = !options?.willRetry && !this.ctx.isKnownSlashCommand(message.text);
+				if (!options?.willRetry && message.loopNEntry) break;
 				if (deferPrompt && (!message.images?.length || !message.text.startsWith("/"))) break;
 				const consumed = await this.#deliverQueuedMessage(message, onDelivered, isOwnerVisible, deferPrompt);
 				if (consumed === undefined) break;
@@ -1491,6 +1487,7 @@ export class UiHelpers {
 				promptPromise = owner.prompt(first.text, {
 					streamingBehavior: first.mode === "followUp" ? "followUp" : "steer",
 					images: first.images,
+					...(first.loopNEntry ? { expandPromptTemplates: false } : {}),
 					onPromptQueued: onFirstQueued,
 					onPromptAdmitted: onFirstAdmitted,
 				});
@@ -1499,6 +1496,7 @@ export class UiHelpers {
 					onFirstFailed(error);
 				});
 			}
+			firstSettlement = promptPromise;
 			if (firstAdmission && isOwnerVisible() && this.ctx.loopModeEnabled && this.ctx.loopPrompt === first.text) {
 				const loopSettlement = promptPromise.then(async forwarded => {
 					if (forwarded && firstAdmitted?.length && (!restored || firstLeftOut)) await owner.waitForIdle();
@@ -1530,7 +1528,14 @@ export class UiHelpers {
 		} catch (error) {
 			restoreQueue(error);
 		} finally {
-			afterDispatch?.resolve();
+			if (afterDispatch) {
+				// The watcher must not overtake a first prompt that fails and gets
+				// restored, but this flush (which can be a session event handler) must
+				// not wait for the whole turn.
+				const resolve = () => afterDispatch?.resolve();
+				if (firstSettlement && !restored) void firstSettlement.then(resolve, resolve);
+				else resolve();
+			}
 		}
 	}
 

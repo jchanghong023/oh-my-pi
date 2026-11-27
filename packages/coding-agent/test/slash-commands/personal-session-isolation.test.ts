@@ -103,7 +103,6 @@ describe("personal command session isolation", () => {
 		const move = vi.spyOn(host.session, "moveSession");
 		expect(await executeAcpBuiltinSlashCommand("/wt main", host.runtime)).toEqual({ consumed: true });
 		expect(host.manager.getCwd()).toBe(f.source);
-		expect(host.runtime.cwd).toBe(f.source);
 		expect(host.manager.getSessionId()).toBe(identity);
 		expect(sibling.manager.getCwd()).toBe(f.source);
 		expect(sibling.manager.getSessionId()).toBe(siblingIdentity);

@@ -93,7 +93,7 @@ export const KEYBINDINGS = {
 		description: "Reset terminal display",
 	},
 	"app.thinking.cycle": {
-		defaultKeys: "alt+e",
+		defaultKeys: process.platform === "darwin" ? ["alt+e", "f6"] : "alt+e",
 		description: "Cycle thinking level",
 	},
 	"app.thinking.toggle": {

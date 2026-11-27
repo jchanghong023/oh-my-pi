@@ -90,9 +90,7 @@ describe("custom command loader", () => {
 		const result = await loadCustomCommands({ cwd: tempRoot, agentDir: tempRoot, discover: true });
 
 		expect(result.errors).toEqual([]);
-		expect(result.commands.map(({ command }) => command.name)).toEqual(
-			expect.arrayContaining(["review", "annotate", "green", "external-fixture"]),
-		);
+		expect(result.commands.map(({ command }) => command.name)).toContain("external-fixture");
 	});
 
 	it("supports legacy and callable ArkType injection", async () => {

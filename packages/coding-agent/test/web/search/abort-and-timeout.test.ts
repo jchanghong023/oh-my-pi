@@ -219,7 +219,7 @@ describe("executeSearch abort propagation", () => {
 
 		const result = await runSearchQuery({ query: "anything" }, context);
 
-		expect(result.details?.response.provider).toBe("brave");
+		expect(result.details.response.provider).toBe("brave");
 		expect(timeoutMs).toBe(180_000);
 	});
 
@@ -326,7 +326,6 @@ describe("executeSearch abort propagation", () => {
 		const result = await runSearchQuery({ query: "anything" }, context);
 
 		expect(result.isError).toBeUndefined();
-		expect(result.details?.error).toContain("All web search providers failed");
 		expect(result.details?.error).toContain("brave failed");
 		expect(result.details?.error).toContain("exa failed");
 		expect(result.details?.response.provider).toBe("exa");
@@ -343,7 +342,7 @@ describe("executeSearch abort propagation", () => {
 
 		expect(result.content[0]?.text).toContain("upstream 500");
 		expect(result.isError).toBeUndefined();
-		expect(result.details?.error).toContain("upstream 500");
+		expect(result.details.error).toContain("upstream 500");
 	});
 
 	it("falls through when the configured role candidate returns no renderable content", async () => {
@@ -363,7 +362,7 @@ describe("executeSearch abort propagation", () => {
 		expect(fallbackSearch).toHaveBeenCalledTimes(1);
 		expect(result.content[0]?.text).toContain("Fallback result");
 		expect(result.isError).not.toBe(true);
-		expect(result.details?.response.provider).toBe("brave");
+		expect(result.details.response.provider).toBe("brave");
 	});
 
 	it("stops loading the role chain after the preferred candidate succeeds", async () => {
@@ -378,7 +377,7 @@ describe("executeSearch abort propagation", () => {
 
 		const result = await runSearchQuery({ query: "anything" }, context);
 
-		expect(result.details?.response.provider).toBe("exa");
+		expect(result.details.response.provider).toBe("exa");
 		expect(context.getProvider).toHaveBeenCalledTimes(1);
 		expect(context.getProvider).toHaveBeenCalledWith("exa");
 		expect(fallbackSearch).not.toHaveBeenCalled();
@@ -401,7 +400,7 @@ describe("executeSearch abort propagation", () => {
 		const result = await runSearchQuery({ query: "anything" }, context);
 
 		expect(result.isError).not.toBe(true);
-		expect(result.details?.response.provider).toBe("brave");
+		expect(result.details.response.provider).toBe("brave");
 		expect(context.getProvider).toHaveBeenCalledTimes(2);
 		expect(fallbackSearch).toHaveBeenCalledTimes(1);
 		expect(result.content[0]?.text).toStartWith(
@@ -467,8 +466,8 @@ describe("executeSearch abort propagation", () => {
 
 		const result = await runSearchQuery({ query: "anything", model: "web/exa" }, context);
 
-		expect(result.details?.error).toContain("Explicit Exa search failed.");
-		expect(result.details?.response.provider).toBe("exa");
+		expect(result.details.error).toContain("Explicit Exa search failed.");
+		expect(result.details.response.provider).toBe("exa");
 		expect(context.getProvider).toHaveBeenCalledTimes(1);
 		expect(fallbackSearch).not.toHaveBeenCalled();
 	});

@@ -372,7 +372,6 @@ describe("runEvalCompletion", () => {
 		const result = await runEvalCompletionAndWait({ prompt: "q", model: "default" }, { session });
 
 		expect(spy.mock.calls.map(call => call[0].id)).toEqual(["slow"]);
-		expect(spy.mock.calls[0]?.[2]?.reasoning).toBeUndefined();
 		expect(result).toEqual({
 			text: "role answer",
 			details: { model: "p/slow", tier: "default", structured: false },
@@ -517,7 +516,6 @@ describe("runEvalCompletion", () => {
 			tier === "slow" ? Effort.High : undefined,
 			tier === "slow" ? Effort.Low : undefined,
 		]);
-		expect(spy.mock.calls[0]?.[2]?.disableReasoning).toBe(false);
 		expect(result).toEqual({
 			text: "effort-specific answer",
 			details: { model: "p/effort-fallback", tier, structured: false },

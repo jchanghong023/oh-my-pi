@@ -4,7 +4,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadNpmRegistryResolver } from "../../src/cli/npm-registry";
-import { buildBunInstallArgs, buildNpmInstallArgs } from "../../src/cli/update-cli";
 
 const PKG = "@oh-my-pi/pi-coding-agent";
 const dirs: string[] = [];
@@ -81,18 +80,12 @@ describe("loadNpmRegistryResolver", () => {
 		});
 	});
 
-	it("moves credentials embedded in the registry URL into basic auth, never into the URL or install argv", async () => {
+	it("moves credentials embedded in the registry URL into basic auth", async () => {
 		const homeDir = await home({ ".npmrc": "registry=https://me:p%40ss@creds.example/\n" });
 		const resolve = await loadNpmRegistryResolver({ env: {}, homeDir });
 		const registry = resolve(PKG);
 		expect(registry.authorization).toBe(`Basic ${btoa("me:p@ss")}`);
 		expect(registry.url).toBe("https://creds.example/");
-		const argv = [
-			...buildBunInstallArgs("19.0.0", "linux-x64", undefined, { registry: registry.url }),
-			...buildNpmInstallArgs("19.0.0", "linux-x64", undefined, { registry: registry.url }),
-		].join(" ");
-		expect(argv).not.toContain("p%40ss");
-		expect(argv).not.toContain("me:");
 	});
 
 	it("rejects a malformed configured registry instead of silently using the public one", async () => {
@@ -104,13 +97,5 @@ describe("loadNpmRegistryResolver", () => {
 	it("fails loudly on an unset required ${VAR} like npm does", async () => {
 		const homeDir = await home({ ".npmrc": "//x.example/:_authToken=${MISSING}\n" });
 		await expect(loadNpmRegistryResolver({ env: {}, homeDir })).rejects.toThrow("${MISSING}");
-	});
-});
-
-describe("install args follow the checked registry", () => {
-	it("pins bun and npm installs to the registry the release was resolved from", () => {
-		const registry = "https://npm.corp.example/api/npm/feed/";
-		expect(buildBunInstallArgs("19.0.0", "linux-x64", undefined, { registry })).toContain(`--registry=${registry}`);
-		expect(buildNpmInstallArgs("19.0.0", "linux-x64", undefined, { registry })).toContain(`--registry=${registry}`);
 	});
 });

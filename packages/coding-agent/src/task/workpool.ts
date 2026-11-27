@@ -388,7 +388,7 @@ export class WorkPool {
 							invocationKind: "eval",
 							assignment: message,
 							...(this.context ? { context: this.context } : {}),
-							agent: this.policy.agentName,
+							agent: this.policy.bundledAgentSelector ?? this.policy.agentName,
 							...(this.#model !== undefined ? { perCallModel: this.#model } : {}),
 							identity: { id: agent.id },
 							customTools: this.customTools,

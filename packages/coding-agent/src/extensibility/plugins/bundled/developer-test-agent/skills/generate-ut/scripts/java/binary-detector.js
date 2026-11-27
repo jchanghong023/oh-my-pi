@@ -53,7 +53,7 @@ function createBinaryDetector(depsDir) {
   // 转换为绝对路径
   function toAbsolutePath(relativePath) {
     const normalized = relativePath.replace(/\\/g, '/');
-    return path.join(depsDir, normalized).replace(/\\/g, '/');
+    return path.resolve(path.join(depsDir, normalized)).replace(/\\/g, '/');
   }
 
   return {
@@ -105,7 +105,7 @@ function createBinaryDetector(depsDir) {
         .map(c => c.trim())
         .filter(c => c.length > 0);
 
-      const found = {};
+      const found = Object.create(null);
       const missing = [];
 
       for (const className of classNameList) {

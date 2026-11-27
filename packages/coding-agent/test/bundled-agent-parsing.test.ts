@@ -20,10 +20,6 @@ describe("bundled agent parsing", () => {
 		expect(task?.thinkingLevel).toBe(AUTO_THINKING);
 	});
 
-	it("does not bundle a dedicated document researcher", () => {
-		expect(getBundledAgent("doc-researcher")).toBeUndefined();
-	});
-
 	it("accepts security-reviewer findings with optional remediation metadata", () => {
 		const securityReviewer = getBundledAgent("security-reviewer");
 		const findingValidator = buildOutputValidator(securityReviewer?.output).validator?.validateSection.get(
@@ -47,6 +43,7 @@ describe("bundled agent parsing", () => {
 			}).success,
 		).toBe(true);
 	});
+
 	// Issue #4761: with `modelRoles.slow: ...:xhigh`, the role's explicit effort
 	// suffix must survive agent-pattern expansion and model resolution for the
 	// bundled agents routed at that role. The executor prefers an explicit

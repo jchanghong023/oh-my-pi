@@ -74,7 +74,6 @@ import type { SessionInfo as StoredSessionInfo } from "../../session/session-lis
 import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
-import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { getDefaultLocalSttModel, STT_MODELS } from "../../stt/models";
 import { refreshAgentDiscovery } from "../../task";
 import { sumSubagentTreeCost } from "../agent-hub-runtime";
@@ -200,8 +199,6 @@ type PromptDispatchCancellation = { cancelled: boolean };
 
 type PromptTurnState = {
 	abortController: AbortController;
-	teamOnly: boolean;
-	teamCommand?: Promise<void>;
 	cancelRequested: boolean;
 	settled: boolean;
 	/**
@@ -461,7 +458,7 @@ type AcpSessionHandle = {
 
 type CreateAcpSession = (
 	cwd: string,
-	options?: { interactivePrompts?: boolean },
+	options?: { interactivePrompts?: boolean; forkSourcePath?: string },
 ) => Promise<AgentSession | AcpSessionHandle>;
 
 function normalizeCreatedAcpSession(created: AgentSession | AcpSessionHandle): {
@@ -1279,7 +1276,6 @@ export class AcpAgent implements Agent {
 				const pendingPrompt = Promise.withResolvers<PromptResponse>();
 				record.promptTurn = {
 					abortController: new AbortController(),
-					teamOnly: parseSlashCommand(converted.text)?.name === "team",
 					cancelRequested: false,
 					settled: false,
 					errorTextDelivery: undefined,
@@ -1291,13 +1287,9 @@ export class AcpAgent implements Agent {
 					promise: pendingPrompt.promise,
 				};
 
-				// A Team prompt owns only the discussion; a concurrent model loop
-				// cannot finish it before the persisted report reaches command output.
-				if (!record.promptTurn.teamOnly) {
-					record.promptTurn.unsubscribe = record.session.subscribe(event => {
-						this.#trackPromptEvent(record, event);
-					});
-				}
+				record.promptTurn.unsubscribe = record.session.subscribe(event => {
+					this.#trackPromptEvent(record, event);
+				});
 
 				// Cancelled before the turn ever started (dispatch window or
 				// queued behind a cancelled predecessor): settle the wire
@@ -1324,9 +1316,9 @@ export class AcpAgent implements Agent {
 				// guard above cannot fire and a client prompt lands on AgentSession's busy
 				// guard. Type that failure for the wire instead of letting transport.ts wrap
 				// it as a generic -32603 internal error.
-				const dispatch = this.#runPromptOrCommand(record, converted.text, converted.images);
-				if (record.promptTurn.teamOnly) record.promptTurn.teamCommand = dispatch;
-				dispatch.catch((error: unknown) => {
+				const promptTurn = record.promptTurn;
+				this.#runPromptOrCommand(record, converted.text, converted.images).catch((error: unknown) => {
+					if (record.promptTurn !== promptTurn || promptTurn.cancelRequested) return;
 					this.#finishPrompt(
 						record,
 						undefined,
@@ -1631,19 +1623,13 @@ export class AcpAgent implements Agent {
 	async #runCancelCleanup(record: ManagedSessionRecord, promptTurn: PromptTurnState): Promise<void> {
 		let timer: NodeJS.Timeout | undefined;
 		try {
-			if (promptTurn.teamOnly) {
-				// The signal already cancelled this discussion. Await its unwind
-				// without aborting or timing out independent session work.
-				await promptTurn.teamCommand?.catch(() => {});
-			} else {
-				const timeout = new Promise<never>((_, reject) => {
-					timer = setTimeout(
-						() => reject(RequestError.resourceNotFound(record.protocolSessionId)),
-						this.#cancelCleanupTimeoutMs,
-					);
-				});
-				await Promise.race([record.session.abort({ reason: USER_INTERRUPT_LABEL }), timeout]);
-			}
+			const timeout = new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() => reject(RequestError.resourceNotFound(record.protocolSessionId)),
+					this.#cancelCleanupTimeoutMs,
+				);
+			});
+			await Promise.race([record.session.abort({ reason: USER_INTERRUPT_LABEL }), timeout]);
 		} finally {
 			if (timer) clearTimeout(timer);
 			// Order matters: clear `cleanup` before evicting the slot so the slot-eviction
@@ -1918,21 +1904,9 @@ export class AcpAgent implements Agent {
 		const { session, setToolUIContext } = normalizeCreatedAcpSession(
 			await this.#createSession(path.resolve(params.cwd), {
 				interactivePrompts: this.#clientCapabilities?.elicitation?.form != null,
+				forkSourcePath: sourcePath,
 			}),
 		);
-		try {
-			const success = await session.switchSession(sourcePath);
-			if (!success) {
-				throw new Error(`ACP session fork was cancelled: ${params.sessionId}`);
-			}
-			const forked = await session.fork();
-			if (!forked) {
-				throw new Error(`ACP session fork failed: ${params.sessionId}`);
-			}
-		} catch (error) {
-			await this.#disposeStandaloneSession(session);
-			throw error;
-		}
 		return await this.#registerPreparedSession(session, params.mcpServers ?? [], setToolUIContext);
 	}
 
@@ -1972,7 +1946,7 @@ export class AcpAgent implements Agent {
 			...createAcpClientBridge(this.#connection, record.protocolSessionId, this.#clientCapabilities),
 			get deferAgentInitiatedTurns() {
 				const promptTurn = record.promptTurn;
-				return !promptTurn || promptTurn.teamOnly || promptTurn.settled || promptTurn.cancelRequested;
+				return !promptTurn || promptTurn.settled || promptTurn.cancelRequested;
 			},
 		});
 		// Client-declared servers live in `record.mcpManager`, not the session's

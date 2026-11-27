@@ -555,10 +555,11 @@ async function runDiagnosticConsumer(
 	return { root, stdout, stderr, pid: child.pid };
 }
 
-function consumerFallbackDir(root: string): string {
-	if (process.platform === "win32") return path.join(root, "local", "omp", "Logs");
-	if (process.platform === "darwin") return path.join(root, "home", "Library", "Logs", "omp");
-	return path.join(root, "state", "omp", "logs");
+function consumerFallbackDir(root: string, profile?: string): string {
+	const scope = profile ? ["profiles", profile] : [];
+	if (process.platform === "win32") return path.join(root, "local", "omp", ...scope, "Logs");
+	if (process.platform === "darwin") return path.join(root, "home", "Library", "Logs", "omp", ...scope);
+	return path.join(root, "state", "omp", ...scope, "logs");
 }
 
 describe("diagnostic consumer contracts", () => {
@@ -831,7 +832,7 @@ describe("diagnostic consumer contracts", () => {
 				}));
 			`);
 			const payload = JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"));
-			const fallback = consumerFallbackDir(result.root);
+			const fallback = consumerFallbackDir(result.root, "debug-readers");
 			expect(payload.actual.logs).toBe(fallback);
 			expect(path.dirname(payload.actual.file)).toBe(fallback);
 			expect(payload.actual.file).not.toBe(payload.configured.file);

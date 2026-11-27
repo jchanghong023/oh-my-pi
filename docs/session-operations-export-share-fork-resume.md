@@ -59,15 +59,15 @@ Behavior details:
 - The viewer uses the `/stats` design, with Auto/Light/Dark themes; Light uses soft-gray surfaces and high-contrast secondary text. The sidebar lists the main session, nested subagents, and advisors; selecting a session or a task-card agent opens its transcript and conversation tree. Session and message links preserve the selected transcript.
 - Child transcripts stored next to the session file (`<session>/<AgentId>.jsonl`, recursively for nested spawns) are embedded as `subSessions`, including advisor and gzip-compressed transcripts. Discovery descends only into real child directories and flags tombstoned agents as `aborted`. `includeSubSessions: false` in `ExportOptions` excludes child transcripts and their trace tracks.
 - The bottom **Timeline** drawer and **Trace** view reuse `/trace`'s span assembly and viewer: duration/turn/call axes, idle compression, search, zoom, nested tracks, entry details, and tool aggregates. **Jump to transcript** opens the corresponding session and message. All transcript and trace data remain embedded; no stats server is needed. Both development and release exports load shared libraries from `stencil.so`, so opening the HTML requires network access.
-- Tool calls use `<omp-tool-view>` (shared with collab-web); traces use `<omp-session-trace>` (shared with stats). `bun gen:export-viewer` bundles these with the shell, styles and default themes. Both source and packaged exports inline the viewer built from their own sources. Shared Markdown and highlighting libraries still load from content-addressed `stencil.so/assets/omp/` URLs pinned with Subresource Integrity.
-- The inlined viewer adds roughly 800 KiB of fixed HTML overhead. `--themes` embeds the selected TUI theme overrides in addition to the session data.
+- Tool calls use `<omp-tool-view>` (shared with collab-web); traces use `<omp-session-trace>` (shared with stats). `bun gen:export-viewer` bundles these with the shell, styles and default themes. A source checkout inlines the generated viewer into each export; packaged releases load their versioned viewer from `build.stencil.so`. Both load shared Markdown and highlighting libraries from content-addressed `stencil.so/assets/omp/` URLs, pinned with Subresource Integrity. Only viewer code is uploaded, never session data.
+- Packaged exports add roughly 2 KiB of fixed HTML overhead; source exports also contain the generated viewer. `--themes` embeds the selected TUI theme overrides in addition to the session data.
 - No session entries are appended during export.
 - The default filename is `omp-session-<session-file-stem>.html` in the current directory. HTML export is not secret-redacted or encrypted; it can contain raw context, image data, and extension payloads.
 
 Caveat:
 
 - Parsing is whitespace-based, so quoted paths with spaces are not preserved. Use a path without spaces.
-- A source checkout needs `bun gen:export-viewer` before exporting. A missing generated viewer reports the command to run; packages and executables already include the generated viewer.
+- A source checkout needs `bun gen:export-viewer` before exporting. A missing generated viewer reports the command to run; packaged viewer assets become available when release CI publishes them.
 
 ### `--export <inputSessionFile> [outputPath]` (CLI)
 

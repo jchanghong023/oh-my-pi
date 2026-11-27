@@ -111,13 +111,13 @@ onSubscribe → onNext (0..N) → (onComplete | onError | cancel)
 | 多个值（仅计数）                    | `expectNextCount(n)` → `verifyComplete()`                       | 仅在值正确性已在其他地方验证时使用；否则优先使用显式匹配。                                                      |
 | 基于谓词的匹配                      | `expectNextMatches(predicate)` 或 `assertNext(consumer)`        | 对于复杂对象优先使用谓词检查，而非依赖 `equals()`。                                                              |
 | 记录并检查发射                      | `recordWith(...)` → `consumeRecordedWith(...)`                  | 在验证复杂集合或聚合属性时先进行记录。                                                                          |
-| 错误终止（类型）                    | `expectError(SomeException.class)`                              | 当预期失败时始终验证**错误类型**。                                                                              |
-| 错误终止（细节）                    | `expectErrorSatisfies(...)`                                     | 验证消息、原因或领域字段，而不过度拟合到精确字符串。                                                            |
-| 发射值后失败                        | `expectNext(...)` → `expectError(...)`                          | 同时断言错误前的发射和失败信号。                                                                                |
+| 错误终止（类型）                    | `expectError(SomeException.class)` → `verify()`                 | 始终验证预期的错误类型。 |
+| 错误终止（细节）                    | `expectErrorSatisfies(...)` → `verify()`                        | 验证消息、原因或领域字段，而不过度拟合到精确字符串。 |
+| 发射值后失败                        | `expectNext(...)` → `expectError(...)` → `verify()`             | 同时断言错误前的发射和失败信号。 |
 | 取消行为                            | `thenCancel()` → `verify()`                                     | 在测试 `take`、`timeout` 或手动释放等操作符时使用取消断言。                                                     |
 | 背压 / 请求控制                     | `StepVerifier.create(publisher, 0)` → `thenRequest(n)`          | 以零需求开始，以精确验证生产者行为。                                                                            |
 | 基于时间的操作符                    | `withVirtualTime(...)` → `thenAwait(...)`                       | 优先使用**虚拟时间**而非真实延迟，以保持测试的确定性和快速性。                                                  |
-| 超时保护                            | `verifyTimeout(Duration)`                                       | 通过强制最大执行窗口防止测试挂起。                                                                              |
+| 超时保护                            | `expectComplete()` → `verify(Duration)`                        | 保留预期终止信号，再以 `verify(Duration)` 限时执行；`verifyTimeout(Duration)` 仅在预期发布者不终止时使用。 |
 | 重试 / 重新订阅                     | 结合 StepVerifier 与计数器或 mock 验证                          | 通过可观察的副作用验证订阅或重试次数。                                                                          |
 | 兜底 / 恢复路径                     | 注入错误源 → 断言兜底发射                                       | 显式测试恢复逻辑，例如 `onErrorResume`。                                                                       |
 | Reactor Context 使用                | `contextWrite(...)` → `expectNext(...)`                         | 在测试中注入上下文，并验证其是否正确影响行为。                                                                  |

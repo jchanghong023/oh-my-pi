@@ -10,6 +10,7 @@ export {
 } from "../../../vendor/openwiki/src/config/openwiki-home";
 export { resolveRepositoryRoot } from "../../../vendor/openwiki/src/integrations/core/repository-root";
 export { previewRepositoryFiles } from "../../../vendor/openwiki/src/generation/repository-preview";
+export { readRepositoryRunState } from "../../../vendor/openwiki/src/generation/run-state";
 export {
 	SearchInput,
 	ReadInput,

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings/keybindings";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -26,10 +25,6 @@ const FOLLOW_UP = "ctrl+enter";
 const originalImage: ImageContent = { type: "image", mimeType: "image/png", data: "b3JpZ2luYWw=" };
 const newerImage: ImageContent = { type: "image", mimeType: "image/jpeg", data: "bmV3ZXI=" };
 const transformedImage: ImageContent = { type: "image", mimeType: "image/jpeg", data: "cmVwbGFjZW1lbnQ=" };
-const pastedPng = Buffer.from(
-	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
-	"base64",
-);
 
 async function createHarness(factory: ExtensionFactory) {
 	const runtime = new ExtensionRuntime();
@@ -159,8 +154,6 @@ async function createHarness(factory: ExtensionFactory) {
 		press,
 		pressSubmit,
 		draftWithImage,
-		controller,
-		helpers,
 	};
 }
 
@@ -176,105 +169,6 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("interactive native input ingress", () => {
-	for (const key of [ENTER, FOLLOW_UP]) {
-		it.each([true, false])(`${key} Team preserves a newer real paste when dispatch succeeds=%j`, async starts => {
-			using temp = TempDir.createSync("@omp-team-input-images-");
-			const imagePath = temp.join("newer.png");
-			await Bun.write(imagePath, pastedPng);
-			const entered = Promise.withResolvers<void>();
-			const release = Promise.withResolvers<void>();
-			const seen: InputEvent[] = [];
-			const h = await createHarness(pi => {
-				pi.on("input", async event => {
-					seen.push(event);
-					entered.resolve();
-					await release.promise;
-				});
-			});
-			const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
-			const register = vi.fn(() => "bg_team_images");
-			const appendCustomMessage = vi.fn(async () => {});
-			Object.assign(h.session, {
-				model: starts ? model : undefined,
-				modelRegistry: { getAvailable: () => [model], authStorage: undefined },
-				registerSessionChangeCallback: () => () => {},
-				asyncJobManager: { register },
-				appendCustomMessage,
-			});
-			const submitted = "/team inspect [Image #1] attachment://1";
-			h.draftWithImage(submitted);
-			const submitting = h.pressSubmit(key);
-			await entered.promise;
-			try {
-				expect(h.editor.pendingImages).toEqual([]);
-				expect(h.editor.pendingImageLinks).toEqual([]);
-				h.editor.setText("newer ");
-				await h.controller.handleImagePathPaste(imagePath);
-				const newer = h.editor.expandedText();
-				expect(newer.trimEnd()).toMatch(/^newer \[Image #1(?:,[^\]]+)?\]$/);
-				const pasted = h.editor.pendingImages[0];
-				const link = h.editor.pendingImageLinks[0];
-				expect(pasted).toBeDefined();
-				expect(pasted).not.toBe(originalImage);
-				expect(link).toBe(imagePath);
-				release.resolve();
-				await submitting;
-
-				expect(seen).toEqual([{ type: "input", source: "interactive", text: submitted, images: [originalImage] }]);
-				const restored = h.editor.expandedText();
-				expect(restored).toContain(newer);
-				expect(Array.from(restored.matchAll(/\[Image #(\d+)/g), match => Number(match[1]))).toEqual(
-					starts ? [1] : [2, 1],
-				);
-				expect(h.editor.pendingImages).toEqual(starts ? [pasted] : [pasted, originalImage]);
-				expect(h.editor.pendingImageLinks).toEqual(starts ? [link] : [link, "local://original.png"]);
-				expect(register).toHaveBeenCalledTimes(starts ? 1 : 0);
-				expect(appendCustomMessage).toHaveBeenCalledTimes(starts ? 1 : 0);
-				expect(h.prompt).not.toHaveBeenCalled();
-				if (starts) expect(h.ctx.showError).not.toHaveBeenCalled();
-			} finally {
-				release.resolve();
-				await submitting;
-			}
-		});
-	}
-
-	it.each([false, true])("restores a compacting Team submission beside a newer paste (retry=%j)", async willRetry => {
-		using temp = TempDir.createSync("@omp-team-queued-images-");
-		const imagePath = temp.join("newer.png");
-		await Bun.write(imagePath, pastedPng);
-		const h = await createHarness(() => {});
-		const text = "/team inspect [Image #1] attachment://1";
-		h.session.isCompacting = true;
-		h.draftWithImage(text);
-		await h.pressSubmit(FOLLOW_UP);
-		expect(h.ctx.compactionQueuedMessages).toEqual([
-			expect.objectContaining({
-				text,
-				mode: "followUp",
-				images: [originalImage],
-				imageLinks: ["local://original.png"],
-			}),
-		]);
-		h.editor.setText("newer ");
-		await h.controller.handleImagePathPaste(imagePath);
-		const newer = h.editor.expandedText();
-		const pasted = h.editor.pendingImages[0];
-		expect(newer.trimEnd()).toMatch(/^newer \[Image #1(?:,[^\]]+)?\]$/);
-		expect(pasted).toBeDefined();
-		h.session.isCompacting = false;
-		await h.helpers.flushCompactionQueue({ willRetry });
-
-		expect(h.ctx.compactionQueuedMessages).toEqual([]);
-		const restored = h.editor.expandedText();
-		expect(restored).toContain(newer);
-		expect(Array.from(restored.matchAll(/\[Image #(\d+)/g), match => Number(match[1]))).toEqual([2, 1]);
-		expect(h.editor.pendingImages).toEqual([pasted, originalImage]);
-		expect(h.editor.pendingImageLinks).toEqual([imagePath, "local://original.png"]);
-		expect(h.ctx.showError).toHaveBeenCalledWith(expect.stringContaining("/team requires a session model"));
-		expect(h.prompt).not.toHaveBeenCalled();
-	});
-
 	for (const command of ["/goal", "/goal-autopilot"]) {
 		it.each([true, false])(
 			`${command} protects newer typing and pasted images when dispatch succeeds=%j`,
@@ -434,7 +328,7 @@ describe("interactive native input ingress", () => {
 		release.resolve();
 		await submitting;
 		expect(h.ctx.compactionQueuedMessages).toEqual([
-			{ text: "queued after compaction", mode: "followUp", images: undefined, draftDetached: true },
+			expect.objectContaining({ text: "queued after compaction", mode: "followUp", images: undefined }),
 		]);
 		expect(h.editor.expandedText()).toBe("new draft");
 	});
@@ -991,13 +885,12 @@ describe("interactive native input ingress", () => {
 		expect(imageLink.endsWith(".jpg")).toBe(true);
 		expect(h.blobs.get(imageLink)?.toString()).toBe("replacement");
 		expect(h.ctx.compactionQueuedMessages).toEqual([
-			{
+			expect.objectContaining({
 				text: "/skill:review changed [Image #1]",
 				mode: "followUp",
 				images: [transformedImage],
 				imageLinks: [imageLink],
-				draftDetached: true,
-			},
+			}),
 		]);
 		expect(seen).toHaveLength(1);
 		expect(h.prompt).not.toHaveBeenCalled();
