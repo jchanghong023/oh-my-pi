@@ -29,7 +29,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { getPuppeteerDir } from "@oh-my-pi/pi-utils";
 import puppeteer, { type Browser, type Page, type Protocol } from "puppeteer-core";
 import { type FixtureRelayExtension, prepareRelayExtension } from "./browser-relay-fixture";
-import { chromiumAvailable } from "./chromium-probe";
+import { CHROMIUM_TEST_SANDBOX_ARGS, chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
 
@@ -181,7 +181,13 @@ async function launchRelayFixture(
 			userDataDir,
 			enableExtensions: true,
 			env: { ...process.env, PI_CODING_AGENT_DIR: path.join(root, "omp") },
-			args: ["--no-first-run", "--no-default-browser-check", "--use-mock-keychain", ...RENDERER_PRIORITY_ARGS],
+			args: [
+				"--no-first-run",
+				"--no-default-browser-check",
+				"--use-mock-keychain",
+				...CHROMIUM_TEST_SANDBOX_ARGS,
+				...RENDERER_PRIORITY_ARGS,
+			],
 		});
 		browsers.push(browser);
 		const extensionId = await browser.installExtension(install.dir);

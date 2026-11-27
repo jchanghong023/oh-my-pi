@@ -432,18 +432,18 @@ describe("BashTool skill:// working directory", () => {
 					'if [ "$#" -ne 1 ]; then echo "usage: report.sh FILE" >&2; exit 2; fi\ncat "$1"\n',
 				);
 				const tool = new BashTool({ ...makeSession(), skills: [skill] });
+				const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 				const usage = await tool.execute("skill-script-usage", {
-					command: "bash report.sh",
-					cwd: skillDir,
+					command: `cd ${quote(skillDir)} && bash report.sh`,
 				});
 				expect(usage.isError).toBe(true);
+				expect(usage.details?.cwd).toBe(skillDir);
+				expect(usage.details?.exitCode).toBe(2);
 				expect(usage.content.find(c => c.type === "text")?.text).toContain("usage: report.sh FILE");
 
 				await fs.writeFile(path.join(cwd, "report.txt"), "project payload\n");
-				const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 				const run = await tool.execute("skill-script-project", {
 					command: `bash ${quote(script)} report.txt`,
-					cwd,
 				});
 				expect(run.isError).toBeUndefined();
 				expect(run.content.find(c => c.type === "text")?.text).toContain("project payload");

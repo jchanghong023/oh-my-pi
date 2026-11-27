@@ -3,14 +3,18 @@ import { ensureChromiumExecutable } from "@oh-my-pi/pi-coding-agent/tools/browse
 import { registerSemanticQueryHandlers } from "@oh-my-pi/pi-coding-agent/tools/browser/query-handlers";
 import { TERN_KIT_SOURCE } from "@oh-my-pi/pi-coding-agent/tools/browser/tern/page-kit";
 import puppeteer from "puppeteer-core";
-import { chromiumAvailable } from "./chromium-probe";
+import { CHROMIUM_TEST_SANDBOX_ARGS, chromiumAvailable } from "./chromium-probe";
 
 const available = await chromiumAvailable();
 
 describe.skipIf(!available)("browser implicit role selectors", () => {
 	it("matches Chrome's computed roles and names through Puppeteer and the serialized Tern kit", async () => {
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			const tags = [
@@ -150,7 +154,11 @@ describe.skipIf(!available)("browser implicit role selectors", () => {
 
 	it("bounds cyclic native-label references in named role queries", async () => {
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			await page.setContent(`
@@ -175,7 +183,11 @@ describe.skipIf(!available)("browser implicit role selectors", () => {
 
 	it("refuses a role selector with text after its name filter instead of matching the outer role", async () => {
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			await page.setContent(
@@ -206,7 +218,11 @@ describe.skipIf(!available)("browser implicit role selectors", () => {
 
 	it("resolves roles under deeply nested asides without recomputing every ancestor", async () => {
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			// Each unnamed aside's role depends on its ancestors' roles; recomputed per level, 40 levels never finish.
@@ -221,7 +237,11 @@ describe.skipIf(!available)("browser implicit role selectors", () => {
 	}, 60_000);
 
 	it("reports the role and name a role/ selector takes back from the Tern kit's observe()", async () => {
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			await page.setContent(`<!doctype html>

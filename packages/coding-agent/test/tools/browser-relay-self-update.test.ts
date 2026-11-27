@@ -626,7 +626,7 @@ describe("writing the omp extension", () => {
 		expect((await fs.readdir(dir)).filter(name => name.endsWith(".tmp"))).toEqual([]);
 	});
 
-	it("replaces a file Windows refuses to rename over, as when Chrome or antivirus holds it", async () => {
+	it.skipIf(process.platform !== "win32")("retries a transient Windows rename denial", async () => {
 		const dir = home.join("extension");
 		await writeRelayExtension(dir, OLD);
 		const rename = nodeFs.promises.rename.bind(nodeFs.promises);

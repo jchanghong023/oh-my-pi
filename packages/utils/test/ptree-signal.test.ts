@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -97,6 +97,12 @@ describe("ptree signal abort handling", () => {
 			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-utils-abort-output-"));
 			const pidFile = path.join(dir, "pid");
 			const controller = new AbortController();
+			const listenerDetached = Promise.withResolvers<void>();
+			const removeEventListener = controller.signal.removeEventListener.bind(controller.signal);
+			const removeListener = spyOn(controller.signal, "removeEventListener").mockImplementation((...args) => {
+				removeEventListener(...args);
+				if (args[0] === "abort") listenerDetached.resolve();
+			});
 			using child = spawn(["/bin/sh", "-c", `${BLOCK_FOREVER} 2>/dev/null & echo $! > '${pidFile}'; echo token`], {
 				detached,
 				signal: controller.signal,
@@ -107,14 +113,34 @@ describe("ptree signal abort handling", () => {
 				await child.exited;
 				orphan = Process.fromPid(Number.parseInt(await Bun.file(pidFile).text(), 10));
 				if (!orphan) throw new Error("the fixture must expose its pipe-holding descendant");
-				const nextTurn = Promise.withResolvers<void>();
-				setImmediate(nextTurn.resolve);
-				await nextTurn.promise;
+				await listenerDetached.promise;
 
 				// Start collection only after root exit and stderr EOF have detached
 				// the signal listener. The read must re-arm cancellation for inherited pipes.
 				// Without a detached group, reader cutoff alone must release wait().
-				outcome = child.wait({ allowAbort: true });
+				const stdout = child.stdout;
+				const reader = stdout.getReader();
+				const read = reader.read.bind(reader);
+				const readingRemainder = Promise.withResolvers<void>();
+				let bytesRead = 0;
+				// Abort cuts off unread pipe data. Wait until the collector has
+				// received the token and asked for more from the still-open pipe.
+				const readSpy = spyOn(reader, "read").mockImplementation(async () => {
+					const pending = read();
+					if (bytesRead >= "token\n".length) readingRemainder.resolve();
+					const chunk = await pending;
+					if (chunk.done) readingRemainder.resolve();
+					else bytesRead += chunk.value.byteLength;
+					return chunk;
+				});
+				const getReader = spyOn(stdout, "getReader").mockReturnValueOnce(reader);
+				try {
+					outcome = child.wait({ allowAbort: true });
+					await Promise.race([readingRemainder.promise, outcome]);
+				} finally {
+					getReader.mockRestore();
+					readSpy.mockRestore();
+				}
 				controller.abort("abort inherited output");
 				expect(child.exitReason).toBeInstanceOf(AbortError);
 
@@ -125,6 +151,7 @@ describe("ptree signal abort handling", () => {
 					expect(await orphan.waitForExit(), "the detached descendant must be terminated").toBe(true);
 				}
 			} finally {
+				removeListener.mockRestore();
 				if (orphan) {
 					orphan.killTree(9);
 					await orphan.waitForExit();

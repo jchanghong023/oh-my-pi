@@ -499,6 +499,7 @@ describe.skipIf(process.platform === "win32")("write tool shebang execute bits u
 			getSessionSpawns: () => "*",
 			// Deduplication drops a clean late result, which the deferred test reads.
 			settings: Settings.isolated({
+				"lsp.enabled": true,
 				"lsp.diagnosticsOnWrite": true,
 				"lsp.diagnosticsDeduplicate": false,
 				...settings,
@@ -589,14 +590,18 @@ describe.skipIf(process.platform === "win32")("write tool shebang execute bits u
 	});
 
 	it("sets the execute bits before late diagnostics of a write that outran its budget", async () => {
-		// `runLspWritethrough`'s 5s operation budget: the formatter ends it and never answers.
+		// Expire the 5s operation budget during formatting. Writethrough drains the
+		// formatter after cancellation because a custom formatter can mutate the file.
 		const budget = new AbortController();
 		const realTimeout = AbortSignal.timeout.bind(AbortSignal);
 		vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => (ms === 5_000 ? budget.signal : realTimeout(ms)));
-		useModeCheckingLinter(() => {
-			budget.abort();
-			return Promise.withResolvers<string>().promise;
-		});
+		useModeCheckingLinter(
+			(_filePath, _content, signal) =>
+				new Promise<string>((_resolve, reject) => {
+					signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+					budget.abort();
+				}),
+		);
 		const filePath = await existingScript("slow.py");
 		const late = Promise.withResolvers<DeferredDiagnosticsEntry>();
 

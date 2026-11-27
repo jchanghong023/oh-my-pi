@@ -1618,8 +1618,8 @@ mod tests {
 			tree.mkdir(Path::new("x"), 0o755).unwrap();
 			assert!(base.join("disk/x").is_dir());
 			// A root that refuses our uid (the trust seam) is refused.
-			let only_root = |uid: u32| uid == 0;
-			let err = paths::open_operator_dir(&base.join("backup"), false, None, &only_root).unwrap_err();
+			let distrust_owner = |_: u32| false;
+			let err = paths::open_operator_dir(&base.join("backup"), false, None, &distrust_owner).unwrap_err();
 			assert!(paths::is_untrusted_symlink(&err));
 			// --confine-root refuses a root outside it.
 			let confined = TreeOpts { confine: Some(base.join("elsewhere")), ..opts };

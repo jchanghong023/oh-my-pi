@@ -74,12 +74,23 @@ it.skipIf(process.platform === "win32")(
 	`;
 		const child = spawn([process.execPath, "-e", script], { detached: true });
 		const reader = child.stdout.getReader();
-		const first = await reader.read();
-		expect(new TextDecoder().decode(first.value)).toContain("ready");
-		reader.releaseLock();
+		const decoder = new TextDecoder();
+		let output = "";
+		try {
+			const first = await reader.read();
+			output = decoder.decode(first.value, { stream: true });
+			expect(output).toContain("ready");
 
-		child.kill(undefined, 1000);
-		const output = await new Response(child.stdout).text();
+			child.kill(undefined, 1000);
+			for (;;) {
+				const chunk = await reader.read();
+				if (chunk.done) break;
+				output += decoder.decode(chunk.value, { stream: true });
+			}
+			output += decoder.decode();
+		} finally {
+			reader.releaseLock();
+		}
 		await child.exited;
 		expect(output).toContain("root-term 1");
 		expect(output).not.toContain("root-term 2");

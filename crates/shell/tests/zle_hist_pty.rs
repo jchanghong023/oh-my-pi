@@ -11,7 +11,7 @@
 
 mod pty_support;
 
-use std::{io, time::Duration};
+use std::{io, path::Path, time::Duration};
 
 use pty_support::{Pty, Spawn, TIMEOUT, ZLE_SYNC_SCRIPT, differential, have_real_zsh};
 
@@ -176,8 +176,17 @@ fn history_beginning_search_with_histfindnodups() {
 
 #[test]
 fn history_beginning_search_end_functions() {
+	// macOS installs the functions flat; Debian keeps the Zle directory.
+	let Some(fpath) = ["/usr/share/zsh/5.9/functions", "/usr/share/zsh/functions/Zle"]
+		.into_iter()
+		.find(|dir| Path::new(dir).join("history-search-end").is_file())
+	else {
+		assert!(!have_real_zsh(), "could not find zsh's history-search-end function");
+		eprintln!("skipped: zsh's history-search-end function is not installed");
+		return;
+	};
 	let rc = format!(
-		"{SHOW}fpath=(/usr/share/zsh/5.9/functions)\nautoload -Uz history-search-end\nzle -N \
+		"{SHOW}fpath=({fpath})\nautoload -Uz history-search-end\nzle -N \
 		 history-beginning-search-backward-end history-search-end\nzle -N \
 		 history-beginning-search-forward-end history-search-end\nbindkey '^T' \
 		 history-beginning-search-backward-end\nbindkey '^Y' history-beginning-search-forward-end\n"

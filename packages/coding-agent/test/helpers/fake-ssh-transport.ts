@@ -5,7 +5,11 @@ import type { SSHConnectionTarget } from "../../src/ssh/connection-manager";
 import { quotePosixArgument } from "../../src/utils/shell-quote";
 
 /** Execute production POSIX snippets locally, without an SSH connection or global environment changes. */
-export function fakeSshTransport(home: (target: SSHConnectionTarget) => string, onSpawn?: () => void) {
+export function fakeSshTransport(
+	home: (target: SSHConnectionTarget) => string,
+	onSpawn?: () => void,
+	binPath?: string,
+) {
 	const commands: Array<{ target: SSHConnectionTarget; command: string }> = [];
 	vi.spyOn(connectionManager, "ensureConnection").mockResolvedValue(undefined);
 	vi.spyOn(connectionManager, "ensureHostInfo").mockResolvedValue({
@@ -17,7 +21,8 @@ export function fakeSshTransport(home: (target: SSHConnectionTarget) => string, 
 	});
 	vi.spyOn(connectionManager, "buildRemoteCommand").mockImplementation(async (target, command) => {
 		commands.push({ target, command });
-		return ["--fixture", `HOME=${quotePosixArgument(home(target))}; export HOME; ${command}`];
+		const pathSetup = binPath === undefined ? "" : `PATH=${quotePosixArgument(binPath)}:"$PATH"; export PATH; `;
+		return ["--fixture", `HOME=${quotePosixArgument(home(target))}; export HOME; ${pathSetup}${command}`];
 	});
 	const spawn = ptree.spawn;
 	vi.spyOn(ptree, "spawn").mockImplementation((command, options) => {

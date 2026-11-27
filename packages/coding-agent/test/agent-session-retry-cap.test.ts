@@ -2077,6 +2077,12 @@ describe("AgentSession retry delay cap", () => {
 			throw new Error("Expected bundled OpenCode Go and fallback test models to exist");
 		}
 
+		const wall = Date.now();
+		const monotonic = performance.now();
+		let elapsed = 0;
+		vi.spyOn(Date, "now").mockImplementation(() => wall + elapsed);
+		vi.spyOn(performance, "now").mockImplementation(() => monotonic + elapsed);
+
 		await authStorage.credentials.set("opencode-go", [
 			{ type: "api_key", key: "opencode-go-key-1" },
 			{ type: "api_key", key: "opencode-go-key-2" },
@@ -2126,7 +2132,10 @@ describe("AgentSession retry delay cap", () => {
 			settings,
 			modelRegistry,
 		});
-		const waitSpy = mockSchedulerWaitWithClock();
+		const waitSpy = vi.spyOn(scheduler, "wait").mockImplementation(async (delay, options) => {
+			options?.signal?.throwIfAborted();
+			elapsed += delay;
+		});
 		const fallbackEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
 		session.subscribe(event => {
 			if (event.type === "retry_fallback_applied") fallbackEvents.push(event);

@@ -295,7 +295,9 @@ describe("write tool read projection guard", () => {
 		"writes a bounded projection to a new ssh:// file and still guards existing ones",
 		async () => {
 			vi.spyOn(capability, "loadCapability").mockResolvedValue({ items: [], all: [], warnings: [], providers: [] });
-			fakeSshTransport(() => tmpDir);
+			const remoteBin = path.join(tmpDir, "remote-bin");
+			await fs.mkdir(remoteBin);
+			fakeSshTransport(() => tmpDir, undefined, remoteBin);
 			const session = createSession(tmpDir);
 			cfgReadDefaultLimit.set(session.settings, 20);
 			const sourcePath = path.join(tmpDir, "source.txt");
@@ -323,12 +325,16 @@ describe("write tool read projection guard", () => {
 			// An existing file the read cannot open is not "missing": its read error still fails the write.
 			const lockedPath = path.join(tmpDir, "locked.txt");
 			await Bun.write(lockedPath, original);
-			await fs.chmod(lockedPath, 0o200);
+			// Fail the remote read itself regardless of the local process's effective UID.
+			await fs.writeFile(
+				path.join(remoteBin, "head"),
+				"#!/bin/sh\nprintf '%s\\n' 'head: Permission denied' >&2\nexit 1\n",
+				{ mode: 0o755 },
+			);
 			const locked = await rejectionOf(
 				new WriteTool(session).execute("write-locked", { path: `ssh://fixture${lockedPath}`, content: projection }),
 			);
 			expect(locked).toMatchObject({ message: expect.stringContaining("Permission denied") });
-			await fs.chmod(lockedPath, 0o600);
 			expect(await Bun.file(lockedPath).text()).toBe(original);
 		},
 	);

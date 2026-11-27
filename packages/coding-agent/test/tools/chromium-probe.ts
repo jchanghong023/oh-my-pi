@@ -9,6 +9,10 @@ import {
 	type LaunchHeadlessResult,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 
+// Chromium refuses to start as root on Linux with its sandbox enabled.
+export const CHROMIUM_TEST_SANDBOX_ARGS: readonly string[] =
+	process.platform === "linux" && process.getuid?.() === 0 ? ["--no-sandbox"] : [];
+
 async function windowsPuppeteerAvailable(): Promise<boolean> {
 	const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-chromium-probe-"));
 	let browser: LaunchHeadlessResult["browser"] | undefined;

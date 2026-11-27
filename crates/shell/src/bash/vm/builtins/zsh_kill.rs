@@ -14,23 +14,16 @@ use super::{
 	zsh_args::isset,
 };
 use crate::bash::{
-	ControlHandle, Platform, SigTarget, Signal, diag, vm::proc::JobState, zshopt::ZshOpt,
+	ControlHandle, Platform, SigTarget, Signal, diag,
+	vm::{proc::JobState, zsh_signal_name},
+	zshopt::ZshOpt,
 };
 
 /// zsh `SIGCOUNT`: the signals `kill -l` lists (`$signals[2,32]`).
 const SIGCOUNT: i64 = 31;
 
-/// zsh `sigs[n]` for `1 <= n <= SIGCOUNT` (as `$signals`).
-fn sig_name(n: i64, platform: Platform) -> String {
-	u8::try_from(n)
-		.ok()
-		.and_then(|n| Signal::from_number(n, platform))
-		.map_or_else(|| format!("SIG{n}"), |s| s.to_string())
-}
-
-/// The signal number `name` (without `SIG`) names in `sigs`, then zsh's
-/// `alt_sigs` (`CLD` and `IO` where they alias `CHLD` and `POLL`; `ERR`
-/// names zsh's `SIGZERR`, past `SIGCOUNT`, so never a signal here).
+/// The signal number `name` (without `SIG`) names in `sigs`, then the Linux
+/// aliases. Keep `ABRT` accepted even where zsh displays `IOT`.
 fn sig_number(name: &[u8], platform: Platform, nocase: bool) -> Option<i64> {
 	let eq = |a: &[u8], b: &[u8]| {
 		if nocase {
@@ -39,11 +32,12 @@ fn sig_number(name: &[u8], platform: Platform, nocase: bool) -> Option<i64> {
 			a == b
 		}
 	};
-	if let Some(n) = (1..=SIGCOUNT).find(|&n| eq(sig_name(n, platform).as_bytes(), name)) {
+	if let Some(n) = (1..=SIGCOUNT).find(|&n| eq(zsh_signal_name(n, platform).as_bytes(), name)) {
 		return Some(n);
 	}
 	if platform == Platform::Linux {
-		for (alt, sig) in [(&b"CLD"[..], Signal::Chld), (b"IO", Signal::Io)] {
+		for (alt, sig) in [(&b"ABRT"[..], Signal::Abrt), (b"CLD", Signal::Chld), (b"IO", Signal::Io)]
+		{
 			if eq(alt, name) {
 				return Some(i64::from(sig.number(platform)));
 			}
@@ -124,7 +118,7 @@ fn list(ctx: &mut Ctx<'_, '_>, args: &[BString], platform: Platform) -> R {
 				sig = (sig >> 8) & 0xff;
 			}
 			if (1..=SIGCOUNT).contains(&sig) {
-				ctx.out(format!("{}\n", sig_name(sig, platform)).as_bytes());
+				ctx.out(format!("{}\n", zsh_signal_name(sig, platform)).as_bytes());
 			} else {
 				ctx.out(format!("{sig}\n").as_bytes());
 			}
@@ -155,8 +149,12 @@ pub fn kill(ctx: &mut Ctx<'_, '_>, args: &[BString]) -> R {
 				if rest.len() > 1 {
 					return list(ctx, &rest[1..], platform);
 				}
-				let names: Vec<String> = (1..=SIGCOUNT).map(|n| sig_name(n, platform)).collect();
-				ctx.out(format!("{}\n", names.join(" ")).as_bytes());
+				let mut line = String::new();
+				for n in 1..=SIGCOUNT {
+					line.push_str(&zsh_signal_name(n, platform));
+					line.push(if n == SIGCOUNT { '\n' } else { ' ' });
+				}
+				ctx.out(line.as_bytes());
 				return done(0);
 			}
 			if a.as_slice() == b"-n" {

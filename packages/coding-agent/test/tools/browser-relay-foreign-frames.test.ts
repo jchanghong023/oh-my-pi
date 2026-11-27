@@ -8,7 +8,7 @@ import { type HiddenFrame, isHiddenFrame } from "@oh-my-pi/pi-coding-agent/tools
 import puppeteer from "puppeteer-core";
 import { onForeignFramesHidden, pastForeignFrames } from "../../../browser-relay/extension/foreign-frames";
 import { rejectionOf } from "../helpers/rejection";
-import { chromiumAvailable } from "./chromium-probe";
+import { CHROMIUM_TEST_SANDBOX_ARGS, chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
 
@@ -191,7 +191,7 @@ describe("pastForeignFrames", () => {
 			const browser = await puppeteer.launch({
 				executablePath: await ensureChromiumExecutable(),
 				headless: true,
-				args: ["--no-first-run", ...RENDERER_PRIORITY_ARGS],
+				args: ["--no-first-run", ...CHROMIUM_TEST_SANDBOX_ARGS, ...RENDERER_PRIORITY_ARGS],
 			});
 			try {
 				const page = await browser.newPage();
@@ -254,7 +254,7 @@ describe("pastForeignFrames", () => {
 			const browser = await puppeteer.launch({
 				executablePath: await ensureChromiumExecutable(),
 				headless: true,
-				args: ["--no-first-run", ...RENDERER_PRIORITY_ARGS],
+				args: ["--no-first-run", ...CHROMIUM_TEST_SANDBOX_ARGS, ...RENDERER_PRIORITY_ARGS],
 			});
 			try {
 				const page = await browser.newPage();

@@ -34,6 +34,7 @@ mod zle;
 mod zsh;
 
 use std::{
+	borrow::Cow,
 	collections::{HashMap, HashSet, VecDeque},
 	sync::Arc,
 	task::Waker,
@@ -1450,10 +1451,7 @@ pub fn zsh_startup_values(
 	// `signals`: `EXIT`, the signal names by number, `ZERR`, `DEBUG`.
 	let mut signals = vec![BString::from("EXIT")];
 	for n in 1..=31u8 {
-		match crate::bash::signal::Signal::from_number(n, platform) {
-			Some(s) => signals.push(BString::from(s.to_string())),
-			None => signals.push(BString::from(format!("SIG{n}"))),
-		}
+		signals.push(BString::from(zsh_signal_name(n.into(), platform).as_bytes()));
 	}
 	signals.push(BString::from("ZERR"));
 	signals.push(BString::from("DEBUG"));
@@ -1472,6 +1470,22 @@ pub fn zsh_startup_values(
 		true,
 	));
 	out
+}
+
+/// The name in zsh's platform-generated `sigs` table, shared by `$signals`
+/// and `kill -l`. Linux zsh 5.9 uses different spellings from bash.
+fn zsh_signal_name(n: i64, platform: crate::bash::ids::Platform) -> Cow<'static, str> {
+	use crate::bash::ids::Platform;
+
+	match u8::try_from(n)
+		.ok()
+		.and_then(|n| Signal::from_number(n, platform))
+	{
+		Some(Signal::Abrt) if platform == Platform::Linux => Cow::Borrowed("IOT"),
+		Some(Signal::Io) if platform == Platform::Linux => Cow::Borrowed("POLL"),
+		Some(signal) => Cow::Borrowed(signal.into()),
+		None => Cow::Owned(format!("SIG{n}")),
+	}
 }
 
 /// Startup-only defaults shared by root and nested bash/sh shells.

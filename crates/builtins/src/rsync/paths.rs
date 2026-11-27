@@ -1392,16 +1392,16 @@ mod tests {
 		let text = std::io::read_to_string(std::fs::File::from(fd)).unwrap();
 		assert_eq!(text, "- *.o\n");
 
-		// A walk that trusts only root rejects our symlinks: parent component…
-		let only_root = |uid: u32| uid == 0;
-		let err = walk_bytes(&base.join("link/rules"), &only_root, libc::O_RDONLY).unwrap_err();
+		// A policy that distrusts every owner rejects the parent symlink…
+		let distrust_owner = |_: u32| false;
+		let err = walk_bytes(&base.join("link/rules"), &distrust_owner, libc::O_RDONLY).unwrap_err();
 		assert!(is_untrusted_symlink(&err));
 		assert_eq!(os_errno(&err), Some(libc::ELOOP));
 		// …and leaf.
-		let err = walk_bytes(&base.join("real/leaf"), &only_root, libc::O_RDONLY).unwrap_err();
+		let err = walk_bytes(&base.join("real/leaf"), &distrust_owner, libc::O_RDONLY).unwrap_err();
 		assert!(is_untrusted_symlink(&err));
 		// Real directories still work under the strict rule.
-		assert!(walk_bytes(&base.join("real/rules"), &only_root, libc::O_RDONLY).is_ok());
+		assert!(walk_bytes(&base.join("real/rules"), &distrust_owner, libc::O_RDONLY).is_ok());
 	}
 
 	#[test]
@@ -1410,11 +1410,11 @@ mod tests {
 		fs::create_dir(base.join("logs")).unwrap();
 		fs::create_dir(base.join("victim")).unwrap();
 		symlink("victim", base.join("planted")).unwrap();
-		let only_root = |uid: u32| uid == 0;
+		let distrust_owner = |_: u32| false;
 		let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND;
-		walk_bytes(&base.join("logs/new.log"), &only_root, flags).unwrap();
+		walk_bytes(&base.join("logs/new.log"), &distrust_owner, flags).unwrap();
 		assert!(base.join("logs/new.log").exists());
-		let err = walk_bytes(&base.join("planted/evil.log"), &only_root, flags).unwrap_err();
+		let err = walk_bytes(&base.join("planted/evil.log"), &distrust_owner, flags).unwrap_err();
 		assert!(is_untrusted_symlink(&err));
 		assert!(!base.join("victim/evil.log").exists());
 	}

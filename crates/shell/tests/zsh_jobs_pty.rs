@@ -191,25 +191,36 @@ fn a_suspended_pipeline_is_one_job() -> io::Result<()> {
 /// command line is dropped, and the finished job is named by the loop.
 #[test]
 fn a_suspended_loop_takes_the_rest_of_the_loop_with_it() -> io::Result<()> {
-	let (ours, real) = both(|pty| {
+	let suspend = |pty: &mut Pty| {
 		line(pty, "for i in 1 2; do sleep 100; echo it$i; done; echo after")?;
 		thread::sleep(START);
 		pty.write("\x1a")?;
 		pty.read_until("suspended  sleep 100", TIMEOUT)?;
 		line(pty, "jobs")?;
-		pty.read_until("[1]  + suspended  sleep 100", TIMEOUT)?;
-		line(pty, "kill -9 %1")?;
-		line(pty, "echo done")?;
-		pty.read_until("killed", TIMEOUT)?;
-		pty.settle(Duration::from_millis(300), TIMEOUT)
-	})?;
+		pty.read_until("[1]  + suspended  sleep 100\r\n", TIMEOUT)
+			.map(drop)
+	};
+	let mut pty = shell(false)?;
+	suspend(&mut pty)?;
+	line(&mut pty, "kill -9 %1")?;
+	line(&mut pty, "echo done")?;
+	pty.read_until("killed", TIMEOUT)?;
+	pty.settle(Duration::from_millis(300), TIMEOUT)?;
+	let ours = job_lines(&pty.output());
 	assert_eq!(ours, [
 		"zsh: suspended  sleep 100",
 		"[1]  + suspended  sleep 100",
 		"[1]  + killed     for i in 1 2; do; sleep 100; echo it$i; done",
 	]);
-	if let Some(real) = real {
-		assert_eq!(ours, real);
+	if have_real_zsh() {
+		let mut real = shell(true)?;
+		suspend(&mut real)?;
+		assert_eq!(job_lines(&real.output()), ours[..2]);
+		// Zsh can report the last stop instead of the final death when it
+		// reaps the suspended loop and its child. Observe the exit status
+		// directly; obash must still announce the whole compound above.
+		line(&mut real, "kill -9 %1 && { wait %1; printf 'job exit %d\\n' $?; }")?;
+		real.read_until("\r\njob exit 137\r\n", TIMEOUT)?;
 	}
 	Ok(())
 }

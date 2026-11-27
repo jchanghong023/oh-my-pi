@@ -90,13 +90,29 @@ exit "$code"`;
 			expect(fence).toBeGreaterThan(modes);
 			expect(report).toBeGreaterThan(fence);
 			expect(output).not.toContain('"ev":"ack"');
-			expect(output.slice(report)).not.toContain("fatal-tui.ts:");
-			const log = /Details: ([^\r\n]+)/.exec(output.slice(report))?.[1];
+			const fatalReport = output.slice(report);
+			const frame = /^\s+at [^\r\n]*\/fatal-tui\.ts:(\d+):(\d+)\)?\r?$/m.exec(fatalReport);
+			expect(frame).not.toBeNull();
+			const log = /^Diagnostic log: ([^\r\n]+)/m.exec(fatalReport)?.[1];
 			expect(log).toStartWith(`${home}/`);
 			const persisted = await Bun.file(log!).text();
-			expect(persisted).toContain('"message":"Unhandled rejection"');
-			expect(persisted).toContain('"stack":"Error: unhandled native PTY fixture\\n');
-			expect(persisted).toContain("fatal-tui.ts:");
+			expect(persisted).not.toContain("unhandled native PTY fixture");
+			const failure = persisted
+				.trim()
+				.split(/\r?\n/)
+				.map(line => JSON.parse(line) as Record<string, unknown>)
+				.find(entry => entry.event === "application_failed");
+			expect(failure).toMatchObject({
+				level: "error",
+				message: "Unhandled rejection",
+				component: "application",
+				stage: "fatal",
+				result: "failed",
+				error_type: "Error",
+				stack_frames: expect.arrayContaining([
+					{ file: "fatal-tui.ts", line: Number(frame![1]), column: Number(frame![2]) },
+				]),
+			});
 		} finally {
 			terminal.close();
 			await closed.promise;

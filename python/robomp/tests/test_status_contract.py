@@ -18,6 +18,8 @@ from robomp.config import Settings, reset_settings_cache
 from robomp.db import get_database
 from robomp.server import create_app
 
+from .server_helpers import PausedPoolFactory
+
 # Runtime/timestamp fields vary every run; normalize them so the live payload
 # can be compared against (or regenerated into) a byte-stable committed fixture.
 _VOLATILE_TS_KEYS = {"received_at", "started_at", "last_tool_ts", "updated_at"}
@@ -42,7 +44,7 @@ def _normalize_for_fixture(value: Any) -> Any:
 
 
 def test_status_contract(settings: Settings) -> None:
-    app = create_app(settings)
+    app = create_app(settings, pool_factory=PausedPoolFactory())
     with TestClient(app) as client:
         # Seed AFTER startup:
         db = get_database(settings.sqlite_path)
@@ -248,7 +250,7 @@ def test_cancel_happy_path(env, monkeypatch: pytest.MonkeyPatch) -> None:
     token = _enable_replay(monkeypatch)
     cfg = Settings()
     cfg.ensure_paths()
-    app = create_app(cfg)
+    app = create_app(cfg, pool_factory=PausedPoolFactory())
     with TestClient(app) as client:
         db = get_database(cfg.sqlite_path)
         db.record_event(
@@ -281,7 +283,7 @@ def test_cancel_errors_and_gating(env, monkeypatch: pytest.MonkeyPatch) -> None:
     token = _enable_replay(monkeypatch)
     cfg = Settings()
     cfg.ensure_paths()
-    app = create_app(cfg)
+    app = create_app(cfg, pool_factory=PausedPoolFactory())
     with TestClient(app) as client:
         db = get_database(cfg.sqlite_path)
         db.record_event(
@@ -332,7 +334,7 @@ def test_cancel_errors_and_gating(env, monkeypatch: pytest.MonkeyPatch) -> None:
     reset_settings_cache()
     cfg_disabled = Settings()
     cfg_disabled.ensure_paths()
-    app_disabled = create_app(cfg_disabled)
+    app_disabled = create_app(cfg_disabled, pool_factory=PausedPoolFactory())
     with TestClient(app_disabled) as client:
         resp = client.post(
             "/api/cancel",
@@ -346,7 +348,7 @@ def test_retry_state_transition(env, monkeypatch: pytest.MonkeyPatch) -> None:
     token = _enable_replay(monkeypatch)
     cfg = Settings()
     cfg.ensure_paths()
-    app = create_app(cfg)
+    app = create_app(cfg, pool_factory=PausedPoolFactory())
     with TestClient(app) as client:
         db = get_database(cfg.sqlite_path)
         db.record_event(

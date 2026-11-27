@@ -17,7 +17,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
-import { chromiumAvailable } from "./chromium-probe";
+import { CHROMIUM_TEST_SANDBOX_ARGS, chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
 const TAB_ID = 1;
@@ -300,7 +300,7 @@ describe("relay tabs Chrome detaches omp from", () => {
 		chromium = await puppeteer.launch({
 			executablePath,
 			headless: true,
-			args: ["--no-first-run", ...RENDERER_PRIORITY_ARGS],
+			args: ["--no-first-run", ...CHROMIUM_TEST_SANDBOX_ARGS, ...RENDERER_PRIORITY_ARGS],
 		});
 		site = Bun.serve({
 			hostname: "127.0.0.1",

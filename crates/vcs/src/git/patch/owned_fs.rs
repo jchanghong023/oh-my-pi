@@ -502,8 +502,8 @@ mod unix {
 			// writer. Check the displaced entry itself to catch a racing save.
 			match fs::renameat_with(parent, name, parent, saved, RenameFlags::NOREPLACE) {
 				Ok(()) => {},
-				Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
-				Err(err) => return Err(err.into()),
+				Err(rustix::io::Errno::EXIST) => continue,
+				Err(err) => return Err(io::Error::from(err).into()),
 			}
 			let result = (|| {
 				if observe(parent, saved)?.as_ref() != Some(before) {
@@ -514,7 +514,7 @@ mod unix {
 			if let Err(err) = result {
 				return Err(match fs::renameat_with(parent, saved, parent, name, RenameFlags::NOREPLACE) {
 					Ok(()) => err,
-					Err(restore) => recovery_error(name, saved, err, restore),
+					Err(restore) => recovery_error(name, saved, err, restore.into()),
 				});
 			}
 			// Unix cannot exclude writers still holding an fd to this inode.

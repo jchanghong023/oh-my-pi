@@ -6,18 +6,6 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-/** Best-of-5 wall time to lex `units` copies of `unit` as one string, `runs` times. */
-function lexCost(unit: string, units: number, runs: number): number {
-	const src = `"${unit.repeat(units)}"`;
-	let best = Number.POSITIVE_INFINITY;
-	for (let trial = 0; trial < 5; trial++) {
-		const start = performance.now();
-		for (let run = 0; run < runs; run++) new JsonLexer(src, "strict").string(QUOTE);
-		best = Math.min(best, performance.now() - start);
-	}
-	return best;
-}
-
 /** `indexOf` calls made while running `fn`, by searched needle. */
 function countSearches(fn: () => void): string[] {
 	const indexOf = vi.spyOn(String.prototype, "indexOf");
@@ -69,18 +57,17 @@ describe("JsonLexer string scan", () => {
 		});
 	});
 
-	it("keeps escape-dense strings linear", () => {
-		// Equal total work at two sizes: 64 lexes of 2K units vs 8 lexes of 16K.
-		// A linear scan costs about the same (ratio ~1); one that re-searches the
-		// rest of the input per escape pays ~8x more on the long string (~5.5x
-		// measured on the quadratic revision of this scan).
-		const unit = "a\\\\";
-		const ratio = lexCost(unit, 16_384, 8) / lexCost(unit, 2_048, 64);
-		expect(ratio).toBeLessThan(3);
+	it("does not re-search a distant closing quote in an escape-dense string", () => {
+		const units = 16_384;
+		const src = `"${"a\\\\".repeat(units)}"`;
+		let progress: unknown;
+		const searches = countSearches(() => {
+			progress = new JsonLexer(src, "strict").string(QUOTE);
+		});
 
-		const progress = new JsonLexer(`"${unit.repeat(4)}"`, "strict").string(QUOTE);
-		expect(progress.complete).toBe(true);
-		expect(progress.value).toBe("a\\".repeat(4));
+		// Re-searching for the final quote after each escape scans the remaining suffix quadratically.
+		expect(searches.filter(needle => needle === '"').length).toBeLessThan(16);
+		expect(progress).toEqual({ value: "a\\".repeat(units), complete: true, stableLen: 2 * units });
 	});
 
 	it("does not re-search a distant closing quote after every mixed escape", () => {

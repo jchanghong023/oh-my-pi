@@ -31,8 +31,10 @@ const STARTUP: Duration = Duration::from_secs(60);
 /// Bound of one step's output settling.
 const STEP: Duration = Duration::from_secs(30);
 
-/// The fixture every case starts from (after `fpath`).
-const FIXTURE: &str = "PS1='%# '
+/// The fixture every case starts from (after `fpath`), with literal `%` prompt
+/// and end-of-line markers for all UIDs.
+const FIXTURE: &str = "PS1='%% '
+PROMPT_EOL_MARK='%B%S%%%s%b'
 mkdir -p ~/fx/dir1 ~/fx/dir2 ~/bin
 : >~/fx/file1 >~/fx/file2 >~/fx/foo.c >~/fx/foo.h
 for c in fxcmd-one fxcmd-two fxtool; do print '#!/bin/sh' >~/bin/$c; chmod +x ~/bin/$c; done
@@ -78,7 +80,7 @@ fn record(fpath: &str, setup: Setup, rc: &str, steps: &[&str], what: Record) -> 
 	rcfile.push_str("\nprint -r -- RE''ADY\n");
 	let mut pty = shell()
 		.args(["-f", "-i"])
-		.env("PS1", "%# ")
+		.env("PS1", "%% ")
 		.env("LC_ALL", "en_US.UTF-8")
 		.rc_file(".zshrc", rcfile)
 		.size(24, 80)
@@ -171,8 +173,11 @@ fn options_of_ls_ask_then_list() {
 
 #[test]
 fn options_and_values_of_arguments() {
-	let rc = "_fx() { _arguments '-a[show all]' '-l[long listing]' \
-	          '--color=[colourize]:when:(always never auto)' '*:file:_files' }\ncompdef _fx fxtool";
+	// Keep the snapshot's byte order (`--color` before `-a`) without changing
+	// the UTF-8 character locale.
+	let rc = "unset LC_ALL\nexport LC_COLLATE=C\n_fx() { _arguments '-a[show all]' '-l[long \
+	          listing]' '--color=[colourize]:when:(always never auto)' '*:file:_files' }\ncompdef \
+	          _fx fxtool";
 	check(
 		"options_and_values_of_arguments",
 		Setup::Compsys,

@@ -48,6 +48,7 @@ async function runModels(
 		HOME: home,
 		USERPROFILE: home,
 		OMP_CONFIG_ROOT: path.join(home, ".omp"),
+		OMP_CACHE_DIR: path.join(home, "cache"),
 		CLAUDE_CONFIG_DIR: claudeDir,
 		PI_CODING_AGENT_DIR: path.join(home, "agent"),
 		OMP_OFFLINE: "1",
@@ -86,7 +87,14 @@ async function runModels(
 		);
 		extensionArgs.push("--extension", extensionFile);
 		if (options.extensionCache === "warm") {
-			writeModelCache(
+			// The offline CLI reads from the selected cache root, not the agent config directory.
+			const cacheRoot = env.OMP_CACHE_DIR!;
+			const modelCacheDir = path.join(
+				process.platform === "linux" ? path.join(cacheRoot, String(process.getuid!())) : cacheRoot,
+				"agent",
+			);
+			await fs.mkdir(modelCacheDir, { recursive: true, mode: 0o700 });
+			const outcome = writeModelCache(
 				"opencode-go",
 				Date.now() - 48 * 60 * 60 * 1000,
 				[
@@ -105,8 +113,9 @@ async function runModels(
 				],
 				true,
 				"",
-				path.join(agentDir, "models.db"),
+				path.join(modelCacheDir, "models.db"),
 			);
+			expect(outcome).toBe("written");
 		}
 	}
 

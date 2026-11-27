@@ -581,25 +581,27 @@ describe("startup prepaint frame", () => {
 		// The prepaint's speculative version; InteractiveMode's is authoritative.
 		const lease = await prepaint({ columns: 80, rows: 32, version: "9.9.8", preferences: { quiet: false } });
 		await term.waitFor(rows => rows.some(row => row.includes("v9.9.8")));
-		const prepaintComposerRow = term.screen().findLastIndex(row => row.trim() !== "");
 
-		term.type("draft message");
-		await term.waitFor(() => lease.frame.composer.text() === "draft message");
+		const draft = "draft message";
+		const finalDraft = `${draft} between`;
+		const rowOf = (rows: string[], text: string) => rows.findIndex(row => row.includes(text));
+		term.type(draft);
+		await term.waitFor(rows => rowOf(rows, draft) !== -1);
+		const prepaintComposerRow = rowOf(term.screen(), draft);
 		const testSession = await createTestSession({ inMemory: true });
 		const mode = adopt(lease, testSession.session, "9.9.9");
 
 		try {
 			term.type(" between");
-			await term.waitFor(() => mode.composer.text() === "draft message between");
+			await term.waitFor(rows => rowOf(rows, finalDraft) !== -1);
 			await mode.init({ suppressWelcomeIntro: true });
-			await term.waitFor(rows => rows.some(row => row.includes("v9.9.9")));
-			await term.settle();
+			await term.waitFor(rows => rowOf(rows, "v9.9.9") !== -1 && rowOf(rows, finalDraft) !== -1);
 
-			expect(mode.composer.expandedText()).toBe("draft message between");
-			const output = screen();
+			expect(mode.composer.expandedText()).toBe(finalDraft);
+			const output = term.text();
 			expect(output).not.toContain("v9.9.8");
 			expect((output.match(/v9\.9\.9/g) || []).length).toBe(1);
-			expect(term.screen().findLastIndex(row => row.trim() !== "")).toBe(prepaintComposerRow);
+			expect(rowOf(term.screen(), finalDraft), output).toBe(prepaintComposerRow);
 		} finally {
 			mode.stop();
 			await mode.shell.stop();

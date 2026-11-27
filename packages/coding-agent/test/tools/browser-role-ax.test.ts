@@ -4,7 +4,7 @@ import { isNavigatedContextError } from "@oh-my-pi/pi-coding-agent/tools/browser
 import { registerSemanticQueryHandlers } from "@oh-my-pi/pi-coding-agent/tools/browser/query-handlers";
 import { TERN_KIT_SOURCE } from "@oh-my-pi/pi-coding-agent/tools/browser/tern/page-kit";
 import type { Page } from "puppeteer-core";
-import { chromiumAvailable } from "./chromium-probe";
+import { CHROMIUM_TEST_SANDBOX_ARGS, chromiumAvailable } from "./chromium-probe";
 import { rejectionOf } from "../helpers/rejection";
 
 const available = await chromiumAvailable();
@@ -18,7 +18,11 @@ describe.skipIf(!available)("Chromium role/ selectors through the accessibility 
 	it("answer in a background tab, inside a scope, and inside a frame", async () => {
 		const puppeteer = await loadPuppeteer();
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			// A tab opened in the background is hidden: Chrome renders nothing for it until it is shown.
 			const page = await browser.newPage({ background: true });
@@ -60,7 +64,11 @@ describe.skipIf(!available)("Chromium role/ selectors through the accessibility 
 	it("treats a document role as visible while a hidden wait remains pending until aborted", async () => {
 		const puppeteer = await loadPuppeteer();
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			await page.setContent("<title>Root wait</title>");
@@ -100,7 +108,11 @@ describe.skipIf(!available)("Chromium role/ selectors through the accessibility 
 	it.each(["timeout", "abort"] as const)("ends a role wait during a pending AX probe on %s", async mode => {
 		const puppeteer = await loadPuppeteer();
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		const started = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
 		const disposed = Promise.withResolvers<void>();
@@ -146,7 +158,11 @@ describe.skipIf(!available)("Chromium role/ selectors through the accessibility 
 	it("keeps waiting through a navigation that replaces the document", async () => {
 		const puppeteer = await loadPuppeteer();
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			await page.setContent("<h1>First</h1>");
@@ -163,7 +179,11 @@ describe.skipIf(!available)("Chromium role/ selectors through the accessibility 
 	it("propagates a navigation that invalidates an accessibility probe batch", async () => {
 		const puppeteer = await loadPuppeteer();
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			await page.setContent("<button>Before</button>");
@@ -191,7 +211,11 @@ describe.skipIf(!available)("Chromium role/ selectors through the accessibility 
 	it("finds a match past the first round trip, layout tables as tables, and presentational elements as none", async () => {
 		const puppeteer = await loadPuppeteer();
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			const buttons = Array.from({ length: 100 }, (_, index) => `<button id="b${index}">b${index}</button>`).join(
@@ -214,7 +238,11 @@ describe.skipIf(!available)("Chromium role/ selectors through the accessibility 
 	it("refuses role inside a P-selector, where the accessibility tree cannot be asked", async () => {
 		const puppeteer = await loadPuppeteer();
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			await page.setContent("<main><button>Save</button></main>");
@@ -229,7 +257,11 @@ describe.skipIf(!available)("Chromium role/ selectors through the accessibility 
 	it("finds every element Chrome's full accessibility tree gives a role, across tags and contexts", async () => {
 		const puppeteer = await loadPuppeteer();
 		registerSemanticQueryHandlers(puppeteer);
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		const tags =
 			"a abbr address area article aside audio b blockquote br button canvas caption code datalist dd del details dfn dialog div dl dt em embed fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr i iframe img ins label legend li main mark menu meter nav object ol optgroup option output p pre progress ruby s search section select span strong sub summary sup table tbody td textarea tfoot th thead time tr ul video math svg".split(
 				" ",
@@ -371,7 +403,11 @@ interface TernKitProbe {
 describe.skipIf(!available)("Tern kit roles and names", () => {
 	it("masks filled password values in serialized kit observations without changing text values", async () => {
 		const puppeteer = await loadPuppeteer();
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			await page.setContent(`<input id="pw" type="password" aria-label="Password">
@@ -405,7 +441,11 @@ describe.skipIf(!available)("Tern kit roles and names", () => {
 
 	it("keeps DOM roles and names independent of a Turkish default locale", async () => {
 		const puppeteer = await loadPuppeteer();
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			await page.setContent(
@@ -438,7 +478,11 @@ describe.skipIf(!available)("Tern kit roles and names", () => {
 
 	it("reports names in observe() that its role/ selector finds again, Codex's #17895 cases included", async () => {
 		const puppeteer = await loadPuppeteer();
-		const browser = await puppeteer.launch({ executablePath: await ensureChromiumExecutable(), headless: true });
+		const browser = await puppeteer.launch({
+			executablePath: await ensureChromiumExecutable(),
+			headless: true,
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS],
+		});
 		try {
 			const page = await browser.newPage();
 			// The kit is plain page script, so Chrome hosts it as WKWebView does.

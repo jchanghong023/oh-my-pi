@@ -203,6 +203,7 @@ describe("native addon embedding", () => {
 			if (privateRoot === undefined) throw new Error("Expected a Linux private cache root");
 			const cache = path.join(privateRoot, "natives");
 			const versionDir = path.join(cache, packageJson.version);
+			const grammarDir = path.join(cache, "grammars");
 			const { filename } = resolveLocalHostAddon({ platform: "linux", arch: process.arch, avx2: false });
 			const fallback = path.join(path.dirname(process.execPath), filename);
 			const env = { PI_NATIVES_DIR: cache, PI_COMPILED: "1", PI_NATIVE_VARIANT: "baseline" };
@@ -212,12 +213,12 @@ describe("native addon embedding", () => {
 			const uid = process.geteuid!();
 			const directory = (owner: number, mode: number) => ({ uid: owner, mode, isDirectory: () => true });
 			let outcome: "EROFS" | "ENOSPC" | "unsafe" = "EROFS";
-			// No writes beneath the host's /dev/shm: supply trusted parents and a
-			// precise fault at the version directory (or an unsafe existing directory).
+			// No writes beneath the host's /dev/shm: supply trusted parents and an
+			// existing grammar cache, leaving only the version directory under test.
 			const lstat = spyOn(fsSync, "lstatSync").mockImplementation(((target, options) => {
 				if (target === "/" || target === "/dev") return directory(0, 0o755);
 				if (target === "/dev/shm") return directory(0, 0o1777);
-				if (target === privateRoot || target === cache) return directory(uid, 0o700);
+				if (target === privateRoot || target === cache || target === grammarDir) return directory(uid, 0o700);
 				if (target === versionDir) return outcome === "unsafe" ? directory(uid, 0o777) : undefined;
 				if (typeof target === "string" && target.startsWith(`${privateRoot}${path.sep}`)) return undefined;
 				return realLstat(target, options);

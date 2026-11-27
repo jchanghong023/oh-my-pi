@@ -1708,6 +1708,7 @@ describe("agent frontmatter structured opt-in", () => {
 			"task.agentIdleTtlMs": 0,
 			"task.maxRecursionDepth": 4,
 			"task.isolation.enabled": isolationEnabled,
+			"isolation.backend": "rcopy",
 			"async.enabled": false,
 			"compaction.enabled": false,
 			"retry.enabled": false,

@@ -216,6 +216,25 @@ fn zcompile_switches_match_zsh() {
 	}
 }
 
+/// A controlled multi-file corpus, with the dump path first in the shell
+/// arguments.
+fn digest_fixture(dir: &Path) -> (PathBuf, Vec<String>) {
+	let dump = dir.join("all.zwc");
+	let mut args = vec![dump.display().to_string()];
+	for (name, text) in [
+		("one.zsh", "echo one\n"),
+		("two.zsh", "print -r -- \"${name:-two}\"\n"),
+		("three.zsh", "for i in 1 2 3; do echo $i; done\n"),
+		("four.zsh", "four() { echo four; }\n"),
+		("five.zsh", "true && echo five\n"),
+	] {
+		let path = dir.join(name);
+		fs::write(&path, text).unwrap();
+		args.push(path.display().to_string());
+	}
+	(dump, args)
+}
+
 /// One digest of several files with the in-list `-k`/`-z` switches, and
 /// its `-t` listing.
 #[test]
@@ -223,27 +242,26 @@ fn zcompile_digest_and_listing_match_zsh() {
 	if !have_zsh() {
 		return;
 	}
-	let files: Vec<String> = corpus().into_iter().step_by(131).take(12).collect();
-	let mut outs = Vec::new();
-	for real in [true, false] {
-		let dir = scratch(if real { "digest-real" } else { "digest-ours" });
-		let script = format!(
-			r#"unalias run-help which-command 2>/dev/null; d={}/all.zwc
-zcompile $d $1 -k $2 $3 -z ${{@[4,-1]}}; print $?
-zcompile -t $d; print $?
-zcompile -t $d ${{1:t}} ${{2:t}}; print $?
-zcompile -t $d ${{1:t}} nope; print $?"#,
-			dir.display()
-		);
-		let (out, err, st) = run(real, &script, &files);
-		let dump = fs::read(dir.join("all.zwc")).ok().map(masked);
-		let _ = fs::remove_dir_all(&dir);
-		outs.push((out, err, st, dump));
-	}
-	let ours = &outs[1];
-	let real = &outs[0];
-	assert_eq!((&ours.0, &ours.1, ours.2), (&real.0, &real.1, real.2));
-	assert!(ours.3 == real.3, "the digests differ");
+	let dir = scratch("digest");
+	let (dump, args) = digest_fixture(&dir);
+	let script = r#"unalias run-help which-command 2>/dev/null
+d=$1; shift
+zcompile "$d" "$1" -k "$2" "$3" -z ${@[4,-1]}; print $?
+zcompile -t "$d"; print $?
+zcompile -t "$d" "${1:t}" "${2:t}"; print $?
+zcompile -t "$d" "${1:t}" nope; print $?"#;
+	let real = run(true, script, &args);
+	let listing = format!("0\nzwc file (read) for zsh-5.9\n{}\n0\n0\n1\n", args[1..].join("\n"));
+	assert_eq!((real.0.as_str(), real.1.as_str(), real.2), (listing.as_str(), "", 0));
+	let expected = fs::read(&dump).unwrap();
+	assert!(!expected.is_empty(), "zsh wrote an empty digest");
+	fs::remove_file(&dump).unwrap();
+
+	let ours = run(false, script, &args);
+	assert_eq!(ours, real);
+	let actual = fs::read(&dump).unwrap();
+	let _ = fs::remove_dir_all(&dir);
+	assert!(masked(actual) == masked(expected), "the digests differ");
 }
 
 /// `zcompile -t` lists a dump zsh wrote, and finds its names.
@@ -252,18 +270,21 @@ fn zcompile_lists_dumps_zsh_wrote() {
 	if !have_zsh() {
 		return;
 	}
-	let files: Vec<String> = corpus().into_iter().step_by(211).take(5).collect();
 	let dir = scratch("list");
-	let d = dir.join("x.zwc").display().to_string();
-	let (_, err, st) = run(true, &format!("zcompile -M {d} \"$@\""), &files);
-	assert_eq!((err.as_str(), st), ("", 0));
-	let script = format!(
-		"zcompile -t {d}; print $?; zcompile -t {d} ${{1:t}}; print $?; zcompile -t {d} nope; print \
-		 $?"
-	);
-	let real = run(true, &script, &files);
-	let ours = run(false, &script, &files);
+	let (dump, args) = digest_fixture(&dir);
+	let (out, err, st) = run(true, r#"d=$1; shift; zcompile -M "$d" "$@""#, &args);
+	assert_eq!((out.as_str(), err.as_str(), st), ("", "", 0));
+	assert!(fs::metadata(dump).unwrap().len() > 0, "zsh wrote an empty digest");
+
+	let script = r#"d=$1; shift
+zcompile -t "$d"; print $?
+zcompile -t "$d" "${1:t}"; print $?
+zcompile -t "$d" nope; print $?"#;
+	let real = run(true, script, &args);
+	let ours = run(false, script, &args);
 	let _ = fs::remove_dir_all(&dir);
+	let listing = format!("zwc file (mapped) for zsh-5.9\n{}\n0\n0\n1\n", args[1..].join("\n"));
+	assert_eq!((real.0.as_str(), real.1.as_str(), real.2), (listing.as_str(), "", 0));
 	assert_eq!(ours, real);
 }
 

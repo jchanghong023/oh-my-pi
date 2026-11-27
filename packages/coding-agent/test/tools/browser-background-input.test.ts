@@ -22,7 +22,7 @@ import {
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
 import puppeteer, { type Browser, type Page, type WebWorker } from "puppeteer-core";
 import { prepareRelayExtension } from "./browser-relay-fixture";
-import { chromiumAvailable } from "./chromium-probe";
+import { CHROMIUM_TEST_SANDBOX_ARGS, chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
 
@@ -119,7 +119,7 @@ async function withRelay(run: (fixture: RelayFixture) => Promise<void>): Promise
 			enableExtensions: true,
 			userDataDir,
 			env: { ...process.env, PI_CODING_AGENT_DIR: path.join(root, "omp") },
-			args: ["--no-first-run", "--no-default-browser-check", "--use-mock-keychain"],
+			args: [...CHROMIUM_TEST_SANDBOX_ARGS, "--no-first-run", "--no-default-browser-check", "--use-mock-keychain"],
 		});
 		const extensionId = await browser.installExtension(install.dir);
 		const workerUrl = `chrome-extension://${extensionId}/background.js`;
@@ -212,6 +212,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("background tab input", () => {
 			executablePath: await ensureChromiumExecutable(),
 			headless: true,
 			args: [
+				...CHROMIUM_TEST_SANDBOX_ARGS,
 				"--no-first-run",
 				"--no-default-browser-check",
 				"--use-mock-keychain",

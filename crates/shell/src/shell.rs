@@ -618,7 +618,7 @@ impl CommandResult {
 const fn cancelled_result(reason: AbortReason) -> ShellRunResult {
 	ShellRunResult {
 		exit_code:   None,
-		cancelled:   matches!(reason, AbortReason::Signal),
+		cancelled:   matches!(reason, AbortReason::Signal | AbortReason::User),
 		timed_out:   matches!(reason, AbortReason::Timeout),
 		minimized:   None,
 		working_dir: None,

@@ -59,11 +59,13 @@ async fn cancelled_mixed_stopped_pipeline_reaps_members_and_cleanup_descendant()
 	let dir = tempfile::tempdir().unwrap();
 	let mut cleanup = Cleanup(dir.path(), true);
 	let cwd = dir.path().to_str().unwrap().to_owned();
-	let command = "sh -c 'trap \"sleep 0.15; echo done > peer.done; exit 0\" TERM; echo $$ > \
-	               peer.pid; echo ready > peer.ready; while :; do :; done' | sh -c 'echo $$ > \
-	               stopped.pid; kill -STOP $$; exit 0' | sh -c 'echo $$ > running.pid; sleep 30 & \
-	               child=$!; echo $child > child.pid; trap \"kill $child 2>/dev/null; wait $child; \
-	               sleep 0.15; echo done > running.done; exit 0\" TERM; echo ready > \
+	// Bare `sh` runs as a virtual process. Exercise OS process-group cleanup
+	// with real shell PIDs and an actual SIGSTOP.
+	let command = "/bin/sh -c 'trap \"sleep 0.15; echo done > peer.done; exit 0\" TERM; echo $$ > \
+	               peer.pid; echo ready > peer.ready; while :; do :; done' | /bin/sh -c 'echo $$ > \
+	               stopped.pid; kill -STOP $$; exit 0' | /bin/sh -c 'echo $$ > running.pid; sleep \
+	               30 & child=$!; echo $child > child.pid; trap \"kill $child 2>/dev/null; wait \
+	               $child; sleep 0.15; echo done > running.done; exit 0\" TERM; echo ready > \
 	               running.ready; wait $child'";
 	let mut cancel = CancelToken::default();
 	let abort = cancel.emplace_abort_token();

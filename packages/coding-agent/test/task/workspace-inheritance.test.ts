@@ -106,12 +106,16 @@ function localRoot(session: AgentSession): string {
 	);
 }
 
-// Identify the actual hidden request message by resolved session/system temporary paths,
-// not the assistant's response, option echoes, or a fixed paragraph of prompt prose.
-function reminders(messages: readonly Message[], session: AgentSession): string[] {
-	return messages
-		.map(text)
-		.filter(value => value.includes(localRoot(session)) && value.includes(canonical(os.tmpdir())));
+// The environment preamble can mention paths without granting write access.
+function reminderRootLists(messages: readonly Message[]): string[][] {
+	const rootList = /^Allowed write roots \(each root and its descendants only\):\n((?:- `.+`\n)*)/gm;
+	const rootLists: string[][] = [];
+	for (const message of messages) {
+		for (const [, list] of text(message).matchAll(rootList)) {
+			rootLists.push(Array.from(list.matchAll(/^- `(.+)`$/gm), ([, root]) => root));
+		}
+	}
+	return rootLists;
 }
 
 function canonical(value: string): string {
@@ -254,11 +258,14 @@ async function fixture(
 }
 
 function expectScope(messages: readonly Message[], child: AgentSession, f: Fixture, extraRoots: string[] = []): void {
-	const active = reminders(messages, child);
+	const active = reminderRootLists(messages);
 	expect(active).toHaveLength(1);
-	for (const allowed of [f.project, ...extraRoots]) expect(active[0]).toContain(canonical(allowed));
-	expect(active[0]).not.toContain(canonical(f.extra));
-	if (!extraRoots.includes(f.cwd)) expect(active[0]).not.toContain(canonical(f.cwd));
+	const [roots] = active;
+	expect(roots).toContain(canonical(os.tmpdir()));
+	expect(roots).toContain(localRoot(child));
+	for (const allowed of [f.project, ...extraRoots]) expect(roots).toContain(canonical(allowed));
+	expect(roots).not.toContain(canonical(f.extra));
+	expect(roots).not.toContain(canonical(f.cwd));
 }
 
 describe("native workspace subagent inheritance", () => {
@@ -268,7 +275,7 @@ describe("native workspace subagent inheritance", () => {
 		const result = await f.spawn();
 		expect(result.result.exitCode, [result.result.error, result.result.stderr].filter(Boolean).join("\n")).toBe(0);
 		expect(f.model.calls.length).toBeGreaterThan(0);
-		for (const call of f.model.calls) expect(reminders(call.context.messages, f.children[0])).toHaveLength(0);
+		for (const call of f.model.calls) expect(reminderRootLists(call.context.messages)).toHaveLength(0);
 	}, 30_000);
 
 	it("captures dispatch-time scope and keeps it after the parent toggles", async () => {
@@ -449,6 +456,6 @@ describe("native workspace subagent inheritance", () => {
 		const child = localSession(await revive(ref));
 		await child.prompt("legacy continuation");
 		expect(f.model.calls.length).toBeGreaterThan(0);
-		for (const call of f.model.calls) expect(reminders(call.context.messages, child)).toHaveLength(0);
+		for (const call of f.model.calls) expect(reminderRootLists(call.context.messages)).toHaveLength(0);
 	}, 30_000);
 });

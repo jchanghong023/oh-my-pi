@@ -15,20 +15,23 @@ const PDF_RENDER_TIMEOUT_MS = 30_000;
 // read 8 pt print.
 const PDF_VIEWPORT = { width: 874, height: 874, deviceScaleFactor: 1 };
 
-// The PDF plugin paints out of process after navigation. Chrome exposes its
-// viewer as a frame; Edge exposes a separate webview target, while its
-// about:blank plugin frame does not answer JavaScript evaluation.
+// The PDF plugin paints out of process after navigation. Chrome can expose
+// the viewer in an extension frame and the plugin in a separate frame at
+// the PDF's own URL. Edge exposes a webview target; its about:blank plugin
+// frame does not answer JavaScript evaluation.
 // Capture the viewport: full-page capture often omits the plugin's frame.
 const PDF_SCREENSHOT_CODE = `
 let viewerFrame;
 let edgeSession;
 const pageSession = await page.createCDPSession();
 try {
-	const requestedPage = Number(new URL(page.url()).hash.match(/(?:^|[&#])page=(\\d+)/)?.[1] ?? 1);
+	const pdfUrl = page.url();
+	const requestedPage = Number(new URL(pdfUrl).hash.match(/(?:^|[&#])page=(\\d+)/)?.[1] ?? 1);
 	const pageId = (await pageSession.send("Target.getTargetInfo")).targetInfo.targetId;
 	await wait(async () => {
 		for (const frame of page.frames()) {
-			if (frame !== page.mainFrame() && !frame.url().startsWith("chrome-extension://")) continue;
+			const frameUrl = frame.url();
+			if (frame !== page.mainFrame() && frameUrl !== pdfUrl && !frameUrl.startsWith("chrome-extension://")) continue;
 			try {
 				const loaded = await frame.evaluate(() => {
 					const viewer = document.querySelector("pdf-viewer");
