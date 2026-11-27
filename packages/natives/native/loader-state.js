@@ -609,6 +609,14 @@ function isEmbeddedAddonFileCurrent(targetPath, file, offlineCacheUid) {
 	}
 }
 
+function matchesStagedAddon(tempPath, targetPath) {
+	try {
+		return fs.readFileSync(tempPath).equals(fs.readFileSync(targetPath));
+	} catch {
+		return false;
+	}
+}
+
 function publishEmbeddedAddon(tempPath, targetPath) {
 	let retainTemp = false;
 	try {
@@ -618,11 +626,7 @@ function publishEmbeddedAddon(tempPath, targetPath) {
 		// Windows then refuses replacement. Only accept that winner when all
 		// bytes match our fully staged image; permission and corrupt-cache
 		// failures must still propagate.
-		try {
-			if (fs.readFileSync(tempPath).equals(fs.readFileSync(targetPath))) return false;
-		} catch {
-			// Preserve the original publication failure below.
-		}
+		if (matchesStagedAddon(tempPath, targetPath)) return false;
 		if (process.platform !== "win32") throw error;
 
 		// Windows permits moving a mapped addon aside when its embedded cache
@@ -634,26 +638,38 @@ function publishEmbeddedAddon(tempPath, targetPath) {
 		} catch {
 			throw error;
 		}
+		let published = true;
 		try {
 			fs.renameSync(tempPath, targetPath);
 		} catch (installError) {
-			try {
-				fs.renameSync(backupPath, targetPath);
-			} catch (rollbackError) {
-				retainTemp = true;
-				throw new Error(
-					`Failed to publish ${targetPath} and restore the previous addon: ${rollbackError.message}. ` +
-					`Recovery files retained at ${backupPath} and ${tempPath}.`,
-					{ cause: installError },
-				);
+			if (matchesStagedAddon(tempPath, targetPath)) {
+				published = false;
+			} else {
+				try {
+					// Restoring the backup must not replace a different concurrent target.
+					fs.linkSync(backupPath, targetPath);
+				} catch (rollbackError) {
+					retainTemp = true;
+					throw new Error(
+						`Failed to publish ${targetPath} and restore the previous addon: ${rollbackError.message}. ` +
+						`Recovery files retained at ${backupPath} and ${tempPath}.`,
+						{ cause: installError },
+					);
+				}
+				try {
+					fs.unlinkSync(backupPath);
+				} catch {
+					// Running processes may still hold the old image.
+				}
+				throw installError;
 			}
-			throw installError;
 		}
 		try {
 			fs.unlinkSync(backupPath);
 		} catch {
 			// Running processes may still hold the old image.
 		}
+		return published;
 	} finally {
 		try {
 			if (!retainTemp) fs.unlinkSync(tempPath);

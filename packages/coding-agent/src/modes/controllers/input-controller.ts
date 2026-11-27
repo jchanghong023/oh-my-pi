@@ -1346,6 +1346,7 @@ export class InputController {
 				}
 				if (this.ctx.collabGuest.readOnly) {
 					// Keep the typed text: the prompt was not consumed.
+					this.#restoreResetSubmission(submittedText);
 					this.ctx.showStatus("This collab link is read-only — prompting is disabled");
 					return;
 				}
@@ -1353,7 +1354,10 @@ export class InputController {
 				// No local render: the prompt comes back from the host as a
 				// collab-prompt event/entry and renders with the author badge.
 				if (this.ctx.collabGuest.sendPrompt(text, images)) this.#clearDraft(text);
-				else this.ctx.showStatus("Collab could not send the prompt — draft kept");
+				else {
+					this.#restoreResetSubmission(submittedText);
+					this.ctx.showStatus("Collab could not send the prompt — draft kept");
+				}
 				return;
 			}
 
@@ -2313,16 +2317,16 @@ export class InputController {
 		// queued text into a user-attributed skill invocation before delivery.
 		// Side commands answer now instead: the queue would deliver them as a
 		// main-turn prompt. Builtins keep precedence, as in the dispatch below.
-		// Goal management also runs during active compaction, just like plain Enter.
-		// A compaction queued for the next yield holds later follow-ups the same
-		// way, so they run after it.
+		// Goal Autopilot dispatches directly to its owner even when compaction
+		// is queued. Ordinary Goal only bypasses active compaction.
 		this.releaseStaleYieldCompaction();
 		const compacting = this.ctx.session.isCompacting;
 		const direct =
 			this.ctx.collabGuest !== undefined ||
 			commandName === "collab2" ||
 			leave ||
-			(compacting && (commandName === "goal" || commandName === "goal-autopilot"));
+			commandName === "goal-autopilot" ||
+			(compacting && commandName === "goal");
 		if (!direct && (compacting || this.ctx.yieldCompaction)) {
 			const builtin = this.#matchesBuiltinSlashCommand(text);
 			if (text.startsWith("/") && !builtin && (await this.#runSideFileCommand(text, restoreSideDraft))) return;

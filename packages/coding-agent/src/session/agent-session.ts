@@ -8792,6 +8792,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						cwd: this.sessionManager.getCwd(),
 						agentDir: this.#agentDir,
 						extensionRoots: this.effectiveExtensionRoots,
+						restrictToolNames: this.restrictToolNames,
 					}),
 				);
 				// Resets the capability cache again, rediscovers skills, rebuilds the prompt,

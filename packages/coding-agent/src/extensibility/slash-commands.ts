@@ -70,6 +70,7 @@ export interface LoadSlashCommandsOptions {
 	agentDir?: string;
 	/** Session-local extension roots for post-startup reloads (explicit + mode + configured). */
 	extensionRoots?: EffectiveExtensionRoots;
+	restrictToolNames?: boolean;
 }
 
 /**
@@ -77,10 +78,12 @@ export interface LoadSlashCommandsOptions {
  * Loads from all registered providers (builtin, user, project).
  */
 export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}): Promise<FileSlashCommand[]> {
+	if (options.restrictToolNames) return [];
 	const result = await loadCapability<SlashCommand>(slashCommandCapability.id, {
 		cwd: options.cwd,
 		agentDir: options.agentDir,
 		extensionRoots: options.extensionRoots,
+		providers: options.extensionRoots?.mode === "explicit-only" ? ["developer-test-agent", "omp-plugins"] : undefined,
 	});
 
 	const fileCommands: FileSlashCommand[] = result.items.map(cmd => {

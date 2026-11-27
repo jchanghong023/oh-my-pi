@@ -20,7 +20,7 @@ import { COST_GATE_NOTICE_SOURCE } from "../session/cost-gate";
 import { CREDENTIAL_DISABLED_NOTICE_SOURCE } from "../session/credential-disabled-notice";
 import { isSilentAbort } from "../session/messages";
 import { flushTelemetryExport } from "../telemetry-export";
-import { parseSlashCommand, parseSubcommand } from "../slash-commands/helpers/parse";
+import { isTuiOnlyBuiltinName, parseSlashCommand, parseSubcommand } from "../slash-commands/helpers/parse";
 import type { ParsedSlashCommand, SlashCommandRuntime } from "../slash-commands/types";
 import { SPOTLIGHT_NOTICE_SOURCE } from "../spotlight/session";
 import { reconnectMcpManagerServer } from "../mcp/oauth-reauth";
@@ -67,14 +67,14 @@ const MAX_TIMER_MS = 2_147_483_647;
 /** Exit status of a run the cost gate stopped (`--max-cost` / `session.maxCost` reached). */
 export const PRINT_MODE_COST_CAP_EXIT_CODE = 3;
 
-/** Recognize only commands supported by the headless runtime. */
+/** Recognize headless commands and TUI-only commands that must be refused locally. */
 export function parsePrintBuiltinCommand(message: string): ParsedSlashCommand | null {
 	const parsed = parseSlashCommand(message);
+	if (parsed && isTuiOnlyBuiltinName(parsed.name)) return parsed;
 	switch (parsed?.name) {
 		case "compact":
 		case "handoff":
 		case "retry":
-		case "todoloop":
 			return parsed;
 		case "mcp":
 			return parseSubcommand(parsed.args).verb === "reauth" ? parsed : null;
@@ -344,8 +344,8 @@ async function runPrintModeCore(
 	/**
 	 * Dispatch a CLI-authored message as a local command, if it is one.
 	 * Only CLI-authored input (`initialCommand` and `messages`) is ever
-	 * dispatched; merged stdin/@file data is never command syntax. TodoLoop
-	 * consumes the whole submission, including any companion data.
+	 * dispatched; merged stdin/@file data is never command syntax. A local
+	 * refusal of a TUI-only command consumes its entire submission.
 	 * Commands outside the dispatched list keep the historic behavior of
 	 * prompting the model with the literal text.
 	 */
@@ -353,7 +353,7 @@ async function runPrintModeCore(
 		const parsed = parsePrintBuiltinCommand(message);
 		if (!parsed) return false;
 		const { executeAcpBuiltinSlashCommand } = await import("../slash-commands/acp-builtins");
-		const consumed = parsed.name === "todoloop" ? "standalone" : "local";
+		const consumed = isTuiOnlyBuiltinName(parsed.name) ? "standalone" : "local";
 		// `/retry` schedules its model turn outside `promptTurn`
 		// (`session.retry()` posts the continuation as a post-prompt task),
 		// so run `promptTurn`'s pre-turn prep BEFORE the command executes:

@@ -1,6 +1,7 @@
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { apiRouteFor } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { getGitLabDuoModels, resolveGitLabDuoModelIdentity } from "@oh-my-pi/pi-catalog/provider-models";
+import { assertOnlineCredentialExchange } from "../auth/offline";
 import * as AIError from "../error";
 import { ANTHROPIC_THINKING, mapAnthropicToolChoice } from "../stream";
 import type { Api, Context, FetchImpl, Model, ModelSpec, SimpleStreamOptions } from "../types";
@@ -37,6 +38,7 @@ async function getDirectAccessToken(
 		return cached;
 	}
 
+	assertOnlineCredentialExchange("gitlab-duo");
 	const response = await fetchImpl(`${GITLAB_COM_URL}/api/v4/ai/third_party_agents/direct_access`, {
 		method: "POST",
 		headers: {

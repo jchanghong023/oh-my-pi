@@ -28,7 +28,7 @@ export async function isIntranetEndpoint(url: URL, allowMetadata = false): Promi
 
 /** Validate the actual credential endpoint, not an associated inference or resource URL. */
 export async function assertOfflineCredentialEndpoint(provider: string, input: string | URL): Promise<void> {
-	const url = URL.parse(input);
+	const url = typeof input === "string" ? URL.parse(input) : input;
 	if (!url || !(await isIntranetEndpoint(url, true))) throw new OAuthOfflineError(provider);
 }
 

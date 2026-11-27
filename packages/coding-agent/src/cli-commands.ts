@@ -531,7 +531,7 @@ export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
 	if (subIndex >= 0) {
 		const sub = argv[subIndex];
 		const leading = argv.slice(0, subIndex);
-		if (isResourceCommand(sub)) {
+		if (isResourceCommand(sub) || sub === "openwiki") {
 			let cwd: string | undefined;
 			for (let index = 0; index < leading.length; index += 1) {
 				const arg = leading[index];

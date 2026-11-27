@@ -1097,6 +1097,9 @@ export interface AgentToolResult<T = any, _TInput = unknown> {
 	useless?: boolean;
 }
 
+/** Local execution marker for a tool that returns partial output after cancellation. Not a wire field. */
+export const LOCAL_TOOL_RESULT_CANCELLED = Symbol("localToolResultCancelled");
+
 // Callback for streaming tool execution updates
 export type AgentToolUpdateCallback<T = any, TInput = unknown> = (partialResult: AgentToolResult<T, TInput>) => void;
 

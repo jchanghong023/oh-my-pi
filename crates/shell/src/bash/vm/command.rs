@@ -2183,7 +2183,7 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 				{
 					let resolved = Resolved::Native(native);
 					if rejects_raw_args(cx.host, &exec.argv, &resolved) {
-						Target::NotFound
+						Target::RejectedRaw
 					} else {
 						resolved.into()
 					}

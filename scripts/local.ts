@@ -94,7 +94,7 @@ async function main(): Promise<void> {
 		} catch (error) {
 			if (renamedAside) {
 				try {
-					await fs.rename(previous, target);
+					await fs.link(previous, target);
 				} catch (rollbackError) {
 					candidateCreated = false;
 					throw new Error(
@@ -102,6 +102,9 @@ async function main(): Promise<void> {
 						{ cause: error },
 					);
 				}
+				await fs
+					.unlink(previous)
+					.catch(cleanupError => console.warn(`Could not remove previous executable ${previous}: ${cleanupError}`));
 			}
 			throw error;
 		}

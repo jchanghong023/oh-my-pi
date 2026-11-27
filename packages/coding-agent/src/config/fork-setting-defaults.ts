@@ -10,7 +10,6 @@ export const FORK_SETTING_DEFAULTS: ReadonlyMap<string, ForkSettingDefault> = ne
 	["marketplace.autoUpdate", "off"],
 	["mnemopi.embeddingVariant", "multilingual"],
 	["recap.enabled", false],
-	["skills.enableCodexUser", true],
 	["startup.setupWizard", false],
 	["statusLine.compactThinkingLevel", false],
 	["stt.language", "zh-CN"],

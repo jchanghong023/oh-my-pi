@@ -3,10 +3,7 @@
 	"private": true,
 	"homepage": "https://omp.sh",
 	"license": "MIT",
-	"author": {
-		"name": "Stencil Labs, Inc.",
-		"url": "https://stencil.so"
-	},
+	"author": { "name": "Stencil Labs, Inc.", "url": "https://stencil.so" },
 	"workspaces": {
 		"packages": [
 			"packages/*",
@@ -71,7 +68,7 @@
 	"type": "module",
 	"scripts": {
 		"setup": "bun scripts/setup.ts",
-		"postsetup": "bun run gen:export-viewer && bun run gen:relay-extension",
+		"postsetup": "bun run gen:export-viewer && bun run gen:relay-extension && bun run gen:spec-driven-resources",
 		"dev": "bun --cwd=packages/coding-agent src/cli.ts",
 		"local": "bun scripts/local.ts",
 		"cnb": "bun scripts/cnb.ts",

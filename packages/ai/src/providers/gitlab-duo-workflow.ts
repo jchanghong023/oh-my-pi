@@ -4,6 +4,7 @@ import {
 	discoverGitLabDuoWorkflowRuntimeNamespace,
 	type GitLabDuoWorkflowNamespaceSelection,
 } from "@oh-my-pi/pi-catalog/discovery/gitlab-duo-workflow";
+import { credentialFetch } from "../auth/offline";
 import * as AIError from "../error";
 import { parseToolCallArguments } from "../utils/tool-call-arguments";
 import type {
@@ -1695,15 +1696,18 @@ async function requestGitLabDuoWorkflowDirectAccess(
 	// which surfaces through the outer `streamGitLabDuoWorkflow` catch as a real
 	// stream `error` event — matching the existing HTTP-error path rather than the
 	// swallowed best-effort helpers (settings ensure / project discovery / models).
-	const response = await fetchImpl(gitLabApiUrl(baseUrl, "/api/v4/ai/duo_workflows/direct_access"), {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			"content-type": "application/json",
+	const response = await credentialFetch(GITLAB_DUO_WORKFLOW_PROVIDER_ID, fetchImpl)(
+		gitLabApiUrl(baseUrl, "/api/v4/ai/duo_workflows/direct_access"),
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify(buildGitLabDuoWorkflowDirectAccessBody(rootNamespaceId, projectId, workflowDefinition)),
+			signal: gitLabDuoWorkflowRestSignal(signal),
 		},
-		body: JSON.stringify(buildGitLabDuoWorkflowDirectAccessBody(rootNamespaceId, projectId, workflowDefinition)),
-		signal: gitLabDuoWorkflowRestSignal(signal),
-	});
+	);
 	traceGitLabDuoWorkflow("direct_access.response", {
 		status: response.status,
 		ok: response.ok,

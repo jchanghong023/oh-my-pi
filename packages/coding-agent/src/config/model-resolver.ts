@@ -54,6 +54,7 @@ import {
 	resolveThinkingLevelForModel,
 } from "../thinking/levels";
 import { type ConfiguredThinkingLevel } from "../utils/render-utils";
+import { COMPANY_PROVIDER_ID, isCompanyLaneActive } from "./company-provider";
 import { isAuthenticated, kNoAuth, type ModelRegistry } from "./model-registry";
 import {
 	DEFAULT_MODEL_ROLE_ALIAS,
@@ -2631,6 +2632,17 @@ export function resolveCliModel(options: CliModelOptions): ResolveCliModelResult
 
 	if (!cliModel) {
 		return { model: undefined, selector: undefined, warning: undefined, error: undefined };
+	}
+	if (
+		!isCompanyLaneActive() &&
+		(cliProvider ?? parseModelString(cliModel.trim())?.provider)?.toLowerCase() === COMPANY_PROVIDER_ID
+	) {
+		return {
+			model: undefined,
+			selector: undefined,
+			warning: undefined,
+			error: "Company provider is only available with OMP_OFFLINE=1.",
+		};
 	}
 
 	const disabled = disabledProviderIds(settings);

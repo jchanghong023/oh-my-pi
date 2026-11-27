@@ -35,6 +35,11 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
 	};
 }
 
+/** These interactive commands are rejected locally rather than forwarded as prompts. */
+export function isTuiOnlyBuiltinName(name: string): boolean {
+	return name === "collab2" || name === "sketch" || name === "todoloop";
+}
+
 /**
  * Mark a command as fully consumed in the ACP shape.
  *

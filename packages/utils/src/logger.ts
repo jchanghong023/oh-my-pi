@@ -420,8 +420,12 @@ function fallbackLogsDir(primaryDirectory: string): string {
 		directory = path.join(home, "Library", "Logs", APP_NAME, ...profilePath);
 	} else {
 		const xdgState = process.env.XDG_STATE_HOME;
-		const root = xdgState && path.isAbsolute(xdgState) ? xdgState : path.join(home, ".local", "state");
-		directory = path.join(root, APP_NAME, ...profilePath, "logs");
+		const xdgRoot =
+			xdgState && path.isAbsolute(xdgState) ? path.join(xdgState, APP_NAME, ...profilePath) : undefined;
+		// Creating an XDG app or profile directory would opt the user into state migration.
+		const root =
+			xdgRoot && fs.existsSync(xdgRoot) ? xdgRoot : path.join(home, ".local", "state", `${APP_NAME}-logs`, ...profilePath);
+		directory = path.join(root, "logs");
 	}
 	// An already-standard default must still get a distinct user-owned attempt.
 	return path.relative(directory, primaryDirectory) === ""

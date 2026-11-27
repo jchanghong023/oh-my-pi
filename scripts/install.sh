@@ -173,19 +173,6 @@ install_log_init() {
             platform_root="$HOME/.local/state/omp"
             ;;
     esac
-    expanded_root="$(explicit_config_root)"
-    case "$expanded_root" in
-        /*) log_root="$expanded_root" ;;
-        *)
-            case "${XDG_STATE_HOME:-}" in
-                /*)
-                    xdg_root="$(normalize_absolute_path "$XDG_STATE_HOME/omp")"
-                    # XDG is opt-in via the app root, independent of the current profile.
-                    if [ -d "$xdg_root" ]; then log_root="$xdg_root"; fi
-                    ;;
-            esac
-            ;;
-    esac
     log_profile="$(printf '%s' "${OMP_PROFILE-${PI_PROFILE:-}}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     # Invalid profile input must not make a bootstrap install fail.
     case "$log_profile" in
@@ -197,6 +184,19 @@ install_log_init() {
     case "$profile_base" in con|prn|aux|nul|com[0-9]|lpt[0-9]) log_profile="" ;; esac
     profile_suffix=""
     [ -z "$log_profile" ] || profile_suffix="/profiles/$log_profile"
+    expanded_root="$(explicit_config_root)"
+    case "$expanded_root" in
+        /*) log_root="$expanded_root" ;;
+        *)
+            case "${XDG_STATE_HOME:-}" in
+                /*)
+                    xdg_root="$(normalize_absolute_path "$XDG_STATE_HOME/omp")"
+                    # Logging must not create the directory that marks a profile as migrated.
+                    if [ -d "$xdg_root$profile_suffix" ]; then log_root="$xdg_root"; fi
+                    ;;
+            esac
+            ;;
+    esac
     cache_root="$(printf '%s' "${OMP_CACHE_DIR:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     case "${HOME:-}" in
         /*)
@@ -293,11 +293,6 @@ install_finish() {
         install_log INFO install_completed "result=$INSTALL_RESULT exit_code=$install_exit"
     fi
 }
-install_log_init || :
-trap 'install_finish "$?"' EXIT
-trap 'INSTALL_RESULT=cancelled; exit 130' INT
-trap 'INSTALL_RESULT=cancelled; exit 143' TERM
-install_log INFO install_started 'result=started version_selection=pending'
 
 # Accept only a bounded release-version identifier in diagnostic fields.
 install_log_version() {
@@ -379,9 +374,16 @@ if [ -n "$UNINSTALL" ] && { [ -n "$BINARY_SELECTED" ] || [ -n "$REF" ]; }; then
     echo "--uninstall and --purge do not combine with --binary or --ref"
     exit 1
 fi
-install_log_version "${REF:-}"
-INSTALL_STAGE=platform
-INSTALL_STAGE_MS="$(install_now_ms)"
+if [ -z "$UNINSTALL" ]; then
+    install_log_init || :
+    trap 'install_finish "$?"' EXIT
+    trap 'INSTALL_RESULT=cancelled; exit 130' INT
+    trap 'INSTALL_RESULT=cancelled; exit 143' TERM
+    install_log INFO install_started 'result=started version_selection=pending'
+    install_log_version "${REF:-}"
+    INSTALL_STAGE=platform
+    INSTALL_STAGE_MS="$(install_now_ms)"
+fi
 
 version_ge() {
     current="$1"

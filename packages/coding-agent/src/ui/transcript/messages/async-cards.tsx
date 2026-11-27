@@ -3,12 +3,12 @@
  * Background activity the session reports into the transcript, each a status
  * block hidden with tool activity, plus the IRC coordination cards:
  *
- * - `AsyncResult` (`async-result`): one `✔ Background job completed id
- *   (duration)` row per finished non-task job not already shown by its tool card.
+ * - `AsyncResult` (`async-result`): diagnostic status rows for non-task jobs
+ *   not already shown by a tool card; successful completions stay in history.
  *   Artifact-error, schema and minimizer rows remain independent. A registered
  *   extension renderer owns the card (#14131), with built-in rows as fallback.
- * - `LaunchCompletion` (`launch-completion`): one `Supervised process
- *   completed|failed name (exit N) (duration)` row per exited service.
+ * - `LaunchCompletion` (`launch-completion`): failure or unknown exit
+ *   diagnostics for supervised processes.
  * - `AsyncNotify` (`async-notify`): one `Background job output` /
  *   `Supervised process output` row per reporting source with its first
  *   matching lines under it (natively the notice's body).
@@ -103,19 +103,12 @@ export function asyncResultRows(
 		const command = label && label !== jobId ? label : undefined;
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
 		if (
-			(job.type !== "task" || (status !== "completed" && label.startsWith("/tan "))) &&
-			(status === "completed" || status === "failed" || status === "cancelled" || status === "finished") &&
+			(job.type !== "task" || label.startsWith("/tan ")) &&
+			(status === "failed" || status === "cancelled" || status === "finished") &&
 			(!job.jobId || !represented?.has(`${job.type}:${job.jobId}:${status}`))
 		) {
 			const title = `Background job ${status}`;
-			const tone =
-				status === "completed"
-					? "success"
-					: status === "failed"
-						? "error"
-						: status === "cancelled"
-							? "warning"
-							: "info";
+			const tone = status === "failed" ? "error" : status === "cancelled" ? "warning" : "info";
 			rows.push({
 				parts: [
 					{ text: `${symbols.symbol(`status.${tone}`)} ${title}`, color: tone === "info" ? "dim" : tone },
@@ -214,12 +207,8 @@ export function launchCompletionRows(details: LaunchCompletionDetails | undefine
 		const name = "key" in daemon ? daemon.key : daemon.name;
 		const { exitCode, startedAt, exitedAt } = daemon;
 		const failed = daemon.state === "failed" || (exitCode !== undefined && exitCode !== 0);
-		const succeeded = !failed && exitCode === 0;
-		const label = failed
-			? "Supervised process failed"
-			: succeeded
-				? "Supervised process completed"
-				: "Supervised process exited";
+		if (!failed && exitCode === 0) continue;
+		const label = failed ? "Supervised process failed" : "Supervised process exited";
 		const exit = exitCode !== undefined ? `exit ${exitCode}` : undefined;
 		const duration =
 			exitedAt !== undefined && startedAt !== undefined ? formatDuration(exitedAt - startedAt) : undefined;
@@ -230,15 +219,13 @@ export function launchCompletionRows(details: LaunchCompletionDetails | undefine
 							text: `${symbols.symbol("status.error")} ${label}`,
 							color: "error",
 						}
-					: succeeded
-						? { text: `${symbols.symbol("status.success")} ${label}`, color: "success" }
-						: { text: label, color: "dim" },
+					: { text: label, color: "dim" },
 				{ text: name, color: "accent" },
 				exit ? { text: `(${exit})`, color: "dim" } : undefined,
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
 			],
 			native: {
-				tone: failed ? "error" : succeeded ? "success" : "info",
+				tone: failed ? "error" : "info",
 				message: [{ t: label }, { t: " " }, { t: name, s: "mono" }, ...statusFacts([exit, duration])],
 			},
 		});

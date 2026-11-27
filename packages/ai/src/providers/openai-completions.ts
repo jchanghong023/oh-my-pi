@@ -2083,7 +2083,12 @@ export const streamOpenAICompletionsOnce = (
 					abortTracker.getLocalAbortReason() instanceof AIError.StreamTimeoutError
 				) {
 					safeError = new AIError.StreamTimeoutError("CodeAgent request timed out");
-				} else if (error instanceof AIError.ProviderResponseError && error.kind === "content-blocked") {
+				} else if (
+					(error instanceof AIError.ProviderResponseError && error.kind === "content-blocked") ||
+					(error instanceof OpenAIHttpError &&
+						(error.code === "content_filter" ||
+							AIError.is(AIError.classify(error, model.api), AIError.Flag.ContentBlocked)))
+				) {
 					safeError = new AIError.ProviderResponseError("CodeAgent response blocked by content filtering", {
 						provider: model.provider,
 						kind: "content-blocked",

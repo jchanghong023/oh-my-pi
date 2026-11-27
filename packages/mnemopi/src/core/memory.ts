@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
-import { popLoopPhase, pushLoopPhase, withLoopPhase } from "@oh-my-pi/pi-utils";
+import { logger, popLoopPhase, pushLoopPhase, withLoopPhase } from "@oh-my-pi/pi-utils";
 
 import { dbPath as configuredDbPath } from "../config";
 import { closeQuietly } from "../db";
@@ -64,6 +64,8 @@ export interface MnemopiOptions {
 	 * would exit before completing. Defaults to `true`.
 	 */
 	readonly reconcile?: boolean;
+	/** Use text retrieval instead of switching or mixing the bank's existing embedding model. */
+	readonly preserveStoredEmbeddingModel?: boolean;
 }
 
 export interface RememberInput extends MemoryInput {
@@ -446,7 +448,7 @@ export class Mnemopi {
 			this.authorType = options.authorType ?? options.author_type ?? null;
 			this.channelId = options.channelId ?? options.channel_id ?? this.sessionId;
 			this.dbPath = resolveDbPath(options, this.bank);
-			this.runtimeOptions = resolveRuntimeOptions(options);
+			const runtimeOptions = resolveRuntimeOptions(options);
 
 			this.beam = new BeamMemory({
 				sessionId: this.sessionId,
@@ -473,6 +475,18 @@ export class Mnemopi {
 			}
 			this.conn = this.beam.db;
 			this.db = this.beam.db;
+			const embedding = runtimeOptions?.embeddings;
+			if (
+				options.preserveStoredEmbeddingModel &&
+				embedding?.model &&
+				!embedding.disabled &&
+				this.db.query("SELECT 1 FROM memory_embeddings WHERE model IS NOT ? LIMIT 1").get(embedding.model.trim())
+			) {
+				logger.warn("mnemopi: keeping stored embeddings; using text retrieval for this bank");
+				this.runtimeOptions = { ...runtimeOptions, embeddings: { ...embedding, disabled: true } };
+			} else {
+				this.runtimeOptions = runtimeOptions;
+			}
 			// Wipe-and-rebuild stale embeddings when the configured model changed since
 			// the vectors were written. Runs inside the runtime scope so
 			// `currentEmbeddingModel()` reflects this instance's configured model.

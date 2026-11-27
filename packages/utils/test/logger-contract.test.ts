@@ -559,7 +559,7 @@ function consumerFallbackDir(root: string, profile?: string): string {
 	const scope = profile ? ["profiles", profile] : [];
 	if (process.platform === "win32") return path.join(root, "local", "omp", ...scope, "Logs");
 	if (process.platform === "darwin") return path.join(root, "home", "Library", "Logs", "omp", ...scope);
-	return path.join(root, "state", "omp", ...scope, "logs");
+	return path.join(root, "home", ".local", "state", "omp-logs", ...scope, "logs");
 }
 
 describe("diagnostic consumer contracts", () => {

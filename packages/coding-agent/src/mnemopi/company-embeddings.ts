@@ -74,6 +74,7 @@ export function getCompanyEmbeddingDefaults(settings: Settings): Partial<Mnemopi
 		embeddingModel: COMPANY_RETRIEVAL_MODELS[0].id,
 		embeddingApiUrl: config.embeddingBaseUrl,
 		embeddingApiKey: cachedCompanyToken,
+		preserveStoredEmbeddingModel: true,
 		embeddings: {
 			allowRemote: companyAllowed,
 			// The automatic company lane must not leave its configured gateway.

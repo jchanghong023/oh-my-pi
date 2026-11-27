@@ -229,8 +229,7 @@ COPY . /pi/
 
 # Restore generated assets skipped by --ignore-scripts. The OpenWiki
 # postinstall uses the vendored source only when it is present.
-RUN bun run gen:export-viewer && \
-    bun run gen:relay-extension && \
+RUN bun run postsetup && \
     bun run postinstall
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/omp"]

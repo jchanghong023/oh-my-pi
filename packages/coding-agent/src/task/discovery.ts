@@ -139,7 +139,7 @@ export async function discoverAgents(
 		orderedDirs.push({ dir: path.join(root.path, "agents"), source: root.level });
 	}
 
-	// Native, explicit, and opted-in Claude marketplace agents share the registry resolver.
+	// Load agents from marketplace plugins (respects disabledProviders).
 	const { roots: pluginRoots } = isProviderEnabled("claude-plugins")
 		? await listClaudePluginRoots(home, resolvedCwd)
 		: { roots: [] };

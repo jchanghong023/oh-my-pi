@@ -38,6 +38,7 @@ const contextWindowKey = "omp.company-models.contextWindow";
 
 /** Set before registry initialization; workers inherit this process-only override. */
 export function setCompanyChatContextWindow(contextWindow: number): void {
+	if (getEnvironmentData(contextWindowKey) === contextWindow) return;
 	setEnvironmentData(contextWindowKey, contextWindow);
 	chatModels = undefined;
 }

@@ -635,14 +635,6 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 		}
 		const id = selectKeyId(key, keybindings);
 		if (id && id === treeDetailsKey() && toggleDetails()) return true;
-		const details = expanded();
-		if (details && (key.id === "shift+up" || key.id === "shift+down")) {
-			const scroll = detailScroll();
-			const max = scroll.terminalMax ?? nativeDetailMax();
-			const offset = Math.max(0, Math.min(max, Math.min(scroll.offset, max) + (key.id === "shift+up" ? -1 : 1)));
-			if (offset !== scroll.offset) detailScroll.set({ ...scroll, offset });
-			return true;
-		}
 		switch (id) {
 			case "up":
 				move(-1, true);
@@ -700,6 +692,14 @@ export function TreeSelector(props: TreeSelectorProps): JSXNode {
 			case "ctrl+o":
 				cycleFilter(1);
 				return true;
+		}
+		const details = expanded();
+		if (details && (key.id === "shift+up" || key.id === "shift+down")) {
+			const scroll = detailScroll();
+			const max = scroll.terminalMax ?? nativeDetailMax();
+			const offset = Math.max(0, Math.min(max, Math.min(scroll.offset, max) + (key.id === "shift+up" ? -1 : 1)));
+			if (offset !== scroll.offset) detailScroll.set({ ...scroll, offset });
+			return true;
 		}
 		const mode = FILTER_KEYS[key.id];
 		if (mode) {

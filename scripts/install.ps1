@@ -968,7 +968,7 @@ function Remove-OmpPath {
 }
 
 # Remove what an update can leave beside launcher $Path: omp's self-update
-# temporaries and backups (<name>.<timestamp>.<pid>[.<seq>].bak|.new|.patch,
+# temporaries and backups (<name>.<timestamp>.<pid>[.<seq>].bak|.new|.new.exe|.patch,
 # legacy <name>.bak and <name>.new, shims renamed aside by a takeover) and this
 # script's .omp.download.exe.
 function Remove-UpdateLeftovers {
@@ -977,7 +977,7 @@ function Remove-UpdateLeftovers {
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
         return
     }
-    $pattern = '^' + [regex]::Escape((Split-Path -Leaf $Path)) + '\.(?:\d+(?:\.\d+)*\.(?:bak|new|patch)|bak|new)$'
+    $pattern = '^' + [regex]::Escape((Split-Path -Leaf $Path)) + '\.(?:\d+(?:\.\d+)*\.(?:bak|new(?:\.exe)?|patch)|bak|new)$'
     Get-ChildItem -LiteralPath $dir -Force -File |
         Where-Object {
             $_.Name -match $pattern -or $_.Name -eq ".omp.download.exe" -or

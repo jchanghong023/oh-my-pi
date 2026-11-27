@@ -1,11 +1,9 @@
 import type { AvailableCommand } from "@oh-my-pi/pi-utils/acp";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL, lookupBuiltinSlashCommand } from "./builtin-registry";
-import { parseSlashCommand, usage } from "./helpers/parse";
+import { isTuiOnlyBuiltinName, parseSlashCommand, usage } from "./helpers/parse";
 import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types";
 
 export type { AcpBuiltinSlashCommandResult } from "./types";
-
-const TUI_ONLY_REFUSED_NAMES: ReadonlySet<string> = new Set(["collab2", "todoloop"]);
 
 /**
  * All names (primary + aliases) reserved by ACP builtins with text handlers.
@@ -26,11 +24,11 @@ export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
  * advertised to ACP clients.
  */
 export function isAcpBuiltinShadowedName(name: string): boolean {
-	if (TUI_ONLY_REFUSED_NAMES.has(name) || ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
+	if (isTuiOnlyBuiltinName(name) || ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
 	const colon = name.indexOf(":");
 	if (colon === -1) return false;
 	const prefix = name.slice(0, colon);
-	return TUI_ONLY_REFUSED_NAMES.has(prefix) || ACP_BUILTIN_RESERVED_NAMES.has(prefix);
+	return isTuiOnlyBuiltinName(prefix) || ACP_BUILTIN_RESERVED_NAMES.has(prefix);
 }
 
 /**
@@ -66,7 +64,7 @@ export async function executeAcpBuiltinSlashCommand(
 ): Promise<AcpBuiltinSlashCommandResult> {
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
-	if (TUI_ONLY_REFUSED_NAMES.has(parsed.name)) {
+	if (isTuiOnlyBuiltinName(parsed.name)) {
 		return (await usage(`/${parsed.name} is only supported in the TUI.`, runtime)) ?? { consumed: true };
 	}
 	const command = lookupBuiltinSlashCommand(parsed.name);

@@ -35,6 +35,7 @@ interface LocatedTask {
 	/** Section identity includes empty sections, unlike dispatched group ids. */
 	section: number;
 	contentIndent: number;
+	bodyEnd: number;
 	/** First subsequent list item outside this task. */
 	nextListLine?: number;
 }
@@ -137,6 +138,7 @@ function parseDocument(content: string): ParsedDocument {
 			// An indented continuation of an open paragraph is still task prose.
 			if (current) {
 				current.task.text += `\n${raw.trimStart()}`;
+				current.bodyEnd = index + 1;
 			}
 			continue;
 		}
@@ -298,12 +300,13 @@ function parseDocument(content: string): ParsedDocument {
 					line: index + 1,
 				};
 			}
-			current = { task, section: sections.length - 1, contentIndent };
+			current = { task, section: sections.length - 1, contentIndent, bodyEnd: index + 1 };
 			section.tasks.push(task);
 			located.push(current);
 		} else if (current && !TEXT_BREAK_PATTERN.test(line)) {
 			// Preserve hard breaks and all continuation prose, unlike a first-line-only parser.
 			current.task.text += `\n${raw.trimStart()}`;
+			current.bodyEnd = index + 1;
 		} else {
 			current = undefined;
 			if (!lists.length && !TEXT_BREAK_PATTERN.test(line)) {
@@ -394,12 +397,20 @@ export function validateTodoLoopChange(
 		const nextTaskLine = previous.located[index + 1]?.task.line ?? oldLines.length + 1;
 		const nextHeadingLine =
 			previous.headings.find(heading => heading.line > located.task.line)?.line ?? oldLines.length + 1;
-		const end = Math.min(nextTaskLine, nextHeadingLine, located.nextListLine ?? oldLines.length + 1) - 1;
+		let end = Math.min(nextTaskLine, nextHeadingLine, located.nextListLine ?? oldLines.length + 1) - 1;
+		for (let index = located.bodyEnd; index < end; index++) {
+			const line = expandIndent(oldLines[index]);
+			const text = line.trimStart();
+			if (text && line.length - text.length < located.contentIndent) {
+				end = index;
+				break;
+			}
+		}
 		let start = end;
 		// A new record can precede the trailing blank separators, but never
 		// precede or interrupt any previously accepted Markdown content.
 		while (start >= located.task.line && !oldLines[start - 1].trim()) start--;
-		return [{ start, end }];
+		return [{ start, end, indent: located.contentIndent, newBodyEnd: next.located[index].bodyEnd }];
 	});
 	const sameLine = (index: number, cursor: number): boolean =>
 		newLines[cursor] === oldLines[index] &&
@@ -408,8 +419,14 @@ export function validateTodoLoopChange(
 			(index === oldLines.length - 1 && oldEndings[index] === undefined && cursor + 1 < newLines.length));
 	let cursor = 0;
 	for (let index = 0; index <= oldLines.length; index++) {
-		if (noteRegions.some(region => index >= region.start && index <= region.end)) {
-			while (cursor < newLines.length && !sameLine(index, cursor)) cursor++;
+		const region = noteRegions.find(region => index >= region.start && index <= region.end);
+		if (region) {
+			while (cursor < newLines.length && !sameLine(index, cursor)) {
+				const line = expandIndent(newLines[cursor]);
+				const text = line.trimStart();
+				if (cursor >= region.newBodyEnd && text && line.length - text.length < region.indent) break;
+				cursor++;
+			}
 		}
 		if (index === oldLines.length) {
 			if (cursor === newLines.length) return;

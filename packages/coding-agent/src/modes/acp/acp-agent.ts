@@ -458,7 +458,7 @@ type AcpSessionHandle = {
 
 type CreateAcpSession = (
 	cwd: string,
-	options?: { interactivePrompts?: boolean; forkSourcePath?: string },
+	options?: { interactivePrompts?: boolean },
 ) => Promise<AgentSession | AcpSessionHandle>;
 
 function normalizeCreatedAcpSession(created: AgentSession | AcpSessionHandle): {
@@ -1904,9 +1904,21 @@ export class AcpAgent implements Agent {
 		const { session, setToolUIContext } = normalizeCreatedAcpSession(
 			await this.#createSession(path.resolve(params.cwd), {
 				interactivePrompts: this.#clientCapabilities?.elicitation?.form != null,
-				forkSourcePath: sourcePath,
 			}),
 		);
+		try {
+			const success = await session.switchSession(sourcePath);
+			if (!success) {
+				throw new Error(`ACP session fork was cancelled: ${params.sessionId}`);
+			}
+			const forked = await session.fork();
+			if (!forked) {
+				throw new Error(`ACP session fork failed: ${params.sessionId}`);
+			}
+		} catch (error) {
+			await this.#disposeStandaloneSession(session);
+			throw error;
+		}
 		return await this.#registerPreparedSession(session, params.mcpServers ?? [], setToolUIContext);
 	}
 

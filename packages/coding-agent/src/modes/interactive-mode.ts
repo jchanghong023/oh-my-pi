@@ -385,7 +385,7 @@ import { cfgHideThinkingBlock } from "../session/settings";
 import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
 import { cfgExtensionHandlersModeControl } from "../extensibility/settings";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
-import { goalContinuationActivity, goalFromModeData } from "../goals/state";
+import { goalContinuationActivity, goalFromModeData, type GoalSubcommand, parseGoalSubcommand } from "../goals/state";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
@@ -588,9 +588,6 @@ export function computeEditorMaxHeight(terminalRows: number): number {
 	return Math.max(EDITOR_MIN_RENDERED_ROWS, Math.min(comfortable, rows - EDITOR_MIN_CHROME_ROWS));
 }
 
-type GoalSubcommand = "set" | "show" | "pause" | "resume" | "drop" | "budget";
-
-const GOAL_SUBCOMMANDS = new Set<GoalSubcommand>(["set", "show", "pause", "resume", "drop", "budget"]);
 const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
 const PLAN_SAVE_TITLE_LINE_LIMIT = 6;
 
@@ -607,21 +604,6 @@ function planSaveTitleExcerpt(planContent: string): string {
 		.filter(Boolean)
 		.slice(0, PLAN_SAVE_TITLE_LINE_LIMIT)
 		.join("\n");
-}
-
-function parseGoalSubcommand(args: string): {
-	sub: GoalSubcommand | undefined;
-	rest: string;
-} {
-	const trimmed = args.trim();
-	if (!trimmed) return { sub: undefined, rest: "" };
-	const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);
-	if (!match) return { sub: undefined, rest: trimmed };
-	const first = match[1].toLowerCase();
-	if (GOAL_SUBCOMMANDS.has(first as GoalSubcommand)) {
-		return { sub: first as GoalSubcommand, rest: match[2]?.trim() ?? "" };
-	}
-	return { sub: undefined, rest: trimmed };
 }
 
 function formatContextTokenCount(value: number): string {
@@ -2623,6 +2605,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					cwd: basePath,
 					agentDir: this.settings.getAgentDir(),
 					extensionRoots: this.session.effectiveExtensionRoots,
+					restrictToolNames: this.session.restrictToolNames,
 				});
 		this.session.setSlashCommands(fileCommands);
 		this.#rebuildSlashCommandAutocomplete(basePath);

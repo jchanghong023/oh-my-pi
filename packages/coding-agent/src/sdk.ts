@@ -2292,11 +2292,17 @@ async function createAgentSessionScoped(
 	// Snapshot this session's effective configured lane onto its invocation scope
 	// so startup sub-discovery sees the same complete policy that post-startup
 	// reloads and recursively spawned children consume.
-	const extensionRoots = options.extensionRoots?.();
-	setInvocationConfiguredExtensions(
-		extensionRoots?.configured ?? cfgExtensions.get(settings),
-		extensionRoots?.configuredLevel ?? settings.extensionsSourceLevel(),
-	);
+	// Keep a live provider for reloads and inherited child policy, not this startup snapshot.
+	const buildSessionExtensionRoots =
+		options.extensionRoots ??
+		((): EffectiveExtensionRoots => ({
+			explicit: options.additionalExtensionPaths ?? [],
+			mode: options.disableExtensionDiscovery ? "explicit-only" : "merge",
+			configured: cfgExtensions.get(settings),
+			configuredLevel: settings.extensionsSourceLevel(),
+		}));
+	const extensionRoots = buildSessionExtensionRoots();
+	setInvocationConfiguredExtensions(extensionRoots.configured, extensionRoots.configuredLevel);
 
 	// Pin authStorage to modelRegistry.authStorage: ModelRegistry.getApiKey() routes refresh
 	// failures through that instance, so any divergent storage handed to the bridge / mcpManager
@@ -2440,9 +2446,18 @@ async function createAgentSessionScoped(
 		? Promise.resolve(options.promptTemplates)
 		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
 	promptTemplatesPromise.catch(() => {});
-	const slashCommandsPromise = options.slashCommands
-		? Promise.resolve(options.slashCommands)
-		: withActiveSettings(settings, () => logger.time("discoverSlashCommands", discoverSlashCommands, cwd, agentDir));
+	const slashCommandsPromise =
+		options.restrictToolNames === true
+			? Promise.resolve<FileSlashCommand[]>([])
+			: options.slashCommands
+				? Promise.resolve(options.slashCommands)
+				: withActiveSettings(settings, () =>
+						logger.time("discoverSlashCommands", loadSlashCommandsInternal, {
+							cwd,
+							agentDir,
+							extensionRoots,
+						}),
+					);
 	slashCommandsPromise.catch(() => {});
 	const customCommandsPromise =
 		options.restrictToolNames === true
@@ -3322,17 +3337,6 @@ async function createAgentSessionScoped(
 			if (event.type === "connecting" && event.serverNames.length === 0) return;
 			eventBus.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, event);
 		};
-		// Provider, never a stored value: inherited child policy remains linked to
-		// the owning session, while top-level sessions materialize their own live
-		// settings on every discovery call.
-		const buildSessionExtensionRoots =
-			options.extensionRoots ??
-			((): EffectiveExtensionRoots => ({
-				explicit: options.additionalExtensionPaths ?? [],
-				mode: options.disableExtensionDiscovery ? "explicit-only" : "merge",
-				configured: cfgExtensions.get(settings),
-				configuredLevel: settings.extensionsSourceLevel(),
-			}));
 		const mcpDiscoverOptions = {
 			onStatus: onMCPStatus,
 			startupTimeoutMs: cfgMcpStartupTimeoutMs.get(settings),

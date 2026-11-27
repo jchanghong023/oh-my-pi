@@ -678,7 +678,9 @@ export async function runCli(argv: string[]): Promise<void> {
 		return;
 	}
 
+	const previousCwd = resolved.cwd === undefined ? undefined : process.cwd();
 	try {
+		if (resolved.cwd !== undefined) process.chdir(resolved.cwd);
 		const { run } = await import("@oh-my-pi/pi-utils/cli");
 		await run({
 			bin: APP_NAME,
@@ -689,6 +691,7 @@ export async function runCli(argv: string[]): Promise<void> {
 		});
 	} finally {
 		stopStartupComposer?.();
+		if (previousCwd !== undefined) process.chdir(previousCwd);
 	}
 }
 

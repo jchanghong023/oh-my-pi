@@ -139,6 +139,8 @@ jobs:
               python3 -m pip install --user cargo-zigbuild==0.24.1 ziglang==0.14.1
               echo "$HOME/.local/bin" >> "$GITHUB_PATH"
          - run: bun install --frozen-lockfile
+           env:
+              OMP_SKIP_OPENWIKI_POSTINSTALL: "1"
          - name: Build one host native addon
            run: bun scripts/build-release-native.ts
          - name: Build release binary

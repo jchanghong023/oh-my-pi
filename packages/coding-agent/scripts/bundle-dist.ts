@@ -90,7 +90,6 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 					entry === "cli.js" ||
 					entry === "docs-index.generated.txt" ||
 					entry === exportViewerDistName ||
-					entry === "spec-driven-resources.tar.gz" ||
 					/^spec-driven-resources.*\.gz$/.test(entry) ||
 					/^developer-test-agent-resources\.json-[^/]+\.gz$/.test(entry) ||
 					entry.endsWith(".node") ||

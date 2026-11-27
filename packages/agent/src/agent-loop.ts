@@ -110,6 +110,7 @@ import {
 	ASIDE_MESSAGE_COMMIT,
 	ASIDE_MESSAGE_DISCARD,
 	isSoftToolRequirement,
+	LOCAL_TOOL_RESULT_CANCELLED,
 	SPECULATIVE_STREAM_SESSION,
 } from "./types";
 
@@ -586,8 +587,9 @@ function hasSubstantiveToolResultContent(content: AgentToolResult["content"]): b
 	return false;
 }
 
-function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; malformed: boolean } {
-	const rawObj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; malformed: boolean; cancelled: boolean } {
+	const rawObj = raw && typeof raw === "object" ? (raw as Record<PropertyKey, unknown>) : null;
+	const cancelled = rawObj?.[LOCAL_TOOL_RESULT_CANCELLED] === true;
 	const rawContent = rawObj?.content;
 	const details = rawObj && "details" in rawObj ? rawObj.details : {};
 	const providerMetadataResult = snapshotToolResultProviderMetadata(
@@ -610,6 +612,7 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; mal
 				isError: true,
 			},
 			malformed: true,
+			cancelled,
 		};
 	}
 
@@ -659,6 +662,7 @@ function coerceToolResult(raw: unknown): { result: AgentToolResult<unknown>; mal
 			...(useless && !isError ? { useless: true } : {}),
 		},
 		malformed: invalidBlocks > 0 || providerMetadataResult.malformed,
+		cancelled,
 	};
 }
 
@@ -3791,6 +3795,7 @@ async function executeToolCalls(
 		let isError = false;
 		let caughtError: unknown;
 		let completedToolExecution = false;
+		let toolReportedCancellation = false;
 		let executionStarted = false;
 		const abortBeforeToolExecution = (): boolean => {
 			if (!isToolAborted(record)) return false;
@@ -3828,6 +3833,7 @@ async function executeToolCalls(
 					// non-array content) that must never persist verbatim in history.
 					const coerced = coerceToolResult(speculativeOutcome.result);
 					result = coerced.result;
+					toolReportedCancellation = coerced.cancelled;
 					if (coerced.malformed || result.isError) isError = true;
 					completedToolExecution = true;
 					executionStarted = true;
@@ -3890,6 +3896,7 @@ async function executeToolCalls(
 					completedToolExecution = true;
 					const coerced = coerceToolResult(rawResult);
 					result = coerced.result;
+					toolReportedCancellation = coerced.cancelled;
 					if (coerced.malformed || result.isError) isError = true;
 				}
 			} catch (e) {
@@ -3946,6 +3953,7 @@ async function executeToolCalls(
 		const interrupted = interruptState.triggered;
 		const perToolAborted = record.signal.aborted;
 		const abortedDuringExecution = perToolAborted && isError && !completedToolExecution;
+		const cancelled = abortedDuringExecution || toolReportedCancellation;
 		if (record.interruptible && interrupted && abortedDuringExecution && !signal?.aborted) {
 			// Queued steering/asides abort only interruptible tools. An external
 			// user abort takes priority even if a queued interrupt fixed the
@@ -3957,13 +3965,13 @@ async function executeToolCalls(
 			// keeps its real result even if its signal aborted around completion:
 			// the model must see the work it actually performed (#4752).
 			// Non-interruptible tools also retain errors from external user aborts.
-			emitToolResult(record, result, isError, abortedDuringExecution);
+			emitToolResult(record, result, isError, cancelled);
 		}
 
 		const firstTextBlock = result.content?.[0];
 		const errorMessageForSpan =
 			caughtError === undefined && isError && firstTextBlock?.type === "text" ? firstTextBlock.text : undefined;
-		const status = abortedDuringExecution
+		const status = cancelled
 			? "aborted"
 			: caughtError instanceof ToolCallBlockedError
 				? "blocked"

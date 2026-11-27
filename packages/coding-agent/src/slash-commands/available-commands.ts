@@ -27,6 +27,7 @@ export interface AvailableCommandsSession {
 	readonly skillsSettings?: SkillsSettings;
 	readonly settings?: { getAgentDir(): string };
 	readonly effectiveExtensionRoots?: EffectiveExtensionRoots;
+	readonly restrictToolNames?: boolean;
 	setSlashCommands(slashCommands: FileSlashCommand[]): void;
 	sessionManager: { getCwd(): string };
 }
@@ -97,7 +98,7 @@ export async function buildAvailableSlashCommands(
 	}
 
 	const cwd = session.sessionManager.getCwd();
-	const fileCommands = await loadFileCommands(cwd);
+	const fileCommands = session.restrictToolNames ? [] : await loadFileCommands(cwd);
 	if (session.sessionManager.getCwd() === cwd) session.setSlashCommands(fileCommands);
 	for (const command of fileCommands) {
 		appendCommand({

@@ -76,7 +76,6 @@ export function releaseNativeEnvironment(): NodeJS.ProcessEnv {
 	}
 	env.CARGO_TARGET_DIR = targetDir;
 	env.CARGO_INCREMENTAL = "1";
-	env.CARGO_PROFILE_LOCAL_LTO = "thin";
 	env.CARGO_PROFILE_LOCAL_STRIP = "symbols";
 	env.CMAKE_GENERATOR = "Ninja";
 	env.PCRE2_SYS_STATIC = "1";
@@ -85,7 +84,8 @@ export function releaseNativeEnvironment(): NodeJS.ProcessEnv {
 	if (linux) {
 		// NumKong's per-function dispatch needs EVEX-512 intrinsic support in
 		// Zig's Clang, not AVX2/AVX512F in baseline TUs. POPCNT is part of v2.
-		env.CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64-v2 -mevex512 -mpopcnt";
+		// Preserve the Tree-sitter endian macros from .cargo/config.toml on glibc 2.17.
+		env.CFLAGS_x86_64_unknown_linux_gnu = "-D_GNU_SOURCE -march=x86-64-v2 -mevex512 -mpopcnt";
 		env.CXXFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64-v2 -mevex512 -mpopcnt -stdlib=libc++";
 		env.CXXSTDLIB_x86_64_unknown_linux_gnu = "c++";
 		// No host pkg-config discoveries may inject Ubuntu libraries into the

@@ -166,6 +166,7 @@ import { scheduleGcAutoCompress } from "./cli/gc-auto-compress";
 import { cfgGcAutoCompress } from "./cli/gc-settings";
 import { cfgGoalEnabled } from "./goals/settings";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "./plan-mode/settings";
+import { isTuiOnlyBuiltinName } from "./slash-commands/helpers/parse";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
 import { cfgAsyncPrintWake, cfgLaunchPersist, cfgToolsApprovalMode } from "./tools/settings";
@@ -584,7 +585,7 @@ interface AcpSessionHandle {
 
 type AcpSessionFactory = (
 	cwd: string,
-	options?: { interactivePrompts?: boolean; forkSourcePath?: string },
+	options?: { interactivePrompts?: boolean },
 ) => Promise<AcpSessionHandle>;
 
 const API_KEY_REQUIRES_MODEL =
@@ -725,9 +726,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 		// Like every top-level session, it holds process-wide effects (`worktree.base`, request
 		// limits, …) on its own project's settings until disposed; its requests redact credentials
 		// per that project's `secrets.enabled` regardless of which session holds the effects.
-		const nextSessionManager = factoryOptions?.forkSourcePath
-			? await SessionManager.forkFrom(factoryOptions.forkSourcePath, cwd, args.sessionDir)
-			: SessionManager.create(cwd, args.sessionDir);
+		const nextSessionManager = SessionManager.create(cwd, args.sessionDir);
 		const agentId = `acp:${nextSessionManager.getSessionId()}`;
 		const { session: nextSession, setToolUIContext } = await args
 			.createSession({
@@ -3263,11 +3262,11 @@ export async function runRootCommand(
 				process.exit(1);
 			}
 
-			// Isolate exact TodoLoop submissions from their stdin/@file data.
+			// Keep TUI-only refusals separate from their stdin/@file data.
 			// Print mode settles the command and its context as one submission.
 			// Other recognized commands need separate dispatch only without a model.
 			const initialCommand =
-				firstCommandName !== undefined && (!session.model || firstCommandName === "todoloop")
+				firstCommandName !== undefined && (!session.model || isTuiOnlyBuiltinName(firstCommandName))
 					? initialArgs.messages.shift()
 					: undefined;
 			const { initialMessage, initialImages } = buildInitialMessage({

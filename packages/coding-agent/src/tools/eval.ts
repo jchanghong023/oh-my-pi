@@ -6,6 +6,7 @@ import type {
 	AgentToolUpdateCallback,
 	ToolSpeculationPolicy,
 } from "@oh-my-pi/pi-agent-core";
+import { LOCAL_TOOL_RESULT_CANCELLED } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, ToolExample } from "@oh-my-pi/pi-ai";
 import { formatBackgroundNotice, formatExitCodeNotice, formatTimeoutClampNotice } from "./details/bash";
 import { replaceTabs, truncateToWidth } from "../utils/text-width";
@@ -1027,11 +1028,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					};
 					if (notice) details.notice = notice;
 
-					return toolResult(details)
+					const output = toolResult(details)
 						.content([{ type: "text", text: notice ? `${notice}\n\n${outputText}` : outputText }, ...images])
 						.truncationFromSummary(summaryForMeta, { direction: "tail" })
 						.error()
 						.done();
+					return result.cancelled ? Object.assign(output, { [LOCAL_TOOL_RESULT_CANCELLED]: true }) : output;
 				}
 
 				if (cell.environmentChange && cell.environment) {

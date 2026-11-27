@@ -42,7 +42,14 @@ export type MnemopiScoping = "global" | "per-project" | "per-project-tagged";
 
 export type MnemopiProviderOptions = Pick<
 	MnemopiOptions,
-	"noEmbeddings" | "embeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey" | "llm" | "debug"
+	| "noEmbeddings"
+	| "embeddings"
+	| "embeddingModel"
+	| "embeddingApiUrl"
+	| "embeddingApiKey"
+	| "preserveStoredEmbeddingModel"
+	| "llm"
+	| "debug"
 >;
 
 export interface MnemopiBackendConfig {
@@ -76,7 +83,7 @@ export function resolveMnemopiEmbeddingOptions(
 	settings: Settings,
 ): Pick<
 	MnemopiProviderOptions,
-	"noEmbeddings" | "embeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey"
+	"noEmbeddings" | "embeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey" | "preserveStoredEmbeddingModel"
 > {
 	const embeddingOverride = cfgMnemopiEmbeddingModel.get(settings);
 	const embeddingVariant = cfgMnemopiEmbeddingVariant.get(settings);

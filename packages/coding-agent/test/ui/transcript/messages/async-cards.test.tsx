@@ -136,7 +136,7 @@ screenSuite("parent-irc", corpusCase => {
 	};
 });
 
-test("displays process receipts and task diagnostics without automatic task status rows", () => {
+test("shows background diagnostics without automatic success or task status rows", () => {
 	const message = {
 		customType: "async-result",
 		content: "results",
@@ -169,8 +169,6 @@ test("displays process receipts and task diagnostics without automatic task stat
 				JSON.stringify(describeTree(node, env)),
 			]) {
 				for (const marker of [
-					"Background job completed",
-					"bash-complete",
 					"Background job failed",
 					"bash-failed",
 					"compile project",
@@ -181,7 +179,13 @@ test("displays process receipts and task diagnostics without automatic task stat
 				])
 					expect(output).toContain(marker);
 				expect(output.match(/task-failed/g)).toHaveLength(1);
-				for (const marker of ["eval-running", "task-complete", "task-cancelled"])
+				for (const marker of [
+					"Background job completed",
+					"bash-complete",
+					"eval-running",
+					"task-complete",
+					"task-cancelled",
+				])
 					expect(output).not.toContain(marker);
 			}
 			visible.set(false);
@@ -227,10 +231,11 @@ test("process exit details survive replay and the tool activity visibility toggl
 				const env = staticEnvironment(PLAIN_THEME);
 				const rows = () => Bun.stripANSI(paintNode(env, node, 200).rows.join("\n"));
 				const native = () => JSON.stringify(describeTree(node, env));
-				for (const output of [rows(), native()])
-					for (const marker of ["healthy", "failed-state", "nonzero", "exit 7", "unknown-exit", "failed-unknown"])
+				for (const output of [rows(), native()]) {
+					for (const marker of ["failed-state", "nonzero", "exit 7", "unknown-exit", "failed-unknown"])
 						expect(output).toContain(marker);
-				expect(rows()).toContain("Supervised process completed healthy");
+					expect(output).not.toContain("healthy");
+				}
 				visible.set(false);
 				expect(rows()).toBe("");
 				expect(describeTree(node, env)).toMatchObject({ p: { role: "omp.activity", hidden: true } });
