@@ -15,7 +15,7 @@
  *   with `{ summary, shortSummary? }`.
  */
 
-import { attach, create, Flag, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { attach, create, Flag, MissingApiKeyError, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { getCodexAttestationHeader } from "@oh-my-pi/pi-ai/providers/openai-codex-attestation";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
 import {
@@ -47,9 +47,11 @@ import type {
 } from "@oh-my-pi/pi-ai/types";
 import {
 	dropMalformedOpenAIResponsesToolCalls,
+	getHeaderCaseInsensitive,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
 	normalizeResponsesToolCallId,
+	resolveRequestAuthBearer,
 	stripOpenAIResponsesInternalMetadataForReplay,
 	stripOpenAIResponsesOutputOnlyStatusesForReplay,
 	truncateResponseItemId,
@@ -71,6 +73,7 @@ import { Tokenizer } from "../tokenizer";
 import { appendAzureApiVersion, resolveAzureOpenAiBaseUrl } from "./azure-openai-endpoint";
 import { prepareBedrockCompactionRequest } from "./bedrock";
 import {
+	applyExplicitCompactionAuth,
 	isOpenAiRemoteCompactionApi,
 	parseResponsesCompactionUsage,
 	type ResponsesCompactionUsage,
@@ -878,6 +881,7 @@ export async function requestOpenAiRemoteCompaction(
 	signal?: AbortSignal,
 	opts?: {
 		fetch?: FetchImpl;
+		requestAuth?: SimpleStreamOptions["requestAuth"];
 		timeoutMs?: number;
 		sessionId?: string;
 		/**
@@ -894,9 +898,14 @@ export async function requestOpenAiRemoteCompaction(
 	},
 ): Promise<OpenAiRemoteCompactionResponse> {
 	model = await withResolvedHeaders(model, signal);
+	if (opts?.requestAuth !== undefined) apiKey = opts.requestAuth.apiKey?.trim() ?? "";
 	let fetchImpl: FetchImpl = opts?.fetch ?? fetch;
 	if (isBedrockOpenAIUrl(model.baseUrl)) {
-		({ model, apiKey, fetch: fetchImpl } = await prepareBedrockCompactionRequest(model, apiKey, opts?.fetch, signal));
+		({
+			model,
+			apiKey,
+			fetch: fetchImpl,
+		} = await prepareBedrockCompactionRequest(model, apiKey, opts?.fetch, signal, opts?.requestAuth));
 	}
 	const endpoint = resolveOpenAiCompactEndpoint(model);
 	const requestModel = resolveOpenAiCompactModel(model);
@@ -967,16 +976,21 @@ export async function requestOpenAiRemoteCompaction(
 	}
 	applySessionHeader(headers, model.compat, opts?.sessionId);
 
+	let accountId: string | undefined;
 	// Codex endpoints require additional auth headers
 	if (isCodexResponses) {
 		// Keep transport loading on the actual Codex request path, not compaction policy inspection.
 		const { createOpenAICodexCompatibilityMetadata } =
 			await import("@oh-my-pi/pi-ai/providers/openai-codex-responses");
-		const accountId = getCodexAccountId(apiKey);
+		const bearer = opts?.requestAuth === undefined ? apiKey : resolveRequestAuthBearer(opts.requestAuth);
+		if (!bearer) throw new MissingApiKeyError(model.provider);
+		accountId =
+			getHeaderCaseInsensitive(opts?.requestAuth?.headers, OPENAI_HEADERS.ACCOUNT_ID)?.trim() ||
+			getCodexAccountId(bearer);
 		if (accountId) {
 			headers[OPENAI_HEADERS.ACCOUNT_ID] = accountId;
 		}
-		applyCodexResidencyHeader(headers, apiKey);
+		applyCodexResidencyHeader(headers, bearer);
 		const attestation = await getCodexAttestationHeader(accountId);
 		if (attestation) {
 			headers[OPENAI_HEADERS.ATTESTATION] = attestation;
@@ -1011,11 +1025,18 @@ export async function requestOpenAiRemoteCompaction(
 			request.include = Array.from(new Set([...(request.include ?? []), "reasoning.encrypted_content"]));
 		}
 	}
+	let requestHeaders: Headers | Record<string, string> = headers;
+	if (opts?.requestAuth !== undefined) {
+		const explicit = new Headers(headers);
+		applyExplicitCompactionAuth(explicit, opts.requestAuth, apiKey, isAzureOpenAiResponses, accountId);
+		requestHeaders = explicit;
+	}
 
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
-		headers,
+		headers: requestHeaders,
 		body: stringifyJson(isCodexResponses ? withCodexRoutingFieldsFirst(request) : request),
+		redirect: opts?.requestAuth !== undefined ? "error" : undefined,
 		signal: ptree.combineSignals(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 	});
 
@@ -1088,6 +1109,7 @@ export async function requestRemoteCompaction(
 		timeoutMs?: number;
 		model?: Model;
 		apiKey?: string;
+		requestAuth?: SimpleStreamOptions["requestAuth"];
 		onPayload?: SimpleStreamOptions["onPayload"];
 	},
 ): Promise<RemoteCompactionResponse> {
@@ -1120,6 +1142,9 @@ export async function requestRemoteCompaction(
 				if (configuredHeaders) {
 					for (const name in configuredHeaders) headers.set(name, configuredHeaders[name]!);
 				}
+				if (opts?.requestAuth !== undefined) {
+					applyExplicitCompactionAuth(headers, opts.requestAuth, opts.requestAuth.apiKey?.trim() ?? "", false);
+				}
 			}
 
 			let body: unknown = isChatCompletions
@@ -1140,6 +1165,7 @@ export async function requestRemoteCompaction(
 				method: "POST",
 				headers,
 				body: stringifyJson(body),
+				redirect: isChatCompletions && opts?.requestAuth !== undefined ? "error" : undefined,
 				signal: ptree.combineSignals(signal, opts?.timeoutMs ?? REMOTE_COMPACTION_TIMEOUT_MS),
 			});
 			if (!response.ok) {

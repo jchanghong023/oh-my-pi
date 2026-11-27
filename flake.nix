@@ -9,6 +9,9 @@
   };
 
   inputs = {
+    # Follow the parent repository's OpenWiki gitlink, not a second version pin.
+    self.submodules = true;
+
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # nixpkgs unstable dropped Intel macOS in 26.11; keep that supported

@@ -37,24 +37,13 @@ import { isResourceCommand, isSubcommand, LAUNCH_FLAG_COMMANDS, leadingSubcomman
 import {
 	EXTENSION_SHADOWABLE_STRING_FLAGS,
 	isUnknownLongValueCandidate,
+	OPENWIKI_VALUE_FLAGS,
 	OPTIONAL_FLAGS,
 	OPTIONAL_VALUE_FLAGS,
 	PROFILE_BOOTSTRAP_BOUNDARY_ARG,
 	STRING_VALUE_FLAGS,
 } from "./flag-tables";
 import { isNativeShell } from "./native-shell";
-
-const OPENWIKI_VALUE_FLAGS = new Set([
-	"--language",
-	"-l",
-	"--mode",
-	"--modelId",
-	"--model-id",
-	"--planner-model",
-	"--telemetry-file",
-	"--port",
-	"--export",
-]);
 
 function preserveBoundaryAfterGlobalStrip(stripped: string[], openWikiArgv: boolean): boolean {
 	const previous = stripped[stripped.length - 1];

@@ -35,6 +35,7 @@
 		"!src/export/html/share-loader.js",
 		"dist/cli.js",
 		"dist/docs-index.generated.txt",
+		"dist/export-viewer.generated.js",
 		"dist/spec-driven-resources*.gz",
 		"dist/developer-test-agent-resources*.gz",
 		"dist/openwiki-vendor.js",

@@ -44,7 +44,7 @@ import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
 import { resolvePeer } from "../utils/resolve-peer";
-import { applyCallerTrust } from "./caller-options";
+import { applyCallerTrust, PI_NATIVE_OUTER_AUTH_HEADERS } from "./caller-options";
 import { type AuthGatewayClientScope, AuthGatewayClientTable } from "./clients";
 import {
 	type AuthGatewayBootOptions,
@@ -839,7 +839,7 @@ async function handlePiNative(
 		delete streamOpts.frequencyPenalty;
 		delete streamOpts.repetitionPenalty;
 	}
-	applyCallerTrust(streamOpts, req, bootOpts.client !== undefined);
+	applyCallerTrust(streamOpts, req, bootOpts.client !== undefined, req.headers.get(PI_NATIVE_OUTER_AUTH_HEADERS));
 	streamOpts.sessionId = sessionId;
 
 	logger.info("auth-gateway request", {

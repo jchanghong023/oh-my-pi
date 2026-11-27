@@ -38,7 +38,7 @@ disable-model-invocation: true
 
 检测测试代码语言后，**必须读取对应语言的专属reference**获取语言特定的错误类型、修复策略和验证命令：
 
-本 skill 的 `references/` 和 `scripts/` 路径相对于加载时返回的 baseDir；用 `read` 读取资源时可用 `skill://fix-ut/<路径>`。reference 中的相对链接以该 reference 所在目录为基准，不依赖项目工作目录。脚本命令使用 baseDir 的绝对路径并加引号。
+本 skill 的 `references/` 和 `scripts/` 路径相对于加载时返回的 baseDir；用 `read` 读取资源时可用 `skill://bundled-developer-test-agent/fix-ut/<路径>`。reference 中的相对链接以该 reference 所在目录为基准，不依赖项目工作目录。脚本命令使用 baseDir 的绝对路径并加引号。
 
 | 语言 | 触发条件 | 必读reference |
 |------|----------|---------------|

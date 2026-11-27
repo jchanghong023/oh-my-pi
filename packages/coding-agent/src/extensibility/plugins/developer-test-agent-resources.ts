@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
+import type { Skill } from "../skills";
 import bundledArchive from "./developer-test-agent-archive";
+
+export const BUNDLED_DEVELOPER_TEST_NAMESPACE = "bundled-developer-test-agent";
+const BUNDLED_SKILL_NAMES = new Set(["generate-ut", "fix-ut", "improve-coverage", "improve-validity", "test-report"]);
 
 /** Resolve the real resource root, materializing the build's immutable resources in the active profile if needed. */
 export async function getDeveloperTestAgentRoot(agentDir: string = getAgentDir()): Promise<string> {
@@ -55,4 +59,20 @@ export async function getDeveloperTestAgentRoot(agentDir: string = getAgentDir()
 		await fs.rm(temporary, { recursive: true, force: true });
 	}
 	return fs.realpath(destination);
+}
+
+/** Address the shipped files independently of skill-catalog names and deduplication. */
+export async function getBundledDeveloperTestSkill(name: string, agentDir?: string): Promise<Skill | undefined> {
+	if (!BUNDLED_SKILL_NAMES.has(name)) return undefined;
+	const root = await getDeveloperTestAgentRoot(agentDir);
+	const baseDir = path.join(root, "skills", name);
+	return {
+		name: `${BUNDLED_DEVELOPER_TEST_NAMESPACE}/${name}`,
+		description: "",
+		filePath: path.join(baseDir, "SKILL.md"),
+		baseDir,
+		source: BUNDLED_DEVELOPER_TEST_NAMESPACE,
+		hide: true,
+		containRoot: root,
+	};
 }

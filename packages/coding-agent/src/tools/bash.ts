@@ -46,7 +46,7 @@ import { type BoardEntry, registerOnBoard } from "../daemon/client";
 import { applyDirenvPreflight, type BashResult, executeBash, sessionShellEnv } from "../exec/bash-executor";
 import { BASH_SESSION_ENV } from "../exec/session-processes";
 import { shellMounts, shellProcessCommand } from "../exec/shell-process";
-import { createToolCommandHandler, toolCommandNames } from "../exec/tool-command-host";
+import { type CompleteToolCommandPage, createToolCommandHandler, toolCommandNames } from "../exec/tool-command-host";
 import { InternalUrlRouter } from "../internal-urls";
 import { sessionResolveContext } from "../internal-urls/context";
 import {
@@ -842,19 +842,29 @@ function isToolCommandLine(command: string, names: ReadonlySet<string>): boolean
 class ToolCommandRecorder {
 	#records: Array<ToolCommandDispatch | undefined> = [];
 	#finished = new Set<number>();
-	#firstCompletePage?: string;
+	#firstCompletePage?: CompleteToolCommandPage;
+	#outputOffset = 0;
 
 	/** Record a finished dispatch. */
-	finish(dispatch: ToolCommandDispatch, index: number, completePage?: string): void {
+	finish(dispatch: ToolCommandDispatch, index: number, completePage?: CompleteToolCommandPage): void {
 		this.#records[index] = dispatch;
-		if (index === 0) this.#firstCompletePage = completePage;
+		// The host records the dispatch before returning stdout to the shell.
+		if (index === 0 && this.#outputOffset === 0) this.#firstCompletePage = completePage;
 		this.#finished.add(index);
+	}
+
+	/** Compare the actual shell stream without retaining a second copy of it. */
+	observeOutput(chunk: string): void {
+		if (!chunk) return;
+		if (!this.#firstCompletePage?.stdout.startsWith(chunk, this.#outputOffset)) this.#firstCompletePage = undefined;
+		this.#outputOffset += chunk.length;
 	}
 
 	soleCompletePage(command: string): string | undefined {
 		const first = this.#records[0];
-		if (this.#firstCompletePage === undefined || this.#records.length !== 1 || !first) return undefined;
-		return isSoleToolInvocation(command, first) ? this.#firstCompletePage : undefined;
+		const page = this.#firstCompletePage;
+		if (!page || this.#outputOffset !== page.stdout.length || this.#records.length !== 1 || !first) return undefined;
+		return isSoleToolInvocation(command, first) ? page.text : undefined;
 	}
 
 	/** Record the partial details a running dispatch reported. */
@@ -1449,7 +1459,24 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const exitCode = result.exitCode;
 		const failedExit = exitCode !== undefined && exitCode !== 0;
 		const isTimeout = result.timedOut === true;
-		const completePage = exitCode === 0 && !result.cancelled && !isTimeout ? options.completePage : undefined;
+		const notices = options.notices?.filter(Boolean) ?? [];
+		const resetNotice = formatShellResetNotice(result, this.session.cwd);
+		if (resetNotice) notices.push(resetNotice);
+		const fork = "fork" in result ? result.fork : undefined;
+		if (fork && !fork.carried) notices.push(FORK_STATE_LOST_NOTICE);
+		if (fork?.jobs) notices.push(FORK_JOBS_NOTICE);
+		const completePage =
+			exitCode === 0 &&
+			!result.cancelled &&
+			!isTimeout &&
+			notices.length === 0 &&
+			!options.replies?.length &&
+			!result.images?.length &&
+			!result.artifactError &&
+			!result.artifactElidedBytes &&
+			!("minimized" in result && result.minimized)
+				? options.completePage
+				: undefined;
 		const wallTimeMs = options.wallTimeMs;
 		const wallTimeNoticeEmitted =
 			completePage === undefined && wallTimeMs !== undefined && wallTimeMs >= WALL_TIME_NOTICE_MIN_MS;
@@ -1476,8 +1503,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (trace) details.trace = trace;
 
 		if (completePage !== undefined) {
-			// A sole query's structured page is not a shell preview: keep its body exact and its run replayable.
-			details.meta = { completePage: true };
+			// Only the fully captured page reached stdout/stderr. Keep its body exact,
+			// and retain a raw capture link without claiming this body was truncated.
+			details.meta = {
+				completePage: true,
+				...(result.artifactId ? { source: { type: "internal", value: spillUrl(result.artifactId) } } : {}),
+			};
 			return { content: [{ type: "text", text: completePage }], details };
 		}
 
@@ -1487,20 +1518,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				: await this.#shapeOutput(result, options.toolCallId, options.command);
 		if (shaped?.spotlight) details.spotlight = shaped.spotlight;
 		const outputLines = [shaped?.text ?? this.#formatResultOutput(result)];
-		const notices: string[] = [];
-		if (wallTimeNoticeEmitted) {
-			notices.push(formatWallTimeNotice(wallTimeMs));
-		}
-		if (options.notices) {
-			for (const notice of options.notices) {
-				if (notice) notices.push(notice);
-			}
-		}
-		const resetNotice = formatShellResetNotice(result, this.session.cwd);
-		if (resetNotice) notices.push(resetNotice);
-		const fork = "fork" in result ? result.fork : undefined;
-		if (fork && !fork.carried) notices.push(FORK_STATE_LOST_NOTICE);
-		if (fork?.jobs) notices.push(FORK_JOBS_NOTICE);
+		if (wallTimeNoticeEmitted) notices.unshift(formatWallTimeNotice(wallTimeMs));
 		if (notices.length > 0) outputLines.push("", ...notices);
 		// Shaped output already leads with its exit status.
 		if (failedExit && !shaped?.text?.startsWith("[exit code ")) outputLines.push("", formatExitCodeNotice(exitCode));
@@ -1817,6 +1835,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							},
 						}),
 						allocateArtifact: this.session.allocateOutputArtifact,
+						onRawChunk:
+							options.toolCommands.length > 0 ? chunk => toolCommandRecorder.observeOutput(chunk) : undefined,
 						onChunk: chunk => {
 							outputModified = Date.now();
 							outputTap.append(chunk);
@@ -2719,6 +2739,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						onChange: emitFrame,
 					}),
 					allocateArtifact: this.session.allocateOutputArtifact,
+					onRawChunk:
+						toolCommandNameList.length > 0 ? chunk => toolCommandRecorder.observeOutput(chunk) : undefined,
 					// Stream the sink's own inline view rather than re-buffering chunks.
 					onPreview: emitFrame
 						? text => {

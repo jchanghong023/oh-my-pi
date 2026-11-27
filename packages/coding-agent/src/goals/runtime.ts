@@ -402,12 +402,13 @@ export class GoalRuntime {
 			state.goal.tokenBudget = newBudget;
 			state.goal.updatedAt = this.#now();
 			let shouldSteer = false;
+			const wasBudgetLimited = state.goal.status === "budget-limited";
 			if (newBudget !== undefined && isBudgetExhausted(state.goal)) {
 				if (state.goal.status === "active") {
 					state.goal.status = "budget-limited";
 					shouldSteer = true;
 				}
-			} else if (state.goal.status === "budget-limited") {
+			} else if (wasBudgetLimited) {
 				state.goal.status = "active";
 				state.enabled = true;
 				this.#markActiveAccounting(state.goal);
@@ -415,6 +416,8 @@ export class GoalRuntime {
 			await this.#commitState(state, {
 				persist: state.enabled ? "goal" : "goal_paused",
 				transition: "budget_mutated",
+				// Lifting the cap can restore a previously admitted run, not admit a new one.
+				resumeAutopilot: wasBudgetLimited && state.goal.status === "active" ? "restored" : undefined,
 			});
 			if (shouldSteer) {
 				await this.#sendBudgetLimitSteer(state);

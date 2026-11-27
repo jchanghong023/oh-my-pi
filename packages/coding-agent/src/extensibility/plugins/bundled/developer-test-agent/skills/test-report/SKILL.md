@@ -20,7 +20,7 @@ disable-model-invocation: true
 
 检测测试代码语言后，**必须读取对应语言的专属reference**获取语言特定的覆盖率工具、质量评估标准和检查项：
 
-本 skill 的 `references/` 路径相对于加载时返回的 baseDir；用 `read` 读取资源时可用 `skill://test-report/<路径>`。reference 中的相对链接以该 reference 所在目录为基准，不依赖项目工作目录。
+本 skill 的 `references/` 路径相对于加载时返回的 baseDir；用 `read` 读取资源时可用 `skill://bundled-developer-test-agent/test-report/<路径>`。reference 中的相对链接以该 reference 所在目录为基准。
 
 | 语言 | 触发条件 | 必读reference |
 |------|----------|---------------|

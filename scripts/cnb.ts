@@ -44,6 +44,8 @@ async function pullBoth(wsl: string): Promise<string> {
 	await Promise.all([ensureSource(wsl, false), ensureSource(wsl, true)]);
 	const update = async (linux: boolean): Promise<string> => {
 		await safeGit(wsl, linux, ["pull", "--ff-only", "--no-recurse-submodules"]);
+		// The precheck rejected local submodule changes; now check out the new pinned gitlink without forcing it.
+		await safeGit(wsl, linux, ["submodule", "update", "--init", "--checkout", "--", "vendor/openwiki"]);
 		await ensureSource(wsl, linux);
 		console.log(`${linux ? "WSL" : "Windows"} git pull --ff-only completed.`);
 		return safeGit(wsl, linux, ["rev-parse", "HEAD"]);

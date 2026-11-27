@@ -5,7 +5,7 @@
  * All providers translate their native format to this shape.
  */
 
-import type { MCPRequestIdFormat } from "../mcp/types";
+import type { MCPRequestIdFormat, MCPServerConfig } from "../mcp/types";
 import { defineCapability } from ".";
 import type { SourceMeta } from "./types";
 
@@ -59,16 +59,8 @@ export interface MCPServer {
 		clientSecret?: string;
 		resource?: string;
 	};
-	/** OAuth configuration for servers requiring explicit client credentials */
-	oauth?: {
-		clientId?: string;
-		clientSecret?: string;
-		scope?: string;
-		redirectUri?: string;
-		callbackPort?: number;
-		callbackPath?: string;
-		prompt?: string;
-	};
+	/** OAuth client configuration */
+	oauth?: MCPServerConfig["oauth"];
 	/** Transport type */
 	transport?: "stdio" | "sse" | "http";
 	/** Source metadata (added by loader) */

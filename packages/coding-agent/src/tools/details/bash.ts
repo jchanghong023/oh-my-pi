@@ -1,3 +1,4 @@
+import { parseSpillUrl } from "@oh-my-pi/pi-utils";
 import { type OutputMeta, stripOutputNotice, stripRawOutputNotice, stripTrailingNotice } from "../output-meta-format";
 import type { RenderResultOptions } from "./renderer";
 import { type ShellTrace } from "@oh-my-pi/pi-wire";
@@ -126,6 +127,11 @@ export function stripBashNotices(
 	raw: string,
 	details: BashNoticeDetails | undefined,
 ): { text: string; artifactId?: string } {
+	const meta = details?.meta;
+	if (meta?.completePage) {
+		const artifactId = meta.source?.type === "internal" ? parseSpillUrl(meta.source.value) : undefined;
+		return artifactId === undefined ? { text: raw } : { text: raw, artifactId: String(artifactId) };
+	}
 	const job = details?.async;
 	let text = raw;
 	if (job?.state === "running") {

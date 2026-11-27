@@ -96,7 +96,7 @@ OMP MUST Git 钩子保持禁用，提交和推送不自动运行检查。
 
 - **WHEN** 维护以下能力
 - **THEN** 以下边界适用：
-  - 会话 HTML 导出的 viewer、Markdown 和代码高亮资源按上游规则选择、加载和提示失败；开发检出与发行产物分别沿用原有路径，不要求所有发行路径内联资源或离线可用。
+  - 会话 HTML 导出的 Markdown 与代码高亮沿用上游共享资源、完整性校验及失败提示。开发检出读取本地生成的 viewer；打包 CLI 使用同次构建生成的 viewer 并内联到导出 HTML，不固定旧上游版本、不新增发布渠道，也不承诺整个导出可离线打开。
   - Provider 错误码提取、优先级和传播沿用上游；扩展工具使用通用 schema 校验，不提供扩展作者可选的 `lenientArgValidation`。已批准的内建工具参数反馈和其他工具能力保持不变。
   - 服务日志读取失败和 Web Search 未配置模型／所有候选失败沿用上游失败传播及回执，不增加服务日志失败专用回执或 Web Search `isError` 标记。日志读取失败不撤销已启动服务；服务参数校验及 native PipeStreams 降级要求保持不变。
   - Robomp 的 PR 元数据解析、PR 审查、review 处理及 PR 对话处理中的 GitHub 请求遇到 `GitHubError` 时，沿用上游捕获、记录 warning 后返回的行为；其他异常和路径保持既有行为。

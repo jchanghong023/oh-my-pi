@@ -17,7 +17,7 @@
  */
 import * as os from "node:os";
 import { getAppName, getInstallId, readSseJson } from "@oh-my-pi/pi-utils";
-import { WIRE_OPTION_KEYS } from "../auth-gateway/caller-options";
+import { PI_NATIVE_OUTER_AUTH_HEADERS, WIRE_OPTION_KEYS } from "../auth-gateway/caller-options";
 import * as AIError from "../error";
 import type {
 	Api,
@@ -37,6 +37,7 @@ import {
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 import { notifyProviderResponse } from "../utils/provider-response";
+import { mergeHeaders } from "./anthropic-headers";
 
 const PI_NATIVE_STREAM_IDLE_TIMEOUT_ERROR = "pi-native stream stalled while waiting for the next event";
 const PI_NATIVE_STREAM_FIRST_EVENT_TIMEOUT_ERROR = "pi-native stream timed out while waiting for the first event";
@@ -117,7 +118,7 @@ function resolveStreamUrl(model: Model<Api>): string {
 	return `${model.baseUrl.replace(/\/+$/, "")}/v1/pi/stream`;
 }
 
-function buildHeaders(model: Model<Api>, apiKey: string | undefined): Record<string, string> {
+function buildHeaders(model: Model<Api>, options: SimpleStreamOptions | undefined): Record<string, string> {
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 		Accept: "text/event-stream",
@@ -130,6 +131,22 @@ function buildHeaders(model: Model<Api>, apiKey: string | undefined): Record<str
 		"x-omp-app": getAppName(),
 		...model.headers,
 	};
+	const auth = options?.requestAuth;
+	if (auth !== undefined) {
+		// Explicit auth belongs to the gateway hop, not to the provider it calls.
+		for (const name in headers) {
+			if (name.toLowerCase() === "authorization") delete headers[name];
+		}
+		const apiKey = auth.apiKey?.trim();
+		if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+		const outerNames = Object.keys(auth.headers ?? {}).join(",");
+		return mergeHeaders(
+			headers,
+			auth.headers,
+			outerNames ? { [PI_NATIVE_OUTER_AUTH_HEADERS]: outerNames } : undefined,
+		);
+	}
+	const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
 	if (apiKey) {
 		let authHeader = "Authorization";
 		for (const name in model.headers) {
@@ -187,10 +204,7 @@ export function streamPiNative<TApi extends Api>(
 		try {
 			const url = resolveStreamUrl(model as Model<Api>);
 			const fetchImpl = options?.fetch ?? globalThis.fetch;
-			const headers = buildHeaders(
-				model as Model<Api>,
-				typeof options?.apiKey === "string" ? options.apiKey : undefined,
-			);
+			const headers = buildHeaders(model, options);
 			const body = JSON.stringify({
 				modelId: `${model.provider}/${model.id}`,
 				context,
@@ -211,6 +225,7 @@ export function streamPiNative<TApi extends Api>(
 				method: "POST",
 				headers,
 				body,
+				redirect: options?.requestAuth !== undefined ? "error" : undefined,
 				signal: watchdog.signal,
 				timeout: false,
 			};

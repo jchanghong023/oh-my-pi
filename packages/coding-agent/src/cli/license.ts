@@ -22,22 +22,28 @@ export function renderOpenWikiLicenseSections(licenses: ReadonlyMap<string, stri
 
 async function openWikiNotices(): Promise<string[]> {
 	const root = path.resolve(import.meta.dir, "../../../..");
-	const sourceCheckout = !process.env.PI_COMPILED && !process.env.PI_BUNDLED && isOpenWikiSourceCheckout(root);
+	// Source images keep .gitmodules, even when they copy neither .git nor OpenWiki.
+	const sourceCheckout =
+		!process.env.PI_COMPILED &&
+		!process.env.PI_BUNDLED &&
+		(isOpenWikiSourceCheckout(root) || existsSync(path.join(root, ".gitmodules")));
 	const vendorLicense = path.join(root, "vendor/openwiki/LICENSE");
 	const unavailable = [
 		"OpenWiki resources are unavailable. Initialize the OpenWiki submodule and run bun run gen:openwiki-resources.",
 	];
+	if (sourceCheckout && !existsSync(vendorLicense)) return unavailable;
 	let noticeStatus = "not generated";
 	try {
 		const archive = await loadOpenWikiArchive();
-		if (sourceCheckout) {
-			if (!existsSync(vendorLicense)) return unavailable;
-			if (isOpenWikiArchiveStale(archive.sourceFingerprint, openWikiResourceFingerprint(root))) {
-				noticeStatus = "stale";
-			}
+		if (sourceCheckout && isOpenWikiArchiveStale(archive.sourceFingerprint, openWikiResourceFingerprint(root))) {
+			noticeStatus = "stale";
 		}
-		if (noticeStatus !== "stale")
-			return renderOpenWikiLicenseSections(await readOpenWikiLicenseAssets(archive.files));
+		if (noticeStatus !== "stale") {
+			const sections = renderOpenWikiLicenseSections(await readOpenWikiLicenseAssets(archive.files));
+			if (sections.some(section => !section))
+				throw new Error("Incomplete OpenWiki license notices in the resource archive.");
+			return sections;
+		}
 	} catch (error) {
 		if (!sourceCheckout) throw error;
 		// Archive or fingerprint inputs are unavailable; keep the source license when possible.

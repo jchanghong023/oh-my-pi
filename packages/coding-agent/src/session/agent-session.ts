@@ -3256,6 +3256,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			modelRegistry: this.#modelRegistry,
 			extensionRunner: this.#extensionRunner,
 			sideStreamFn: this.#sideStreamFn,
+			resolveRequestAuth: this.#evalToolSession?.resolveRequestAuth,
 			providerSessionState: this.#providerSessionState,
 			preferWebsockets: model => resolveWebsocketPreference(this.settings, model),
 			model: () => this.model,
@@ -4042,19 +4043,24 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * singleton would tear down the owning primary session's bash/task jobs at
 	 * dispose time (issue #1923).
 	 *
+	 * Strict disposal leaves cancellation and eviction to the manager so retained
+	 * artifacts can be cleaned up before their rows are removed.
+	 *
 	 * No-op when no manager is reachable or this session has no agent id.
 	 *
 	 * A transcript transition also abandons an open run, closing it without `agent_end`.
 	 */
-	#cancelOwnAsyncJobs(reason?: unknown): void {
+	#cancelOwnAsyncJobs(reason?: unknown, strict = false): void {
 		if (this.#runActive) this.#closeRun();
 		if (!this.#agentId) return;
 		releaseCompletionHandles(this.#agentId);
 		releaseJudgmentBatches(this.#agentId);
 		WorkPoolRegistry.global().releaseOwner(this.#agentId);
-		const manager = this.#asyncJobManager;
-		manager?.cancelAll({ ownerId: this.#agentId }, reason);
-		manager?.evictCompletedJobs({ ownerId: this.#agentId });
+		if (!strict) {
+			const manager = this.#asyncJobManager;
+			manager?.cancelAll({ ownerId: this.#agentId }, reason);
+			manager?.evictCompletedJobs({ ownerId: this.#agentId });
+		}
 		// Invalidate this owner's in-flight/drained deliveries and open notify
 		// channels against the new generation, then drop any follow-up already
 		// queued, so a prior session's background job cannot inject into the next
@@ -4062,22 +4068,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#asyncDeliveryEpoch += 1;
 		this.yieldQueue.clear("async-result");
 		this.yieldQueue.clear(ASYNC_NOTIFY_MESSAGE_TYPE);
-	}
-
-	async #settleOwnAsyncJobs(): Promise<void> {
-		const manager = this.#asyncJobManager;
-		if (!manager || !this.#agentId) return;
-		const deadline = Date.now() + 3_000;
-		if (!(await manager.waitForOwnerJobs(this.#agentId, { timeoutMs: 3_000 }))) {
-			throw new Error("Session owned async jobs did not settle during strict cleanup");
-		}
-		if (
-			!(await manager.drainDeliveries({
-				timeoutMs: Math.max(0, deadline - Date.now()),
-				filter: { ownerId: this.#agentId },
-			}))
-		)
-			throw new Error("Session owned async deliveries did not settle during strict cleanup");
 	}
 
 	/**
@@ -7504,9 +7494,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// subagent session dispose (e.g. `release({ tombstone: true })` during an
 		// explicit hard kill) leaves `#ownedAsyncJobManager` undefined and must
 		// propagate a generic cancellation so its nested children stay terminal.
-		this.#cancelOwnAsyncJobs(manager ? ASYNC_JOB_MANAGER_SHUTDOWN_REASON : undefined);
+		this.#cancelOwnAsyncJobs(manager ? ASYNC_JOB_MANAGER_SHUTDOWN_REASON : undefined, strict);
 		if (!manager) {
-			if (strict) await this.#settleOwnAsyncJobs();
+			if (strict && this.#agentId) await this.#asyncJobManager?.disposeOwner(this.#agentId, 3_000);
 			return;
 		}
 		if (strict) {
@@ -9718,11 +9708,22 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#resumeAutopilot(goalId: string, source: "explicit" | "restored"): void {
-		if (this.#agentKind !== "main") return;
+		const state = this.#goalModeState;
+		if (
+			this.#agentKind !== "main" ||
+			this.#isDisposed ||
+			state?.autoOrchestrate !== true ||
+			!state.enabled ||
+			state.goal.id !== goalId
+		) {
+			return;
+		}
 		const sessionGeneration = this.#sessionGeneration;
 		const run = this.#autopilotRun;
+		const currentRun = run?.goalId === goalId && run.sessionGeneration === sessionGeneration;
+		if (source === "restored" && currentRun) return;
 		const alreadyAdmitted =
-			(source === "explicit" && run?.goalId === goalId && run.sessionGeneration === sessionGeneration) ||
+			currentRun ||
 			this.sessionManager
 				.getBranchView()
 				.some(

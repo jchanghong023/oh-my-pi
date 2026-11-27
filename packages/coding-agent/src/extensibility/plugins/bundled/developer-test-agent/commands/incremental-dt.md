@@ -341,7 +341,7 @@ git diff {base}...HEAD -- "{filename}"
 5. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
 6. 覆盖率阈值默认 80%，未达标时 Agent 内部循环补充测试
 7. 任务由主 Agent 按创建顺序串行调度
-8. 已存在测试文件时，优先使用 improve-coverage 分析覆盖率，若已达标则跳过测试生成
+8. 已存在测试文件时，优先使用内置 `improve-coverage` 分析覆盖率，若已达标则跳过测试生成
 9. 执行时必须询问用户选择分析模式（本地变更 / 本地分支对比），不得跳过交互
 10. 本地变更模式下，必须同时检查 `git diff HEAD` 和 `git ls-files --others`，向用户展示未提交变更和未跟踪的新文件，提示添加遗漏的新文件
 11. **禁止使用 Team 模式**：仅使用 `todo` 跟踪任务，使用 `task` 逐个串行调度

@@ -1,5 +1,5 @@
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
-import type { FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import type { FetchImpl, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai/types";
 import { transportFetch } from "@oh-my-pi/pi-ai/utils/transport-fetch";
 
 export interface BedrockCompactionRequest {
@@ -25,17 +25,18 @@ export async function prepareBedrockCompactionRequest(
 	apiKey: string,
 	fetch: FetchImpl | undefined,
 	signal: AbortSignal | undefined,
+	requestAuth?: SimpleStreamOptions["requestAuth"],
 ): Promise<BedrockCompactionRequest> {
 	const baseFetch = transportFetch(model, fetch);
 	const provider = getProviderDefinition(model.provider);
 	const providerModel = provider?.prepareModel?.(model) ?? model;
-	const prepared = provider?.prepareRequest?.(providerModel, { apiKey, fetch: baseFetch, signal }) ?? {
+	const prepared = provider?.prepareRequest?.(providerModel, { apiKey, fetch: baseFetch, signal, requestAuth }) ?? {
 		model: providerModel,
 		options: { apiKey, fetch: baseFetch },
 	};
 	return {
 		model: { ...prepared.model, headers: { ...prepared.model.headers, ...prepared.options.headers } },
-		apiKey: prepared.options.apiKey || apiKey,
+		apiKey: requestAuth === undefined ? prepared.options.apiKey || apiKey : (prepared.options.apiKey ?? ""),
 		fetch: prepared.options.fetch ?? baseFetch,
 	};
 }

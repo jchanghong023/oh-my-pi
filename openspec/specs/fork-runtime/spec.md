@@ -121,6 +121,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 仅执行构建、打包及其必要准备，不运行单元、集成、冒烟或安装测试；发布 MUST 等待版本元数据、全部二进制和浏览器扩展构建成功，不依赖测试作业。验证按[验证要求](../fork-verification-gates/spec.md)独立执行，不自动推送、触发／等待 CI、启动 WSL 或创建 Release；发布须单独明确授权。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
 - 本地开发分发额外提供 `bun run local`（Windows 本机编译并直接替换安装目录中的 `omp.exe`：旧可执行文件先改名，再换入新版，不杀任何已有进程；换入失败恢复旧文件，仍被旧进程占用的映像保留）和 `bun run cnb`（先在 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行安全的 `git pull --ff-only`，确认两端工作区干净且 Git 提交一致，再并行构建两平台产物，并行上传到已有 CNB Release；默认目标为 `jchanghong/bin` 仓库的 `omp` 标签，可用 `--repo`、`--tag` 显式覆盖，无需交互输入）。`bun run cnb` MUST 覆盖 `omp-windows-x64.exe`、`omp-linux-x64`、`omp-sdk-win32-x64.zip`、`omp-sdk-linux-x64.zip` 并取得四次上传成功确认，缓存命中也不跳过上传；不另行确认，不修改其他附件，不提供冗余的 `--overwrite` 参数。不上传独立源码归档，不推送 Git 源码，不替代 GitHub 正式 Release，也不改变安装器或 `omp update` 的 GitHub 来源。
 - `local`、`cnb` 和手动发布 CI 的分发构建 MUST NOT 运行任何测试、冒烟、worker 探测、native 加载探测或构建产物试运行。CNB 不执行全仓源码哈希扫描、重复 WSL 预检、Release 附件竞态检查或发布后重复查询；只保留干净工作区、Git 提交一致性、Bun 版本、构建输出及上传接口所必需的检查和确认。WSL 源码及构建脚本 MUST 只通过 Git 远端同步，不通过 stdin 传脚本，也不复制、移动、打补丁或清理用户文件绕过脏工作区检查。两端 Bun 版本 MUST 一致；保留构建资源所必需的 Export viewer 精确字节元数据校验；遗留 `tool-views.generated.js` 仅作为忽略的生成产物保留。
+- CNB 先检查两端父仓和子模块工作树干净，快进后检出父仓固定的 OpenWiki 子模块提交，再检查干净状态；不强制覆盖子模块修改。
 - 仓库仅启用 `.github/workflows/ci.yml`（手动构建发布），不提供 CNB 源码同步工作流。其他上游工作流（`nix.yml`、`bun-cache-warm.yml`、`stale.yml`）保留上游内容，仅追加 `.disabled` 停用，不参与任何触发；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
 - CNB 与手动发布 CI 的 native 入口直接构建并写入版本戳，不加载 addon；`bun run local` 安装 native 时继续显式跳过宿主加载探测（`--skip-load-probe`）。普通 `bun run build:native` 的默认加载探测行为不变。
 - 二进制必须携带 fork 版本和更新仓库信息。
@@ -521,6 +522,7 @@ OMP MUST 提供可选的 `OMP_CACHE_DIR`，用于分离既有 Cache、统计、�
 - **WHEN** 没有有效显式 `OMP_CACHE_DIR`，且 Linux 进程按既有 `OMP_OFFLINE` 真值规则启用 offline
 - **THEN** OMP MUST 使用 `/dev/shm/omp-<UID>` 作为性能数据根，`<UID>` 为当前用户的数字 UID，不再追加 UID，并保留既有 profile 布局
 - **AND** 隐式根不要求挂载允许执行。编译版 JS eval 的可执行 `cache/bun-stub` 与需执行映射的 native addon 二进制 MUST 沿用未选择性能根时的路径（适用的已初始化 XDG cache，否则配置根；保留 profile 布局），不探测挂载选项。grammar 等数据缓存仍走所选性能根；此例外不改显式 `OMP_CACHE_DIR` 或 `PI_NATIVES_DIR` 的既有行为。
+- **AND** WebKit 主程序不使用隐式 `/dev/shm` 根：保留显式性能根优先于显式配置根，未显式指定时沿用上游共享目录。
 
 #### Scenario: 未选择性能根
 - **WHEN** 没有有效显式 `OMP_CACHE_DIR`，且不是 Linux offline

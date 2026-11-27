@@ -33,7 +33,7 @@ omp
 ### 环境变量与数据
 
 - `OMP_CONFIG_ROOT`：持久数据目录，存放配置、凭据和会话。
-- `OMP_CACHE_DIR`：可选性能目录，使用当前用户可访问的绝对路径；红区 Linux 默认使用 `/dev/shm/omp-<UID>`。模型目录缓存 `agent/models.db` 随性能目录切换，不迁移旧缓存；统计和日志也可避开网络磁盘。JS eval 的 `bun` 占位脚本不使用默认的 `/dev/shm`；显式指定性能目录时，请确保该目录允许执行。
+- `OMP_CACHE_DIR`：可选性能目录，使用当前用户可访问的绝对路径；红区 Linux 默认使用 `/dev/shm/omp-<UID>`。模型目录缓存 `agent/models.db` 随性能目录切换，不迁移旧缓存；统计和日志也可避开网络磁盘。JS eval 的 `bun` 占位脚本和 WebKit 主程序不使用默认的 `/dev/shm`；显式指定性能目录时，请确保该目录允许执行。
 - `OMP_SKILLS_DIR`：可选团队共享技能目录；用 `/extensions` 查看或启停共享技能，不改共享文件。
 
 红区模式会暂时关闭 Web Search 和 Browser（含 `/crawl`）。可以让 Agent 用 `read` 读取可达的内网 HTTP(S) 地址，`fetch.enabled` 默认开启，并遵循你的显式设置。
@@ -68,7 +68,7 @@ omp
 
 ### 多代理与无人值守
 
-- **Team**：在 TUI 输入 `/team <需求>`，或从命令行运行 `omp -p '/team <需求>'`，发起只读调查和交叉评审，不改代码。命令行调用把问题写在命令里，不另附 stdin 或 `@文件`。
+- **Team**：在 TUI 输入 `/team <需求>`，或从命令行运行 `omp -p '/team <需求>'`，发起只读调查和交叉评审，不改代码。命令行调用把问题写在命令里，不另附 stdin 或 `@文件`；后台作业未能启动时返回非零退出码。
 - **Goal Autopilot**：用 `/goal-autopilot <目标>` 运行无人值守长任务。`ask` 表单静默等待 60 秒；超时时，只有推荐值未被同名字段覆盖且当前答案有效才返回表单内容，否则报告未答复并继续任务。普通 `ask` 超时只返回有效的当前表单值和已保存的选项备注（含图片）；计划模式不设超时。首次请求结题时先复核。
 - **按清单执行**：用 `/todoloop tasks.md --check` 只预检，用 `/todoloop tasks.md` 按组执行 Markdown 待办。
 - **按需编排**：`/orchestrate` 拆解并分派任务，`/workflowz` 组织批量工作，`/ultrathink` 深入分析。

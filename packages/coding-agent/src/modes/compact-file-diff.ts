@@ -118,6 +118,8 @@ export class CompactFileDiff {
 	handleKey(key: string): boolean {
 		this.sync();
 		if (!this.#expanded || this.ctx.shell.focused() !== this.ctx.composer.field) return false;
+		// Let the focused draft navigate or dismiss its completion before scrolling the diff.
+		if (this.ctx.composer.completing()) return false;
 		if (key === "escape") {
 			this.close();
 			return true;
@@ -166,10 +168,10 @@ export class CompactFileDiff {
 			return source.findLast(matches)?.diff;
 		}
 		const latest = source[source.length - 1]!;
-		if (path.relative(file, path.resolve(cwd, latest.path)) !== "") return undefined;
+		if (!matches(latest)) return undefined;
 		const bodyWidth = width - Math.min(1, width - 1);
 		if (!this.#previewRows(latest, cwd, bodyWidth, height).length) return undefined;
-		return matches(latest) ? latest.diff : source.findLast(matches)?.diff;
+		return latest.diff;
 	}
 
 	#previewRows(file: TurnToolDiff, cwd: string, width: number, height: number): readonly string[] {

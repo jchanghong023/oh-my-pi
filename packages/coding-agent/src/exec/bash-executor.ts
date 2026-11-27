@@ -65,6 +65,8 @@ export interface BashExecutorOptions {
 	/** Milliseconds before aborting the command; 0 disables the executor deadline. */
 	timeout?: number;
 	onChunk?: (chunk: string) => void;
+	/** Observe embedded-shell stdout+stderr before graphics decoding, sanitization, or preview shaping. */
+	onRawChunk?: (chunk: string) => void;
 	/**
 	 * Receives the sink's current inline view ({@link OutputSink.preview}: the
 	 * body the final result will carry so far) at the `onChunk` cadence. Use it
@@ -842,6 +844,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	let decodedImages: ImageContent[] = [];
 	const enqueueChunk = (chunk: string) => {
 		if (!acceptingChunks) return;
+		options?.onRawChunk?.(chunk);
 		const clean = graphics.push(chunk);
 		if (clean) sink.push(clean);
 	};

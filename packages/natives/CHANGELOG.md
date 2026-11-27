@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- On Windows, sorted glob preserves other directory entries when an item disappears or cannot be refreshed.
 - Git mutations return the result of writes already started, preserve the real index during scoped commits, and record commits in the current worktree's HEAD reflog.
 - Linux PTY cancellation still stops the owned process group when pidfd handles are unavailable, and process termination keeps track of descendants after their parent exits.
 - Non-strict glob preserves partial results when some directory entries cannot be inspected.

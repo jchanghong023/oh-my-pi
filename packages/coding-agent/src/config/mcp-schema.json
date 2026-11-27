@@ -82,6 +82,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "clientName": {
+          "type": "string",
+          "description": "Client name sent during OAuth dynamic client registration (default: \"Codex\")."
+        },
         "clientId": {
           "type": "string"
         },

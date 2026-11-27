@@ -3,8 +3,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { exportViewerDistName } from "../src/export/html/viewer-resource";
 import { createBundlePlugins } from "./bundle-plugins";
 import { embeddedRelayExtensionFiles } from "./embed-relay-extension";
+import { readGeneratedExportViewer } from "./export-viewer";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { buildOpenWikiResourceText, openWikiResourceFile } from "./openwiki-resources";
 
@@ -87,6 +89,7 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 				entry =>
 					entry === "cli.js" ||
 					entry === "docs-index.generated.txt" ||
+					entry === exportViewerDistName ||
 					entry === "spec-driven-resources.tar.gz" ||
 					/^spec-driven-resources.*\.gz$/.test(entry) ||
 					/^developer-test-agent-resources\.json-[^/]+\.gz$/.test(entry) ||
@@ -105,6 +108,7 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 export async function bundleDist(outDir: string = defaultOutDir): Promise<void> {
 	const cliPath = path.join(outDir, "cli.js");
 	const start = Bun.nanoseconds();
+	const exportViewer = await readGeneratedExportViewer();
 	const openWikiText = await buildOpenWikiResourceText();
 	await cleanBundleOutputs(outDir);
 	const failures: unknown[] = [];
@@ -174,6 +178,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		}
 		await ensureShebang(cliPath);
 		await Bun.write(path.join(outDir, "docs-index.generated.txt"), docsPayload.payload);
+		await Bun.write(path.join(outDir, exportViewerDistName), exportViewer);
 		await Bun.write(path.join(outDir, "spec-driven-resources.tar.gz"), specDrivenArchive);
 		await Bun.write(path.join(outDir, "openwiki-resources.generated.txt"), openWikiText);
 	} catch (error) {

@@ -329,6 +329,6 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 5. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
 6. 覆盖率阈值默认 80%，未达标时 Agent 内部循环补充测试
 7. 任务由主 Agent 按创建顺序串行调度
-8. 已存在测试文件时，优先使用 improve-coverage 分析覆盖率，若已达标则跳过测试生成
+8. 已存在测试文件时，优先使用内置 `improve-coverage` 分析覆盖率，若已达标则跳过测试生成
 9. 本命令为全量生成模式，所有文件均为全量生成，无需解析变更方法，覆盖率模式固定为 class-level
 10. **禁止使用 Team 模式**：仅使用 `todo` 跟踪任务，使用 `task` 逐个串行调度

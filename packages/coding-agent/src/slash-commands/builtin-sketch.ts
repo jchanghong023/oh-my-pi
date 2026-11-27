@@ -1,4 +1,6 @@
-import { errorMessage } from "@oh-my-pi/pi-utils";
+import { mkdir, open, rm } from "node:fs/promises";
+import { dirname } from "node:path";
+import { errorMessage, logger } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "../cli/args";
 import { InternalUrlRouter } from "../internal-urls/router";
 import { compactImageMarkers, formatVisionMarker } from "../modes/view-model/prompt/composer-attachments";
@@ -109,6 +111,8 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				server = startSketchServer(async (png, isOpen) => {
 					const ownsDraft = () => isOpen() && isCurrent();
 					if (!ownsDraft()) return "stale";
+					let ownedPath: string | undefined;
+					let attached = false;
 					try {
 						const localUrl = `local://sketch-${crypto.randomUUID()}.png`;
 						const artifactsDir = sessionManager.getArtifactsDir();
@@ -119,15 +123,35 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 							},
 						});
 						if (filePath === undefined) throw new Error("Unable to locate the session sketch artifact");
-						await Bun.write(filePath, png);
+						await mkdir(dirname(filePath), { recursive: true });
 						if (!ownsDraft()) return "stale";
-						if (await ctx.handleImagePathPaste(localUrl, ownsDraft)) return "attached";
+						const file = await open(filePath, "wx");
+						ownedPath = filePath;
+						try {
+							await file.writeFile(png);
+						} finally {
+							await file.close();
+						}
+						if (!ownsDraft()) return "stale";
+						attached = (await ctx.handleImagePathPaste(localUrl, ownsDraft)) === true;
+						if (attached) return "attached";
 						if (!ownsDraft()) return "stale";
 						throw new Error("Unable to attach the sketch PNG to the draft");
 					} catch (error) {
 						if (!ownsDraft()) return "stale";
 						ctx.showError(`Sketch failed: ${errorMessage(error)}`);
 						return "failed";
+					} finally {
+						if (ownedPath && !attached) {
+							try {
+								await rm(ownedPath, { force: true });
+							} catch (error) {
+								logger.warn("Failed to remove unattached sketch", {
+									path: ownedPath,
+									error: errorMessage(error),
+								});
+							}
+						}
 					}
 				});
 				removeSessionChange = session.registerSessionChangeCallback(owned.cancel);

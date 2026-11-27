@@ -84,7 +84,7 @@ export async function handleTeamCommand(
 			? { consumed: true, failed: true, costCapped: true }
 			: { consumed: true, failed: true };
 	}
-	if (!discussion.started && !discussion.registrationRefused && !runtime.signal?.aborted) {
+	if (!discussion.started && !runtime.signal?.aborted) {
 		return { consumed: true, failed: true };
 	}
 	return { consumed: true };

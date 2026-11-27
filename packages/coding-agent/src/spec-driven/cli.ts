@@ -33,9 +33,9 @@ export async function runResourceCommand(
 						controller.signal,
 						process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY ? "terminal" : "capture",
 					)
-				: await runSuperpowersScript(script, argv.slice(1), cwd, controller.signal);
-		process.stdout.write(result.stdout);
-		process.stderr.write(result.stderr);
+				: await runSuperpowersScript(script, argv.slice(1), cwd, controller.signal, "stream");
+		if (result.stdout) process.stdout.write(result.stdout);
+		if (result.stderr) process.stderr.write(result.stderr);
 		process.exitCode = result.exitCode;
 	} catch (error) {
 		if (name === "openspec") throw error;

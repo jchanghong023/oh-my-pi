@@ -451,6 +451,8 @@ export interface AsyncJobManagerApi {
 	waitForOwnerJobs(ownerId: string, options?: { timeoutMs?: number; excludeSuppressed?: boolean }): Promise<boolean>;
 	/** Cancel every job owned by `ownerId`, then wait until `deadlineAt`. */
 	cancelAndReapOwnerJobs(ownerId: string, deadlineAt: number): Promise<AsyncJobReapResult>;
+	/** Strictly settle and remove one owner's jobs, retaining failed artifact cleanups for retry. */
+	disposeOwner(ownerId: string, timeoutMs: number): Promise<void>;
 	drainDeliveries(options?: { timeoutMs?: number; filter?: AsyncJobFilter }): Promise<boolean>;
 	isDeliverySuppressed(jobId: string): boolean;
 	/** True while a settled job's completion is queued or in flight — its push is on the way. */
@@ -508,6 +510,8 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 	#deliveryLoop: Promise<void> | undefined;
 	#deliveryQueueChanged = Promise.withResolvers<void>();
 	#disposed = false;
+	#strictDisposal = false;
+	readonly #strictDisposalOwners = new Set<string>();
 	/** Live widgets of this root's jobs; set by the root session when widgets are available. */
 	widgets: JobWidgetRegistry | undefined;
 	readonly #settleListeners = new Set<() => void>();
@@ -1163,8 +1167,39 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		return true;
 	}
 
+	async disposeOwner(ownerId: string, timeoutMs: number): Promise<void> {
+		this.#strictDisposalOwners.add(ownerId);
+		const filter = { ownerId };
+		const deadline = Date.now() + Math.max(timeoutMs, 0);
+		this.#cancelJobs(filter);
+		if (!(await this.waitForOwnerJobs(ownerId, { timeoutMs }))) {
+			throw new Error("Session owned async jobs did not settle during strict cleanup");
+		}
+		if (!(await this.drainDeliveries({ timeoutMs: Math.max(0, deadline - Date.now()), filter }))) {
+			throw new Error("Session owned async deliveries did not settle during strict cleanup");
+		}
+		await this.#disposeRetainedArtifacts(deadline, ownerId);
+		this.#strictDisposalOwners.delete(ownerId);
+
+		// The drain skips suppressed deliveries. Drop only this owner's remaining
+		// queue entries before eviction clears their suppression.
+		const deliveryCount = this.#deliveries.length;
+		for (let i = this.#deliveries.length - 1; i >= 0; i--) {
+			if (this.#deliveries[i].ownerId === ownerId) {
+				this.#deliveries.splice(i, 1);
+			}
+		}
+		if (this.#deliveries.length !== deliveryCount) this.#notifyDeliveryQueueChanged();
+		let evicted = false;
+		for (const job of this.#jobs.values()) {
+			if (job.ownerId === ownerId && this.#evictJob(job.id, "cleared", false)) evicted = true;
+		}
+		if (evicted) this.#pruneAgentParents();
+	}
+
 	async dispose(options?: { timeoutMs?: number; strict?: boolean }): Promise<boolean> {
 		this.#disposed = true;
+		this.#strictDisposal ||= options?.strict === true;
 		this.#clearEvictionTimers();
 		this.#cancelJobs(undefined, ASYNC_JOB_MANAGER_SHUTDOWN_REASON);
 		const timeoutMs = Math.max(options?.timeoutMs ?? 3_000, 0);
@@ -1172,38 +1207,18 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		const jobsSettled = await this.#waitForAllUntil(deadline);
 		const drained = await this.drainDeliveries({ timeoutMs: Math.max(deadline - Date.now(), 0) });
 		this.#clearEvictionTimers();
-		if (options?.strict) {
+		if (this.#strictDisposal) {
 			if (!jobsSettled || !drained) {
 				throw new Error("Async jobs or completion deliveries did not settle during strict disposal");
 			}
-			const cleanups: Promise<void>[] = [];
-			for (const job of this.#jobs.values()) {
-				const cleanup = job.retainedArtifactsCleanup;
-				if (!cleanup) continue;
-				let pending = this.#strictRetainedArtifactsCleanups.get(job);
-				if (!pending) {
-					pending = Promise.resolve()
-						.then(cleanup)
-						.then(() => {
-							job.retainedArtifactsCleanup = undefined;
-						})
-						.finally(() => this.#strictRetainedArtifactsCleanups.delete(job));
-					this.#strictRetainedArtifactsCleanups.set(job, pending);
-				}
-				cleanups.push(pending);
-			}
-			const results = Promise.allSettled(cleanups);
-			if (cleanups.length > 0 && !(await this.#waitForDeliveryPromise(results, deadline))) {
-				throw new Error("Async job retained artifacts cleanup did not settle during strict disposal");
-			}
-			const failures = (await results).flatMap(result => (result.status === "rejected" ? [result.reason] : []));
-			if (failures.length) throw new AggregateError(failures, "Async job retained artifacts cleanup failed");
+			await this.#disposeRetainedArtifacts(deadline);
 		} else {
 			// The manager is closing, so don't delay best-effort cleanup by the
 			// normal grace period for reading a delivered artifact.
 			for (const job of this.#jobs.values()) this.#runRetainedArtifactsCleanup(job, { bypassGrace: true });
 		}
 		this.#jobs.clear();
+		this.#strictDisposalOwners.clear();
 		this.#agentParents.clear();
 		this.#deliveries.length = 0;
 		this.#notifyDeliveryQueueChanged();
@@ -1217,6 +1232,33 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		this.widgets?.dispose();
 		this.widgets = undefined;
 		return jobsSettled && drained;
+	}
+
+	async #disposeRetainedArtifacts(deadline: number, ownerId?: string): Promise<void> {
+		const cleanups: Promise<void>[] = [];
+		for (const job of this.#jobs.values()) {
+			if (ownerId !== undefined && job.ownerId !== ownerId) continue;
+			const cleanup = job.retainedArtifactsCleanup;
+			if (!cleanup) continue;
+			let pending = this.#strictRetainedArtifactsCleanups.get(job);
+			if (!pending) {
+				pending = Promise.resolve()
+					.then(cleanup)
+					.then(() => {
+						job.retainedArtifactsCleanup = undefined;
+					})
+					.finally(() => this.#strictRetainedArtifactsCleanups.delete(job));
+				this.#strictRetainedArtifactsCleanups.set(job, pending);
+			}
+			cleanups.push(pending);
+		}
+		if (cleanups.length === 0) return;
+		const results = Promise.allSettled(cleanups);
+		if (!(await this.#waitForDeliveryPromise(results, deadline))) {
+			throw new Error("Async job retained artifacts cleanup did not settle during strict disposal");
+		}
+		const failures = (await results).flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+		if (failures.length) throw new AggregateError(failures, "Async job retained artifacts cleanup failed");
 	}
 
 	#consumeJobResult(jobId: string): boolean {
@@ -1253,8 +1295,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 	 */
 	#discardForegroundJob(jobId: string): void {
 		this.#releasedForegroundJobs.delete(jobId);
-		this.#evictJob(jobId);
-		if (jobId === `bg_${this.#nextAutoId - 1}`) this.#nextAutoId -= 1;
+		if (this.#evictJob(jobId) && jobId === `bg_${this.#nextAutoId - 1}`) this.#nextAutoId -= 1;
 	}
 
 	#claimJobId(preferredId?: string): string {
@@ -1394,11 +1435,14 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 	#evictJob(jobId: string, reason?: EvictedJob["reason"], pruneLineage = true): boolean {
 		clearTimeout(this.#evictionTimers.get(jobId));
 		this.#evictionTimers.delete(jobId);
+		const job = this.#jobs.get(jobId);
+		if (job && (this.#strictDisposal || (job.ownerId !== undefined && this.#strictDisposalOwners.has(job.ownerId)))) {
+			return false;
+		}
 		this.#suppressedDeliveries.delete(jobId);
 		this.#supersededDeliveries.delete(jobId);
 		this.#watchedJobs.delete(jobId);
 		const delivered = this.#consumedJobResults.delete(jobId);
-		const job = this.#jobs.get(jobId);
 		if (job) this.#runRetainedArtifactsCleanup(job);
 		if (job && reason && !job.foreground) {
 			this.#evicted.delete(jobId);

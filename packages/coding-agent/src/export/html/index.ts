@@ -7,53 +7,54 @@ import { APP_NAME, isCompiledBinary, isEnoent } from "@oh-my-pi/pi-utils";
 import type { SessionEntry, SessionHeader } from "../../session/session-entries";
 import { SessionManager } from "../../session/session-manager";
 import { collectSubSessions, type SubSession } from "../../session/sub-sessions";
+import { getResolvedThemeColors, getThemeExportColors } from "../../ui/theme/service";
 import type { ExportThemeNames } from "./args";
 import { writeBase64Json } from "./payload";
 import templateHtml from "./template.html.txt" with { type: "text" };
+import { embeddedExportViewerPath, exportViewerDistName } from "./viewer-resource";
 import viewerAsset from "./viewer.generated.json" with { type: "json" };
 import { exportThemeStyles, webExportThemeVars } from "./web-palette";
-import { getResolvedThemeColors, getThemeExportColors } from "../../ui/theme/service";
 
 export { type ExportThemeNames, parseExportArgs } from "./args";
 
 let cachedTemplate: string | undefined;
 const SESSION_DATA_MARKER = "{{SESSION_DATA}}";
 
-// Use the integrated upstream v19.2.1 release manifest, which supports Bash details.toolCommands.
-// The fork does not publish a viewer for the development manifest.
-const HOSTED_VIEWER_URL =
-	"https://build.stencil.so/web/omp/19.2.1/export-viewer-89198a2c1cf0f36d0e455c4623f0c68958b71eba7f0a08be089b63e68d40f981.js";
-const HOSTED_VIEWER_INTEGRITY = "sha256-iRmKLBzw820ORVxGI/DGiVi3Hrp/Cgi+CJtj5o1A+YE=";
-
-/** Create an export document with a checkout viewer or an integrity-pinned release viewer. */
+/** Create an export document with the viewer from this build or source checkout. */
 export function getTemplate(): string {
 	if (cachedTemplate) return cachedTemplate;
+	const compiled = isCompiledBinary();
+	const bundled = Boolean(process.env.PI_BUNDLED);
 	const sourceCheckout =
-		!isCompiledBinary() &&
-		!process.env.PI_BUNDLED &&
+		!compiled &&
+		!bundled &&
 		!import.meta.dir.split(/[\\/]/).includes("node_modules") &&
 		fs.existsSync(path.join(import.meta.dir, "shell.html"));
-	let viewerScript: string;
-	if (sourceCheckout) {
-		const viewerPath = path.resolve(import.meta.dir, "../../../export-assets", viewerAsset.file);
-		let viewer: string;
-		try {
-			viewer = fs.readFileSync(viewerPath, "utf8");
-		} catch (err) {
-			if (isEnoent(err)) {
-				throw new Error(
-					`Development export viewer not found: ${viewerPath}. Run bun gen:export-viewer (packages/collab-web/scripts/build-export-viewer.ts).`,
-				);
-			}
-			throw err;
-		}
-		// Inline classic scripts run before deferred external scripts. Wait for
-		// both shared libraries, and prevent embedded text from closing the tag.
-		const escaped = viewer.replace(/<\/script/gi, match => `<\\/${match.slice(2)}`);
-		viewerScript = `<script>window.addEventListener("DOMContentLoaded",function(){\n${escaped}\n});</script>`;
+	let viewerPath: string;
+	if (compiled) {
+		if (!embeddedExportViewerPath) throw new Error("Compiled export viewer is missing. Rebuild the executable.");
+		viewerPath = path.resolve(import.meta.dir, embeddedExportViewerPath);
+	} else if (sourceCheckout) {
+		viewerPath = path.resolve(import.meta.dir, "../../../export-assets", viewerAsset.file);
 	} else {
-		viewerScript = `<script defer src="${HOSTED_VIEWER_URL}" integrity="${HOSTED_VIEWER_INTEGRITY}" crossorigin="anonymous" onerror="document.getElementById('viewer-status').textContent='Could not load the session viewer. Connect to the internet and reload this file.'"></script>`;
+		viewerPath = path.resolve(import.meta.dir, bundled ? "." : "../../../dist", exportViewerDistName);
 	}
+	let viewer: string;
+	try {
+		viewer = fs.readFileSync(viewerPath, "utf8");
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+		throw new Error(
+			sourceCheckout
+				? `Development export viewer not found: ${viewerPath}. Run bun gen:export-viewer (packages/collab-web/scripts/build-export-viewer.ts).`
+				: `Packaged export viewer not found: ${viewerPath}. Rebuild or reinstall the package.`,
+			{ cause: err },
+		);
+	}
+	// Inline classic scripts run before deferred external scripts. Wait for
+	// both shared libraries, and prevent embedded text from closing the tag.
+	const escaped = viewer.replace(/<\/script/gi, match => `<\\/${match.slice(2)}`);
+	const viewerScript = `<script>window.addEventListener("DOMContentLoaded",function(){\n${escaped}\n});</script>`;
 	cachedTemplate = templateHtml
 		.replace("{{MARKED_URL}}", () => "https://stencil.so/assets/omp/marked.333561b9.js")
 		.replace("{{MARKED_INTEGRITY}}", () => "sha256-MzVhuUicTTOmBQF03OgI9HBhlGcICMhDRSPIdD9aYmM=")

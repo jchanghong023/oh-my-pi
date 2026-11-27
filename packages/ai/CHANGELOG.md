@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Codex and pi-native requests honor explicit authentication headers, and CodeAgent preserves HTTP context-window exhaustion for recovery.
 - Explicit request credentials disable ambient API key lookup and are redacted from rejection diagnostics.
 - Redact the effective Alibaba Token Plan token from rejected-request diagnostics.
 - Embedded Responses replays do not duplicate assistant text already delivered by the gateway.

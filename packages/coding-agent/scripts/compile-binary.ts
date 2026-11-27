@@ -4,6 +4,7 @@ import { USER_AGENT } from "@oh-my-pi/pi-utils/dirs";
 import { embeddedAddonFiles, type EmbedOptions } from "../../natives/scripts/embed-native";
 import { createBundlePlugins } from "./bundle-plugins";
 import { embeddedRelayExtensionFiles } from "./embed-relay-extension";
+import { embeddedExportViewerFiles } from "./export-viewer";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { buildOpenWikiResourceText, openWikiResourceFile } from "./openwiki-resources";
 
@@ -63,6 +64,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			files: {
 				...(options.native ? await embeddedAddonFiles(options.native) : {}),
 				...(await embeddedRelayExtensionFiles()),
+				...(await embeddedExportViewerFiles()),
 				[openWikiResourceFile]: await buildOpenWikiResourceText(),
 			},
 			define: {

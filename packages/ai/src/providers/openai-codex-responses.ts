@@ -54,9 +54,11 @@ import {
 	clampOpenAIResponsesImageDetailForReplay,
 	createOpenAIResponsesHistoryPayload,
 	dropMalformedOpenAIResponsesToolCalls,
+	getHeaderCaseInsensitive,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
 	normalizeSystemPrompts,
+	resolveRequestAuthBearer,
 	sanitizeOpenAIResponsesAssistantFallbackItemsForReplay,
 	sanitizeOpenAIResponsesAssistantHistoryItemsForReplay,
 	stripOpenAIResponsesComputerLinkedReasoningIdsForReplay,
@@ -83,6 +85,7 @@ import { wrapFetchForRequestCompression } from "../utils/request-compression";
 import { getHeadersFromError, getRetryAfterMsFromHeaders, type HeadersLike } from "../utils/retry-after";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { toWebSocketHeaders, toWebSocketUrl } from "../utils/websocket";
+import { mergeHeaders } from "./anthropic-headers";
 import { compactGrammarDefinition } from "./grammar";
 import {
 	type CodexLiteShapedBody,
@@ -1287,12 +1290,14 @@ function createCodexRequestContext(
 		turnStartedAtUnixMs?: number;
 	},
 ): CodexRequestContext {
-	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+	const auth = options?.requestAuth;
+	const apiKey = auth === undefined ? options?.apiKey || getEnvApiKey(model.provider) : resolveRequestAuthBearer(auth);
 	if (!apiKey) {
 		throw new AIError.MissingApiKeyError(model.provider);
 	}
 
-	const accountId = getCodexAccountId(apiKey);
+	const accountId =
+		getHeaderCaseInsensitive(auth?.headers, OPENAI_HEADERS.ACCOUNT_ID)?.trim() || getCodexAccountId(apiKey);
 	applyCodexAccessPrograms(transformedBody, model, accountId, options?.codexAccessPrograms);
 	dropUnofferedServiceTier(transformedBody, model, accountId);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
@@ -1300,7 +1305,16 @@ function createCodexRequestContext(
 
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = getCodexClientVersion();
-	const requestHeaders = { ...model.headers, ...options?.headers };
+	const requestHeaders =
+		auth === undefined
+			? { ...model.headers, ...options?.headers }
+			: mergeHeaders(model.headers, options?.headers, auth.headers);
+	if (auth !== undefined && !accountId) {
+		// Never pair an explicit token with an inherited account identity.
+		for (const name in requestHeaders) {
+			if (name.toLowerCase() === OPENAI_HEADERS.ACCOUNT_ID) delete requestHeaders[name];
+		}
+	}
 	const rawRequestDump: RawHttpRequestDump = {
 		provider: model.provider,
 		api: model.api,
@@ -1969,6 +1983,7 @@ async function openCodexSseTransport(
 				requestSetup.requestSignal,
 				requestSetup.firstEventTimeoutMs,
 				options?.codexSseMaxAttempts,
+				options?.requestAuth !== undefined,
 				event => options?.onSseEvent?.(event, model),
 				wrapFetchForRequestCompression(options?.fetch ?? fetch, model),
 			),
@@ -4121,6 +4136,7 @@ async function openCodexSseEventStream(
 	signal: AbortSignal | undefined,
 	firstEventTimeoutMs: number | undefined,
 	codexSseMaxAttempts: number | undefined,
+	explicitAuth: boolean,
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
 ): Promise<AsyncGenerator<Record<string, unknown>>> {
@@ -4162,7 +4178,8 @@ async function openCodexSseEventStream(
 			}
 		}
 	};
-	CODEX_DEBUG &&
+	!explicitAuth &&
+		CODEX_DEBUG &&
 		logger.debug("[codex] codex request", {
 			url,
 			model: body.model,
@@ -4177,6 +4194,7 @@ async function openCodexSseEventStream(
 			method: "POST",
 			headers,
 			body: JSON.stringify(withCodexRoutingFieldsFirst(body)),
+			redirect: explicitAuth ? "error" : undefined,
 			signal,
 			prepareInit: () => {
 				// A retried non-2xx attempt leaves its guard armed for the retry-status

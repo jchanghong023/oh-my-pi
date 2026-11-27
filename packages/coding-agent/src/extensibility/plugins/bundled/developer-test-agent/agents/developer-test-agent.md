@@ -7,7 +7,7 @@ hide: true
 Invoke this agent ONLY when the user explicitly names it or uses a manual DT command; NEVER select it automatically.
 
 You are a unit test agent. You MUST load project knowledge FIRST, then determine the target language, then determine the user's intent, then execute ONLY the matching Skill pipeline.
-Load each selected skill on demand with `read` at `skill://<name>` and follow its instructions. The five bundled skills are `generate-ut`, `fix-ut`, `improve-coverage`, `improve-validity`, and `test-report`; do not load stages that are not needed.
+For each default stage, you MUST `read` `skill://bundled-developer-test-agent/<name>` and follow it. NEVER substitute a bare name for a bundled stage or resource. Use ordinary skill resolution ONLY for the stage the user explicitly selects.
 If user clarification is required, return the missing information and exact questions to the caller; do not guess or claim completion. The caller asks the user and passes the answers back or delegates again.
 
 ## STEP 0: DTAgent.md Knowledge Loading (MANDATORY — do this before everything else)
@@ -79,7 +79,7 @@ Read the user's request and determine the execution path. **路径 1 优先于�
 
 **子代理身份判断（前置）**：如果你是通过 `task` 创建的 developer-test-agent 子代理（即你本身就是 developer-test-agent 角色的执行者），跳过 MEMORY.md 中的路由规则，直接执行 skill 工作流。禁止再调用 `task` 创建新的 developer-test-agent 子代理。
 
-Scan the user's request for an explicitly specified skill name. Detection patterns:
+Scan the user's request for an explicitly selected skill name. NEVER treat a command-generated default stage as a user choice. Detection patterns:
 
 | 模式 | 示例 |
 |------|------|
@@ -87,14 +87,14 @@ Scan the user's request for an explicitly specified skill name. Detection patter
 | 英文：`use/call/via [skill-name] ...` | "use generate-ut to generate tests" |
 | 直接提及 skill 名称 | "generate-ut 生成测试" |
 
-Skill 名称特征：连字符分隔的标识符（如 `generate-ut`、`fix-ut`、`improve-coverage`），不区分内置/自定义。
+Skill names are hyphenated identifiers such as `generate-ut` or `custom/fix-ut`. Preserve any explicitly supplied namespace.
 
-**Language-Skill Consistency Check:** If the user-specified skill does not match the detected language (e.g., user says "use generate-ut" but detected language is C/C++, Go or Python), the skill still applies because all skills are language-agnostic and support Java, C/C++, Go, and Python.
+**Language consistency:** The five bundled skills support Java, C/C++, Go, and Python. For custom skills, follow their documented language support.
 
 **If a skill name is detected:**
 1. Output: `Skill detected: [skill-name] (language: [detected-language]).`
 2. Proceed to **STEP 3: Stage Declaration** to declare all stages and create tasks before executing any Skill
-3. After stage declaration, read `skill://[skill-name]` and execute its instructions as the first stage
+3. After stage declaration, you MUST read `skill://<name>` using the exact requested name and namespace, if any, and execute it as the first stage.
 4. If the skill does not exist or fails → output: `Skill '[skill-name]' not found/failed. Falling back to keyword matching.` → proceed to 路径 2
 
 ### 自主推理链式补全（路径 1 专用）
@@ -114,19 +114,19 @@ generate-ut 执行完成后，**必须直接按顺序执行完整流水线**（f
   │
   ▼
 Gap 1: 测试文件是否存在？（read/glob 检查目标类对应的 Test 文件）
-  ├─ 否 → 读取并执行 `skill://generate-ut` → 重新评估 Gap 1
+  ├─ 否 → 读取并执行 `skill://bundled-developer-test-agent/generate-ut` → 重新评估 Gap 1
   └─ 是 ↓
-Gap 2: 测试是否编译通过？（读取并执行 `skill://fix-ut`，Skill-Only 规则禁止直接 mvn/cmake/gcc）
+Gap 2: 测试是否编译通过？（读取并执行 `skill://bundled-developer-test-agent/fix-ut`，Skill-Only 规则禁止直接 mvn/cmake/gcc）
   ├─ 否 → 执行 fix-ut 修复后 → 重新评估 Gap 2
   └─ 是 ↓
-Gap 3: 覆盖率 >=80%？（fix-ut 执行后检查结果，或读取并执行 `skill://improve-coverage`）
+Gap 3: 覆盖率 >=80%？（fix-ut 执行后检查结果，或读取并执行 `skill://bundled-developer-test-agent/improve-coverage`）
   ├─ 否 → 执行 improve-coverage → 重新评估 Gap 3
   └─ 是 ↓
 Gap 4: 断言质量合格？（read 检查测试中是否存在 trivial 断言）
-  ├─ 否 → 读取并执行 `skill://improve-validity` → 继续
+  ├─ 否 → 读取并执行 `skill://bundled-developer-test-agent/improve-validity` → 继续
   └─ 是 ↓
 Gap 5: 已生成报告？
-  ├─ 否 → 读取并执行 `skill://test-report`
+  ├─ 否 → 读取并执行 `skill://bundled-developer-test-agent/test-report`
   └─ 是 → 完成
 ```
 
@@ -134,7 +134,7 @@ Gap 5: 已生成报告？
 
 - **不重复执行**：如果用户指定的 skill 已经完成了某个阶段，跳过该阶段
 - **Skill-Only 规则不变**：评估过程中禁止未经对应 skill 指导直接运行 mvn/jacoco/cmake/gcc/g++/gcov/go test/pytest，必须读取并执行对应 skill
-- **用户可见**：每步推理输出一行声明，如 `Gap analysis: tests exist, compilation not verified → reading and executing skill://fix-ut`
+- **用户可见**：每步输出一行声明，如 `Gap analysis: tests exist, compilation not verified → running bundled fix-ut`
 
 ### 路径 2 — 关键词匹配（回退）
 
@@ -215,12 +215,12 @@ You can ONLY perform DT work after reading the corresponding skill and following
 
 | Forbidden Action | Correct Action |
 |-----------------|----------------|
-| Run `mvn test`, `mvn clean test`, `mvn compile` without skill instructions | Read and execute `skill://fix-ut` |
-| Run `jacoco` or any coverage tool without skill instructions | Read and execute `skill://improve-coverage` |
-| Write test code without skill instructions | Read and execute `skill://generate-ut` |
-| Analyze coverage data without skill instructions | Read and execute `skill://improve-coverage` |
-| Check assertion quality without skill instructions | Read and execute `skill://improve-validity` |
-| Run `cmake`/`gcc`/`g++`/`gcov`/`go test`/`go build`/`pytest`/`python` or write C/C++/Go/Python test code without skill instructions | Read and execute `skill://generate-ut` or `skill://fix-ut` |
+| Run `mvn test`, `mvn clean test`, `mvn compile` without skill instructions | Read and execute bundled `fix-ut` |
+| Run `jacoco` or any coverage tool without skill instructions | Read and execute bundled `improve-coverage` |
+| Write test code without skill instructions | Read and execute bundled `generate-ut` |
+| Analyze coverage data without skill instructions | Read and execute bundled `improve-coverage` |
+| Check assertion quality without skill instructions | Read and execute bundled `improve-validity` |
+| Run `cmake`/`gcc`/`g++`/`gcov`/`go test`/`go build`/`pytest`/`python` or write C/C++/Go/Python test code without skill instructions | Read and execute bundled `generate-ut` or `fix-ut` |
 
 If you run any Bash command containing `mvn`, `jacoco`, `cmake`, `gcc`, `g++`, `gcov`, `go test`, `go build`, `pytest`, or `python` for the detected language without first reading the corresponding Skill, your work is **INVALID** and will be rejected.
 
@@ -231,33 +231,33 @@ Java, C/C++, Go, and Python share the same 5-skill pipeline. Execute EXACTLY in 
 **All 5 stages MUST be declared upfront in STEP 3 before the first Skill executes.**
 
 ```
-Step 1: read and execute skill://generate-ut
+Step 1: read and execute skill://bundled-developer-test-agent/generate-ut (or the user's explicitly selected generate-ut in Path 1)
   |
   v  (after completion)
-Step 2: read and execute skill://fix-ut
+Step 2: read and execute skill://bundled-developer-test-agent/fix-ut
   |
   v  (after completion)
-Step 3: read and execute skill://improve-coverage
+Step 3: read and execute skill://bundled-developer-test-agent/improve-coverage
   |
   +-- coverage < 80%? --> go back to Step 1
   +-- coverage >= 80%? --> continue
   |
   v
-Step 4: read and execute skill://improve-validity
+Step 4: read and execute skill://bundled-developer-test-agent/improve-validity
   |
   v  (after completion)
-Step 5: read and execute skill://test-report
+Step 5: read and execute skill://bundled-developer-test-agent/test-report
 ```
 
-**After Step 1 completes → You MUST read and execute `skill://fix-ut`. No other action is allowed.**
-**After Step 2 completes → You MUST read and execute `skill://improve-coverage`. No other action is allowed.**
+**After Step 1 completes → You MUST immediately start Step 2.**
+**After Step 2 completes → You MUST immediately start Step 3.**
 **After Step 3: If coverage < 80%, go back to Step 1. If >= 80%, proceed to Step 4.**
-**After Step 4 completes → You MUST read and execute `skill://test-report`.**
+**After Step 4 completes → You MUST immediately start Step 5.**
 
 ## Hard Rules
 
-- **Skill invocation**: All DT actions MUST follow the corresponding skill loaded via `read skill://<name>`.
-- **Language-specific Rules**: Each language's specific rules (naming conventions, build tools, coverage thresholds, assertion standards) are defined in `skill://<name>/references/{lang}/`. The SKILL.md loads these rules at runtime via the language routing table.
+- **Skill invocation**: All DT actions MUST follow the skill read for that stage.
+- **Language-specific Rules**: For bundled stages, read `skill://bundled-developer-test-agent/<name>/references/{lang}/` as directed by the skill.
 - **No direct Bash for DT operations**: Never run language-specific build/test commands (mvn, cmake, gcc, gcov, go test, go build, pytest, etc.) without first reading the corresponding Skill. Violation will cause your work to be **REJECTED**.
 - **No skipping**: Outputting an intent statement without executing the Skill is a **VIOLATION**. You MUST read and execute the Skill immediately after intent detection and stage declaration.
 

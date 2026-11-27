@@ -352,6 +352,7 @@ class DirResolver {
 	readonly configRoot: string;
 	readonly agentDir: string;
 	readonly cacheRoot: string | undefined;
+	readonly explicitCacheRoot: string | undefined;
 	readonly executableCacheRoot: string;
 
 	// Per-category base dirs. Without XDG, all three equal configRoot / agentDir.
@@ -367,6 +368,7 @@ class DirResolver {
 		const profile = normalizeProfileName(options.profile);
 		this.configRoot = getProfileConfigRoot(profile);
 		this.cacheRoot = resolveCacheRoot(profile);
+		this.explicitCacheRoot = resolveFullyQualifiedDir(process.env.OMP_CACHE_DIR) ? this.cacheRoot : undefined;
 
 		const defaultAgent = path.join(this.configRoot, "agent");
 		const agentDirOverride = profile ? undefined : options.agentDirOverride;
@@ -421,9 +423,7 @@ class DirResolver {
 			cache: this.cacheRoot ?? xdgCache ?? this.configRoot,
 		};
 		// The implicit Linux cache lives on /dev/shm, which may be mounted noexec.
-		this.executableCacheRoot =
-			(this.cacheRoot && resolveFullyQualifiedDir(process.env.OMP_CACHE_DIR) ? this.cacheRoot : xdgCache) ??
-			this.configRoot;
+		this.executableCacheRoot = this.explicitCacheRoot ?? xdgCache ?? this.configRoot;
 		// XDG flattens the agent/ prefix: ~/.omp/agent/sessions → $XDG_DATA_HOME/omp/sessions
 		this.#agentDirs = {
 			data: xdgData ?? this.agentDir,
@@ -854,7 +854,7 @@ export function getPuppeteerDir(): string {
  */
 export function getWebKitHostPath(platform: NodeJS.Platform = process.platform): string {
 	const root =
-		dirs.cacheRoot ||
+		dirs.explicitCacheRoot ??
 		(resolveFullyQualifiedDir(process.env.OMP_CONFIG_ROOT) ? dirs.configRoot : path.join(os.homedir(), ".o2"));
 	return path.join(root, "lib", "abkit", platform === "win32" ? "ABHost.exe" : "ABHost");
 }

@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { decodeEmbeddedArchive, extractEmbeddedArchive, hasEmbeddedArchive } from "@oh-my-pi/pi-utils/embedded-archive";
+import { decodeEmbeddedArchive, extractEmbeddedArchive } from "@oh-my-pi/pi-utils/embedded-archive";
 import { isOpenWikiSourceCheckout } from "./resource-dependencies";
 import { openWikiResourceFingerprint } from "./resource-fingerprint";
 import generatedArchiveText from "./openwiki-resources.generated.txt";
@@ -30,12 +30,8 @@ export function loadOpenWikiArchive(): Promise<OpenWikiArchive> {
 
 async function readOpenWikiArchive(): Promise<OpenWikiArchive> {
 	let text = generatedArchiveText;
-	// The npm SDK uses the archive from the package build even if its src placeholder is populated.
-	if (
-		!process.env.PI_COMPILED &&
-		!process.env.PI_BUNDLED &&
-		(!hasEmbeddedArchive(text) || !isOpenWikiSourceCheckout(fileURLToPath(new URL("../../../../", import.meta.url))))
-	) {
+	// Both checkout generation and the npm SDK provide the disk archive under dist.
+	if (!process.env.PI_COMPILED && !process.env.PI_BUNDLED) {
 		try {
 			text = await Bun.file(new URL("../../dist/openwiki-resources.generated.txt", import.meta.url)).text();
 		} catch (cause) {

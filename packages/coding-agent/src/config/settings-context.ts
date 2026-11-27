@@ -8,11 +8,17 @@ const collectedSettingsInstances = new FinalizationRegistry<WeakRef<Settings>>(r
 	liveSettingsInstances.delete(ref);
 });
 const activeSettingsScope = new AsyncLocalStorage<Settings>();
+/** Released SDK instances can remain reachable through their former sessions. */
+const releasedSettingsInstances = new WeakSet<Settings>();
 
 export function registerSettingsInstance(instance: Settings): void {
 	const ref = new WeakRef(instance);
 	liveSettingsInstances.add(ref);
 	collectedSettingsInstances.register(instance, ref, ref);
+}
+
+export function releaseSettingsInstance(instance: Settings): void {
+	releasedSettingsInstances.add(instance);
 }
 
 /** Visit live instances without retaining them beyond the current operation. */
@@ -29,14 +35,15 @@ export function forEachSettingsInstance(visit: (instance: Settings) => void): vo
 
 /** The current async session's settings, without a process-global fallback. */
 export function getActiveSettings(): Settings | undefined {
-	return activeSettingsScope.getStore();
+	const active = activeSettingsScope.getStore();
+	return active && !releasedSettingsInstances.has(active) ? active : undefined;
 }
 
 export function withActiveSettings<T>(instance: Settings | undefined, fn: () => T): T {
 	return instance ? activeSettingsScope.run(instance, fn) : fn();
 }
 
-/** Active session identity wins; otherwise select the newest instance matching the explicit scope. */
+/** Active session identity wins; otherwise select the newest unreleased instance matching the explicit scope. */
 export function findSettingsContext(cwd?: string, agentDir?: string): Settings | undefined {
 	const active = getActiveSettings();
 	if (active) return active;
@@ -50,6 +57,7 @@ export function findSettingsContext(cwd?: string, agentDir?: string): Settings |
 		const instance = ref.deref();
 		if (
 			instance &&
+			!releasedSettingsInstances.has(instance) &&
 			(wantCwd === undefined || instance.getCwd() === wantCwd) &&
 			(wantAgentDir === undefined || instance.getAgentDir() === wantAgentDir)
 		) {

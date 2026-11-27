@@ -38,9 +38,9 @@ use windows_sys::{
 	},
 	Win32::{
 		Foundation::{
-			ERROR_DIRECTORY, ERROR_HANDLE_EOF, ERROR_INVALID_DATA, ERROR_INVALID_NAME, HANDLE,
-			NTSTATUS, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, STATUS_NO_MORE_FILES,
-			STATUS_NO_SUCH_FILE, UNICODE_STRING,
+			ERROR_DIRECTORY, ERROR_FILE_NOT_FOUND, ERROR_HANDLE_EOF, ERROR_INVALID_DATA,
+			ERROR_INVALID_NAME, HANDLE, NTSTATUS, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError,
+			STATUS_DELETE_PENDING, STATUS_NO_MORE_FILES, STATUS_NO_SUCH_FILE, UNICODE_STRING,
 		},
 		Storage::FileSystem::{
 			BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -54,7 +54,7 @@ use windows_sys::{
 
 use super::{aligned_buf, le32, le64};
 use crate::fs::{
-	Detail, FileId, FileInfo, FileType, Listing, Stamp, not_regular,
+	Detail, FileId, FileInfo, FileType, IncompleteListing, Listing, Stamp, not_regular,
 	wtf8::{push_wide, push_wtf8},
 };
 
@@ -95,6 +95,11 @@ pub(crate) struct Scratch {
 }
 
 fn nt_error(status: NTSTATUS) -> io::Error {
+	// An unlinked name can remain in the index until its last handle closes.
+	// Treat it as a vanished entry, not an access or sharing error.
+	if status == STATUS_DELETE_PENDING {
+		return win_error(ERROR_FILE_NOT_FOUND);
+	}
 	// SAFETY: a pure status-code conversion.
 	io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32)
 }
@@ -227,7 +232,8 @@ const fn is_dot_or_dot_dot_utf16(name: &[u8]) -> bool {
 }
 
 /// Reads every entry of `dir` into `out`. Full detail refreshes each entry's
-/// metadata, keeping the directory index's values if access is denied.
+/// metadata, keeping the directory index's values if access is denied and
+/// reporting other refresh failures after processing the rest of the listing.
 pub(crate) fn list(
 	s: &mut Scratch,
 	dir: &Handle,
@@ -319,9 +325,6 @@ pub(crate) fn list(
 	if detail == Detail::Full {
 		let mut error = None;
 		out.records.retain_mut(|record| {
-			if error.is_some() {
-				return true;
-			}
 			let start = record.name_off as usize;
 			let name = &out.names[start..start + record.name_len as usize];
 			let result =
@@ -336,13 +339,13 @@ pub(crate) fn list(
 				Err(err) if err.kind() == io::ErrorKind::PermissionDenied => true,
 				Err(err) if err.kind() == io::ErrorKind::NotFound => false,
 				Err(err) => {
-					error = Some(err);
-					true
+					error.get_or_insert(err);
+					false
 				},
 			}
 		});
 		if let Some(err) = error {
-			return Err(err);
+			return Err(io::Error::new(err.kind(), IncompleteListing(err)));
 		}
 	}
 	Ok(())

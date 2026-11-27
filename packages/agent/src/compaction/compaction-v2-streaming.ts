@@ -7,7 +7,14 @@
  * compaction item as replacement history.
  */
 
-import type { Api, CodexCompactionContext, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
+import type {
+	Api,
+	CodexCompactionContext,
+	FetchImpl,
+	Model,
+	ProviderSessionState,
+	SimpleStreamOptions,
+} from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-compaction";
 import {
@@ -25,6 +32,7 @@ import {
 	parseAzureDeploymentNameMap,
 	resolveOpenAIRequestSetup,
 } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { getHeaderCaseInsensitive, resolveRequestAuthBearer } from "@oh-my-pi/pi-ai/utils";
 import { captureOpenAIHttpError } from "@oh-my-pi/pi-ai/utils/openai-http";
 import { withResolvedHeaders } from "@oh-my-pi/pi-ai/utils/model-headers";
 import type { CatalogPolicyInputs } from "@oh-my-pi/pi-catalog/types";
@@ -278,6 +286,7 @@ export async function requestCompactionV2Streaming(
 	signal?: AbortSignal,
 	options?: {
 		fetch?: FetchImpl;
+		requestAuth?: SimpleStreamOptions["requestAuth"];
 		timeoutMs?: number;
 		retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 		providerSessionState?: Map<string, ProviderSessionState>;
@@ -315,13 +324,14 @@ export async function requestCompactionV2Streaming(
 			});
 			try {
 				model = await withResolvedHeaders(model, signal);
+				if (options?.requestAuth !== undefined) apiKey = options.requestAuth.apiKey?.trim() ?? "";
 				let fetchImpl: FetchImpl = options?.fetch ?? globalThis.fetch;
 				if (isBedrockOpenAIUrl(model.baseUrl)) {
 					({
 						model,
 						apiKey,
 						fetch: fetchImpl,
-					} = await prepareBedrockCompactionRequest(model, apiKey, options?.fetch, signal));
+					} = await prepareBedrockCompactionRequest(model, apiKey, options?.fetch, signal, options?.requestAuth));
 				}
 				const endpoint = getCompactionV2Endpoint(model);
 				if (!endpoint) {
@@ -360,6 +370,7 @@ export async function requestCompactionV2Streaming(
 							timeoutSignal,
 							{
 								codexMetadata,
+								requestAuth: options?.requestAuth,
 								providerSessionState: options?.providerSessionState,
 								codexCompaction: options?.codexCompaction,
 								preferWebsockets: options?.preferWebsockets,
@@ -430,6 +441,7 @@ async function attemptCompactionV2Streaming(
 	signal: AbortSignal | undefined,
 	options: {
 		codexMetadata?: OpenAICodexCompatibilityMetadata;
+		requestAuth?: SimpleStreamOptions["requestAuth"];
 		providerSessionState?: Map<string, ProviderSessionState>;
 		codexCompaction?: CodexCompactionContext;
 		preferWebsockets?: boolean;
@@ -454,6 +466,7 @@ async function attemptCompactionV2Streaming(
 		const { openCodexCompactionEventStream } = await import("@oh-my-pi/pi-ai/providers/openai-codex-responses");
 		const eventStream = await openCodexCompactionEventStream(model, body, {
 			apiKey,
+			requestAuth: options.requestAuth,
 			signal,
 			fetch: fetchImpl,
 			sessionId: request.sessionId,
@@ -471,8 +484,9 @@ async function attemptCompactionV2Streaming(
 
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
-		headers: buildCompactionV2Headers(model, apiKey, request, options.codexMetadata),
+		headers: buildCompactionV2Headers(model, apiKey, request, options.codexMetadata, options.requestAuth),
 		body: stringifyJson(withCodexRoutingFieldsFirst(body)),
+		redirect: options.requestAuth !== undefined ? "error" : undefined,
 		signal,
 	});
 
@@ -499,12 +513,29 @@ async function attemptCompactionV2Streaming(
 	return collectCompactionV2Output(response, request);
 }
 
+/** Replace inherited credentials on the direct native compaction HTTP request. */
+export function applyExplicitCompactionAuth(
+	headers: Headers,
+	auth: NonNullable<SimpleStreamOptions["requestAuth"]>,
+	apiKey: string,
+	azure: boolean,
+	accountId?: string,
+): void {
+	for (const name of ["authorization", "api-key", "x-api-key", OPENAI_HEADERS.ACCOUNT_ID]) headers.delete(name);
+	if (apiKey) headers.set(azure ? "api-key" : "Authorization", azure ? apiKey : `Bearer ${apiKey}`);
+	if (auth.headers) {
+		for (const [name, value] of Object.entries(auth.headers)) headers.set(name, value);
+	}
+	if (accountId) headers.set(OPENAI_HEADERS.ACCOUNT_ID, accountId);
+}
+
 function buildCompactionV2Headers(
 	model: Model,
 	apiKey: string,
 	request: CompactionV2Request,
 	codexMetadata?: OpenAICodexCompatibilityMetadata,
-): Record<string, string> {
+	requestAuth?: SimpleStreamOptions["requestAuth"],
+): Headers | Record<string, string> {
 	const api = compactionV2Api(model);
 	const cacheOptions = { sessionId: request.sessionId, promptCacheKey: request.promptCacheKey };
 	const routingSessionId = getOpenAIResponsesRoutingSessionId(cacheOptions);
@@ -532,6 +563,7 @@ function buildCompactionV2Headers(
 						},
 						{
 							apiKey,
+							requestAuth,
 							messages: [],
 							sessionId: request.sessionId ?? routingSessionId,
 							promptCacheSessionId,
@@ -542,12 +574,16 @@ function buildCompactionV2Headers(
 						},
 					).headers,
 				};
+	let accountId: string | undefined;
 	if (api === "openai-codex-responses" || model.provider === "openai-codex") {
-		const accountId = getCodexAccountId(apiKey);
+		const bearer = requestAuth === undefined ? apiKey : resolveRequestAuthBearer(requestAuth);
+		if (!bearer) throw new AIError.MissingApiKeyError(model.provider);
+		accountId =
+			getHeaderCaseInsensitive(requestAuth?.headers, OPENAI_HEADERS.ACCOUNT_ID)?.trim() || getCodexAccountId(bearer);
 		if (accountId) {
 			headers[OPENAI_HEADERS.ACCOUNT_ID] = accountId;
 		}
-		applyCodexResidencyHeader(headers, apiKey);
+		applyCodexResidencyHeader(headers, bearer);
 		if (routingSessionId) {
 			headers[OPENAI_HEADERS.SESSION_ID] = routingSessionId;
 			headers["x-client-request-id"] = routingSessionId;
@@ -560,6 +596,11 @@ function buildCompactionV2Headers(
 		}
 	}
 	if (codexMetadata) Object.assign(headers, codexMetadata.headers);
+	if (requestAuth !== undefined) {
+		const explicit = new Headers(headers);
+		applyExplicitCompactionAuth(explicit, requestAuth, apiKey, api === "azure-openai-responses", accountId);
+		return explicit;
+	}
 
 	return headers;
 }

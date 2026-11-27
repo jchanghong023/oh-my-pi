@@ -317,6 +317,8 @@ export interface MCPOAuthConfig {
 	issuerUrl?: string;
 	/** Dynamic client registration endpoint advertised by the authorization server. */
 	registrationUrl?: string;
+	/** Dynamic registration client name (default: "Codex"). */
+	clientName?: string;
 	/** Client ID (optional when already embedded in authorization URL) */
 	clientId?: string;
 	/** Client secret (optional for PKCE flows) */
@@ -661,7 +663,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 		try {
 			const registrationBody: Record<string, unknown> = {
-				client_name: "Codex",
+				client_name: this.config.clientName ?? "Codex",
 				redirect_uris: [redirectUri],
 				grant_types: ["authorization_code", "refresh_token"],
 				response_types: ["code"],

@@ -6838,7 +6838,8 @@ async function createAgentSessionScoped(
 		startupOwnsToolCallbacks = false;
 
 		const prewarmModel = session.model;
-		if (prewarmModel?.api === "openai-codex-responses") {
+		// Host auth is request-scoped; a speculative handshake must not pick a local account.
+		if (!options.resolveRequestAuth && prewarmModel?.api === "openai-codex-responses") {
 			// `.api` equality doesn't narrow the generic; the guard makes this cast sound.
 			const codexModel = prewarmModel as Model<"openai-codex-responses">;
 			if (isOpenAICodexWebSocketPreferred(codexModel, { preferWebsockets: session.preferWebsockets })) {

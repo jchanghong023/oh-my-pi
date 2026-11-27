@@ -476,6 +476,7 @@ export type McpOAuthFlowPresentation = Pick<OAuthController, "onAuth" | "onProgr
 export interface McpOAuthFlowRunOptions extends McpOAuthFlowPresentation {
 	authUrl: string;
 	tokenUrl: string;
+	clientName?: string;
 	clientId: string;
 	clientSecret: string;
 	scopes: string;
@@ -565,6 +566,7 @@ export async function runMcpOAuthFlow(opts: McpOAuthFlowRunOptions): Promise<OAu
 				tokenUrl: opts.tokenUrl,
 				registrationUrl: opts.registrationUrl,
 				issuerUrl: opts.issuerUrl,
+				clientName: opts.clientName,
 				clientId: resolvedClientId,
 				clientSecret: resolvedClientSecret,
 				scopes: opts.scopes || undefined,
@@ -838,6 +840,7 @@ export async function reauthorizeMcpServer(
 	const oauthResult = await runMcpOAuthFlow({
 		authUrl: oauth.authorizationUrl,
 		tokenUrl: oauth.tokenUrl,
+		clientName: runtimeBaseConfig.oauth?.clientName,
 		clientId: flowClientId,
 		clientSecret: flowClientSecret,
 		scopes,

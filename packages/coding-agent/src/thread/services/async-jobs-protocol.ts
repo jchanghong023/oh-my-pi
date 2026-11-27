@@ -171,6 +171,7 @@ export type AsyncJobManagerProtocol = {
 		boolean
 	>;
 	cancelAndReapOwnerJobs: RpcMethod<[ownerId: string, deadlineAt: number], AsyncJobReapResult>;
+	disposeOwner: RpcMethod<[ownerId: string, timeoutMs: number], void>;
 	drainDeliveries: RpcMethod<[options: { timeoutMs?: number; filter?: AsyncJobFilter } | undefined], boolean>;
 	isDeliverySuppressed: RpcMethod<[jobId: string], boolean>;
 	isDeliveryPending: RpcMethod<[jobId: string], boolean>;

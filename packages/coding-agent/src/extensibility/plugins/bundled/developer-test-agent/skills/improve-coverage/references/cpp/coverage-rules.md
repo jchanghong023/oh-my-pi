@@ -14,7 +14,7 @@
    ```
    - **存在** → 继续执行，将搜索到的gcda路径记为 `TARGET_GCDA_PATH`
    - **不存在** → 说明编译时未添加覆盖率插桩标志，必须**回退重新编译**：
-     1. 使用 `-fprofile-arcs -ftest-coverage` 重新编译被测源文件和测试文件，使用 `--coverage -lgcov` 重新链接（构建策略详见 `skill://generate-ut/references/cpp/compile-and-coverage.md`）
+     1. 使用 `-fprofile-arcs -ftest-coverage` 重新编译被测源文件和测试文件，使用 `--coverage -lgcov` 重新链接（构建策略详见 `skill://bundled-developer-test-agent/generate-ut/references/cpp/compile-and-coverage.md`）
      2. 重新运行测试可执行文件，生成 `.gcda` 文件
      3. 重新执行本步骤检查 gcda 是否存在
      4. 仍不存在则说明环境配置问题，输出错误详情并结束

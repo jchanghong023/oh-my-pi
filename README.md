@@ -620,6 +620,8 @@ bun dev
 
 Nix users get the pinned Bun and Rust toolchains plus all native build dependencies. Keep `flake.lock` tracked in Git so `nix develop` and `nix build` use the pinned inputs:
 
+Building from a Git checkout requires [Nix 2.27 or later](https://nix.dev/manual/nix/2.27/release-notes/rl-2.27) and the pinned OpenWiki submodule: `git submodule update --init --recursive -- vendor/openwiki`.
+
 ```sh
 nix develop
 bun setup

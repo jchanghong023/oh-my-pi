@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { Lexer, type Links } from "@oh-my-pi/pi-utils/marked";
 import { CloserIndexes } from "@oh-my-pi/pi-utils/marked/inline-closers";
 
 export interface TodoLoopTask {
@@ -89,6 +90,7 @@ function parseDocument(content: string): ParsedDocument {
 	let nearestHeading: { level: number; title: string } | undefined;
 	let groupLevel: number | undefined;
 	let groupCount = 0;
+	let shortcutReferences: Links | undefined;
 
 	for (let index = 0; index < lines.length; index++) {
 		let raw = lines[index];
@@ -208,6 +210,9 @@ function parseDocument(content: string): ParsedDocument {
 			// Markdown links are context, not checkboxes (including one-letter labels).
 			if (/^[([]/.test(checkbox[2]) && checkbox[1] !== " ") continue;
 			if (![" ", "x", "X"].includes(checkbox[1])) {
+				shortcutReferences ??= Lexer.lex(content.replace(/^\uFEFF/, "")).links;
+				const label = checkbox[1].replace(/\s+/g, " ").toLowerCase();
+				if (Object.hasOwn(shortcutReferences, label)) continue;
 				throw new Error(`TodoLoop: invalid checkbox state at line ${index + 1}`);
 			}
 			// The first real checkbox, including an already completed one, fixes

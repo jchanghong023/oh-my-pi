@@ -1168,7 +1168,7 @@ describe("compact latest live Output consumers", () => {
 		expect(setTodos).toHaveBeenCalledWith(phases);
 	});
 
-	it("keeps the previous Output and its deadline across covered original edit receipts", async () => {
+	it("deduplicates only the latest original edit receipt in the folded diff", async () => {
 		setSystemTime(10_000);
 		let diffRows = 6;
 		const h = focusFixture(() => diffRows);
@@ -1188,6 +1188,10 @@ describe("compact latest live Output consumers", () => {
 			nativeHead: "Done · bash · echo shell",
 			nativeBody: ["retained Output"],
 		});
+		const earlier = {
+			body: ["[result.txt#ABCD]", "1:updated_1"],
+			nativeBody: ["[result.txt#ABCD]", "1:updated_1"],
+		};
 
 		for (let i = 1; i <= 2; i++) {
 			vi.advanceTimersByTime(500);
@@ -1215,10 +1219,11 @@ describe("compact latest live Output consumers", () => {
 				},
 				Date.now(),
 			);
-			expect(h.previewView()).toEqual(original);
+			if (i === 1) expect(h.previewView()).toEqual(original);
+			else expect(h.previewView()).toMatchObject(earlier);
 		}
 		output.restore(output.snapshot(), false);
-		expect(h.previewView()).toEqual(original);
+		expect(h.previewView()).toMatchObject(earlier);
 
 		diffRows = 0;
 		expect(h.previewView()).toMatchObject({
@@ -1226,8 +1231,8 @@ describe("compact latest live Output consumers", () => {
 			nativeBody: ["[result.txt#ABCD]", "1:updated_2"],
 		});
 		diffRows = 6;
-		vi.advanceTimersByTime(1999);
-		expect(h.previewView()).toEqual(original);
+		vi.advanceTimersByTime(2499);
+		expect(h.previewView()).toMatchObject(earlier);
 		vi.advanceTimersByTime(1);
 		expect(h.outputRows()).toEqual([[], []]);
 

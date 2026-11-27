@@ -2314,11 +2314,16 @@ export class InputController {
 		// queued text into a user-attributed skill invocation before delivery.
 		// Side commands answer now instead: the queue would deliver them as a
 		// main-turn prompt. Builtins keep precedence, as in the dispatch below.
+		// Goal management also runs during active compaction, just like plain Enter.
 		// A compaction queued for the next yield holds later follow-ups the same
 		// way, so they run after it.
 		this.releaseStaleYieldCompaction();
-		const direct = commandName === "collab2" || leave;
-		if (!direct && (this.ctx.session.isCompacting || this.ctx.yieldCompaction)) {
+		const compacting = this.ctx.session.isCompacting;
+		const direct =
+			commandName === "collab2" ||
+			leave ||
+			(compacting && (commandName === "goal" || commandName === "goal-autopilot"));
+		if (!direct && (compacting || this.ctx.yieldCompaction)) {
 			const builtin = this.#matchesBuiltinSlashCommand(text);
 			if (text.startsWith("/") && !builtin && (await this.#runSideFileCommand(text, restoreSideDraft))) return;
 			this.ctx.queueCompactionMessage(text, "followUp", images, {

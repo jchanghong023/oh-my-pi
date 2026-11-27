@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { getAgentDir, postmortem } from "@oh-my-pi/pi-utils";
 import { configureOpenWikiHome, getOpenWikiConfigDirectory } from "../openwiki/home";
 import { loadOpenWikiVendor } from "../openwiki/vendor-loader";
+import { OPENWIKI_VALUE_FLAGS } from "./flag-tables";
 
 const HELP = `Usage: omp openwiki <command> [options]
 
@@ -65,22 +66,34 @@ function extractModelAndDebug(argv: string[]): {
 	let dryRun = false;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
+		if (arg === "--") {
+			for (; i < argv.length; i++) result.push(argv[i]);
+			break;
+		}
+		const equals = arg.indexOf("=");
+		const option = equals < 0 ? arg : arg.slice(0, equals);
 		if (arg === "--dry-run") {
 			dryRun = true;
 		} else if (arg === "--debug") {
 			debug = true;
-		} else if (arg === "--modelId" || arg === "--model-id" || arg === "--planner-model") {
-			const value = argv[++i];
-			if (!value || value.startsWith("-")) throw new Error(`${arg} requires a model ID.`);
-			if (arg === "--planner-model") plannerModel = value;
-			else model = value;
-		} else if (arg.startsWith("--modelId=") || arg.startsWith("--model-id=") || arg.startsWith("--planner-model=")) {
-			const value = arg.slice(arg.indexOf("=") + 1);
-			if (!value) throw new Error(`${arg.split("=")[0]} requires a model ID.`);
-			if (arg.startsWith("--planner-model=")) plannerModel = value;
+		} else if (option === "--modelId" || option === "--model-id" || option === "--planner-model") {
+			const value = equals < 0 ? argv[++i] : arg.slice(equals + 1);
+			if (!value || value.startsWith("-")) throw new Error(`${option} requires a model ID.`);
+			if (option === "--planner-model") plannerModel = value;
 			else model = value;
 		} else {
 			result.push(arg);
+			if (OPENWIKI_VALUE_FLAGS.has(arg)) {
+				const next = argv[i + 1];
+				// Let the vendor report malformed options using the unmodified
+				// suffix rather than lending this option a later positional token.
+				if (!next || next.startsWith("-")) {
+					for (let j = i + 1; j < argv.length; j++) result.push(argv[j]);
+					break;
+				}
+				result.push(next);
+				i++;
+			}
 		}
 	}
 	return { argv: result, model, plannerModel, debug, dryRun };

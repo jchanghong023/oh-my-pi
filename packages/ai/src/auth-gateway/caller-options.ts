@@ -12,6 +12,9 @@ import { captureRequestHeaders } from "./http";
 
 type OptionTier = "client" | "gateway" | "server";
 
+/** Pi-native-only list of outer credential header names, never relayed upstream. */
+export const PI_NATIVE_OUTER_AUTH_HEADERS = "x-omp-gateway-auth-headers";
+
 // Exhaustive: a new `SimpleStreamOptions` field is a compile error until classified.
 const OPTION_TIERS = {
 	temperature: "client",
@@ -124,10 +127,19 @@ const GATEWAY_ONLY_KEYS: readonly (keyof SimpleStreamOptions)[] = TIERED_KEYS.fi
  * upstream-bound options only; response encoders read the caller's parsed
  * request (the Anthropic encoder answers the caller's `anthropic-beta`).
  */
-export function applyCallerTrust(opts: SimpleStreamOptions, req: Request, scoped: boolean): void {
+export function applyCallerTrust(
+	opts: SimpleStreamOptions,
+	req: Request,
+	scoped: boolean,
+	outerOnly?: string | null,
+): void {
 	if (scoped) {
 		for (const key of GATEWAY_ONLY_KEYS) delete opts[key];
 		return;
 	}
-	opts.headers = { ...captureRequestHeaders(req.headers), ...opts.headers };
+	const headers = captureRequestHeaders(req.headers);
+	if (outerOnly) {
+		for (const name of outerOnly.split(",")) delete headers[name.trim().toLowerCase()];
+	}
+	opts.headers = { ...headers, ...opts.headers };
 }

@@ -3,9 +3,9 @@
  *
  * Each server's enabled tools become async methods of one eval global
  * (`mcp__github_create_issue` → `github.create_issue(args)`) and leave the
- * top-level and tool-command surfaces. A method calls its registry tool
- * through the eval bridge op {@link EVAL_MCP_BRIDGE_NAME}, which runs the
- * tool exactly as `tool.<name>(args)` does (approval, ACP gates, extension
+ * top-level and tool-command surfaces, unless the server sets `alwaysLoad: true`.
+ * A method calls its registry tool through {@link EVAL_MCP_BRIDGE_NAME}, which
+ * runs the tool exactly as `tool.<name>(args)` does (approval, ACP gates, extension
  * hooks stay the tool's own) and maps its MCP content to a script value
  * ({@link mcpNamespaceValue}): images, audio and binary resources land as
  * `local://mcp/…` files. Full docs (every method with its description and
@@ -86,8 +86,10 @@ const RESERVED_NAMESPACES = new Set([
 	..."archive browser commit computer dsm ratchet".split(" "),
 ]);
 
-/** Original MCP route of a registry entry; `undefined` for tools that did not come from an MCP server. */
+/** Original MCP route of a tool eligible for namespace presentation. */
 function mcpRoute(tool: object | undefined): { server: string; tool: string } | undefined {
+	// MCP marks alwaysLoad: true tools essential so they stay top-level.
+	if (tool && "loadMode" in tool && tool.loadMode === "essential") return undefined;
 	if (!tool || !("mcpServerName" in tool) || !("mcpToolName" in tool)) return undefined;
 	const { mcpServerName, mcpToolName } = tool;
 	return typeof mcpServerName === "string" && typeof mcpToolName === "string"
@@ -125,9 +127,9 @@ function methodName(tool: string): string {
  * Group MCP registry entries into namespaces named after their sanitized
  * server (the `<server>` of `mcp__<server>_<tool>`). A name that is reserved,
  * starts with a digit, or is in `taken` (other preludes' globals) gains an
- * `_mcp` suffix (`fetch` → `fetch_mcp`), numbered until unique. Tools without
- * an MCP route are ignored; a method name two tools share keeps the first by
- * registry name.
+ * `_mcp` suffix (`fetch` → `fetch_mcp`), numbered until unique. Tools not
+ * eligible for namespace presentation are ignored; a method name two tools
+ * share keeps the first by registry name.
  */
 export function groupMCPNamespaces(tools: readonly AgentTool[], taken: ReadonlySet<string>): MCPNamespace[] {
 	const groups = new Map<string, { servers: Set<string>; methods: Map<string, AgentTool> }>();

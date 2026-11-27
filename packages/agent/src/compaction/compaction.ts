@@ -37,7 +37,8 @@ import {
 	resolveOpenAICompatPolicy,
 } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { isSurvivingAssistant } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import { stripOpenAIResponsesOutputOnlyStatusesForReplay } from "@oh-my-pi/pi-ai/utils";
+import { assertProviderEnabled } from "@oh-my-pi/pi-ai/registry";
+import { hasRequestAuthMaterial, stripOpenAIResponsesOutputOnlyStatusesForReplay } from "@oh-my-pi/pi-ai/utils";
 import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
@@ -837,6 +838,12 @@ export interface SummaryOptions {
 	tools?: Tool[];
 	/** Optional fetch implementation threaded into remote compaction calls. */
 	fetch?: FetchImpl;
+	/** Resolve host credentials for remote HTTP requests that bypass {@link completeImpl}. */
+	resolveRemoteRequestAuth?: (
+		model: Model,
+		signal: AbortSignal | undefined,
+		reasoning: Effort | undefined,
+	) => Promise<SimpleStreamOptions["requestAuth"]>;
 	/** Inspect or replace a generic remote-compaction payload before it is sent. */
 	onPayload?: SimpleStreamOptions["onPayload"];
 	/**
@@ -1131,6 +1138,31 @@ export async function generateSummary(
 	return carriedSummary ?? "";
 }
 
+async function withRemoteRequestAuth<T>(
+	model: Model,
+	apiKey: ApiKey,
+	signal: AbortSignal | undefined,
+	options: SummaryOptions | undefined,
+	reasoning: Effort | undefined,
+	send: (key: string, auth?: SimpleStreamOptions["requestAuth"]) => Promise<T>,
+	missingKeyMessage?: string,
+): Promise<T> {
+	if (options?.resolveRemoteRequestAuth) {
+		const auth = await options.resolveRemoteRequestAuth(model, signal, reasoning);
+		signal?.throwIfAborted();
+		if (auth !== undefined) {
+			assertProviderEnabled(model.provider);
+			if (!hasRequestAuthMaterial(auth)) throw new AIError.MissingApiKeyError(model.provider);
+			// The gateway credential must not be used on an out-of-band provider HTTP route.
+			if (model.transport === "pi-native") {
+				throw new AIError.ConfigurationError("Direct remote compaction cannot use pi-native gateway credentials.");
+			}
+			return send(auth.apiKey?.trim() ?? "", auth);
+		}
+	}
+	return withAuth(apiKey, send, { signal, missingKeyMessage });
+}
+
 /** One summarization call over a single conversation window. */
 async function summarizeConversationWindow(
 	conversationText: string,
@@ -1169,16 +1201,20 @@ async function summarizeConversationWindow(
 
 	if (options?.remoteEndpoint) {
 		const endpoint = options.remoteEndpoint;
-		const remote = await withAuth(
+		const remote = await withRemoteRequestAuth(
+			model,
 			apiKey,
-			key =>
+			signal,
+			options,
+			undefined,
+			(key, requestAuth) =>
 				requestRemoteCompaction(
 					endpoint,
 					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText, maxTokens },
 					signal,
-					{ fetch: options.fetch, model, apiKey: key, onPayload: options.onPayload },
+					{ fetch: options.fetch, model, apiKey: key, requestAuth, onPayload: options.onPayload },
 				),
-			{ signal, missingKeyMessage: "Remote compaction credentials unavailable" },
+			"Remote compaction credentials unavailable",
 		);
 		return remote.summary;
 	}
@@ -1422,16 +1458,20 @@ async function generateShortSummary(
 	try {
 		if (options?.remoteEndpoint) {
 			const endpoint = options.remoteEndpoint;
-			const remote = await withAuth(
+			const remote = await withRemoteRequestAuth(
+				model,
 				apiKey,
-				key =>
+				signal,
+				options,
+				undefined,
+				(key, requestAuth) =>
 					requestRemoteCompaction(
 						endpoint,
 						{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText, maxTokens },
 						signal,
-						{ fetch: options?.fetch, model, apiKey: key, onPayload: options?.onPayload },
+						{ fetch: options.fetch, model, apiKey: key, requestAuth, onPayload: options.onPayload },
 					),
-				{ signal, missingKeyMessage: "Remote compaction credentials unavailable" },
+				"Remote compaction credentials unavailable",
 			);
 			outcome = { kind: "text", text: remote.summary };
 		} else {
@@ -2026,6 +2066,7 @@ export async function compact(
 					codexCompaction: options?.codexCompaction,
 					tools: options?.tools,
 					fetch: options?.fetch,
+					resolveRemoteRequestAuth: options?.resolveRemoteRequestAuth,
 					onPayload: options?.onPayload,
 					completeImpl: options?.completeImpl,
 					onRemoteUsage: options?.onRemoteUsage,
@@ -2265,17 +2306,21 @@ export async function compact(
 									reasoning: buildCompactionV2Reasoning(model, summaryOptions.thinkingLevel),
 								});
 						const startedAt = Date.now();
-						const remote = await withAuth(
+						const remote = await withRemoteRequestAuth(
+							model,
 							apiKey,
-							key =>
+							signal,
+							summaryOptions,
+							resolveCompactionEffort(model, summaryOptions.thinkingLevel),
+							(key, requestAuth) =>
 								requestCompactionV2Streaming(model, key, request, signal, {
 									fetch: summaryOptions.fetch,
+									requestAuth,
 									providerSessionState: summaryOptions.providerSessionState,
 									preferWebsockets: summaryOptions.preferWebsockets,
 									codexAccessPrograms: summaryOptions.codexAccessPrograms,
 									codexCompaction: summaryOptions.codexCompaction,
 								}),
-							{ signal },
 						);
 						reportRemoteUsage(remote.usage, startedAt);
 						preserveData = { ...preserveData, ...storeCompactionV2PreserveData(remote, model) };
@@ -2368,9 +2413,13 @@ export async function compact(
 							input_item_count: remoteHistory.length,
 						});
 						const startedAt = Date.now();
-						const { usage, ...remote } = await withAuth(
+						const { usage, ...remote } = await withRemoteRequestAuth(
+							model,
 							apiKey,
-							key =>
+							signal,
+							summaryOptions,
+							undefined,
+							(key, requestAuth) =>
 								requestOpenAiRemoteCompaction(
 									model,
 									key,
@@ -2379,6 +2428,7 @@ export async function compact(
 									signal,
 									{
 										fetch: summaryOptions.fetch,
+										requestAuth,
 										sessionId: summaryOptions.sessionId,
 										promptCacheKey: summaryOptions.remotePromptCacheKey,
 										providerSessionState: summaryOptions.providerSessionState,
@@ -2386,7 +2436,6 @@ export async function compact(
 										rewriteOutputs,
 									},
 								),
-							{ signal },
 						);
 						reportRemoteUsage(usage, startedAt);
 						preserveData = withOpenAiRemoteCompactionPreserveData(preserveData, remote);

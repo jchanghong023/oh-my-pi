@@ -6,6 +6,7 @@ import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import { getDocumentConversionCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
+import { terminateOwnedSubprocess } from "@oh-my-pi/pi-utils/subprocess";
 import { offlineFromEnv } from "../cli/args";
 import { DEFAULT_NPM_REGISTRY } from "../cli/npm-registry";
 import type { Skill } from "../extensibility/skills";
@@ -49,8 +50,8 @@ export interface SpecDrivenProcessResult {
 	stderr: string;
 }
 
-/** SDK/tool calls capture by default; only the standalone CLI selects terminal inheritance. */
-export type SpecDrivenProcessIO = "capture" | "terminal";
+/** Capture for SDK calls, inherit output for streaming, or also inherit terminal input. */
+export type SpecDrivenProcessIO = "capture" | "stream" | "terminal";
 
 // Keep URL ownership available even if the resource archive or its cache cannot be opened.
 // Extraction checks this pinned index against the archive manifest.
@@ -260,39 +261,54 @@ async function run(
 	signal?: AbortSignal,
 	extraEnv: Record<string, string> = {},
 	io: SpecDrivenProcessIO = "capture",
+	ownership: "child" | "tree" = "child",
 ): Promise<SpecDrivenProcessResult> {
 	signal?.throwIfAborted();
-	const terminal = io === "terminal";
+	const capture = io === "capture";
+	const detached = ownership === "tree" && process.platform !== "win32";
 	const child = Bun.spawn(command, {
 		cwd,
-		stdin: terminal ? "inherit" : "ignore",
-		stdout: terminal ? "inherit" : "pipe",
-		stderr: terminal ? "inherit" : "pipe",
+		detached,
+		stdin: io === "terminal" ? "inherit" : "ignore",
+		stdout: capture ? "pipe" : "inherit",
+		stderr: capture ? "pipe" : "inherit",
 		env: { ...process.env, OPENSPEC_TELEMETRY: "0", DO_NOT_TRACK: "1", ...extraEnv },
 	});
-	// The CLI's process-wide signal handler exits after postmortem cleanup.
-	// Join that cleanup as well as cancellation, so it cannot exit before
-	// this owned child has been reaped.
+	// Join cancellation and the CLI's exit cleanup. Don't stop a normally
+	// completed launcher: a script can intentionally hand off background work.
+	let stopping: Promise<void> | undefined;
+	const stop = () =>
+		(stopping ??=
+			ownership === "tree"
+				? terminateOwnedSubprocess(child, { detached })
+				: (async () => {
+						if (child.exitCode === null && child.signalCode === null) child.kill();
+						await child.exited;
+					})());
+	const unregisterCleanup = postmortem.register(`spec-driven-process:${child.pid}`, stop);
+	const cancelled = Promise.withResolvers<never>();
 	const abort = () => {
-		if (child.exitCode === null) child.kill();
+		void stop().then(() => cancelled.reject(signal?.reason), cancelled.reject);
 	};
-	const unregisterCleanup = postmortem.register(`spec-driven-process:${child.pid}`, async () => {
-		abort();
-		await child.exited;
-	});
 	signal?.addEventListener("abort", abort, { once: true });
 	if (signal?.aborted) abort();
 	try {
-		const [stdout, stderr, exitCode] = await Promise.all([
-			terminal ? "" : new Response(child.stdout).text(),
-			terminal ? "" : new Response(child.stderr).text(),
-			child.exited,
+		const [stdout, stderr, exitCode] = await Promise.race([
+			Promise.all([
+				capture ? new Response(child.stdout).text() : "",
+				capture ? new Response(child.stderr).text() : "",
+				child.exited,
+			]),
+			cancelled.promise,
 		]);
+		if (stopping) await stopping;
 		signal?.throwIfAborted();
 		return { exitCode, stdout, stderr };
+	} catch (error) {
+		await stop();
+		throw error;
 	} finally {
 		signal?.removeEventListener("abort", abort);
-		await child.exited;
 		unregisterCleanup();
 	}
 }
@@ -347,6 +363,7 @@ export async function runSuperpowersScript(
 	args: readonly string[],
 	cwd: string,
 	signal?: AbortSignal,
+	io: SpecDrivenProcessIO = "capture",
 ): Promise<SpecDrivenProcessResult> {
 	const resources = await ensureSpecDrivenResources();
 	const inventory = resources.manifest.files.find(file => file.path === `superpowers/${relativePath}`);
@@ -363,7 +380,8 @@ export async function runSuperpowersScript(
 		PATH: `${runtimeRoot}${path.delimiter}${process.env.PATH ?? ""}`,
 		BRAINSTORM_DIR: path.join(cwd, ".superpowers", "brainstorm"),
 	};
-	if (/\.(?:c?js|mjs)$/.test(relativePath)) return run([process.execPath, script, ...args], cwd, signal, env);
+	if (/\.(?:c?js|mjs)$/.test(relativePath))
+		return run([process.execPath, script, ...args], cwd, signal, env, io, "tree");
 	const newline = bytes.indexOf(0x0a);
 	const head = bytes.toString("utf8", 0, newline === -1 ? bytes.length : newline);
 	if (!head.startsWith("#!") || !/\b(?:bash|sh)\b/.test(head))
@@ -377,5 +395,5 @@ export async function runSuperpowersScript(
 			path.resolve(path.dirname(bash), "../usr/bin"),
 			process.env.PATH ?? "",
 		].join(path.delimiter);
-	return run([bash, script.replaceAll("\\", "/"), ...args], cwd, signal, env);
+	return run([bash, script.replaceAll("\\", "/"), ...args], cwd, signal, env, io, "tree");
 }

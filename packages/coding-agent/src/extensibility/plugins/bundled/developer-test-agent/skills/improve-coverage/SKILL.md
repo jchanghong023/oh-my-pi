@@ -44,7 +44,7 @@ disable-model-invocation: true
 
 检测测试代码语言后，**必须读取对应语言的专属reference**获取语言特定的覆盖率工具、测量命令、覆盖率分类规则、未覆盖场景策略表：
 
-本 skill 的 `references/` 和 `scripts/` 路径相对于加载时返回的 baseDir；用 `read` 读取资源时可用 `skill://improve-coverage/<路径>`。reference 中的相对链接以该 reference 所在目录为基准，不依赖项目工作目录。脚本命令使用 baseDir 的绝对路径并加引号。
+本 skill 的 `references/` 和 `scripts/` 路径相对于加载时返回的 baseDir；用 `read` 读取资源时可用 `skill://bundled-developer-test-agent/improve-coverage/<路径>`。reference 中的相对链接以该 reference 所在目录为基准，不依赖项目工作目录。脚本命令使用 baseDir 的绝对路径并加引号。
 
 | 语言 | 触发条件 | 必读reference |
 |------|----------|---------------|

@@ -58,6 +58,7 @@ import {
 } from "@oh-my-pi/pi-agent-core/compaction/pruning";
 import type { ProtectedToolMatcher } from "@oh-my-pi/pi-agent-core/compaction/tool-protection";
 import type {
+	ApiKeyResolver,
 	AssistantMessage,
 	CodexCompactionContext,
 	Context,
@@ -80,6 +81,7 @@ import { writeArtifact } from "./artifacts";
 import { cfgOffline } from "../config/auxiliary-model-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import { CHAT_MODEL_ROLE_IDS } from "../config/model-roles";
+import { cfgDisabledProviders } from "../config/model-settings";
 import type { Settings } from "../config/settings";
 import type { ExtensionRunner, SessionBeforeCompactResult } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
@@ -89,6 +91,7 @@ import type { MemoryBackendOperationContext } from "../memory-backend/types";
 import { customMessageEntryMessage } from "./transcript/transcript-entry";
 import { computeNonMessageTokens, type NonMessageTokenSource } from "./context-usage";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
+import type { ToolSession } from "../tools";
 import { isCompleteReadResult } from "../tools/read-supersede";
 import type { ConfiguredThinkingLevel } from "../utils/render-utils";
 import type { LocalAgentSessionEvent } from "./agent-session-events";
@@ -544,6 +547,7 @@ export interface SessionMaintenanceHost {
 	modelRegistry: ModelRegistry;
 	extensionRunner: ExtensionRunner | undefined;
 	sideStreamFn: StreamFn;
+	resolveRequestAuth?: ToolSession["resolveRequestAuth"];
 	providerSessionState: Map<string, ProviderSessionState>;
 	/** Codex-only request preference from the live session setting. */
 	preferWebsockets(model: Model): boolean | undefined;
@@ -4561,6 +4565,33 @@ export class SessionMaintenance {
 			this.#host.convertToLlmForSideRequest(messages, candidate, { withImageDescriptions: !!describeFor });
 	}
 
+	#compactionRemoteAuth(): SummaryOptions["resolveRemoteRequestAuth"] {
+		const resolve = this.#host.resolveRequestAuth;
+		return resolve && ((model, signal, reasoning) => resolve(model, signal, { thinkingLevel: reasoning ?? "off" }));
+	}
+
+	async #compactionRegistryAuth(candidate: Model, signal: AbortSignal): Promise<ApiKeyResolver | undefined> {
+		const { modelRegistry } = this.#host;
+		if (cfgDisabledProviders.get(this.#host.settings).includes(candidate.provider)) return undefined;
+		const sessionId = this.#host.sessionId();
+		if (!this.#host.resolveRequestAuth) {
+			if (!(await modelRegistry.getApiKey(candidate, sessionId, { signal }))) return undefined;
+			return modelRegistry.resolver(candidate, sessionId);
+		}
+
+		// Stream dispatch and direct native requests only invoke this fallback if the
+		// host returned undefined. Preserve the registry's account-affine preflight.
+		let preflight: Promise<string | undefined> | undefined;
+		let fallback: ApiKeyResolver | undefined;
+		return async context => {
+			if (context.error === undefined) {
+				preflight ??= modelRegistry.getApiKey(candidate, sessionId, { signal: context.signal ?? signal });
+				if (!(await preflight)) return undefined;
+			}
+			return (fallback ??= modelRegistry.resolver(candidate, sessionId))(context);
+		};
+	}
+
 	async #compactWithFallbackModel(
 		method: CompactionMethod,
 		preparation: CompactionPreparation,
@@ -4593,6 +4624,7 @@ export class SessionMaintenance {
 					const telemetry = resolveTelemetry(this.#host.agent.telemetry, this.#host.sessionId());
 					let nativeCompactionFailure: { error: NativeCompactionError; provider: string } | undefined;
 					const compactionJournal = this.#journalCompaction(method);
+					const resolveRemoteRequestAuth = this.#compactionRemoteAuth();
 					const journal: CompletionJournal | undefined =
 						onAttempt === undefined
 							? compactionJournal
@@ -4603,8 +4635,8 @@ export class SessionMaintenance {
 
 					for (const [candidateIndex, candidate] of candidates.entries()) {
 						const attemptStarted = performance.now();
-						const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
-						if (!apiKey) {
+						const registryAuth = await this.#compactionRegistryAuth(candidate, signal);
+						if (!registryAuth) {
 							logger.info("Compaction model skipped", {
 								component: "compaction",
 								event: "compaction_model_attempt",
@@ -4639,7 +4671,7 @@ export class SessionMaintenance {
 							const result = await compact(
 								this.#host.obfuscatePreparationForProvider(preparation),
 								candidate,
-								this.#host.modelRegistry.resolver(candidate, this.#host.sessionId()),
+								registryAuth,
 								this.#host.obfuscateTextForProvider(customInstructions),
 								signal,
 								{
@@ -4672,6 +4704,7 @@ export class SessionMaintenance {
 									providerSessionState: this.#host.providerSessionState,
 									preferWebsockets: this.#host.preferWebsockets(candidate),
 									codexAccessPrograms: cfgProvidersOpenaiCodexDaybreak.get(this.#host.settings),
+									resolveRemoteRequestAuth,
 									// Route every summarization HTTP request through the
 									// session's side-stream transport so the provider
 									// concurrency cap (e.g. providers.ollama-cloud.maxConcurrency)
@@ -6360,7 +6393,7 @@ export class SessionMaintenance {
 			}
 
 			const availableModels = this.#host.modelRegistry.getAvailable();
-			if (availableModels.length === 0) {
+			if (availableModels.length === 0 && !this.#host.resolveRequestAuth) {
 				await this.#emitLifecycleEvent(
 					{
 						type: "auto_compaction_end",
@@ -6889,6 +6922,7 @@ export class SessionMaintenance {
 				let lastError: unknown;
 				let nativeCompactionFailure: { error: NativeCompactionError; provider: string } | undefined;
 				const journal = this.#journalCompaction(method);
+				const resolveRemoteRequestAuth = this.#compactionRemoteAuth();
 				codexCompaction = createCodexCompactionContext({
 					trigger: "auto",
 					reason: "context_limit",
@@ -6900,8 +6934,8 @@ export class SessionMaintenance {
 				for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
 					const candidate = candidates[candidateIndex];
 					const hasMoreCandidates = candidateIndex < candidates.length - 1;
-					const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
-					if (!apiKey) {
+					const registryAuth = await this.#compactionRegistryAuth(candidate, autoCompactionSignal);
+					if (!registryAuth) {
 						logger.info("Automatic compaction model skipped", {
 							component: "compaction",
 							event: "compaction_model_attempt",
@@ -6938,7 +6972,7 @@ export class SessionMaintenance {
 							compactResult = await compact(
 								this.#host.obfuscatePreparationForProvider(preparation),
 								candidate,
-								this.#host.modelRegistry.resolver(candidate, this.#host.sessionId()),
+								registryAuth,
 								undefined,
 								autoCompactionSignal,
 								{
@@ -6969,16 +7003,21 @@ export class SessionMaintenance {
 									preferWebsockets: this.#host.preferWebsockets(candidate),
 									codexAccessPrograms: cfgProvidersOpenaiCodexDaybreak.get(this.#host.settings),
 									codexCompaction,
+									resolveRemoteRequestAuth,
 									// This loop already retries the whole compaction attempt on
 									// transient errors, so the summarization oneshots must not
 									// retry too — the budgets would multiply and each outer
 									// wait would stack on top of an inner backoff.
 									oneshotRetry: false,
-									// The default transport, wrapped so every provider attempt is journaled.
+									// SDK sessions must use the hooked transport; journal every provider attempt.
 									completeImpl: guardCompactionReplay(
 										candidate,
 										async (requestModel, requestContext, requestOptions) => {
-											const message = await completeSimple(requestModel, requestContext, requestOptions);
+											const message = resolveRemoteRequestAuth
+												? await (
+														await this.#host.sideStreamFn(requestModel, requestContext, requestOptions)
+													).result()
+												: await completeSimple(requestModel, requestContext, requestOptions);
 											journal?.(message);
 											return message;
 										},

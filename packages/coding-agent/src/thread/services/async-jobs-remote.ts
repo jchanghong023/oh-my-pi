@@ -400,6 +400,10 @@ export class RemoteAsyncJobManager implements AsyncJobManagerApi {
 		return this.#remote.call("cancelAndReapOwnerJobs", ownerId, deadlineAt);
 	}
 
+	disposeOwner(ownerId: string, timeoutMs: number): Promise<void> {
+		return this.#remote.call("disposeOwner", ownerId, timeoutMs);
+	}
+
 	drainDeliveries(options?: { timeoutMs?: number; filter?: AsyncJobFilter }): Promise<boolean> {
 		return this.#remote.call("drainDeliveries", options);
 	}

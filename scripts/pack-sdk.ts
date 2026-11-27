@@ -100,7 +100,16 @@ async function pack(out: string): Promise<void> {
 			addons,
 		};
 		await Bun.write(path.join(stage, "omp-sdk.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-		const command = platform === "win32" ? ["tar.exe", "-a", "-cf", temporary, "."] : ["zip", "-qr", temporary, "."];
+		const command =
+			platform === "win32"
+				? [
+						path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"),
+						"--format=zip",
+						"-cf",
+						temporary,
+						".",
+					]
+				: ["zip", "-qr", temporary, "."];
 		const child = Bun.spawn(command, { cwd: stage, stdout: "inherit", stderr: "inherit" });
 		if ((await child.exited) !== 0) throw new Error(`${command[0]} could not create the SDK ZIP`);
 		const sha256 = createHash("sha256");

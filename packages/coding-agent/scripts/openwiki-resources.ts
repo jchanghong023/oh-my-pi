@@ -12,8 +12,9 @@ import { openWikiResourceFingerprint } from "../src/openwiki/resource-fingerprin
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 const vendorRoot = path.join(repoRoot, "vendor/openwiki");
 const packageDir = path.join(repoRoot, "packages/coding-agent");
-/** Absolute Bun.build overlay key and the source generator's destination. */
+/** Absolute Bun.build overlay key for the tracked placeholder. */
 export const openWikiResourceFile = path.join(packageDir, "src/openwiki/openwiki-resources.generated.txt");
+const sourceResourceFile = path.join(packageDir, "dist", path.basename(openWikiResourceFile));
 
 async function filesUnder(root: string, prefix = ""): Promise<Record<string, string>> {
 	const entries: Record<string, string> = {};
@@ -100,11 +101,11 @@ export async function buildOpenWikiResourceText(): Promise<string> {
 
 /** Publish the source archive in one rename. */
 async function writeOpenWikiResources(archive: string): Promise<void> {
-	await mkdir(path.dirname(openWikiResourceFile), { recursive: true });
-	const temporary = `${openWikiResourceFile}.${randomUUID()}.tmp`;
+	await mkdir(path.dirname(sourceResourceFile), { recursive: true });
+	const temporary = `${sourceResourceFile}.${randomUUID()}.tmp`;
 	try {
 		await writeFile(temporary, archive, { flag: "wx" });
-		await rename(temporary, openWikiResourceFile);
+		await rename(temporary, sourceResourceFile);
 	} finally {
 		await rm(temporary, { force: true });
 	}
@@ -112,11 +113,9 @@ async function writeOpenWikiResources(archive: string): Promise<void> {
 
 if (import.meta.main) {
 	const postinstall = process.argv.includes("--if-present");
-	// CNB embeds its own archive and must leave the tracked placeholder untouched.
+	// CNB builds the embedded archive itself and does not need the source copy.
 	if (postinstall && process.env.OMP_SKIP_OPENWIKI_POSTINSTALL === "1") process.exit(0);
 	if (postinstall && !existsSync(path.join(vendorRoot, "package.json"))) {
-		await mkdir(path.dirname(openWikiResourceFile), { recursive: true });
-		await writeFile(openWikiResourceFile, "");
 		console.warn(
 			"OpenWiki submodule absent; initialize it and run bun run gen:openwiki-resources before using OpenWiki.",
 		);

@@ -115,7 +115,13 @@ function pickerBrowser(
 	return browser;
 }
 
-/** Key pinned rows by identity, not by their potentially ambiguous configuration selector. */
+/** Every bare row key contains a slash; pinned rows use a separate identity namespace. */
+function pinnedPickerItem(model: Model, pin: string): ModelBrowserItem {
+	const { provider, id } = model;
+	const selector = `pin:${encodeURIComponent(JSON.stringify([provider, id, pin]))}`;
+	return { model, provider, id, selector, perfSelector: `${provider}/${id}` };
+}
+
 const routedPickerScopes = new WeakMap<ModelBrowserItem[], ModelBrowserItem[]>();
 function routedPickerItems(items: ModelBrowserItem[]): ModelBrowserItem[] {
 	const cached = routedPickerScopes.get(items);
@@ -126,9 +132,7 @@ function routedPickerItems(items: ModelBrowserItem[]): ModelBrowserItem[] {
 		const pin = getUpstreamPin(item.model);
 		if (!pin) continue;
 		if (routed === items) routed = items.slice();
-		// Every bare row key contains a slash; this namespace has none.
-		const selector = `pin:${encodeURIComponent(JSON.stringify([item.provider, item.id, pin]))}`;
-		routed[i] = { ...item, selector, perfSelector: item.selector };
+		routed[i] = pinnedPickerItem(item.model, pin);
 	}
 	routedPickerScopes.set(items, routed);
 	return routed;
@@ -329,14 +333,22 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 		);
 		batch(() => {
 			configError.set(scoped.error);
-			const items = selectOnly ? scoped.items : routedPickerItems(scoped.items);
-			modelItems.set(items);
+			let items = selectOnly ? scoped.items : routedPickerItems(scoped.items);
 			if (!selectOnly) {
 				const selector = options.currentSelector;
-				const sessionItem = props.currentModel
-					? items.find(item => routedModelsAreEqual(item.model, props.currentModel))
+				const currentModel = props.currentModel;
+				let sessionItem = currentModel
+					? items.find(item => routedModelsAreEqual(item.model, currentModel))
 					: (items.find(item => (item.perfSelector ?? item.selector) === selector) ??
 						items.find(item => formatModelStringWithRouting(item.model) === selector));
+				if (!sessionItem && currentModel) {
+					// A session pin can be resolved from a bare catalog row without being listed in it.
+					const pin = getUpstreamPin(currentModel);
+					if (pin) {
+						sessionItem = pinnedPickerItem(currentModel, pin);
+						items = [...items, sessionItem];
+					}
+				}
 				sessionRowKey.set(sessionItem?.selector);
 				if (taskKeys.size > 0 && options.taskSelector) {
 					const taskModel = source.resolveRoleValue(
@@ -359,6 +371,7 @@ export function ModelPicker(props: ModelPickerProps): JSXNode {
 				}
 				browser.setPerfStats(source.modelPerf);
 			}
+			modelItems.set(items);
 			syncItems(browser.query, true);
 		});
 	};

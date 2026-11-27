@@ -65,6 +65,15 @@
 
 ### Fixed
 
+- Automatic compaction uses the SDK host's request credentials, and strict session shutdown waits for retained task artifacts to be cleaned up.
+- Goal Autopilot can finish after reopening a budget-limited session and raising its budget; Goal controls take effect during compaction.
+- Ctrl+T preselects the active routed model, expanded compact diffs leave composer completion keys alone, and collapsed diffs no longer hide receipts they did not display.
+- Git status remains visible with older development native addons, and structured Bash results preserve extra shell output and notices.
+- MCP servers honor `alwaysLoad` in Eval mode and native plugin configs, and dynamic OAuth registration uses the configured client name.
+- `/team` reports job registration failure to non-interactive callers, `/todoloop` accepts Markdown shortcut links, and `/dt` uses its bundled stages by default.
+- Cancelling `/sketch` no longer leaves unattached images; Superpowers foreground scripts stream output and stop their child processes on cancellation.
+- OpenWiki rejects missing option values without writing a telemetry file, and source containers can print OMP notices without OpenWiki resources.
+- CNB checks out the pinned OpenWiki sources after a fast-forward, Windows SDK archives are ZIP files, and packaged HTML exports use the viewer from their own build.
 - Resuming a session reads its latest history after the old session settles, and worktree pickers disambiguate session directories that share a storage bucket.
 - Withdrawing a queued `/compact` restores its draft attachments as well as its text.
 - Failed browser recording finalization leaves no partial recording at the original destination.

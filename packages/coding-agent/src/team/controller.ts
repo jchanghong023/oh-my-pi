@@ -50,7 +50,6 @@ export interface StartTeamDiscussionArgs {
 
 export interface StartTeamDiscussionResult {
 	started: boolean;
-	registrationRefused?: boolean;
 	jobId?: string;
 	/** User-facing feedback for the dispatch outcome. */
 	message: string;
@@ -371,7 +370,6 @@ async function startTeamDiscussionImpl(
 	const label = `/team ${previewQuestion(question)}`;
 
 	let jobId: string | undefined;
-	let registrationAttempted = false;
 	let unregisterSessionChange: (() => void) | undefined;
 	const sessionAbort = new AbortController();
 	const dispatchSignal = requestSignal ? AbortSignal.any([sessionAbort.signal, requestSignal]) : sessionAbort.signal;
@@ -391,7 +389,6 @@ async function startTeamDiscussionImpl(
 			sessionAbort.abort();
 			unregisterSessionChange?.();
 		});
-		registrationAttempted = true;
 		jobId = manager.register(
 			"task",
 			label,
@@ -591,7 +588,6 @@ async function startTeamDiscussionImpl(
 			"Wait for existing jobs to finish or cancel them through Agent Hub or `hub cancel`, then retry.",
 		].join("\n");
 		await report(message);
-		if (registrationAttempted && jobId === undefined) return { started: false, registrationRefused: true, message };
 		return { started: false, message };
 	}
 	logger.info("Team job registered", {

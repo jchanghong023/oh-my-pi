@@ -223,16 +223,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 							clientSecret?: string;
 					  }
 					| undefined,
-				oauth: serverConfig.oauth as
-					| {
-							clientId?: string;
-							clientSecret?: string;
-							redirectUri?: string;
-							callbackPort?: number;
-							callbackPath?: string;
-							prompt?: string;
-					  }
-					| undefined,
+				oauth: serverConfig.oauth as MCPServer["oauth"],
 				transport: serverConfig.type as "stdio" | "sse" | "http" | undefined,
 				_source: createSourceMeta(PROVIDER_ID, path, level),
 			});

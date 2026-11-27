@@ -98,9 +98,10 @@ interface MCPServerConfigBase {
 	instructions?: boolean;
 	/** Authentication configuration (optional) */
 	auth?: MCPAuthConfig;
-	/** OAuth configuration for servers requiring explicit client credentials */
+	/** OAuth client configuration (optional) */
 	oauth?: {
 		type?: "authorization_code" | "client_credentials";
+		/** Client name sent during dynamic registration (default: "Codex") */
 		clientName?: string;
 		clientId?: string;
 		clientSecret?: string;

@@ -335,6 +335,19 @@ export const EXTENSION_SHADOWABLE_STRING_FLAGS: ReadonlySet<string> = new Set(["
  */
 export const OPTIONAL_VALUE_FLAGS: ReadonlySet<string> = new Set(Object.keys(OPTIONAL_FLAGS));
 
+/** OpenWiki split-value flags reject a flag-shaped successor in the vendor parser. */
+export const OPENWIKI_VALUE_FLAGS: ReadonlySet<string> = new Set([
+	"--language",
+	"-l",
+	"--mode",
+	"--modelId",
+	"--model-id",
+	"--planner-model",
+	"--telemetry-file",
+	"--port",
+	"--export",
+]);
+
 /**
  * Internal marker inserted by the profile bootstrap when removing `--profile`
  * or `--alias` would otherwise make the following value-like token become the

@@ -778,21 +778,23 @@ export class SessionStatusLine implements StatusLineModel {
 				// A colocated jj repository shows its own label; pull requests follow the git branch beneath it.
 				const operational = git ?? vcs.repo(gitCwd)?.asGit();
 				const prBranch = git ? branch : operational ? headBranch(operational.headSync()) : null;
-				const status = operational
-					? await operational.statusChangeCounts().catch(() => null)
-					: await repository
-							.statusSummary()
-							.then(({ staged, unstaged, untracked }): GitStatus => [
-								0,
-								staged,
-								unstaged,
-								staged + unstaged,
-								untracked,
-								staged + untracked,
-								unstaged + untracked,
-								staged + unstaged + untracked,
-							])
-							.catch(() => null);
+				// Older native addons expose the summary but not the visibility-mask counts.
+				const status =
+					typeof operational?.statusChangeCounts === "function"
+						? await operational.statusChangeCounts().catch(() => null)
+						: await (operational ?? repository)
+								.statusSummary()
+								.then(({ staged, unstaged, untracked }): GitStatus => [
+									0,
+									staged,
+									unstaged,
+									staged + unstaged,
+									untracked,
+									staged + untracked,
+									unstaged + untracked,
+									staged + unstaged + untracked,
+								])
+								.catch(() => null);
 				const worktree = linkedWorktreeNames(git?.linkedWorktree());
 				// The default branch has no pull request of its own: no lookup for it.
 				const pr =

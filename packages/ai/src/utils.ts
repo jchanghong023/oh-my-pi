@@ -27,6 +27,12 @@ export function getHeaderCaseInsensitive(
 	return undefined;
 }
 
+/** Read an explicit bearer without falling back to another credential source. */
+export function resolveRequestAuthBearer(auth: NonNullable<StreamOptions["requestAuth"]>): string | undefined {
+	const authorization = getHeaderCaseInsensitive(auth.headers, "Authorization")?.trim();
+	return authorization ? /^Bearer[ \t]+(\S+)$/i.exec(authorization)?.[1] : auth.apiKey?.trim();
+}
+
 /** Check actual explicitly resolved credentials, rather than declaration or identity metadata. */
 export function hasRequestAuthMaterial(auth: StreamOptions["requestAuth"]): boolean {
 	if (auth?.apiKey?.trim()) return true;

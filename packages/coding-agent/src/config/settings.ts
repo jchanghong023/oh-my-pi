@@ -70,6 +70,7 @@ import {
 	forEachSettingsInstance,
 	getActiveSettings as getContextActiveSettings,
 	registerSettingsInstance,
+	releaseSettingsInstance,
 	resetSettingsInstancesForTest,
 	withActiveSettings as runWithActiveSettings,
 } from "./settings-context";
@@ -181,7 +182,6 @@ const CONFIG_WATCH_DEBOUNCE_MS = 200;
 /** Stat-poll interval for config sources while {@link Settings.startWatching} is active. */
 const CONFIG_POLL_INTERVAL_MS = 500;
 const EMPTY_MODEL_ROLE_DEFAULTS: Readonly<Record<string, string>> = Object.freeze({});
-const releasedScopedSettings = new WeakSet<Settings>();
 
 type ConfigOverlayReadResult = {
 	settings: RawSettings;
@@ -995,7 +995,7 @@ export class Settings {
 				released = true;
 				if (--leases !== 0) return;
 				settings.#retainScopedLease = undefined;
-				releasedScopedSettings.add(settings);
+				releaseSettingsInstance(settings);
 				settings.cancelPendingSaves();
 				settings.#storage = null;
 				releaseStorage?.();
@@ -4948,23 +4948,8 @@ export function isSettingsInitialized(): boolean {
  */
 export function findScopedSettings(cwd?: string, agentDir?: string): Settings | undefined {
 	const scoped = findSettingsContext(cwd, agentDir);
-	if (scoped && !releasedScopedSettings.has(scoped)) return scoped;
-	if (cwd === undefined && agentDir === undefined) return globalInstance ?? undefined;
-	if (!scoped) return undefined;
-	// A disposed SDK view can remain reachable via its session. Do not let it shadow a live sibling.
-	const wantCwd = cwd === undefined ? undefined : path.normalize(cwd);
-	const wantAgentDir = agentDir === undefined ? undefined : path.normalize(agentDir);
-	let live: Settings | undefined;
-	forEachSettingsInstance(instance => {
-		if (
-			!releasedScopedSettings.has(instance) &&
-			(wantCwd === undefined || instance.getCwd() === wantCwd) &&
-			(wantAgentDir === undefined || instance.getAgentDir() === wantAgentDir)
-		) {
-			live = instance;
-		}
-	});
-	return live;
+	if (scoped || cwd !== undefined || agentDir !== undefined) return scoped;
+	return globalInstance ?? undefined;
 }
 
 /**

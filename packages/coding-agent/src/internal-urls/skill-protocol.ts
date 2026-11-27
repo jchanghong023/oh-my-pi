@@ -7,6 +7,7 @@
  * - skill://<name> - Reads SKILL.md
  * - skill://<name>/<path> - Reads relative path within skill's baseDir
  * - skill://<namespace>/<name>[/<path>] - Same, for a collision-namespaced skill
+ * - skill://bundled-developer-test-agent/<name>[/<path>] - Reads the shipped Developer Test skill or resource
  * - Any skill:// URI an MCP server advertises, when no loaded skill owns it - Reads that MCP resource
  */
 import type * as fsTypes from "node:fs";
@@ -15,6 +16,10 @@ import * as path from "node:path";
 import { isEnoent, logger, withTimeout } from "@oh-my-pi/pi-utils";
 import { resolveContainedPath } from "../discovery/contained-path";
 import { substitutePluginRoot } from "../discovery/substitute-plugin-root";
+import {
+	BUNDLED_DEVELOPER_TEST_NAMESPACE,
+	getBundledDeveloperTestSkill,
+} from "../extensibility/plugins/developer-test-agent-resources";
 import {
 	findStaleSkillStandIn,
 	getActiveSkills,
@@ -249,6 +254,16 @@ async function findUrlSkillAnew(
 	const skillName = url.rawHost || url.hostname;
 	if (!skillName) throw new Error("skill:// URL requires a skill name: skill://<name>");
 	const access = skillAccessContext(context);
+	if (skillName === BUNDLED_DEVELOPER_TEST_NAMESPACE) {
+		const urlPath = url.rawPathname ?? url.pathname;
+		const slash = urlPath.indexOf("/", 1);
+		const name = decodeURIComponent(slash === -1 ? urlPath.slice(1) : urlPath.slice(1, slash));
+		const bundled = await getBundledDeveloperTestSkill(
+			name,
+			(context?.settings ?? context?.session?.settings)?.getAgentDir(),
+		);
+		if (bundled) return { skill: bundled, urlPath: slash === -1 ? "" : urlPath.slice(slash) };
+	}
 	const captured = findKnownUrlSkill(url, skillName, skills, access);
 	const current = host.skills !== skills ? findKnownUrlSkill(url, skillName, host.skills, access) : undefined;
 	if (current && (!captured || current.urlPath.length < captured.urlPath.length)) return current;

@@ -5,7 +5,9 @@ import * as path from "node:path";
 import { VERSION } from "@oh-my-pi/pi-utils";
 import { parseHTML } from "@oh-my-pi/pi-utils/dom";
 import type { BunPlugin } from "bun";
+import { embeddedExportViewerFiles, readGeneratedExportViewer } from "../scripts/export-viewer";
 import { getTemplate } from "../src/export/html/index";
+import { exportViewerDistName } from "../src/export/html/viewer-resource";
 import viewerAsset from "../src/export/html/viewer.generated.json" with { type: "json" };
 import { ensureDevelopmentViewer } from "./fixtures/development-export-viewer";
 
@@ -68,10 +70,12 @@ beforeAll(async () => {
 	const entrypoint = bundle.outputs.find(output => output.kind === "entry-point");
 	if (!entrypoint) throw new Error("Template probe emitted no entry point");
 	bundlePath = entrypoint.path;
+	await Bun.write(path.join(bundleDir, exportViewerDistName), await readGeneratedExportViewer());
 	const compiled = await Bun.build({
 		entrypoints: [probePath],
 		target: "bun",
 		plugins: [focusedBundlePlugin],
+		files: await embeddedExportViewerFiles(),
 		define: {
 			"process.env.PI_COMPILED": '"true"',
 			"process.env.PI_BUILD_VERSION": JSON.stringify(compiledVersion),
@@ -131,12 +135,12 @@ describe("HTML export template", () => {
 		expect(reported).toContain("packages/collab-web/scripts/build-export-viewer.ts");
 	});
 
-	test("packaged exports load the version-pinned viewer after both integrity-checked shared libraries", async () => {
+	test("packaged exports inline the checkout viewer after both integrity-checked shared libraries", async () => {
 		const html = await runProbe([process.execPath, bundlePath]);
+		expect(html).toBe(getTemplate());
 		const { document } = parseHTML(html);
 		const scripts = document.querySelectorAll("script[src]");
-		expect(Buffer.byteLength(html)).toBeLessThan(3072);
-		expect(scripts).toHaveLength(3);
+		expect(scripts).toHaveLength(2);
 		for (const [index, name] of ["marked", "highlight"].entries()) {
 			const script = scripts[index]!;
 			const url = new URL(script.getAttribute("src")!);
@@ -147,13 +151,6 @@ describe("HTML export template", () => {
 			expect(integrity).toMatch(/^sha256-[A-Za-z0-9+/]{43}=$/);
 			expect(Buffer.from(integrity!.slice("sha256-".length), "base64").toHex()).toStartWith(match![1]!);
 		}
-		const viewer = scripts[2]!;
-		const viewerUrl = new URL(viewer.getAttribute("src")!);
-		expect(viewerUrl.origin).toBe("https://build.stencil.so");
-		expect(viewerUrl.pathname).toBe(
-			"/web/omp/19.2.1/export-viewer-89198a2c1cf0f36d0e455c4623f0c68958b71eba7f0a08be089b63e68d40f981.js",
-		);
-		expect(viewer.getAttribute("integrity")).toBe("sha256-iRmKLBzw820ORVxGI/DGiVi3Hrp/Cgi+CJtj5o1A+YE=");
 		for (const script of scripts) {
 			expect(script.getAttribute("crossorigin")).toBe("anonymous");
 			expect(script.hasAttribute("defer")).toBe(true);
@@ -161,17 +158,14 @@ describe("HTML export template", () => {
 		}
 	});
 
-	test("compiled exports use the same hosted viewer as npm exports despite the fork build version", async () => {
+	test("compiled exports inline the same viewer as npm exports despite the fork build version", async () => {
 		const npmHtml = await runProbe([process.execPath, bundlePath]);
 		const compiledHtml = await runProbe([compiledPath]);
-		const npmViewer = parseHTML(npmHtml).document.querySelectorAll("script[src]")[2]!;
-		const compiledViewer = parseHTML(compiledHtml).document.querySelectorAll("script[src]")[2]!;
-		expect(compiledViewer.getAttribute("src")).toBe(npmViewer.getAttribute("src"));
-		expect(compiledViewer.getAttribute("integrity")).toBe(npmViewer.getAttribute("integrity"));
-		expect(await fs.readdir(bundleDir)).toEqual([path.basename(bundlePath)]);
+		expect(compiledHtml).toBe(npmHtml);
+		expect((await fs.readdir(bundleDir)).sort()).toEqual([path.basename(bundlePath), exportViewerDistName].sort());
 	});
 
-	test("npm packages keep the tiny loader and metadata but omit hosted viewer source assets", async () => {
+	test("npm packages keep the viewer and metadata but omit the viewer build inputs", async () => {
 		const repoRoot = path.resolve(packageDir, "../..");
 		const packWorkspace = path.join(tempRoot, "pack-workspace");
 		const packageRel = path.relative(repoRoot, packageDir).split(path.sep).join("/");
@@ -181,10 +175,14 @@ describe("HTML export template", () => {
 		await Bun.write(path.join(packWorkspace, "bun.lock"), Bun.file(path.join(repoRoot, "bun.lock")));
 		const packDir = path.join(packWorkspace, packageRel);
 		await Bun.write(path.join(packDir, "package.json"), Bun.file(path.join(packageDir, "package.json")));
-		// Use the focused loader bundle, not a full release build.
+		// Use the focused bundle and its viewer sidecar, not a full release build.
 		await Bun.write(path.join(packDir, "dist", "cli.js"), Bun.file(bundlePath));
+		await Bun.write(
+			path.join(packDir, "dist", exportViewerDistName),
+			Bun.file(path.join(bundleDir, exportViewerDistName)),
+		);
 		for (const name of ["template-stale.css", "tool-views.generated.js", "marked.min.js", "highlight.min.js"]) {
-			await Bun.write(path.join(packDir, "dist", name), "excluded hosted viewer sidecar");
+			await Bun.write(path.join(packDir, "dist", name), "excluded legacy viewer sidecar");
 		}
 		const hostedAssets = ["shell.html", "template.css", "template.js", "share-loader.js"];
 		for (const name of ["template.html.txt", "viewer.generated.json", ...hostedAssets]) {
@@ -205,6 +203,7 @@ describe("HTML export template", () => {
 		expect(packExit, packErr).toBe(0);
 		const packed = Array.from(packOut.matchAll(/^packed \S+ (.+)$/gm), match => match[1]);
 		expect(packed).toContain("dist/cli.js");
+		expect(packed).toContain(`dist/${exportViewerDistName}`);
 		expect(packed).toContain("src/export/html/template.html.txt");
 		expect(packed).toContain("src/export/html/viewer.generated.json");
 		for (const name of hostedAssets) {

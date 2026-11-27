@@ -2080,6 +2080,7 @@ export const streamOpenAICompletionsOnce = (
 						error instanceof OpenAIHttpError
 							? windowRejectionStatus &&
 								(error.code === "context_length_exceeded" ||
+									error.code === "model_context_window_exceeded" ||
 									AIError.hasTokenContextOverflowEvidence(error.message))
 							: error instanceof Error &&
 								"errorId" in error &&
@@ -2159,6 +2160,16 @@ export function setCodeAgentStreamHandler(handler: StreamFunction<"openai-comple
 export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (model, context, options) => {
 	const resolvedModel = resolveOpenAICompletionsCompat(model);
 	if (model.provider === "codeagent") {
+		if (options?.requestAuth !== undefined) {
+			// Explicit caller credentials must never trigger the local token handler.
+			// Keep CodeAgent's single attempt and prohibit credential-bearing redirects.
+			const fetchImpl = options.fetch ?? fetch;
+			return streamOpenAICompletionsOnce(resolvedModel, context, {
+				...options,
+				onSseEvent: undefined,
+				fetch: (input, init) => fetchImpl(input, { ...init, redirect: init?.redirect ?? "error" }),
+			});
+		}
 		return codeAgentStreamHandler
 			? codeAgentStreamHandler(resolvedModel, context, options)
 			: streamOpenAICompletionsOnce(resolvedModel, context, options);

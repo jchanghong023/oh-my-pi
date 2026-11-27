@@ -32,9 +32,9 @@ After changing export HTML/CSS/JS, web themes, or the shared tool/trace renderer
 with the change. The generated JS lives in ignored `export-assets/`; CI verifies
 the metadata (`--check`, also implied by `CI=true`). In a shell that sets
 `CI=true`, use `bun run gen:export-viewer --write` to update the metadata.
-Source exports inline the generated checkout viewer; bundled and compiled exports
-load the version-pinned viewer remotely. All exports load Markdown and Highlight.js
-remotely. Binary and package builds generate the viewer without install hooks.
+Source and packaged exports inline the viewer generated from their own sources.
+All exports load Markdown and Highlight.js remotely. Binary and package builds
+generate and include the viewer without install hooks.
 
 OpenWiki's TypeScript boundary is `scripts/openwiki-vendor-types.d.ts`; the
 checkout entry is excluded from project typechecks so they do not check the

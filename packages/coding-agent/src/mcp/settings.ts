@@ -63,7 +63,7 @@ export const cfgMcpEvalNamespaces = register({
 		group: "Discovery & MCP",
 		label: "MCP Eval Namespaces",
 		description:
-			"Expose each MCP server as an eval global (github.create_issue(...)) instead of top-level tools or tool commands",
+			"Expose MCP tools through eval globals (github.create_issue(...)) unless their server sets alwaysLoad: true",
 	},
 });
 

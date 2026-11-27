@@ -36,7 +36,9 @@ export async function prepareOpenSpecRuntime(): Promise<TempDir> {
 			JSON.stringify({ ...packageJson, overrides: dependencyLock.overrides }, null, 2),
 		);
 		await Bun.write(runtime.join(lockfile), lock);
-		await $`${process.execPath} install --production --ignore-scripts --frozen-lockfile`
+		const cache = process.env.OMP_OPENSPEC_BUN_CACHE;
+		const cacheFlags = cache ? ["--offline", "--backend=copyfile", `--cache-dir=${cache}`] : [];
+		await $`${process.execPath} install --production --ignore-scripts --frozen-lockfile ${cacheFlags}`
 			.cwd(runtime.path())
 			.env({ ...process.env, BUN_BE_BUN: "1" });
 		// Installation inputs are not runtime resources. Keep the vendor lock in

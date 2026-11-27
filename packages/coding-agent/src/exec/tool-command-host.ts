@@ -57,6 +57,12 @@ async function renderToolResult(result: AgentToolResult<unknown>): Promise<Shell
 	return { stdout: text + images, stderr: "", exitCode: 0 };
 }
 
+/** The exact page and the text it is expected to contribute to the shell's output stream. */
+export interface CompleteToolCommandPage {
+	text: string;
+	stdout: string;
+}
+
 /**
  * Per-run handler: resolves the live tool, parses argv with runToolCli, validates,
  * approves, executes, encodes image blocks as kitty graphics on stdout, and reports
@@ -69,7 +75,7 @@ export function createToolCommandHandler(options: {
 	signal?: AbortSignal;
 	context?: AgentToolContext;
 	/** A dispatch finished (help or execute), in invocation order; complete text pages may bypass the Bash preview cap. */
-	onDispatch?: (dispatch: ToolCommandDispatch, index: number, completePage?: string) => void;
+	onDispatch?: (dispatch: ToolCommandDispatch, index: number, completePage?: CompleteToolCommandPage) => void;
 	/** A running dispatch reported partial details. */
 	onProgress?: (dispatch: ToolCommandDispatch, index: number) => void;
 }): (request: ShellCommandRequest) => Promise<ShellCommandResult> {
@@ -146,7 +152,11 @@ export function createToolCommandHandler(options: {
 			onDispatch?.({ ...(dispatch ?? fallback), exitCode: 1 }, index);
 			throw error;
 		}
-		onDispatch?.({ ...(dispatch ?? fallback), exitCode: result.exitCode }, index, completePage);
+		const page =
+			completePage !== undefined && result.exitCode === 0 && !result.stderr
+				? { text: completePage, stdout: result.stdout }
+				: undefined;
+		onDispatch?.({ ...(dispatch ?? fallback), exitCode: result.exitCode }, index, page);
 		throwIfAborted(signal);
 		return result;
 	};

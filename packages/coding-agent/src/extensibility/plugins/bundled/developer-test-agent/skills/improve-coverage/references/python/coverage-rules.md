@@ -113,7 +113,7 @@ node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" user_service /tmp/u
 
 ### 函数级覆盖率解析
 
-使用 `read` 加载 `skill://generate-ut`，将其返回的 baseDir 作为 `{GENERATE_SKILL_DIR}`，调用：
+使用 `read` 加载 `skill://bundled-developer-test-agent/generate-ut`，将其返回的 baseDir 作为 `{GENERATE_SKILL_DIR}`，调用：
 ```bash
 .venv/Scripts/python.exe "{GENERATE_SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" <function_name> <start_line> <end_line> <source_file_path>
 ```

@@ -71,7 +71,7 @@ async function main(): Promise<void> {
 	try {
 		console.log("[build-binary] Generating stats client...");
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
-		// Embed metadata for the same content-addressed viewer used by source exports.
+		// Embed the same content-addressed viewer used by source exports.
 		// Generate here too for clean checkouts that skipped install hooks.
 		console.log("[build-binary] Generating export viewer...");
 		await runCommand(["bun", "--cwd=../collab-web", "run", "gen:export-viewer"]);

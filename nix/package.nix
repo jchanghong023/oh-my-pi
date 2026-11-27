@@ -54,6 +54,50 @@ let
     _: patch: source + "/${patch}"
   ) rootPackageJson.patchedDependencies;
   patchOverrides = bun2nix.patchedDependenciesToOverrides { inherit patchedDependencies; };
+  openSpecBunDeps = bun2nix.fetchBunDeps {
+    # OpenSpec has a separate pnpm lock. Feed its registry tarballs to the same
+    # cache builder without pulling in OMP's workspace versions or patches.
+    bunNix =
+      { fetchurl }:
+      let
+        lock = builtins.readFile (
+          source + "/packages/coding-agent/src/spec-driven/vendor/resources/openspec/pnpm-lock.yaml"
+        );
+        sections = lib.splitString "\npackages:\n\n" lock;
+        packages = lib.splitString "\n\nsnapshots:\n" (lib.last sections);
+        fetchPackage =
+          entry:
+          let
+            lines = lib.splitString "\n" entry;
+            key = builtins.head lines;
+            id = builtins.match "  '?((@[[:alnum:]_.-]+/)?[[:alnum:]_.-]+)@([[:alnum:]_.+-]+)'?:" key;
+            resolutions = builtins.filter (lib.hasPrefix "    resolution:") lines;
+            hash =
+              if builtins.length resolutions == 1 then
+                builtins.match "    resolution: [{]integrity: (sha512-[[:alnum:]+/=]+)[}]" (builtins.head resolutions)
+              else
+                null;
+            name = builtins.elemAt id 0;
+            version = builtins.elemAt id 2;
+          in
+          if id == null || hash == null then
+            throw "Unsupported OpenSpec pnpm-lock.yaml package entry: ${key}"
+          else
+            {
+              name = "${name}@${version}";
+              value = fetchurl {
+                url = "https://registry.npmjs.org/${name}/-/${builtins.baseNameOf name}-${version}.tgz";
+                hash = builtins.head hash;
+              };
+            };
+      in
+      if builtins.length sections != 2 || builtins.length packages != 2 then
+        throw "Unsupported OpenSpec pnpm-lock.yaml layout (expected pnpm v9 registry packages)"
+      else
+        builtins.listToAttrs (map fetchPackage (lib.splitString "\n\n" (builtins.head packages)));
+    # These packages are embedded in the executable; do not inject Nix store shebangs.
+    patchShebangs = false;
+  };
   # Vendor libraries the on-demand onnxruntime-node CUDA execution provider
   # dlopens. These are not needed for the addon itself to load (postFixup's
   # DT_NEEDED covers libstdc++/libgcc), but the provider is its own .so whose
@@ -89,7 +133,11 @@ in
 stdenv.mkDerivation {
   pname = "omp";
   inherit (packageJson) version;
-  src = source;
+  src =
+    if builtins.pathExists (source + "/vendor/openwiki/src/agent/repository-runner.ts") then
+      source
+    else
+      throw "OMP requires the pinned vendor/openwiki submodule; run git submodule update --init --recursive.";
 
   passthru = { inherit nativeBuild; };
   bunDeps = bun2nix.fetchBunDeps {
@@ -114,8 +162,10 @@ stdenv.mkDerivation {
   strictDeps = true;
   # Nix builders cannot reliably hardlink cache files into node_modules
   # (and Darwin's clonefile backend also rejects store permissions).
+  # Use the repository's hoisted routing: OpenWiki is a source submodule,
+  # not a Bun workspace, and resolves dependencies from the checkout root.
   bunInstallFlags = [
-    "--linker=isolated"
+    "--linker=hoisted"
     "--backend=copyfile"
   ];
   dontConfigure = true;
@@ -176,8 +226,14 @@ stdenv.mkDerivation {
       signIfRequired "packages/natives/native/${platform.addon}"
     ''}
 
+    echo "Staging OpenSpec's locked Bun cache"
+    openSpecBunCache="$(mktemp -d)"
+    cp -RL "${openSpecBunDeps}/share/bun-cache/." "$openSpecBunCache"
+    chmod -R u+w "$openSpecBunCache"
+
     echo "Compiling OMP"
-    BUN_COMPILE_EXECUTABLE_PATH="${bunRuntimeTemplate}/libexec/bun" \
+    OMP_OPENSPEC_BUN_CACHE="$openSpecBunCache" \
+      BUN_COMPILE_EXECUTABLE_PATH="${bunRuntimeTemplate}/libexec/bun" \
       bun --cwd="$PWD/packages/coding-agent" run build
 
     runHook postBuild
