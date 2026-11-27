@@ -902,7 +902,7 @@ fn check_cancel_kills_orphan(batched: bool) {
 	// It ignores TERM and HUP and sleeps on once continued: only the KILL
 	// after the grace ends it, when its parent is long dead.
 	let a = sh("/usr/bin/perl -e '$SIG{HUP} = $SIG{TERM} = q(IGNORE); use POSIX (); \
-	            POSIX::setsid() > 0 or die; kill(q(STOP), $$); sleep 30' & wait");
+		            POSIX::setsid() > 0 or die; kill(q(STOP), $$); sleep 30' & wait");
 	let mut p = s.spawn(spec(&a, &env, NEW)).unwrap();
 	let pid = p.pid() as i32;
 	let inferior = KillOnDrop(child_of(pid));

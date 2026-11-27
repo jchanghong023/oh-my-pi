@@ -80,22 +80,20 @@ use windows_sys::Win32::{
 		SystemInformation::GetSystemDirectoryW,
 		Threading::{
 			CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-			CreateEventW, CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
-			GetExitCodeProcess, GetProcessTimes, INFINITE, InitializeProcThreadAttributeList,
-			OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-			PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-			PROCESS_SUSPEND_RESUME, QueryFullProcessImageNameW, ResumeThread, STARTF_USESTDHANDLES,
-			STARTUPINFOEXW, STARTUPINFOW, SetEvent, TerminateProcess, UpdateProcThreadAttribute,
-			WaitForMultipleObjects,
+			CreateEventW, CreateProcessW, DETACHED_PROCESS, DeleteProcThreadAttributeList,
+			EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, GetProcessTimes, INFINITE,
+			InitializeProcThreadAttributeList, OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+			PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+			PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SUSPEND_RESUME, QueryFullProcessImageNameW,
+			ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, SetEvent,
+			TerminateProcess, UpdateProcThreadAttribute, WaitForMultipleObjects,
 		},
 	},
 };
 
 use super::{Dir, Leftover, Sessions, Shared, child_end};
 use crate::{
-	bash::{
-		EnvView, ExitStatus, ExtProc, OsHandle, PgroupSpec, ProcUsage, Signal, SpawnSpec, StdioSpec,
-	},
+	bash::{ExitStatus, ExtProc, OsHandle, PgroupSpec, ProcUsage, Signal, SpawnSpec, StdioSpec},
 	sys::{
 		cmdline,
 		job::{self, JobOps, JobPause},
@@ -696,35 +694,30 @@ fn command(path: &BStr, argv: &[BString]) -> io::Result<(Vec<u16>, Vec<u16>)> {
 
 /// `CREATE_UNICODE_ENVIRONMENT` block: `K=V\0…\0`, sorted by name without
 /// case as Windows requires (case-insensitive duplicates: the last wins).
-fn env_block(env: &EnvView) -> io::Result<Vec<u16>> {
-	let mut vars: Vec<(String, &str)> = Vec::with_capacity(env.len());
-	for (k, v) in env.iter() {
+fn env_block<'a>(env: impl ExactSizeIterator<Item = (&'a BStr, &'a BStr)>) -> io::Result<Vec<u16>> {
+	let mut vars = Vec::with_capacity(env.len());
+	for (k, v) in env {
 		let k = k.to_str().map_err(invalid)?;
 		let v = v.to_str().map_err(invalid)?;
 		// Names may start with `=` (the per-drive `=C:` variables).
 		if k.contains('\0') || v.contains('\0') || k.get(1..).is_some_and(|r| r.contains('=')) {
 			return Err(invalid("environment entry contains NUL or `=` in its name"));
 		}
-		vars.push((k.to_uppercase(), v));
+		vars.push((k.to_uppercase(), k, v));
 	}
-	let names: Vec<&str> = env
-		.iter()
-		.map(|(k, _)| k.to_str().unwrap_or_default())
-		.collect();
-	let mut order: Vec<usize> = (0..vars.len()).collect();
-	order.sort_by(|&a, &b| vars[a].0.cmp(&vars[b].0));
-	order.dedup_by(|later, earlier| {
-		let same = vars[*later].0 == vars[*earlier].0;
-		if same {
-			*earlier = *later;
+	vars.sort_by(|a, b| a.0.cmp(&b.0));
+	vars.dedup_by(|later, earlier| {
+		if later.0 != earlier.0 {
+			return false;
 		}
-		same
+		mem::swap(later, earlier);
+		true
 	});
 	let mut block = Vec::new();
-	for i in order {
-		block.extend(names[i].encode_utf16());
+	for (_, name, value) in vars {
+		block.extend(name.encode_utf16());
 		block.push(u16::from(b'='));
-		block.extend(vars[i].1.encode_utf16());
+		block.extend(value.encode_utf16());
 		block.push(0);
 	}
 	if block.is_empty() {
@@ -732,6 +725,40 @@ fn env_block(env: &EnvView) -> io::Result<Vec<u16>> {
 	}
 	block.push(0);
 	Ok(block)
+}
+
+/// Launch a detached console executable without inheriting parent handles.
+pub fn spawn_detached(argv: &[String], cwd: &str, env: &HashMap<String, String>) -> io::Result<()> {
+	let executable = argv.first().ok_or_else(|| invalid("missing executable"))?;
+	let app = wide(BStr::new(executable.as_bytes()))?;
+	let mut line = cmdline::command_line(argv).map_err(invalid)?;
+	line.push(0);
+	let cwd = wide(BStr::new(cwd.as_bytes()))?;
+	let env = env_block(
+		env.iter()
+			.map(|(k, v)| (BStr::new(k.as_bytes()), BStr::new(v.as_bytes()))),
+	)?;
+	let si = STARTUPINFOW { cb: mem::size_of::<STARTUPINFOW>() as u32, ..Default::default() };
+	let mut pi = PROCESS_INFORMATION::default();
+	// SAFETY: all strings are NUL-terminated, the command line is writable,
+	// and the startup and process information pointers stay valid for the call.
+	check(unsafe {
+		CreateProcessW(
+			app.as_ptr(),
+			line.as_mut_ptr(),
+			ptr::null(),
+			ptr::null(),
+			0,
+			DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
+			env.as_ptr().cast(),
+			cwd.as_ptr(),
+			&raw const si,
+			&raw mut pi,
+		)
+	})?;
+	let _process = owned(pi.hProcess)?;
+	let _thread = owned(pi.hThread)?;
+	Ok(())
 }
 
 /// The child's handle for one stream (`NUL` for `Null`), inheritable.
@@ -922,7 +949,7 @@ pub(super) fn spawn(shared: &Arc<Shared>, spec: SpawnSpec<'_>) -> io::Result<Box
 	let mut pumps = Vec::new();
 	let argv = bridge_fds(argv, extra_fds, &mut pumps)?;
 	let (app, mut line) = command(path, &argv)?;
-	let env = env_block(env)?;
+	let env = env_block(env.iter())?;
 	let cwd = wide(cwd)?;
 	let job = shared
 		.state

@@ -357,6 +357,31 @@ pub fn exec_replace(
 	}
 }
 
+/// Launch a detached Windows process with no inherited handles.
+#[napi]
+#[allow(
+	clippy::implicit_hasher,
+	reason = "napi marshals a JS object into the default-hasher HashMap"
+)]
+pub fn spawn_detached(
+	js_env: &Env,
+	argv: Vec<String>,
+	cwd: String,
+	env: HashMap<String, String>,
+) -> Result<()> {
+	#[cfg(windows)]
+	{
+		omp_shell::sys::spawn_detached(&argv, &cwd, &env).map_err(|error| {
+			coded_error(js_env, &errno_code(&error), format!("spawnDetached: {error}"))
+		})
+	}
+	#[cfg(not(windows))]
+	{
+		let _ = (argv, cwd, env);
+		Err(coded_error(js_env, "ENOSYS", "spawnDetached is unsupported on this platform"))
+	}
+}
+
 // --- FdStream -------------------------------------------------------------
 
 /// Item delivered to JavaScript through the stream's event sink.

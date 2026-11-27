@@ -9,7 +9,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FileLock } from "@oh-my-pi/pi-natives";
+import { FileLock, Process } from "@oh-my-pi/pi-natives";
 import { closeDaemonClient, probeDaemon } from "../../src/daemon/client";
 import { daemonLockPath } from "../../src/daemon/paths";
 import { DAEMON_DIR_ENV, DAEMON_TCP_ENV } from "../../src/daemon/protocol";
@@ -96,10 +96,15 @@ export class IsolatedDaemon {
 			}
 			for (const pid of this.#pids) {
 				if (pid !== process.pid && isAlive(pid)) {
+					const processRef = process.platform === "win32" ? Process.fromPid(pid) : undefined;
 					try {
 						process.kill(pid, "SIGKILL");
 					} catch {
 						// Exited meanwhile.
+					}
+					// The runtime cwd and loaded DLLs stay locked until Windows completes termination.
+					if (processRef && !(await processRef.waitForExit({ timeoutMs: TEARDOWN_TIMEOUT_MS }))) {
+						throw new Error(`Daemon fixture process ${pid} did not exit`);
 					}
 				}
 			}

@@ -10,7 +10,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { IpcConnection, Process } from "@oh-my-pi/pi-natives";
+import { IpcConnection, Process, spawnDetached } from "@oh-my-pi/pi-natives";
 import { isEexist, isEnoent, logger, postmortem, removeWithRetries, toError } from "@oh-my-pi/pi-utils";
 import { resolveCliEntryCmd, resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { daemonBuildId } from "./build";
@@ -71,12 +71,6 @@ const ABANDONED_LIMIT = 256;
 /** Server errors (`server.ts`) meaning "this daemon is going away; dial its successor". */
 const DAEMON_RESTARTING = "Daemon is restarting";
 const DAEMON_SHUTTING_DOWN = "Daemon is shutting down";
-/**
- * The daemon must outlive whichever omp process spawned it. Bun on Windows puts
- * every non-detached child in a kill-on-close job object owned by the parent,
- * so it is detached; it then has no console and its units spawn hidden.
- */
-const DAEMON_SPAWN_OPTIONS = { detached: true, windowsHide: true } as const;
 
 /** The daemon answered a request with an error. */
 export class DaemonRejectedError extends Error {}
@@ -185,19 +179,18 @@ function dial(): Promise<IpcConnection> {
  * fallback pins a cwd, because its entry path is relative to it.
  */
 function spawnDaemon(): void {
-	const spawn = resolveWorkerSpawnCmd(DAEMON_WORKER_ARG);
-	const child = Bun.spawn(spawn.cmd, {
-		cwd: spawn.cwd ?? daemonDir(),
-		// Linux keeps the inherited executable/grammar caches, including the offline
-		// performance root. Elsewhere a detached daemon must not map its creator's DLL.
-		env: workerEnvFromParent(
-			process.platform === "linux" ? undefined : { PI_NATIVES_DIR: path.join(daemonDir(), "natives") },
-		),
-		stdin: "ignore",
-		stdout: "ignore",
-		stderr: "ignore",
-		...DAEMON_SPAWN_OPTIONS,
-	});
+	const { cmd, cwd = daemonDir() } = resolveWorkerSpawnCmd(DAEMON_WORKER_ARG);
+	// Linux keeps the inherited executable/grammar caches, including the offline
+	// performance root. Elsewhere a detached daemon must not map its creator's DLL.
+	const env = workerEnvFromParent(
+		process.platform === "linux" ? undefined : { PI_NATIVES_DIR: path.join(daemonDir(), "natives") },
+	);
+	if (process.platform === "win32") {
+		// Bun's ignored stdio does not prevent it from inheriting other Windows handles.
+		spawnDetached(cmd, cwd, env);
+		return;
+	}
+	const child = Bun.spawn(cmd, { cwd, env, stdin: "ignore", stdout: "ignore", stderr: "ignore", detached: true });
 	child.unref();
 }
 

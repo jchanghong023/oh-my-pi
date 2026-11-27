@@ -65,6 +65,7 @@
 
 ### Fixed
 
+- The shared Windows daemon no longer keeps RPC clients' output pipes open after the client exits.
 - Automatic compaction uses the SDK host's request credentials, and strict session shutdown waits for retained task artifacts to be cleaned up.
 - Goal Autopilot can finish after reopening a budget-limited session and raising its budget; Goal controls take effect during compaction.
 - Ctrl+T preselects the active routed model, expanded compact diffs leave composer completion keys alone, and collapsed diffs no longer hide receipts they did not display.

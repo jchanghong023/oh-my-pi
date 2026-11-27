@@ -4933,6 +4933,9 @@ export interface SnapcompactRenderOptions {
  */
 export declare function snapcompactSupportedChars(font: string, chars: string): string
 
+/** Launch a detached Windows process with no inherited handles. */
+export declare function spawnDetached(argv: Array<string>, cwd: string, env: Record<string, string>): void
+
 /**
  * Spawn in its own process group with three pipes; parent-side fds are
  * CLOEXEC raw fds owned by the caller.
