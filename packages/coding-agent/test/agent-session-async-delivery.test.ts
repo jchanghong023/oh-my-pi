@@ -676,7 +676,8 @@ describe("AgentSession owner-routed async delivery", () => {
 		const persisted = JSON.parse(JSON.stringify(batch)) as typeof batch;
 		for (const message of [batch, persisted]) {
 			const rendered = asyncResultText(message, 160);
-			expect(rendered).toMatch(/batch-0[^]*artifact open failed[^]*batch-1[^]*artifact write failed[^]*batch-2/);
+			expect(rendered).toMatch(/batch-0: [^\n]*artifact open failed[^]*batch-1: [^\n]*artifact write failed/);
+			expect(rendered).not.toContain("batch-2");
 			expect(rendered.match(/artifact open failed/g)).toHaveLength(1);
 			expect(rendered.match(/artifact write failed/g)).toHaveLength(1);
 		}

@@ -123,7 +123,10 @@ export function asyncResultRows(
 				},
 			});
 		}
-		if (job.meta?.artifactError) rows.push(note(formatArtifactErrorNotice(job.meta.artifactError), "warning"));
+		if (job.meta?.artifactError) {
+			const warning = formatArtifactErrorNotice(job.meta.artifactError);
+			rows.push(note(jobs.length > 1 && job.jobId ? `${jobId}: ${warning}` : warning, "warning"));
+		}
 		if (job.schema && (job.schema.status !== "valid" || job.schema.error)) {
 			rows.push(
 				note(

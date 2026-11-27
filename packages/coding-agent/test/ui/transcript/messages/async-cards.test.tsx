@@ -174,11 +174,11 @@ test("shows background diagnostics without automatic success or task status rows
 					"compile project",
 					"Background job cancelled",
 					"eval-cancelled",
-					"artifact write failed",
+					"task-failed: Full output was not saved completely (artifact write failed)",
 					"task-failed: Structured output invalid: invalid output",
 				])
 					expect(output).toContain(marker);
-				expect(output.match(/task-failed/g)).toHaveLength(1);
+				expect(output.match(/task-failed/g)).toHaveLength(2);
 				for (const marker of [
 					"Background job completed",
 					"bash-complete",
