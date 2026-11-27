@@ -106,7 +106,6 @@ function findKnownUrlSkill(
 	}
 	skill ??= getGrantedSpecSkill(skillName, access) ?? skills.find(s => s.name === skillName);
 	if (!skill) return undefined;
-	checkSkillReadAccess(skill, access);
 	return { skill, urlPath };
 }
 
@@ -273,10 +272,7 @@ async function findUrlSkillAnew(
 	if (discovered) return discovered;
 
 	const bundled = await findBundledSkill(skillName);
-	if (bundled) {
-		checkSkillReadAccess(bundled, access);
-		return { skill: bundled, urlPath: url.rawPathname ?? url.pathname };
-	}
+	if (bundled) return { skill: bundled, urlPath: url.rawPathname ?? url.pathname };
 
 	const available = (refreshed ?? host.skills).filter(s => !s.hide && !isExplicitOnlySkill(s)).map(s => s.name);
 	const availableStr = available.length > 0 ? available.join(", ") : "none";

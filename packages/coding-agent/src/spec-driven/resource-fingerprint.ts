@@ -3,13 +3,19 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 export const specDrivenOpenSpecInputs = {
+	directory: "../../vendor/openspec",
 	sourceDirectory: "src",
 	packageManifest: "package.json",
 	dependencyLock: "pnpm-lock.yaml",
 	runtimeEntries: ["bin", "schemas", "skills", "LICENSE"],
 } as const;
 
-export const specDrivenPassthroughDirectories = ["superpowers", "jch", "omp-runtime"] as const;
+const packageResources = "src/spec-driven/vendor/resources";
+export const specDrivenPassthroughDirectories = {
+	superpowers: "../../vendor/superpowers",
+	jch: `${packageResources}/jch`,
+	"omp-runtime": `${packageResources}/omp-runtime`,
+} as const;
 
 /** Hash build inputs, never generated dist files or installed dependency trees. */
 export async function specDrivenSourceFingerprint(
@@ -30,12 +36,11 @@ export async function specDrivenSourceFingerprint(
 			throw new Error(`Unsupported spec-driven build input: ${relative}`);
 		}
 	}
-	const resources = "src/spec-driven/vendor/resources";
-	const { sourceDirectory, packageManifest, dependencyLock, runtimeEntries } = specDrivenOpenSpecInputs;
+	const { directory, sourceDirectory, packageManifest, dependencyLock, runtimeEntries } = specDrivenOpenSpecInputs;
 	for (const entry of [sourceDirectory, packageManifest, dependencyLock, ...runtimeEntries]) {
-		await visit(`${resources}/openspec/${entry}`);
+		await visit(`${directory}/${entry}`);
 	}
-	for (const directory of specDrivenPassthroughDirectories) await visit(`${resources}/${directory}`);
+	for (const source of Object.values(specDrivenPassthroughDirectories)) await visit(source);
 	for (const entry of [
 		"scripts/spec-driven-resources.ts",
 		"src/spec-driven/vendor/inventory.json",

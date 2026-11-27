@@ -41,6 +41,7 @@ import { type ParsedSelector, parseSel, resolveTailSelector } from "../tools/rea
 import { UrlContainmentError } from "./filesystem-resource";
 import { parseInternalUrl } from "./parse";
 import { InternalUrlRouter } from "./router";
+import type { SkillReadContext } from "./skill-protocol";
 import type {
 	InternalResource,
 	InternalWriteResult,
@@ -315,6 +316,8 @@ export interface InternalUrlFilesystemOptions {
 	context: ResolveContext;
 	/** Approval tier the shell command ran under; schemes whose read or write tier exceeds it are refused. */
 	tier: ToolTier;
+	/** Read policy for host paths selected by URL handlers, including descendants of a search root. */
+	assertReadBacking?: (target: string) => Promise<void>;
 	/**
 	 * Receives the text a command wrote to a reply URL (`out://`) once its handle closes, after
 	 * the scheme's handler accepted it. Absent: reply URLs refuse writes (EROFS).
@@ -345,8 +348,9 @@ export interface InternalUrlFilesystemOptions {
  */
 export class InternalUrlFilesystem {
 	readonly #router: InternalUrlRouter;
-	readonly #context: ResolveContext;
+	readonly #context: SkillReadContext;
 	readonly #tier: ToolTier;
+	readonly #assertReadBacking: InternalUrlFilesystemOptions["assertReadBacking"];
 	readonly #onReply: ((text: string) => void) | undefined;
 	readonly #onWrite: ((report: UrlWriteReport) => void) | undefined;
 	readonly #onFileChange: ((change: ShellFileChange) => void) | undefined;
@@ -366,6 +370,18 @@ export class InternalUrlFilesystem {
 		// Directory nodes never serve their rendered listing, so handlers skip building it.
 		this.#context = { ...options.context, skipDirectoryListing: true };
 		this.#tier = options.tier;
+		const { assertReadBacking } = options;
+		if (assertReadBacking) {
+			this.#assertReadBacking = async target => {
+				try {
+					await assertReadBacking(target);
+				} catch (error) {
+					throw new UrlFsError("EACCES", error instanceof Error ? error.message : String(error));
+				}
+			};
+			// A skill that locates no host node may still resolve to local bytes after rediscovery.
+			this.#context.assertSkillReadTarget = this.#assertReadBacking;
+		}
 		this.#onReply = options.onReply;
 		this.#onWrite = options.onWrite;
 		this.#onFileChange = options.onFileChange;
@@ -397,6 +413,7 @@ export class InternalUrlFilesystem {
 			this.#cleanupFs ??= new InternalUrlFilesystem({
 				context: { ...this.#context, signal: undefined },
 				tier: this.#tier,
+				assertReadBacking: this.#assertReadBacking,
 			});
 			return this.#cleanupFs.handle(request);
 		}
@@ -845,7 +862,10 @@ export class InternalUrlFilesystem {
 			if (redirected === undefined) throw error;
 			return this.#node(redirected, follow, create, hops + 1);
 		}
-		if (located !== null) return { kind: "host", url, spec, path: located };
+		if (located !== null) {
+			if (!create && this.#assertReadBacking) await this.#assertReadBacking(located);
+			return { kind: "host", url, spec, path: located };
+		}
 		const redirected = await this.#urlSymlinkTarget(route, target);
 		if (redirected !== undefined) {
 			if (this.#context.containSkillPaths && schemeOf(url) === "skill") {

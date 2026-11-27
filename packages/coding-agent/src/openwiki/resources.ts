@@ -55,8 +55,8 @@ export async function materializeOpenWikiSkills(agentDir: string): Promise<strin
 	return materializeOpenWikiSkillsFromFiles(agentDir, files);
 }
 
-/** Materialize from an injected archive file map so callers and tests share one path. */
-export async function materializeOpenWikiSkillsFromFiles(
+/** Materialize bundled skills from the decoded archive. */
+async function materializeOpenWikiSkillsFromFiles(
 	agentDir: string,
 	files: ReadonlyMap<string, File>,
 ): Promise<string> {

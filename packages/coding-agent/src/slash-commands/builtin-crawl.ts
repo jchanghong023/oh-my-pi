@@ -1,4 +1,4 @@
-import { errorMessage } from "@oh-my-pi/pi-utils";
+import { errorMessage, logger } from "@oh-my-pi/pi-utils";
 import { MAX_CRAWL_WAIT_SECONDS, runCrawl, type CrawlOptions } from "../tools/browser/crawl";
 import { parseCommandArgs } from "../utils/command-args";
 import { commandConsumed, usage } from "./helpers/parse";
@@ -149,7 +149,7 @@ async function handleCrawlCommand(command: ParsedSlashCommand, runtime: SlashCom
 		}
 	};
 	if (runtime.runCommandInBackground) runtime.runCommandInBackground(task);
-	else void task();
+	else void task().catch(error => logger.warn("Could not deliver crawl status", { error: errorMessage(error) }));
 	return commandConsumed();
 }
 

@@ -416,6 +416,7 @@ import {
 	cfgComputerEnabled,
 	cfgRatchetEnabled,
 	cfgGenerateImageEnabled,
+	cfgOpenWikiToolsEnabled,
 	cfgSecurityEnabled,
 	cfgSpeechgenEnabled,
 	cfgToolsAbortOnFabricatedResult,
@@ -2506,6 +2507,12 @@ async function createAgentSessionScoped(
 		logger.time("sessionManager", () =>
 			SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, agentDir)),
 		);
+	let hasSession = false;
+	// Acquire the journal before any startup writes can fork an owned session.
+	sessionManager.acquireRuntimeOwnership();
+	startupCleanup.defer(() => {
+		if (!hasSession) return sessionManager.close();
+	});
 	const configuredDirs = options.additionalDirectories
 		? options.additionalDirectories
 		: cfgWorkspaceAdditionalDirectories.get(settings);
@@ -2851,7 +2858,6 @@ async function createAgentSessionScoped(
 	const effectiveGetApiKey =
 		options.getApiKey ?? (requestModel => modelRegistry.resolver(requestModel, agent.sessionId));
 	let session!: AgentSession;
-	let hasSession = false;
 	let hasRegistered = false;
 	const restrictToolNames = options.restrictToolNames === true;
 	// The session tree shares one cost gate: a subagent is given its parent's; a root
@@ -4495,9 +4501,9 @@ async function createAgentSessionScoped(
 				);
 				if (!adapted) continue;
 				const entry = new ExtensionToolWrapper(wrapToolWithMetaNotice(adapted), extensionRunner) as Tool;
-				const registered = toolRegistry.set(tool.name, entry).get(tool.name)!;
-				settingsGatedCustomEntries.set(tool.name, registered);
-				added.push(registered);
+				toolRegistry.set(tool.name, entry);
+				settingsGatedCustomEntries.set(tool.name, entry);
+				added.push(entry);
 			}
 			return { added, removed };
 		};
@@ -4564,6 +4570,12 @@ async function createAgentSessionScoped(
 		// Built-ins re-run the shared `createTools` plan, so explicit lists, restricted
 		// sessions and task depth are honored exactly as at construction; a same-named
 		// extension tool keeps its registry slot and only its native backing changes.
+		const restrictedRequestedToolNames = restrictToolNames ? normalizeToolNames(options.toolNames ?? []) : undefined;
+		const gatedBuiltinToolNames = restrictedRequestedToolNames
+			? SETTINGS_GATED_BUILTIN_TOOL_NAMES.filter(
+					name => OPENWIKI_QUERY_TOOL_NAMES.includes(name) && restrictedRequestedToolNames.includes(name),
+				)
+			: SETTINGS_GATED_BUILTIN_TOOL_NAMES;
 		const reconcileSettingsGatedTools = async (
 			isBuiltIn: (name: string) => boolean,
 		): Promise<SettingsGatedToolDelta> => {
@@ -4574,7 +4586,7 @@ async function createAgentSessionScoped(
 			const removed: string[] = [];
 			const nativeChanges = new Map<string, Tool | undefined>();
 			const registrations = new Map<string, Tool>();
-			for (const name of SETTINGS_GATED_BUILTIN_TOOL_NAMES) {
+			for (const name of gatedBuiltinToolNames) {
 				const registered = toolRegistry.has(name);
 				if (!plan.isAllowed(name)) {
 					if (nativeToolsByName.has(name)) nativeChanges.set(name, undefined);
@@ -5627,16 +5639,7 @@ async function createAgentSessionScoped(
 		// through getters, so mid-session settings UI toggles take effect without
 		// a session recreate. The single shared host keeps its evidence across
 		// toggles; per-turn coordinator close never touches it.
-		const localSpeculation = createSpeculativeToolExecutionConfig(settings, toolSession, extensionRunner);
-		const speculativeToolExecution = {
-			get enabled() {
-				return localSpeculation.enabled;
-			},
-			get maxInFlight() {
-				return localSpeculation.maxInFlight;
-			},
-			host: localSpeculation.host,
-		};
+		const speculativeToolExecution = createSpeculativeToolExecutionConfig(settings, toolSession, extensionRunner);
 
 		agent = new Agent({
 			initialState: {
@@ -5923,9 +5926,13 @@ async function createAgentSessionScoped(
 			names: () => {
 				if (!advisorAvailableToolNames) {
 					const probeSession = createAdvisorToolSession();
-					advisorAvailableToolNames = advisorBuiltinNames.filter(name => buildAdvisorTool(name, probeSession));
+					advisorAvailableToolNames = advisorBuiltinNames.filter(
+						name => OPENWIKI_QUERY_TOOL_NAMES.includes(name) || buildAdvisorTool(name, probeSession),
+					);
 				}
-				return advisorAvailableToolNames;
+				return cfgOpenWikiToolsEnabled.get(settings)
+					? advisorAvailableToolNames
+					: advisorAvailableToolNames.filter(name => !OPENWIKI_QUERY_TOOL_NAMES.includes(name));
 			},
 			create: granted => {
 				const {
@@ -6078,12 +6085,12 @@ async function createAgentSessionScoped(
 			interactivePrompts: options.interactivePrompts,
 			rebindModelAfterDiscovery: options.model === undefined || options.rebindModelAfterDiscovery === true,
 			toolRegistry,
-			reconcileBrowserMcpFilter: mcpManager
+			reconcileBrowserMcpFilter: owningMcpManager
 				? async enabled => {
 						if (initialMcpDiscovery) await initialMcpDiscovery;
 						if (session.isDisposed) return [];
-						await mcpManager.reconcileBrowserFilter(canReplaceBrowserMcp(enabled));
-						return mcpManager.getTools();
+						await owningMcpManager.reconcileBrowserFilter(canReplaceBrowserMcp(enabled));
+						return owningMcpManager.getTools();
 					}
 				: undefined,
 			restrictToolNames,
@@ -6211,16 +6218,22 @@ async function createAgentSessionScoped(
 			agent.abortOnFabricatedToolResult = abortOnFabricatedResult;
 		});
 		// Tool-gating settings add or remove the tools they gate and refresh the
-		// prompt once per coalesced change. Restricted (structured) sessions keep the
-		// exact host-provided tool list they were built with.
-		if (!restrictToolNames) {
-			const reconcileGatedTools = async (options?: { refreshPrompt?: boolean }): Promise<void> => {
-				try {
-					await session.reconcileBuiltinTools(options);
-				} catch (error) {
-					session.emitNotice("error", `Failed to apply tool settings: ${error}`);
-				}
-			};
+		// prompt once per coalesced change. A restricted session owns its tool slate;
+		// only its explicitly granted OpenWiki tools follow this live gate.
+		const reconcileGatedTools = async (options?: { refreshPrompt?: boolean }): Promise<void> => {
+			try {
+				await session.reconcileBuiltinTools(options);
+			} catch (error) {
+				session.emitNotice("error", `Failed to apply tool settings: ${error}`);
+			}
+		};
+		cfgOpenWikiToolsEnabled.listen(session, () => {
+			// The runtime signature checks the gate only for advisors that grant OpenWiki.
+			if (session.isAdvisorEnabled()) session.setAdvisorEnabled(true);
+		});
+		if (restrictToolNames) {
+			if (gatedBuiltinToolNames.length > 0) cfgOpenWikiToolsEnabled.listen(session, () => reconcileGatedTools());
+		} else {
 			cfgSessionToolGates.listen(session, () => reconcileGatedTools());
 			// `find.enabled: auto` follows the judge role; a role change only touches
 			// the prompt when it actually adds or removes `find`.
@@ -6813,9 +6826,9 @@ async function createAgentSessionScoped(
 					unregisterMcpPostmortem?.();
 					const failures: unknown[] = [];
 					for (const callback of disposeCallbacks) {
-						disposeCallbacks.delete(callback);
 						try {
 							await callback();
+							disposeCallbacks.delete(callback);
 						} catch (error) {
 							failures.push(error);
 						}

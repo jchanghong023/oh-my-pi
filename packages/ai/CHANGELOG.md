@@ -17,8 +17,10 @@
 
 - Codex and pi-native requests honor explicit authentication headers, and CodeAgent preserves HTTP context-window exhaustion for recovery.
 - Explicit request credentials disable ambient API key lookup and are redacted from rejection diagnostics.
+- OpenAI requests with explicit credentials reject redirects and cannot inherit a competing bearer; Ollama accepts explicitly supplied header-only credentials without an ambient key.
+- Codex transport state is isolated by explicit credentials, which are excluded from raw diagnostics.
 - Redact the effective Alibaba Token Plan token from rejected-request diagnostics.
-- Embedded Responses replays do not duplicate assistant text already delivered by the gateway.
+- Embedded Responses replay restores native tool turns split by assistant text without duplicating the text.
 - Windows HTTP requests preserve explicit direct connections, select the proxy for each redirect target, and follow POST redirects that switch to GET without replaying the body.
 - Devin sessions now switch to another stored login when the current one's weekly quota is spent and it has no on-demand balance, instead of failing every request on it ([#20524](https://github.com/can1357/oh-my-pi/pull/20524) by [@will-bogusz](https://github.com/will-bogusz))
 - The thinking-loop guard no longer aborts healthy reasoning written in Chinese, Japanese, Thai, or other unspaced scripts when the same English tool or metric names recur, and now also catches loops in that text ([#20096](https://github.com/can1357/oh-my-pi/issues/20096))

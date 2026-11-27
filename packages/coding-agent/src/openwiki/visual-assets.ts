@@ -77,7 +77,7 @@ export function isOpenWikiArchiveStale(sourceFingerprint: string, currentFingerp
 }
 
 /** Reject embedded assets whose fingerprint no longer matches the current checkout. */
-export function assertOpenWikiArchiveFresh(sourceFingerprint: string, currentFingerprint: string | undefined): void {
+function assertOpenWikiArchiveFresh(sourceFingerprint: string, currentFingerprint: string | undefined): void {
 	if (!isOpenWikiArchiveStale(sourceFingerprint, currentFingerprint)) return;
 	throw new Error(
 		"OpenWiki visualizer assets are stale. Run `bun run gen:openwiki-resources` from the repository root.",
@@ -102,7 +102,7 @@ export async function readOpenWikiLicenseAssets(files: ReadonlyMap<string, File>
 }
 
 /** Render the visualizer payload from an already extracted archive. */
-export async function renderOpenWikiVisualAssets(files: ReadonlyMap<string, File>): Promise<OpenWikiVisualAssets> {
+async function renderOpenWikiVisualAssets(files: ReadonlyMap<string, File>): Promise<OpenWikiVisualAssets> {
 	const licenseAssets = Object.fromEntries(await readOpenWikiLicenseAssets(files));
 	const browserAssets: Record<string, string> = {};
 	for (const name of VISUAL_ASSET_NAMES) browserAssets[name] = await readVisualAsset(files, name);

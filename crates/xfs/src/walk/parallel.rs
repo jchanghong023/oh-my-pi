@@ -947,7 +947,10 @@ impl<K: Sink> Ctx<K> {
 			.await
 		{
 			Ok(()) => freshness,
-			Err(error) if IncompleteListing::is(&error) && (depth > 0 || !listing.is_empty()) => {
+			Err(error)
+				if IncompleteListing::is(&error)
+					&& (depth > 0 || !listing.is_empty() || error.kind() == io::ErrorKind::NotFound) =>
+			{
 				self.report(rel_bytes, error);
 				// Incomplete listings must not hide the error on a cache hit.
 				None

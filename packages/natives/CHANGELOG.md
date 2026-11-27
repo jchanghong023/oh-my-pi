@@ -16,14 +16,15 @@
 ### Fixed
 
 - On Windows, sorted glob preserves other directory entries when an item disappears or cannot be refreshed.
+- Strict sorted glob reports a subdirectory that disappears during metadata refresh without discarding readable siblings in non-strict mode.
 - Git mutations return the result of writes already started, preserve the real index during scoped commits, and record commits in the current worktree's HEAD reflog.
 - Linux PTY cancellation still stops the owned process group when pidfd handles are unavailable, and process termination keeps track of descendants after their parent exits.
+- Linux PTY units that survive daemon re-exec can still be stopped on kernels without pidfds.
+- `export` rejects non-UTF-8 operands even when the variable name is valid.
 - Non-strict glob preserves partial results when some directory entries cannot be inspected.
 - Windows rsync keeps file lists relative to the chosen source and preserves symbolic link destination paths.
 - The native loader can use an external addon when the private cache cannot be created.
-- Preserved model tables and meaningful button labels while removing unrelated news and footer content from URL reads.
-- Kept sign-in instructions next to login prompts and omitted empty whitespace-only Markdown paragraphs.
-- Preserved source-code indentation and linked content cards in URL reads.
+- Native installation refuses to replace destination directories and skips identical files only when they are writable.
 
 - The linux-gnu native addon no longer links against `libm.so.6` for the Perl `POSIX` builtin's `acosh` and `asinh` ([#20522](https://github.com/can1357/oh-my-pi/pull/20522) by [@pedropaulovc](https://github.com/pedropaulovc))
 - Improved URL reading to preserve model tables, source-code indentation, linked content cards, meaningful button labels, and sign-in instructions while removing unrelated news, footer content, and empty whitespace-only paragraphs.

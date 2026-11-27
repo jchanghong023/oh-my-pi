@@ -2320,6 +2320,7 @@ export class InputController {
 		this.releaseStaleYieldCompaction();
 		const compacting = this.ctx.session.isCompacting;
 		const direct =
+			this.ctx.collabGuest !== undefined ||
 			commandName === "collab2" ||
 			leave ||
 			(compacting && (commandName === "goal" || commandName === "goal-autopilot"));
@@ -2374,6 +2375,23 @@ export class InputController {
 				this.ctx.showError(error instanceof Error ? error.message : String(error));
 				return;
 			}
+		}
+
+		const guest = this.ctx.collabGuest;
+		if (guest) {
+			if (text.startsWith("/")) {
+				this.ctx.showStatus(`${text.split(/\s+/, 1)[0]} is host-only during a collab session`);
+			} else if (text.startsWith("!") || parsePythonCommandInput(text)) {
+				this.ctx.showStatus("Local execution is host-only during a collab session");
+			} else if (guest.readOnly) {
+				this.ctx.showStatus("This collab link is read-only — prompting is disabled");
+			} else if (guest.sendPrompt(text, images, "followUp")) {
+				return;
+			} else {
+				this.ctx.showStatus("Collab could not send the prompt — draft kept");
+			}
+			restoreDetachedDraft(this.ctx.composer, text, images, imageLinks);
+			return;
 		}
 
 		if (!loopNEntry && text && (await this.#runSideFileCommand(text, restoreSideDraft))) return;

@@ -22,6 +22,7 @@
 ### Fixed
 
 - Interrupted model streams mark unstarted tool calls as cancelled.
+- Native Bedrock compaction with explicit credentials no longer writes raw HTTP captures.
 - Compaction reports truncated responses as failures and does not wait for an unused CodeAgent request after the required summary fails.
 - CodeAgent compaction no longer retries a request with unchanged credentials, and response observers receive the request's cancellation signal.
 - Tool cancellations are reported consistently during execution and replay.

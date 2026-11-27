@@ -69,6 +69,8 @@ export interface OpenAIStreamRequestInit {
 	body: unknown;
 	signal: AbortSignal;
 	fetch?: FetchImpl;
+	/** Reject redirects when the request may carry credentials in arbitrary headers. */
+	redirect?: RequestInit["redirect"];
 	/** Override the default transport attempt budget for this request. */
 	maxAttempts?: number;
 	/** Optional caller-specific gate composed with shared transport retry exclusions. */
@@ -106,6 +108,7 @@ export async function postOpenAIStream<TEvent>(init: OpenAIStreamRequestInit): P
 			headers: { "Content-Type": "application/json", Accept: "text/event-stream", ...init.headers },
 			body: JSON.stringify(init.body),
 			signal: init.signal,
+			redirect: init.redirect,
 			fetch: init.fetch,
 			maxAttempts: init.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
 			// A server/gateway `x-should-retry: false` verdict is terminal, as it was

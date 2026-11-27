@@ -56,9 +56,8 @@ async function main(): Promise<void> {
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
-		const buildEnv: NodeJS.ProcessEnv = { ...process.env };
-		delete buildEnv.CROSS_TARGET;
-		delete buildEnv.BUN_COMPILE_EXECUTABLE_PATH;
+		// Empty overrides select the host defaults without letting Bun reload them from .env.
+		const buildEnv: NodeJS.ProcessEnv = { ...process.env, CROSS_TARGET: "", BUN_COMPILE_EXECUTABLE_PATH: "" };
 		console.log("Building the native addon and local executable...");
 		await run(
 			[

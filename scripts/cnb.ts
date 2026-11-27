@@ -16,8 +16,21 @@ async function safeGit(wsl: string, linux: boolean, args: string[]): Promise<str
 	const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
 	delete env.CNB_TOKEN;
 	const command = linux
-		? [wsl, "-d", distro, "--exec", "env", "GIT_TERMINAL_PROMPT=0", "git", "-C", wslSource, ...args]
-		: ["git", ...args];
+		? [
+				wsl,
+				"-d",
+				distro,
+				"--exec",
+				"env",
+				"GIT_TERMINAL_PROMPT=0",
+				"git",
+				"-c",
+				"core.hooksPath=/dev/null",
+				"-C",
+				wslSource,
+				...args,
+			]
+		: ["git", "-c", "core.hooksPath=/dev/null", ...args];
 	const proc = Bun.spawn(command, { cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 	const [out, , code] = await Promise.all([
 		new Response(proc.stdout).text(),

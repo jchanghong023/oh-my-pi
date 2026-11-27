@@ -601,9 +601,10 @@ export interface InteractiveModeContext {
 	 * when given) and redraw those whose display changed.
 	 */
 	refreshTranscriptPresentation(ids?: ReadonlySet<string>): void;
-	/** Clear working rows, transient HUD/pending slots, streaming state, and pending tools. `viewOnly`
-	 *  (focus switch, main session unchanged) keeps the main session's compaction queues. */
-	clearTransientSessionUi(options?: { viewOnly?: boolean }): void;
+	/** Clear working rows, transient HUD/pending slots, streaming state, and pending tools.
+	 * `viewOnly` preserves the main session's compaction queues; `clearCompactToolHistory`
+	 * discards the main dock's saved actions when a replica replaces its snapshot under the same id. */
+	clearTransientSessionUi(options?: { viewOnly?: boolean; clearCompactToolHistory?: boolean }): void;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];

@@ -3,6 +3,7 @@ import { runEvalAgent } from "../eval/agent-bridge";
 import { runEvalCancel, runEvalWait, type EvalHandleSnapshot } from "../eval/handle-bridge";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
+import { getBundledAgent } from "../task/agents";
 import type { ToolSession } from "../tools";
 
 /** Native eval handles remain the only executor and cancellation authority. */
@@ -17,9 +18,21 @@ export class TodoLoopNative {
 		options?: { agent?: "task" | "scout"; context?: string },
 	): Promise<string> {
 		if (signal?.aborted) throw signal.reason;
+		const agent = options?.agent ?? "task";
+		const scout = agent === "scout" ? getBundledAgent(agent) : undefined;
+		if (agent === "scout" && !scout?.tools?.length) {
+			throw new Error("TodoLoop: bundled scout has no explicit read-only tool list.");
+		}
 		const handle = await runEvalAgent(
-			{ agent: options?.agent ?? "task", prompt, label, isolated: false },
-			{ session: this.session, signal, suppressDelivery: true, context: options?.context },
+			{ agent, prompt, label, isolated: false },
+			{
+				session: this.session,
+				signal,
+				suppressDelivery: true,
+				context: options?.context,
+				// Use the native strict allowlist so ambient tools cannot widen the bundled scout.
+				agentDefinition: scout ? { ...scout, restrictToolNames: true } : undefined,
+			},
 		);
 		this.#jobs.set(handle.id, this.job(handle.id));
 		return handle.id;

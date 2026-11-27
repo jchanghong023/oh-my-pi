@@ -338,6 +338,8 @@ export function validateTodoLoopChange(
 	// and admit only insertions after the last existing record in each task's region.
 	const oldLines = previous.lines;
 	const newLines = next.lines;
+	const oldEndings = before.content.match(/\r\n|\n|\r/g) ?? [];
+	const newEndings = after.content.match(/\r\n|\n|\r/g) ?? [];
 	for (let index = 0; index < previous.located.length; index++) {
 		const oldTask = previous.located[index].task;
 		const newTask = next.located[index].task;
@@ -357,16 +359,21 @@ export function validateTodoLoopChange(
 		while (start >= located.task.line && !oldLines[start - 1].trim()) start--;
 		return [{ start, end }];
 	});
+	const sameLine = (index: number, cursor: number): boolean =>
+		newLines[cursor] === oldLines[index] &&
+		(oldEndings[index] === newEndings[cursor] ||
+			// An appended note may supply the first delimiter for the old final line.
+			(index === oldLines.length - 1 && oldEndings[index] === undefined && cursor + 1 < newLines.length));
 	let cursor = 0;
 	for (let index = 0; index <= oldLines.length; index++) {
 		if (noteRegions.some(region => index >= region.start && index <= region.end)) {
-			while (cursor < newLines.length && newLines[cursor] !== oldLines[index]) cursor++;
+			while (cursor < newLines.length && !sameLine(index, cursor)) cursor++;
 		}
 		if (index === oldLines.length) {
 			if (cursor === newLines.length) return;
 			break;
 		}
-		if (newLines[cursor] !== oldLines[index]) break;
+		if (!sameLine(index, cursor)) break;
 		cursor++;
 	}
 	throw new Error("TodoLoop: original content changed outside append-only current-group task notes");

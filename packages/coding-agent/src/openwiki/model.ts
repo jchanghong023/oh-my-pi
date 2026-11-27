@@ -1,8 +1,10 @@
 import * as path from "node:path";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { ResolvedThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { ChatOpenAI } from "@langchain/openai";
 import { type AuthGatewayRouter, createAuthGatewayRouter } from "@oh-my-pi/pi-ai/auth-gateway";
+import { routedModelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { getCompanyConfigError } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import {
@@ -96,6 +98,12 @@ interface OpenWikiModelRuntime {
 	registry: ModelRegistry;
 }
 
+interface OpenWikiModelSelection {
+	selector: string | undefined;
+	model: Model<Api>;
+	thinkingLevel: ResolvedThinkingLevel | undefined;
+}
+
 /** Create an OMP-backed OpenWiki model with its own request lifetime. */
 export async function createOpenWikiModel(scope: OpenWikiModelScope, selector?: string): Promise<OpenWikiModel> {
 	const settings = await Settings.loadIsolated(scope);
@@ -116,49 +124,62 @@ export async function createOpenWikiModel(scope: OpenWikiModelScope, selector?: 
 		await registry.hydrateCredentialScopedModelCaches();
 		await loadCliExtensionProviders(registry, settings, scope.cwd, { offline });
 		await registry.refresh(offline ? "offline" : "online-if-uncached");
-		return await createRuntimeModel(selector, { settings, storage, registry }, disposeRuntime);
+		const runtime = { settings, storage, registry };
+		const selection = await resolveModelSelection(selector, runtime);
+		return await createRuntimeModel(selection, runtime, disposeRuntime);
 	} catch (error) {
 		disposeRuntime();
 		throw error;
 	}
 }
 
-async function createRuntimeModel(
+async function resolveModelSelection(
 	selector: string | undefined,
+	runtime: OpenWikiModelRuntime,
+): Promise<OpenWikiModelSelection> {
+	const { settings, registry } = runtime;
+	let selected: Model<Api> | undefined;
+	let thinkingLevel: ConfiguredThinkingLevel | undefined;
+	if (selector !== undefined) {
+		if (!selector.trim()) throw new Error("OpenWiki model selector cannot be empty");
+		const resolved = resolveCliModel({ cliModel: selector, modelRegistry: registry, settings });
+		if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `No model matches "${selector}"`);
+		selected = resolved.model;
+		thinkingLevel = resolved.thinkingLevel;
+	} else {
+		const allowed = await resolveAllowedModels(registry, settings, getModelMatchPreferences(settings));
+		const defaultRole = settings.getModelRole("default");
+		if (defaultRole) {
+			const resolved = resolveModelRoleValue(defaultRole, allowed, { settings });
+			if (!resolved.model) throw new Error(`Default model ${defaultRole} is unavailable`);
+			selected = resolved.model;
+			thinkingLevel = resolved.thinkingLevel;
+		} else {
+			selected = pickDefaultAvailableModel(allowed, provider => registry.hasConcreteAuth(provider));
+			if (!selected)
+				throw new Error(
+					getCompanyConfigError() ??
+						"No default model available; configure the default role or model authentication",
+				);
+		}
+	}
+	return {
+		selector,
+		model: selected,
+		thinkingLevel: resolveThinkingLevelForModel(selected, concreteThinkingLevel(thinkingLevel)),
+	};
+}
+
+async function createRuntimeModel(
+	selection: OpenWikiModelSelection,
 	runtime: OpenWikiModelRuntime,
 	disposeRuntime?: () => void,
 ): Promise<OpenWikiModel> {
 	const { settings, storage, registry } = runtime;
+	const { selector, model: selectedModel, thinkingLevel } = selection;
 	let router: AuthGatewayRouter | undefined;
 	const lifetime = new AbortController();
 	try {
-		let selected: Model<Api> | undefined;
-		let thinkingLevel: ConfiguredThinkingLevel | undefined;
-		if (selector !== undefined) {
-			if (!selector.trim()) throw new Error("OpenWiki model selector cannot be empty");
-			const resolved = resolveCliModel({ cliModel: selector, modelRegistry: registry, settings });
-			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `No model matches "${selector}"`);
-			selected = resolved.model;
-			thinkingLevel = resolved.thinkingLevel;
-		} else {
-			const allowed = await resolveAllowedModels(registry, settings, getModelMatchPreferences(settings));
-			const defaultRole = settings.getModelRole("default");
-			if (defaultRole) {
-				const resolved = resolveModelRoleValue(defaultRole, allowed, { settings });
-				if (!resolved.model) throw new Error(`Default model ${defaultRole} is unavailable`);
-				selected = resolved.model;
-				thinkingLevel = resolved.thinkingLevel;
-			} else {
-				selected = pickDefaultAvailableModel(allowed, provider => registry.hasConcreteAuth(provider));
-				if (!selected)
-					throw new Error(
-						getCompanyConfigError() ??
-							"No default model available; configure the default role or model authentication",
-					);
-			}
-		}
-
-		const selectedModel = selected;
 		const modelId = formatModelStringWithRouting(selectedModel);
 		if (selectedModel.supportsTools === false) throw new Error(`Model ${modelId} does not support tool calling`);
 		const initialKey = await registry.getApiKey(selectedModel, undefined, { signal: lifetime.signal });
@@ -187,8 +208,7 @@ async function createRuntimeModel(
 			const signal = AbortSignal.any([request.signal, lifetime.signal]);
 			return activeRouter.route(new Request(request, { signal }), "openwiki");
 		};
-		const resolvedThinking = resolveThinkingLevelForModel(selectedModel, concreteThinkingLevel(thinkingLevel));
-		const reasoningEffort = shouldDisableReasoning(resolvedThinking) ? "none" : toReasoningEffort(resolvedThinking);
+		const reasoningEffort = shouldDisableReasoning(thinkingLevel) ? "none" : toReasoningEffort(thinkingLevel);
 		const model = new ChatOpenAI({
 			model: modelId,
 			apiKey: "embedded",
@@ -207,7 +227,10 @@ async function createRuntimeModel(
 				const effectiveSelector =
 					plannerSelector ?? (settings.getModelRole("plan") !== undefined ? "@plan" : undefined);
 				if (effectiveSelector === undefined || effectiveSelector === selector) return this;
-				return createRuntimeModel(effectiveSelector, runtime);
+				const planner = await resolveModelSelection(effectiveSelector, runtime);
+				if (thinkingLevel === planner.thinkingLevel && routedModelsAreEqual(selectedModel, planner.model))
+					return this;
+				return createRuntimeModel(planner, runtime);
 			},
 			dispose() {
 				if (disposed) return;

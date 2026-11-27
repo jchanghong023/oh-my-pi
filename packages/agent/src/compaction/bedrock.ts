@@ -27,7 +27,7 @@ export async function prepareBedrockCompactionRequest(
 	signal: AbortSignal | undefined,
 	requestAuth?: SimpleStreamOptions["requestAuth"],
 ): Promise<BedrockCompactionRequest> {
-	const baseFetch = transportFetch(model, fetch);
+	const baseFetch = transportFetch(model, fetch, undefined, requestAuth !== undefined);
 	const provider = getProviderDefinition(model.provider);
 	const providerModel = provider?.prepareModel?.(model) ?? model;
 	const prepared = provider?.prepareRequest?.(providerModel, { apiKey, fetch: baseFetch, signal, requestAuth }) ?? {

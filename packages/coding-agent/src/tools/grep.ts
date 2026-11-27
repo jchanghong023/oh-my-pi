@@ -691,12 +691,13 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			const scopedPaths = toPathList(rawPath);
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const resolveContext = sessionResolveContext(this.session, { signal });
+			const assertTarget = await createTeamSearchTargetCheck(this.session, resolveContext);
 			// Internal URLs resolve inside the native search, bounded by the tier this call was approved at.
 			const urlFilesystem = new InternalUrlFilesystem({
 				context: resolveContext,
 				tier: resolveToolTier(this, params),
+				assertReadBacking: assertTarget,
 			});
-			const assertTarget = await createTeamSearchTargetCheck(this.session, resolveContext);
 			const expandedEntries = await expandDelimitedPathEntries(effectivePaths, this.session.cwd, {
 				exclusionParts: true,
 				mixedLocalPaths: urlFilesystem,

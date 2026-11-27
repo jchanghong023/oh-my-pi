@@ -85,6 +85,7 @@ export async function buildReleaseNative(): Promise<string> {
 	}
 	env.CARGO_TARGET_DIR = targetDir;
 	env.CARGO_INCREMENTAL = "1";
+	env.CARGO_PROFILE_LOCAL_LTO = "thin";
 	env.CARGO_PROFILE_LOCAL_STRIP = "symbols";
 	env.CMAKE_GENERATOR = "Ninja";
 	env.PCRE2_SYS_STATIC = "1";

@@ -228,13 +228,14 @@ describe("AgentSession eval preludes", () => {
 		{ backend: "unprobed Python only", evalJs: false },
 	])("reconciles browser MCP filtering on live browser toggles with $backend", async ({ evalJs }) => {
 		const cwd = fs.mkdtempSync(path.join(registryDir, "browser-filter-"));
-		const manager = new MCPManager(cwd, async () => ({
-			configs: {},
-			sources: {},
+		const discovery = vi.spyOn(MCPManager.prototype, "discoverAndConnect").mockResolvedValue({
+			tools: [],
+			errors: new Map(),
+			connectedServers: [],
 			exaApiKeys: [],
-		}));
+		});
 		const settings = Settings.isolated({ "browser.enabled": false, "eval.js": evalJs, "eval.py": true });
-		const { session } = await createAgentSession({
+		const { session, mcpManager } = await createAgentSession({
 			cwd,
 			agentDir: registryDir,
 			modelRegistry,
@@ -246,11 +247,12 @@ describe("AgentSession eval preludes", () => {
 			contextFiles: [],
 			promptTemplates: [],
 			slashCommands: [],
-			mcpManager: manager,
+			enableMCP: true,
 			enableLsp: false,
-		});
+		}).finally(() => discovery.mockRestore());
 		sessions.push(session);
-		const reconcile = vi.spyOn(manager, "reconcileBrowserFilter");
+		if (!mcpManager) throw new Error("Expected a session-owned MCP manager");
+		const reconcile = vi.spyOn(mcpManager, "reconcileBrowserFilter");
 
 		cfgBrowserEnabled.override(settings, true);
 		await Promise.resolve();

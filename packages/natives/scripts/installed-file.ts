@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -6,9 +7,12 @@ import * as path from "node:path";
 export async function matchesInstalledFile(sourcePath: string, destPath: string): Promise<boolean> {
 	try {
 		const installed = await fs.lstat(destPath);
-		if (!installed.isFile() || !(installed.mode & 0o200)) return false;
+		const windows = process.platform === "win32";
+		// Keep the explicit Windows read-only attribute check as well as checking write access.
+		if (!installed.isFile() || (windows && !(installed.mode & 0o200))) return false;
+		await fs.access(destPath, constants.W_OK);
 		if (!(await fs.readFile(destPath)).equals(await fs.readFile(sourcePath))) return false;
-		if (process.platform !== "win32" && (installed.mode & 0o7777) !== 0o644) {
+		if (!windows && (installed.mode & 0o7777) !== 0o644) {
 			await fs.chmod(destPath, 0o644);
 		}
 		return true;
@@ -35,6 +39,12 @@ async function replaceInstalledFile(tempPath: string, destPath: string, allowUnl
 		return;
 	} catch (error) {
 		if (!windows && !allowUnlinkFallback) throw error;
+		// A failed file rename must not cause the fallback to move a directory.
+		const destination = await fs.lstat(destPath).catch((statError: NodeJS.ErrnoException) => {
+			if (statError.code === "ENOENT") return undefined;
+			throw statError;
+		});
+		if (destination?.isDirectory()) throw error;
 	}
 
 	// Windows lets a mapped image move aside even when it cannot be overwritten.

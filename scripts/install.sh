@@ -33,6 +33,25 @@ INSTALL_VERSION=unspecified
 INSTALL_LOG=""
 TMP_BINARY=""
 
+normalized_log_setting() (
+    value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value" | LC_ALL=C tr '[:upper:]' '[:lower:]'
+)
+
+INSTALL_OFFLINE=false
+case "$(normalized_log_setting "${OMP_OFFLINE:-}")" in
+    1|true|yes|on) INSTALL_OFFLINE=true ;;
+esac
+case "$(normalized_log_setting "${OMP_LOG_LEVEL:-}")" in
+    error) INSTALL_LOG_THRESHOLD=0 ;;
+    warn) INSTALL_LOG_THRESHOLD=1 ;;
+    info) INSTALL_LOG_THRESHOLD=2 ;;
+    debug) INSTALL_LOG_THRESHOLD=3 ;;
+    *) if [ "$INSTALL_OFFLINE" = true ]; then INSTALL_LOG_THRESHOLD=1; else INSTALL_LOG_THRESHOLD=3; fi ;;
+esac
+
 install_log_emit() (
     # A subshell prevents diagnostics from changing caller state or exit status.
     [ -n "$INSTALL_LOG" ] || exit 0
@@ -52,6 +71,12 @@ install_log_emit() (
 )
 
 install_log() {
+    case "$1" in
+        ERROR) [ "$INSTALL_LOG_THRESHOLD" -ge 0 ] || return 0 ;;
+        WARN) [ "$INSTALL_LOG_THRESHOLD" -ge 1 ] || return 0 ;;
+        INFO) [ "$INSTALL_LOG_THRESHOLD" -ge 2 ] || return 0 ;;
+        DEBUG) [ "$INSTALL_LOG_THRESHOLD" -ge 3 ] || return 0 ;;
+    esac
     if ! install_log_emit "$@"; then
         INSTALL_LOG=""
         printf '%s\n' 'omp installer: diagnostic log writing unavailable; continuing without file logging.' >&2 || :
@@ -92,6 +117,34 @@ normalize_absolute_path() (
     printf '%s' "${normalized:-/}"
 )
 
+# Walk without following symlinks. Each ancestor must be owned by a trusted UID
+# and, if writable by other users, sticky so they cannot replace our entries.
+prepare_linux_cache_log_dir() (
+    entry="/"
+    components="${1#/}"
+    while :; do
+        info="$(stat -c '%u %f' -- "$entry")" || exit 1
+        owner="${info%% *}"
+        mode=$((0x${info#* }))
+        [ "$((mode & 0170000))" -eq "$((0040000))" ] || exit 1
+        if [ -z "$components" ]; then
+            [ "$owner" = "$2" ] && [ "$((mode & 077))" -eq 0 ]
+            exit "$?"
+        fi
+        { [ "$owner" = 0 ] || [ "$owner" = "$2" ]; } || exit 1
+        [ "$((mode & 022))" -eq 0 ] || [ "$((mode & 01000))" -ne 0 ] || exit 1
+        entry="${entry%/}/${components%%/*}"
+        if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
+            # An installer racing to create the same directory must pass the same checks.
+            mkdir -m 700 -- "$entry" || :
+        fi
+        case "$components" in
+            */*) components="${components#*/}" ;;
+            *) components="" ;;
+        esac
+    done
+)
+
 install_log_init() {
     log_root="$HOME/${PI_CONFIG_DIR:-.omp}"
     explicit_root=false
@@ -125,30 +178,43 @@ install_log_init() {
         "~\\"*) cache_root="$HOME${cache_root#?}" ;;
     esac
     case "$cache_root" in /*) ;; *) cache_root="" ;; esac
-    if [ -z "$cache_root" ]; then
-        offline_value="$(printf '%s' "${OMP_OFFLINE:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
-        case "$offline_value" in
-            1|true|yes|on)
-                if [ "$(uname -s 2>/dev/null)" = Linux ]; then
-                    cache_root="/dev/shm/omp-$(id -u)"
-                    mkdir -m 700 "$cache_root" 2>/dev/null || :
-                fi
-                ;;
-        esac
-    elif [ "$(uname -s 2>/dev/null)" = Linux ]; then
-        cache_root="${cache_root%/}/$(id -u)"
+    cache_uid=""
+    cache_log_dir=""
+    log_fallback=false
+    if { [ -n "$cache_root" ] || [ "$INSTALL_OFFLINE" = true ]; } && [ "$(uname -s 2>/dev/null)" = Linux ]; then
+        if cache_uid="$(id -u 2>/dev/null)" && [ -n "$cache_uid" ]; then
+            if [ -n "$cache_root" ]; then
+                cache_root="${cache_root%/}/$cache_uid"
+            else
+                cache_root="/dev/shm/omp-$cache_uid"
+            fi
+        else
+            cache_root=""
+            log_fallback=true
+        fi
     fi
     log_name="omp.install.$(date -u +%Y-%m-%d 2>/dev/null).${INSTALL_STARTED_MS}.$$.log"
-    log_fallback=false
     if [ -n "$cache_root" ]; then
-        set -- "$cache_root$profile_suffix/logs" "$log_root$profile_suffix/logs" "$HOME/.local/state/omp$profile_suffix/logs"
+        cache_log_dir="$(normalize_absolute_path "$cache_root$profile_suffix/logs")"
+        set -- "$cache_log_dir" "$log_root$profile_suffix/logs" "$HOME/.local/state/omp$profile_suffix/logs"
     else
         set -- "$log_root$profile_suffix/logs" "$HOME/.local/state/omp$profile_suffix/logs"
     fi
     for log_dir; do
         case "$log_dir" in /*) log_dir="$(normalize_absolute_path "$log_dir")" ;; esac
-        if { mkdir -p "$log_dir" && (umask 077; : >> "$log_dir/$log_name"); } 2>/dev/null; then
-            INSTALL_LOG="$log_dir/$log_name"
+        log_path="$log_dir/$log_name"
+        if {
+            if [ -n "$cache_uid" ] && [ "$log_dir" = "$cache_log_dir" ]; then
+                prepare_linux_cache_log_dir "$log_dir" "$cache_uid"
+            else
+                mkdir -p "$log_dir"
+            fi
+        } 2>/dev/null && (
+            umask 077
+            set -C
+            [ ! -e "$log_path" ] && [ ! -L "$log_path" ] && : > "$log_path"
+        ) 2>/dev/null; then
+            INSTALL_LOG="$log_path"
             break
         fi
         log_fallback=true

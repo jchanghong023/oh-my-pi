@@ -10,7 +10,7 @@ import type {
 	StreamOptions,
 	ToolChoice,
 } from "../types";
-import { hasRequestAuthMaterial, resolveCacheRetention } from "../utils";
+import { getHeaderCaseInsensitive, hasRequestAuthMaterial, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { withReplaySafeStreamRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
@@ -171,6 +171,7 @@ const streamAzureOpenAIResponsesOnce = (
 						headers: headersWithTimeout,
 						body: params,
 						signal: requestSignal,
+						redirect: options?.requestAuth !== undefined ? "error" : undefined,
 						fetch: options?.fetch,
 						// Transient 408/429/5xx get Retry-After-aware transport retries;
 						// the first-event watchdog aborts `requestSignal`, so retries
@@ -331,8 +332,8 @@ function modelForAzureEndpoint(
  * never `Authorization: Bearer`), `api-version` rides as a query parameter
  * (azure.mjs constructor `defaultQuery`), and `/responses` is not a
  * deployment-scoped path, so no `/deployments/{model}` URL rewriting applies.
- * Custom model/options headers may override the auth header, matching the SDK's
- * `buildHeaders` precedence.
+ * Custom model/options headers may override ambient auth, matching the SDK's
+ * `buildHeaders` precedence. Explicit request credentials take precedence.
  */
 function buildAzureResponsesRequest(
 	model: Model<"azure-openai-responses">,
@@ -350,12 +351,23 @@ function buildAzureResponsesRequest(
 		);
 	}
 
+	const keyHeaders = apiKey ? { "api-key": apiKey } : undefined;
 	const headers = mergeHeaders(
-		apiKey ? { "api-key": apiKey } : undefined,
+		requestAuth === undefined ? keyHeaders : undefined,
 		model.headers,
 		options?.headers,
+		requestAuth !== undefined ? keyHeaders : undefined,
 		requestAuth?.headers,
 	);
+	if (
+		requestAuth !== undefined &&
+		(apiKey || requestAuth.apiKey?.trim()) &&
+		getHeaderCaseInsensitive(requestAuth.headers, "Authorization") === undefined
+	) {
+		for (const name in headers) {
+			if (name.toLowerCase() === "authorization") delete headers[name];
+		}
+	}
 
 	const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
 

@@ -234,8 +234,9 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 			const internalRouter = InternalUrlRouter.instance();
 			// Internal URLs resolve inside the native walk, bounded by the tier this call was approved at.
 			const context = sessionResolveContext(this.session, { signal, containSkillPaths: true });
-			const urlFilesystem = new InternalUrlFilesystem({ context, tier: resolveToolTier(this, params) });
+			const tier = resolveToolTier(this, params);
 			const assertTarget = await createTeamSearchTargetCheck(this.session, context);
+			const urlFilesystem = new InternalUrlFilesystem({ context, tier, assertReadBacking: assertTarget });
 			const rawPatternInputs = this.#customOps
 				? effectivePaths
 				: await expandDelimitedPathEntries(effectivePaths, this.session.cwd, {

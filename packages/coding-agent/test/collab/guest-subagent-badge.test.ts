@@ -58,6 +58,7 @@ function makeGuestContext(): { ctx: InteractiveModeContext; subagentCount: () =>
 			messages: [],
 			switchSession: () => Promise.resolve(),
 			newSession: () => Promise.resolve(),
+			resetReplicatedViewState: () => {},
 			agent: {
 				state: { model: undefined },
 				setModel: () => {},

@@ -265,16 +265,7 @@ function appendFallbackCandidates(
 		if (seen.has(identity)) continue;
 		seen.add(identity);
 		out.push({ selector: entry.raw, model: candidate, ...reasoning });
-		appendFallbackCandidates(
-			deps,
-			deps.tier === "slow" ? entry.raw : formatModelStringWithRouting(candidate),
-			candidate,
-			reasoning,
-			undefined,
-			seen,
-			expanded,
-			out,
-		);
+		appendFallbackCandidates(deps, entry.raw, candidate, reasoning, undefined, seen, expanded, out);
 	}
 }
 

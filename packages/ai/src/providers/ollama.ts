@@ -16,7 +16,7 @@ import type {
 	Tool,
 	ToolChoice,
 } from "../types";
-import { normalizeSystemPrompts } from "../utils";
+import { hasRequestAuthMaterial, normalizeSystemPrompts } from "../utils";
 import { clearStreamingPartialJson, kStreamingPartialJson } from "../utils/block-symbols";
 import { withReplaySafeStreamRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
@@ -33,6 +33,7 @@ import {
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
+import { mergeHeaders } from "./anthropic-headers";
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, partitionVisionContent } from "./vision-guard";
 
@@ -568,8 +569,12 @@ const streamOllamaOnce = (
 			for (const call of streamMarkupHealing.drainCompleted()) emitHealedToolCall(call);
 		};
 		try {
-			const apiKey = options.apiKey || getEnvApiKey(model.provider);
-			if (!apiKey) {
+			const requestAuth = options.requestAuth;
+			const apiKey =
+				requestAuth === undefined
+					? options.apiKey || getEnvApiKey(model.provider)
+					: (options.requestAuthPrepared ? options.apiKey : requestAuth.apiKey)?.trim();
+			if (requestAuth === undefined ? !apiKey : !hasRequestAuthMaterial(requestAuth)) {
 				throw new AIError.MissingApiKeyError(model.provider);
 			}
 			const baseUrl = normalizeBaseUrl(model.baseUrl);
@@ -585,6 +590,7 @@ const streamOllamaOnce = (
 				method: "POST",
 				url: `${baseUrl}/api/chat`,
 				body,
+				requestAuth,
 			};
 			// Direct callers that bypass `register-builtins` (which installs
 			// the iterator-level watchdog) need a pre-response timer alongside
@@ -599,15 +605,25 @@ const streamOllamaOnce = (
 			const watchdog = armPreResponseTimeout(options.signal, firstEventTimeoutMs);
 			let response: Response;
 			try {
+				let headers: Record<string, string> = {
+					...model.headers,
+					...options.headers,
+					"Content-Type": "application/json",
+				};
+				if (requestAuth === undefined) {
+					headers.Authorization = `Bearer ${apiKey}`;
+				} else {
+					for (const name in headers) {
+						if (name.toLowerCase() === "authorization") delete headers[name];
+					}
+					if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+					headers = mergeHeaders(headers, requestAuth.headers);
+				}
 				response = await fetchWithRetry(`${baseUrl}/api/chat`, {
 					method: "POST",
-					headers: {
-						...model.headers,
-						...options.headers,
-						Authorization: `Bearer ${apiKey}`,
-						"Content-Type": "application/json",
-					},
+					headers,
 					body: JSON.stringify(body),
+					redirect: requestAuth !== undefined ? "error" : undefined,
 					signal: watchdog.signal,
 					defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
 					shouldRetryResponse: shouldRetryOllamaResponse,

@@ -144,6 +144,7 @@ function makeCancelledSwitchGuestContext(
 		session: {
 			switchSession,
 			newSession: () => Promise.resolve(),
+			resetReplicatedViewState: () => {},
 			messages: [],
 			agent: {
 				state: { model: undefined },

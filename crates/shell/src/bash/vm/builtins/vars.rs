@@ -1745,7 +1745,8 @@ pub fn declare(ctx: &mut Ctx<'_, '_>, args: &[BString], kind: DeclareKind) -> R 
 			_ => false,
 		};
 		let (name, index, append, value) = split_assignment(arg, flat);
-		if std::str::from_utf8(name).is_err() {
+		let checked = if kind == DeclareKind::Export { arg.as_slice() } else { name };
+		if std::str::from_utf8(checked).is_err() {
 			ctx.usage_error |= special;
 			let operand = String::from_utf8_lossy(arg);
 			if kind == DeclareKind::Export {

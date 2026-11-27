@@ -337,7 +337,9 @@ pub(crate) fn list(
 					true
 				},
 				Err(err) if err.kind() == io::ErrorKind::PermissionDenied => true,
-				Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+				Err(err) if err.kind() == io::ErrorKind::NotFound && record.file_type != FileType::Dir => {
+					false
+				},
 				Err(err) => {
 					error.get_or_insert(err);
 					false

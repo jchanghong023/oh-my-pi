@@ -60,9 +60,7 @@ let
     bunNix =
       { fetchurl }:
       let
-        lock = builtins.readFile (
-          source + "/packages/coding-agent/src/spec-driven/vendor/resources/openspec/pnpm-lock.yaml"
-        );
+        lock = builtins.readFile (source + "/vendor/openspec/pnpm-lock.yaml");
         sections = lib.splitString "\npackages:\n\n" lock;
         packages = lib.splitString "\n\nsnapshots:\n" (lib.last sections);
         fetchPackage =
@@ -133,11 +131,7 @@ in
 stdenv.mkDerivation {
   pname = "omp";
   inherit (packageJson) version;
-  src =
-    if builtins.pathExists (source + "/vendor/openwiki/src/agent/repository-runner.ts") then
-      source
-    else
-      throw "OMP requires the pinned vendor/openwiki submodule; run git submodule update --init --recursive.";
+  src = source;
 
   passthru = { inherit nativeBuild; };
   bunDeps = bun2nix.fetchBunDeps {

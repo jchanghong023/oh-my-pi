@@ -439,7 +439,11 @@ export function buildCrawlArgumentCompletions(
 				return (
 					items?.map(item => ({
 						...item,
-						value: output[1] + (quoted || /[\s"'\\]/.test(item.value) ? JSON.stringify(item.value) : item.value),
+						value:
+							output[1] +
+							(quoted || /[\s"'\\]/u.test(item.value)
+								? `"${item.value.replace(/[\\"]/gu, "\\$&")}"`
+								: item.value),
 					})) ?? null
 				);
 			}

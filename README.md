@@ -616,11 +616,9 @@ bun setup
 bun dev
 ```
 
-`bun setup` installs Bun workspaces, builds `@oh-my-pi/pi-natives`, and generates the HTML export viewer and embedded browser Relay extension. Re-run `bun run build:native` after changing Rust crates or `packages/natives`.
+`bun setup` installs Bun workspaces and builds `@oh-my-pi/pi-natives`. Re-run `bun run build:native` after changing Rust crates or `packages/natives`.
 
-Nix users get the pinned Bun and Rust toolchains plus all native build dependencies. Keep `flake.lock` tracked in Git so `nix develop` and `nix build` use the pinned inputs:
-
-Building from a Git checkout requires [Nix 2.27 or later](https://nix.dev/manual/nix/2.27/release-notes/rl-2.27) and the pinned OpenWiki submodule: `git submodule update --init --recursive -- vendor/openwiki`.
+Nix users get the pinned Bun and Rust toolchains plus all native build dependencies:
 
 ```sh
 nix develop

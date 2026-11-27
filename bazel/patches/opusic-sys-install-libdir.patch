@@ -6,7 +6,8 @@ Search only the directory explicitly configured for installation.
 diff --git a/build.rs b/build.rs
 --- a/build.rs
 +++ b/build.rs
-@@ -241,11 +241,3 @@
+@@ -240,14 +240,6 @@
+ 
      out_dir.push("lib");
      println!("cargo:rustc-link-search=native={}", out_dir.display());
 -
@@ -18,3 +19,5 @@ diff --git a/build.rs b/build.rs
 -        println!("cargo:rustc-link-search=native={}", out_dir.display());
 -    }
  }
+ 
+ fn run() {

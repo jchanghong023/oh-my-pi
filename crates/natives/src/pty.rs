@@ -1245,8 +1245,8 @@ fn drive_pty(
 		let _ = reader_tx.send(ReaderEvent::Done);
 	});
 
-	// Capture the targets while the child is still owned, before the waiter
-	// can reap it and let its PID be recycled (#4605).
+	// Capture the targets before the waiter can reap the child and its PID
+	// can be recycled (#4605). This includes children retained across re-exec.
 	let mut targets = ps::TerminationTargets::new();
 	#[cfg(unix)]
 	if let Some(pgid) = master.process_group_leader().filter(|pgid| *pgid > 0) {
@@ -1258,7 +1258,6 @@ fn drive_pty(
 	}
 	#[cfg(target_os = "linux")]
 	if pinned_child.is_none()
-		&& matches!(&master, PtyMaster::Portable(_))
 		&& let Some(pid) = child_pid
 	{
 		targets.add_owned_group_leader(pid);

@@ -18,6 +18,7 @@ import {
 } from "../task/structured-subagent";
 import type { AgentProgress, SingleResult, StructuredSubagentSchemaMode } from "../task/task-details";
 import type { NestedRepoPatch } from "../task/task-details";
+import type { AgentDefinition } from "../task/types";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
 import type { JsStatusEvent } from "./js/shared/types";
@@ -60,6 +61,8 @@ export interface EvalAgentBridgeOptions {
 	suppressDelivery?: boolean;
 	/** Program-owned shared context; not exposed as a model-visible eval argument. */
 	context?: string;
+	/** Host-bound agent definition; not exposed as a model-visible eval argument. */
+	agentDefinition?: AgentDefinition;
 }
 
 /** Handle returned immediately after an eval subagent job is registered. */
@@ -208,6 +211,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			invocationKind: "eval",
 			assignment: parsed.prompt,
 			...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
+			...(options.agentDefinition ? { agentDefinition: options.agentDefinition } : {}),
 			...(parsed.model !== undefined ? { perCallModel: parsed.model } : {}),
 			...(Object.hasOwn(parsed, "schema") ? { outputSchema: parsed.schema } : {}),
 			...(parsed.schemaMode !== undefined ? { schemaMode: parsed.schemaMode } : {}),
@@ -235,6 +239,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 						assignment: parsed.prompt,
 						context: options.context,
 						...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
+						...(options.agentDefinition ? { agentDefinition: options.agentDefinition } : {}),
 						...(parsed.model !== undefined ? { perCallModel: parsed.model } : {}),
 						...(Object.hasOwn(parsed, "schema") ? { outputSchema: parsed.schema } : {}),
 						...(parsed.schemaMode !== undefined ? { schemaMode: parsed.schemaMode } : {}),

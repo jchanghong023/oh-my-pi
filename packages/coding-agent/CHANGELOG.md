@@ -44,9 +44,6 @@
 - Added `local/parakeet-tdt-0.6b-v2`, the most accurate local English dictation model.
 - Added Codex's 17 new live voices to `live.voice`: `aube`, `bubbie`, `haetsal`, `hanul`, `himari`, `leher`, `marin`, `miko`, `neer`, `porto`, `rindo`, `rio`, `rivage`, `selva`, `sonna`, `tinta`, and `viola`.
 
-- Bash loads approved `.envrc` and opt-in `.env` files without a `direnv` executable on `PATH`, using the exact file contents checked for approval.
-- URL reads keep cookies across redirects, follow meta refresh, and can fall back to a headless browser when enabled and plain fetch is blocked.
-- URL reads use the native reader for X, YouTube, docs.rs, Discourse, and Mastodon; raw reads still skip site-specific rendering.
 - Debugger attach detects the target executable natively, and Windows eval probes no longer need `taskkill.exe` for cleanup.
 ### Changed
 
@@ -66,12 +63,28 @@
 ### Fixed
 
 - The shared Windows daemon no longer keeps RPC clients' output pipes open after the client exits.
+- Specification subagents now follow the native task assignment instead of asking for artifacts from the retired workbench.
+- A stale skill list no longer denies `skill://` reads before the current list can resolve a more specific match.
+- Collab guests queue follow-ups on the host and keep their draft when the transport refuses the message.
+- Collab guests see live model and tool activity, Output, and per-turn Diff in compact mode.
+- ACP, RPC, and print mode reject `/todoloop:` locally rather than forwarding it as a model prompt.
+- `/crawl` directory suggestions preserve tabs and other whitespace in the selected path.
+- Team searches exclude protected paths even when accessed through a skill resource.
+- TodoLoop uses the bundled read-only scout for preparation and settles attempts even when presentation callbacks fail.
+- OpenWiki honors the live tool setting for advisors and explicitly granted sessions, and reuses an equivalent page model for planning.
+- Source containers prepare OpenWiki visual resources when the vendored source is present.
+- Session startup takes the journal lease before writing, and strict shutdown retries cleanup callbacks that failed during ordinary disposal.
+- Resuming Goal Autopilot no longer reissues its first notice, and child sessions do not change their owner's browser MCP roster.
+- Eval completion follows exact fallback selectors without changing the tier's reasoning settings.
+- Daemons now upgrade between releases that share an upstream version but have different fork build numbers.
+- The Windows installer rejects metadata for a different release tag, and both installers honor offline log levels.
+- Local builds cannot pick up a cross target from `.env`; CNB synchronization runs without Git hooks.
 - Automatic compaction uses the SDK host's request credentials, and strict session shutdown waits for retained task artifacts to be cleaned up.
 - Goal Autopilot can finish after reopening a budget-limited session and raising its budget; Goal controls take effect during compaction.
 - Ctrl+T preselects the active routed model, expanded compact diffs leave composer completion keys alone, and collapsed diffs no longer hide receipts they did not display.
 - Git status remains visible with older development native addons, and structured Bash results preserve extra shell output and notices.
 - MCP servers honor `alwaysLoad` in Eval mode and native plugin configs, and dynamic OAuth registration uses the configured client name.
-- `/team` reports job registration failure to non-interactive callers, `/todoloop` accepts Markdown shortcut links, and `/dt` uses its bundled stages by default.
+- `/team` reports registration rejections with retry guidance without marking the command as failed; `/todoloop` accepts Markdown shortcut links, and `/dt` uses its bundled stages by default.
 - Cancelling `/sketch` no longer leaves unattached images; Superpowers foreground scripts stream output and stop their child processes on cancellation.
 - OpenWiki rejects missing option values without writing a telemetry file, and source containers can print OMP notices without OpenWiki resources.
 - CNB checks out the pinned OpenWiki sources after a fast-forward, Windows SDK archives are ZIP files, and packaged HTML exports use the viewer from their own build.

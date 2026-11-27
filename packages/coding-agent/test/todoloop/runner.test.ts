@@ -811,7 +811,11 @@ describe("TodoLoop native context and cleanup boundaries", () => {
 		const h = harness(temp.path(), undefined, true);
 		vi.spyOn(discovery, "discoverAgents").mockRejectedValue(new Error("Agent environment unavailable"));
 		const spy = vi.spyOn(executor, "runSubprocess");
-		expect((await h.run()).phase).toBe("file_error");
+		expect(await h.run()).toMatchObject({
+			phase: "failed",
+			attempt: 0,
+			reason: "TodoLoop background dispatch failed: Agent environment unavailable",
+		});
 		expect(spy).not.toHaveBeenCalled();
 	});
 });

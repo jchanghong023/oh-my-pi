@@ -13,8 +13,8 @@ import {
 import { collectSpecDrivenResources } from "../src/spec-driven/resource-inventory";
 import { resolveSpecDrivenResourcePath } from "../src/spec-driven/resource-path";
 
-const vendor = path.resolve(import.meta.dir, "../src/spec-driven/vendor");
-const resources = path.join(vendor, "resources");
+const packageRoot = path.resolve(import.meta.dir, "..");
+const openSpecSource = path.resolve(packageRoot, specDrivenOpenSpecInputs.directory);
 
 /**
  * Build an owned, disposable OpenSpec runtime from the maintained vendor source.
@@ -22,12 +22,11 @@ const resources = path.join(vendor, "resources");
  * with OMP's Bun. Preserve module paths for package.json and schema resolution.
  */
 export async function prepareOpenSpecRuntime(): Promise<TempDir> {
-	const source = path.join(resources, "openspec");
 	const { sourceDirectory, packageManifest, dependencyLock: lockfile, runtimeEntries } = specDrivenOpenSpecInputs;
 	const runtime = await TempDir.create("@omp-openspec-runtime-");
 	try {
-		const packageJson = (await Bun.file(path.join(source, packageManifest)).json()) as Record<string, unknown>;
-		const lock = await Bun.file(path.join(source, lockfile)).text();
+		const packageJson = (await Bun.file(path.join(openSpecSource, packageManifest)).json()) as Record<string, unknown>;
+		const lock = await Bun.file(path.join(openSpecSource, lockfile)).text();
 		const dependencyLock = parseYaml(lock) as { overrides?: Record<string, string> };
 		// Bun migrates the pnpm lock, including overrides. Keep them in the staging
 		// manifest so frozen installation cannot silently resolve a different tree.
@@ -48,7 +47,7 @@ export async function prepareOpenSpecRuntime(): Promise<TempDir> {
 		}
 
 		const transpiler = new Bun.Transpiler({ loader: "ts", target: "bun", trimUnusedImports: true });
-		const sourceRoot = path.join(source, sourceDirectory);
+		const sourceRoot = path.join(openSpecSource, sourceDirectory);
 		for await (const relative of new Bun.Glob("**/*").scan({ cwd: sourceRoot, onlyFiles: true })) {
 			if (relative.endsWith(".d.ts")) continue;
 			const input = Bun.file(path.join(sourceRoot, relative));
@@ -57,7 +56,7 @@ export async function prepareOpenSpecRuntime(): Promise<TempDir> {
 		}
 		// Only runtime resources: README/docs and their screenshots stay in vendor.
 		for (const entry of runtimeEntries) {
-			await fs.cp(path.join(source, entry), runtime.join(entry), { recursive: true });
+			await fs.cp(path.join(openSpecSource, entry), runtime.join(entry), { recursive: true });
 		}
 		return runtime;
 	} catch (error) {
@@ -81,10 +80,10 @@ export async function assertOpenSpecRuntime(root: string): Promise<void> {
 	for (const relative of ["dist/cli/index.js", "bin/openspec.js", "package.json", "LICENSE"]) await file(relative);
 	const modules = await resolveSpecDrivenResourcePath(root, "node_modules");
 	if (!(await fs.stat(modules)).isDirectory()) throw new Error("OpenSpec runtime node_modules is not a directory");
-	for (const skill of await fs.readdir(path.join(resources, "openspec/skills"), { withFileTypes: true })) {
+	for (const skill of await fs.readdir(path.join(openSpecSource, "skills"), { withFileTypes: true })) {
 		if (skill.isDirectory()) await file(`skills/${skill.name}/SKILL.md`);
 	}
-	for (const schema of await fs.readdir(path.join(resources, "openspec/schemas"), { withFileTypes: true })) {
+	for (const schema of await fs.readdir(path.join(openSpecSource, "schemas"), { withFileTypes: true })) {
 		if (!schema.isDirectory()) continue;
 		const schemaFile = await file(`schemas/${schema.name}/schema.yaml`);
 		const parsed = parseYaml(await Bun.file(schemaFile).text()) as { artifacts: { template: string }[] };
@@ -130,8 +129,8 @@ export async function buildSpecDrivenArchive(): Promise<Uint8Array> {
 	await using runtime = await prepareOpenSpecRuntime();
 	await using staging = await TempDir.create("@omp-spec-driven-staging-");
 	await fs.rename(runtime.path(), staging.join("openspec"));
-	for (const entry of specDrivenPassthroughDirectories) {
-		await fs.cp(path.join(resources, entry), staging.join(entry), { recursive: true });
+	for (const [entry, source] of Object.entries(specDrivenPassthroughDirectories)) {
+		await fs.cp(path.join(packageRoot, source), staging.join(entry), { recursive: true });
 	}
 	await assertOpenSpecRuntime(staging.join("openspec"));
 	const { manifest, entries } = await collectSpecDrivenResources(staging.path(), sourceFingerprint);

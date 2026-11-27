@@ -245,7 +245,8 @@ export class CompactThinkingPreview {
 		private readonly compactActivity?: (width: number) => CompactPreviewActivity | undefined,
 	) {}
 
-	clear(): void {
+	clear(resetMemoryFor?: InteractiveModeContext["viewSession"]): void {
+		if (resetMemoryFor) memories.delete(resetMemoryFor);
 		this.#session = undefined;
 		this.#sessionId = undefined;
 		this.#memory = undefined;

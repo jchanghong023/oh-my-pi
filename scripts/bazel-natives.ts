@@ -20,13 +20,16 @@
  * headers — see .bazelrc for the cache-rw/cache-ro policy configs).
  *
  * The `host` pseudo-target builds through the local Cargo/N-API path
- * (packages/natives/scripts/build-bindings.ts) by default. Bazel is opt-in
- * for host via OMP_NATIVE_BUILD_BACKEND=bazel or extra bazel args after `--`;
- * explicit targets and aggregates use Bazel.
+ * (packages/natives/scripts/build-bindings.ts) by default — no bazel needed
+ * for plain host iteration. Bazel is opt-in for host via
+ * `OMP_NATIVE_BUILD_BACKEND=bazel` or by passing extra bazel args after `--`;
+ * explicit //:natives-* targets and aggregates always build through bazel.
  *
- * Windows hosts cannot run the msvc cross toolchain, which supports only
- * linux/mac execution hosts. Windows builds `host` locally using VS Build Tools;
- * other targets fail with guidance.
+ * Windows hosts: the msvc cc toolchain in bazel/toolchains/msvc only supports
+ * linux/mac exec hosts (its clang-cl+xwin wrappers replace the MSVC a Windows
+ * box already has), so a win32 host cannot run any bazel addon build. `host`
+ * always uses the local napi build there (against installed VS Build Tools);
+ * every other target on a win32 host fails fast with guidance.
  *
  * Note: musl addons intentionally reuse the plain linux-<arch> filenames, so an
  * `all` copy overwrites the gnu addon with the musl one (and vice versa);
@@ -35,8 +38,8 @@
  * Every install stamps packages/natives/package.json#version into the addon's
  * post-link version slot (scripts/stamp-native-version.ts), so release bumps
  * never touch a Rust input. After install, the addon for the host's own target
- * is dlopen-probed in a child process unless --skip-load-probe is supplied
- * (build-only release CI). An unloadable image or a load that hangs fails the build.
+ * is dlopen-probed in a child process unless `--skip-load-probe` is supplied.
+ * An unloadable image or a load that hangs fails the build.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -499,8 +502,11 @@ async function main(): Promise<void> {
 		throw new Error(`Unknown OMP_NATIVE_BUILD_BACKEND "${backend}" (expected "cargo" or "bazel")`);
 	}
 	const hostOnly = options.targets.length === 1 && options.targets[0] === "host";
-	// Windows hosts can only build `host` locally. Other hosts default to the
-	// Cargo/N-API path for host and use Bazel for explicit targets or opt-in.
+	// Backend selection: the host build defaults to the local Cargo/N-API
+	// path; bazel is opt-in for host via OMP_NATIVE_BUILD_BACKEND=bazel or
+	// extra bazel args after `--`. Explicit //:natives-* targets always go
+	// through bazel. win32 hosts can only build `host`, locally (see the msvc
+	// toolchain note in the header).
 	const cargoBackend =
 		backend === "cargo" ||
 		host.platform === "win32" ||

@@ -192,10 +192,11 @@ pub(super) fn list(
 							out.push(name, FileType::Dir, None, None, 0);
 						},
 						Err(err)
-							if dt == libc::DT_UNKNOWN && err.kind() == io::ErrorKind::PermissionDenied =>
+							if listed == Some(FileType::Dir)
+								|| (dt == libc::DT_UNKNOWN && err.kind() == io::ErrorKind::PermissionDenied) =>
 						{
-							// The name might be a directory. Report the
-							// omission after reading the remaining entries.
+							// A known directory, or an entry that might be one, could not
+							// be inspected. Report it without discarding the readable siblings.
 							incomplete.get_or_insert(err);
 						},
 						_ => {},

@@ -58,8 +58,6 @@ packages/ai/test/.temp-images/
 # Project specific
 !.omp/
 .omp/plugins/
-.omp/big-review/
-.omp/spec-sessions/
 .pi_config/
 .opencode/
 .worktrees/
@@ -110,6 +108,3 @@ packages/coding-agent/bench/boot-baseline.json
 /.bazelrc.user
 
 .parity/
-
-# Vendored, pinned spec-driven source and offline runtime assets.
-!/packages/coding-agent/src/spec-driven/vendor/resources/**

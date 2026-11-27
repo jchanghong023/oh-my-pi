@@ -16,7 +16,7 @@ export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
 );
 
 export function isTuiOnlyTodoLoopCommand(text: string): boolean {
-	return /^\/todoloop(?:\s|$)/.test(text);
+	return parseSlashCommand(text)?.name === "todoloop";
 }
 
 /**
@@ -30,7 +30,9 @@ export function isTuiOnlyTodoLoopCommand(text: string): boolean {
 export function isAcpBuiltinShadowedName(name: string): boolean {
 	if (name === "todoloop" || ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
 	const colon = name.indexOf(":");
-	return colon !== -1 && ACP_BUILTIN_RESERVED_NAMES.has(name.slice(0, colon));
+	if (colon === -1) return false;
+	const prefix = name.slice(0, colon);
+	return prefix === "todoloop" || ACP_BUILTIN_RESERVED_NAMES.has(prefix);
 }
 
 /**
@@ -64,11 +66,11 @@ export async function executeAcpBuiltinSlashCommand(
 	text: string,
 	runtime: SlashCommandRuntime,
 ): Promise<AcpBuiltinSlashCommandResult> {
-	if (isTuiOnlyTodoLoopCommand(text)) {
-		return (await usage("/todoloop is only supported in the TUI.", runtime)) ?? { consumed: true };
-	}
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
+	if (parsed.name === "todoloop") {
+		return (await usage("/todoloop is only supported in the TUI.", runtime)) ?? { consumed: true };
+	}
 	const command = lookupBuiltinSlashCommand(parsed.name);
 	if (!command?.handle) return false;
 	const result = await command.handle(parsed, runtime);

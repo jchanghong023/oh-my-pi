@@ -13,6 +13,7 @@ import workspacesDescription from "../prompts/tools/openwiki-list-workspaces.md"
 import wikisDescription from "../prompts/tools/openwiki-list-wikis.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { BUILTIN_TOOL_HELP, type OpenWikiQueryName } from "./builtin-names";
+import { cfgOpenWikiToolsEnabled } from "./settings";
 import { ToolError } from "./tool-errors";
 
 const searchSchema = type({
@@ -55,6 +56,10 @@ type Query =
 
 async function runQuery(session: ToolSession, query: Query, signal?: AbortSignal) {
 	signal?.throwIfAborted();
+	// A request may retain a wrapped tool from before the roster was reconciled.
+	if (!cfgOpenWikiToolsEnabled.get(session.settings)) {
+		throw new ToolError("invalid_state: OpenWiki query tools are disabled (openwiki.tools.enabled).");
+	}
 	// Capture the profile per call: concurrent sessions must not share mutable home state.
 	const options = { configDirectory: getOpenWikiConfigDirectory(session.settings.getAgentDir()) };
 	const vendor = await loadOpenWikiVendor();

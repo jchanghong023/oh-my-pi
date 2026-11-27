@@ -285,6 +285,7 @@ export async function pollOpenAIResponsesResultForCompletion(args: {
 	headers: Record<string, string>;
 	responseId: string;
 	signal?: AbortSignal;
+	redirect?: RequestInit["redirect"];
 	/** Sleep between polls; defaults to a real wait honoring `signal`. */
 	wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }): Promise<Record<string, unknown> | undefined> {
@@ -310,6 +311,7 @@ export async function pollOpenAIResponsesResultForCompletion(args: {
 		try {
 			const response = await args.fetchImpl(args.url, {
 				headers: args.headers,
+				redirect: args.redirect,
 				signal: args.signal ? AbortSignal.any([args.signal, attemptTimeout]) : attemptTimeout,
 			});
 			status = response.status;
@@ -1021,6 +1023,7 @@ const streamOpenAIResponsesOnce = (
 						headers: headersWithTimeout,
 						body: requestParams,
 						signal: requestSignal,
+						redirect: options?.requestAuth !== undefined ? "error" : undefined,
 						fetch: wrapFetchForCopilotFallback(
 							wrapFetchForRequestCompression(options?.fetch ?? fetch, model),
 							model.provider === "github-copilot",
@@ -1387,6 +1390,7 @@ const streamOpenAIResponsesOnce = (
 							headers,
 							responseId: resumeId,
 							signal: options?.signal,
+							redirect: options?.requestAuth !== undefined ? "error" : undefined,
 							wait: options?.providerRetryWait,
 						});
 						if (resumedResponse !== undefined) {

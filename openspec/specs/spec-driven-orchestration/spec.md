@@ -2,160 +2,244 @@
 
 ## Purpose
 
-维护 OMP 内置 OpenSpec、Superpowers 与 JCH 技能，以及原生实施与验证能力的行为边界。
+内置技能及实施验证、[用户与共享技能发现和管理](#requirement-codex-用户技能)、终端／桌面 [Goal Autopilot](#requirement-1-目标与命令) 的模式、持久历史、无人值守及权限。
 
 ## Requirements
 
 ### Requirement: 包内技能发现与资源兼容
 
-OMP MUST 复用既有技能发现、补全、按需读取与资源授权。
+包内技能 MUST 接入原生发现、`/skill:<name>` 和同名覆盖；发现／读取不授权执行。
 
-#### Scenario: 技能发现与资源兼容的详细边界
+#### Scenario: OpenSpec 与 JCH 技能发现
+- **WHEN** 普通会话或子代理发现包内技能
+- **THEN** 按表提供发现、索引与调用能力。
 
-- **WHEN** 会话发现、手动调用或读取包内技能与命令资源
-- **THEN** 以下发现范围、资源授权及兼容约束适用：
+|技能|MUST|
+|---|---|
+|OpenSpec 2.0 (12 项)|普通会话/子代理，任意 cwd 免安装，发现/补全名与描述|
+|core|仅 `openspec-propose`,`openspec-explore`,`openspec-apply-change`,`openspec-update-change`,`openspec-sync-specs`,`openspec-archive-change` 默认入模型索引|
+|非 core|`openspec-bulk-archive-change`,`openspec-continue-change`,`openspec-ff-change`,`openspec-new-change`,`openspec-onboard`,`openspec-verify-change`: `disable-model-invocation: true`，仅手动；无 profile 过滤/配置|
+|`jch-grill-me`、`jch-grill-todo`|JCH 内置，普通会话仅手动；原 `jch-grill-me` 不变，Todo 交付见[个人命令规格](../personal-commands/spec.md)|
+|`jch-codebase-design`|JCH 内置，普通会话／子代理均可发现；仅改名，其余交付见[个人命令规格](../personal-commands/spec.md)|
 
-| 范围                                               | 技能                                                                                                                                                    | 规则                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 普通会话及其子代理仅手动调用 | 所有包内固定上游 Superpowers 技能，包括 `using-superpowers` | 不出现在模型自动发现索引，保留用户显式调用 |
-| 普通会话及其子代理可通过原生机制发现与调用 | 随 OMP 内置的 OpenSpec 2.0 Skill | 任意工作目录均 MUST 通过既有发现与补全提供技能名称及描述，正文按需读取，通过原生 `/skill:<name>` 显式调用并沿用资源授权和同名用户／项目资源覆盖机制，无须先安装 Skill。实际 CLI 调用统一为 `omp openspec ...`，工具声明及兼容性说明使用同一入口；仅适配宿主交付、发现与执行入口，不将正文改写为需求专用工作流，不限制为旧五项或排除 apply，不改变上游通用工作流、artifact 依赖、校验、同步及归档语义 |
-| 普通会话仅手动调用 | `jch-grill-me` | 保留原资源和显式调用，不默认发现 |
-| 普通会话仅手动调用 | `jch-grill-todo` | 独立的 OMP 本地技能，复用 JCH 包内资源与原生 `/skill:jch-grill-todo` 链路；访谈确认一致后另询生成许可，在当前工作目录生成符合格式的自包含 `.todo.md` Markdown 任务清单，不依赖执行器知识，不自动执行，不改变 `jch-grill-me` |
-| 普通会话及其子代理可通过原生机制发现与调用 | `jch-codebase-design` | 复用 JCH 包内资源与原生 `/skill:jch-codebase-design`、`skill://` 链路；仅适配技能名称，正文、描述及 Agent 元数据与上游一致，保留完整配套材料，不添加手动调用限制，不扩大当前任务权限 |
+#### Scenario: OpenSpec 入口与生命周期
+- **WHEN** 使用内置 OpenSpec CLI 或技能
+- **THEN** 按表处理入口、初始化、迁移与更新。
 
-普通会话及其子代理 MUST 通过原生机制提供全部 12 项内置 OpenSpec Skill：`openspec-apply-change`、`openspec-archive-change`、`openspec-bulk-archive-change`、`openspec-continue-change`、`openspec-explore`、`openspec-ff-change`、`openspec-new-change`、`openspec-onboard`、`openspec-propose`、`openspec-sync-specs`、`openspec-update-change`、`openspec-verify-change`。模型自动发现索引默认仅展示 core 六项：`openspec-propose`、`openspec-explore`、`openspec-apply-change`、`openspec-update-change`、`openspec-sync-specs`、`openspec-archive-change`；其余六项 MUST 通过包内资源的 `disable-model-invocation: true` 仅保留手动调用，沿用现有显式调用及资源读取授权，不新增 profile 过滤或配置。全部技能均保留原生补全、按需读取、路径授权及 `/skill:<name>` 调用，用户／项目同名覆盖优先级不变，MUST NOT 删除非 core 技能或恢复旧五项白名单。可发现或可读取不等于获准执行，模型实际使用仍 MUST 遵循原生调用授权与当前工具权限。
-
-包内 Superpowers 的发现范围仅适用于包内资源；同名非包内自定义技能继续遵循既有发现、调用与优先级规则，不被此例外覆盖。用户显式调用包内技能仍沿用原生调用及授权规则。
-
-普通 OpenSpec MUST 复用上述原生 Skill 入口，不再交付或注册包内 `commands/opsx-*` 文件命令，不保留 `/opsx-*` 别名，不另建命令分发表。任意目录可发现技能不等于获准自动初始化项目；项目尚未初始化时，Agent 自选技能 MUST 退出该工作流并正常答复，用户显式请求 OpenSpec 时 MUST 等待用户显式授权运行 `omp openspec init`，不得因发现或读取 Skill 自动创建 `openspec/` 目录。
-
-独立 `omp openspec init [path]` MUST 仅负责项目初始化与配置，不向项目或用户目录安装、复制、链接、更新或清理 Skill／旧命令，也不迁移或删除用户已有 Skill、命令及其他 Agent 目录。该边界 MUST 由初始化实现本身保证，不依赖宿主强制追加 `--tools=none`；仅服务交付的工具探测、工具选择及参数不再属于初始化合同。项目路径校验、必要目录结构、配置与语言上下文、目标路径解析、重复初始化及已有配置保护与原生错误语义 MUST 保留。新项目默认 schema MUST 为上游 `spec-driven`，MUST NOT 注入 mini；已有配置及 change 不自动覆盖、转换或迁移，显式 schema 选择仍遵循原生规则。内置 Skill 不以初始化为安装前提，随 OMP 版本交付。
-
-普通 `omp openspec ...` 入口 MUST 使用上游通用 `spec-driven` 工作流及其原生产物依赖和校验语义，显式选择 schema 时仍遵循原生解析规则。MUST NOT 注入私有 schema／context、使用需求专用目录桥接或删减通用工作流要求的 design／tasks 等产物。现有用户配置及 change 不因默认 schema 变化而自动转换或迁移。
-
-内置 OpenSpec 的 Skill 与运行资源 MUST 随 OMP 发行版本更新，不通过 `omp openspec update` 安装、刷新或迁移。经职责核对，撤销 Skill／命令交付、profile 同步、旧产物迁移及独立安装升级链后，update 没有必须保留的独立项目职责，因此 MUST 移除该 CLI 入口及专属实现；同步清除公开导出、补全、帮助、配置侧自动应用调用和更新提示中的旧入口，不保留兼容别名、无操作成功或“已是最新”响应。调用 `omp openspec update` MUST 按正常未知命令返回非零退出码，不修改用户已有 Skill、命令、配置或 change；不得为替代它新增运行时自动下载或自升级机制。共享配置、模板及安全工具仅在确无剩余消费者时删除，不因本条改变其他通用 CLI 业务语义。`openspec-update-change` 是维护需求材料的业务 Skill，MUST 保留，不属于被移除的安装更新命令。
-
-Superpowers MUST 仅交付 OMP 原生技能发现与脚本执行需要的固定版本资源：完整 `skills/`、`LICENSE` 和用于 ESM 语义及版本读取的根 `package.json`。NEVER 交付其他宿主专属插件、扩展、bootstrap hooks、安装入口及其品牌图片；后续上游同步同样遵循此边界，不整仓复制。所交付技能正文、引用材料和运行脚本保留上游原始内容，所有包内 Superpowers `SKILL.md` 均增加并持续保留 `disable-model-invocation: true`；根 `package.json` 删除指向未交付宿主资源的 `main`、`pi` 注册及专属包关键字。不为 OMP 改写工具名称、子代理名称或脚本调用，依赖宿主提供的能力及实际可用性不改变上游基线。
+|OpenSpec|MUST|
+|---|---|
+|入口|`omp openspec ...`；不注册 `commands/opsx-*`、`/opsx-*`，不单独分发。只适配交付、发现与执行，保留 apply／上游流程|
+|未初始化|自行选用 Skill 时退出流程、正常答复；用户显式请求时也须另获初始化授权；发现／读取不创建 `openspec/`|
+|初始化|`omp openspec init [path]` 仅创建原生 `openspec/` 和配置；支持 `--` 后路径及 `--language`，缺必要输入报错、不擅选语言。默认 `spec-driven`；禁 mini 注入、自动覆盖／转换／迁移|
+|安装边界|不依赖 `--tools=none`，不安装、迁移或改删项目／用户 Skill、旧命令及其他 Agent 目录；工具探测／选择不作合同|
+|旧 schema|`mini`／`omp-spec` 由用户备份核对后显式迁至 `spec-driven` 或自维；缺失报错，不自动改写／下载／回退，不加私有 schema／context、别名、目录桥接或批改归档|
+|更新|资源随 OMP 发行，保留 `openspec-update-change`；无 `omp openspec update`、专用自动更新、兼容入口或配置自动应用。旧命令非零且不改数据；共享工具无消费者才删|
 
 #### Scenario: 普通会话发现
+- **WHEN** 普通会话启动/重载技能
+- **THEN** 包内 Superpowers（含 `using-superpowers`）各 `SKILL.md` 保持 `disable-model-invocation: true`；会话/子代理仅原生显式调用及授权；非包内同名技能照旧。
 
-- **WHEN** 用户启动普通会话或重载技能
-- **THEN** 所有包内 Superpowers 技能均不出现在普通会话及其子代理的模型自动发现索引，但保留用户显式调用并遵循原生宿主授权
-- **AND** 同名非包内自定义技能仍按既有发现、调用和优先级规则生效
-
-#### Scenario: 初始化不重复安装内置资源
-
-- **WHEN** 用户运行 `omp openspec init [path]`，包括非 TTY、已检测到工具或重复初始化
-- **THEN** 仅建立原生初始化所需的 `openspec/` 目录及配置，新项目默认使用 `spec-driven`，不因检测到工具而选择或交付 Skill／命令，不触碰已有 Skill、自定义命令或其他 Agent 目录
-- **AND** 保留 `--language`、`--` 后目标路径、已有配置保护及重复初始化语义；旧 Store 配置遵循[不支持的项目字段规则](#scenario-不支持的项目字段无例外)。
-- **AND** 非 TTY 不要求选择交付工具；必要业务输入沿用现有配置／显式参数或返回明确错误，不擅自选择语言、覆盖配置或改变原生错误语义
+#### Scenario: Superpowers 随包交付
+- **WHEN** 发行或同步包内 Superpowers
+- **THEN** 仅包含固定版本的完整 `skills/`、`LICENSE`、根 `package.json`（ESM／版本读取）；不整仓复制，不含其他宿主插件／扩展、bootstrap hooks、安装入口或品牌图。根包去未交付宿主的 `main`／`pi` 注册及专属关键字；正文、引用和脚本原样保留，不改工具或子代理名、脚本调用、宿主依赖或可用性。
 
 ### Requirement: 内置 OpenSpec 中文产物上下文
 
-OMP MUST 在 OpenSpec 的统一产物指令出口提供内置中文语言约束，适用于所有新旧项目及内置、自定义 schema，无须修改项目配置。生成文档的正文 MUST 使用简体中文；项目上下文中的其他语言要求不得覆盖此内置规则。MUST 保留 OpenSpec 必需的英文结构标题、SHALL/MUST 关键字、文件名、路径及代码标识符。
+产物指令统一 MUST 合入简体中文正文约束，优先于项目语言要求。
 
-内置语言约束 MUST 与项目原有有效上下文合并，不覆盖项目的其他约束，不写回配置或改写已有文档。MUST NOT 为此改写 12 项 Skill、原始 docs 目录、初始化默认值或 apply／archive 操作上下文。
-
-#### Scenario: 无语言配置的新旧项目创建文档
-
-- **WHEN** 用户在未配置语言的新项目或已有项目获取任意产物生成指令
-- **THEN** 指令上下文包含内置中文语言约束，适用于 proposal、specs、design、tasks 及自定义 schema 的产物，不要求重做初始化或修改项目配置
-
-#### Scenario: 项目上下文及原生格式保留
-
-- **WHEN** 项目已有有效 context、artifact rules 或自定义 schema
-- **THEN** 产物上下文保留原项目约束并加入内置中文语言要求，原有规则、模板、路径和依赖不变；项目配置文件及已有产物不被改写
-
+#### Scenario: 中文产物
+- **WHEN** 新旧项目请求产物指令（含自定义 schema）
+- **THEN** 正文简中；其他上下文/规则/原生格式不变（英文标题、SHALL/MUST、文件名/路径/标识符）。不重 init，不改配置/旧产物/Skill/原始 docs/init 默认值/apply/archive 上下文。
 
 ### Requirement: 普通 OpenSpec 仅使用本地项目根
 
-普通 OpenSpec MUST 仅使用最近的本地项目根，不从外部 Store 继承或回退。已移除的 Store 入口不得修改或迁移用户数据。
+普通 OpenSpec MUST 只用本地根；禁读 Store 指针/注册表/元数据/全局 `defaultStore`，禁 Git origin 推测或回退 Store。
 
-#### Scenario: 最近本地项目根隔离
-
-- **WHEN** 从项目根或其多级子目录运行普通 OpenSpec 命令
-- **THEN** 选择从当前目录向上最近的含 `openspec/` 的目录（包括当前目录），而非 `openspec/` 本身；嵌套项目不串入相邻项目。
-- **AND** `planningHome`、`changeRoot`、`artifactPaths`、`actionContext` 等有效路径与编辑范围 MUST 基于实际本地项目，不能硬编码为启动目录。
-- **AND** 不读取项目 Store 指针、注册表、Store 元数据或全局 `defaultStore` 路由，不以 Git origin 推测或回退到外部 Store。
-
-#### Scenario: 找不到本地项目根
-
-- **WHEN** 运行普通 OpenSpec 命令，且从当前目录向上找不到任何含 `openspec/` 的目录
-- **THEN** 查询命令按原规则失败，不创建 `openspec/` 或其他项目材料，也不回退到外部 Store。
-- **AND** 允许将当前目录作为隐式根的显式写命令仍遵循各自的授权和目标路径规则，不扩大 Skill 初始化授权。
-
-#### Scenario: 已移除的 Store 入口不写文件
-
-- **WHEN** 调用 `omp openspec store`，或向命令传入 `--store`／`--store-path`
-- **THEN** 按正常未知命令／参数非零退出，不写文件、不提示选择 Store、不忽略参数后继续、不保留兼容别名，也不报告无操作成功；JSON 调用不将人类提示混入结构化 stdout。
-- **AND** 不删除、改写、清理或自动迁移用户已有 Store 仓库、注册表、元数据、全局配置、项目材料、自定义 Skill 或缓存。
+#### Scenario: 本地根
+- **WHEN** 普通 OpenSpec 命令
+- **THEN** 自 cwd 向上（含 cwd）取最近含 `openspec/` 的目录而非 `openspec/` 本身；`planningHome`/`changeRoot`/`artifactPaths`/`actionContext` 等及编辑范围据此。无根：查询失败不写；可隐式用 cwd 的显式写命令遵原授权/目标，Skill init 不扩权。
 
 #### Scenario: 不支持的项目字段无例外
+- **WHEN** 读取项目 `store` 或 Store `references`（含 `init`/空值/无本地根）
+- **THEN** 报不支持，不解析旧值/指针、不读外部 Store/旧状态、不写或继续。
 
-- **WHEN** OpenSpec 命令（包括 `init`）读取到含 `store` 或 Store `references` 字段的项目配置，无论字段值是否为空、是否已有本地 `openspec/`
-- **THEN** MUST 明确报不支持且不写文件，不忽略后继续，不解析旧值或指针、不读取外部 Store 或旧系统状态、不覆盖、迁移或清理用户数据。
+`omp openspec store`,`--store`/`--store-path`: 未知命令/参数非零；无写入/选 Store 提示/忽略继续/别名/空成功；JSON stdout 无人类提示。拒绝不删改/清理/自动迁移 Store 仓库/注册表/元数据/全局配置/项目材料/自定义 Skill/缓存。
 
-#### Scenario: 保留独立的本机目录与诊断能力
-
-- **WHEN** 用户使用 Workset、`context` 或 `doctor`
-- **THEN** Workset 继续提供 create／list／show／remove／open、普通目录成员、排序、保存视图和打开工具，不改变成员目录。`context`、`doctor` 保留本地项目、配置与规划目录职责，不提供 Store 健康检查、跨 Store 引用或远程拉取指引。
-- **AND** 不改变普通 OMP、Superpowers 或 JCH 的能力及权限边界。
+Workset 不修改成员目录；`context`／`doctor` 仅查本地项目、配置和规划目录，不查 Store、不引导远端拉取。
 
 ### Requirement: 包内 Superpowers 脚本执行入口
 
-OMP MUST 通过 `omp superpowers <relative-script> [args...]` 提供包内技能脚本入口，只运行随包交付的脚本，不执行工作区任意脚本。
+`omp superpowers <relative-script> [args...]` MUST 透传参数/stdout/stderr/退出码。
 
-#### Scenario: 只运行包内清单内脚本
+#### Scenario: 脚本清单
+- **WHEN** 指定脚本
+- **THEN** 仅运行清单内 `skills/` 相对路径，否则拒绝报“不是包内技能脚本”。
 
-- **WHEN** 用户运行 `omp superpowers <relative-script> [args...]`
-- **THEN** 只接受随包脚本清单中存在且位于 `skills/` 下的相对路径；其他路径 MUST 报“不是包内技能脚本”并拒绝执行
-- **AND** 脚本参数原样透传
-
-#### Scenario: 运行环境与外部工具
-
-- **WHEN** 运行包内 JavaScript 或 shell 脚本
-- **THEN** JavaScript MUST 由 OMP 内嵌的 Bun 执行，不依赖外部 Node；shell 脚本 MUST 要求 Bash 与 POSIX 工具，Unix 使用可用的 `bash`，Windows 使用 Git for Windows 的 Bash，WSL 的 `bash` 不适用；缺少 Bash MUST 报固定错误并失败
-- **AND** MUST 在 PATH 前置包内运行时目录（Windows 另加所用 Bash 及其 POSIX 工具目录），并设置 `BRAINSTORM_DIR` 指向工作区下的 `.superpowers/brainstorm`
-- **AND** Graphviz 等外部工具由脚本自行解析，其真实退出状态随脚本透传，不预先替换或伪造
-
-#### Scenario: 缺参与帮助的退出码
-
-- **WHEN** 未提供脚本参数，或提供 `-h`／`--help`
-- **THEN** 缺参 MUST 把用法写入 stderr 并以退出码 2 结束；`-h`／`--help` MUST 把用法写入 stdout 并以退出码 0 结束
-- **AND** 脚本的 stdout、stderr 与退出码 MUST 原样透传；入口自身异常（例如 Bash 缺失或脚本不存在）MUST 写入 stderr 并以退出码 1 结束
-
-#### Scenario: 中断转为脚本中止
-
-- **WHEN** 脚本执行期间收到 SIGINT 或 SIGTERM
-- **THEN** MUST 转为中止信号并等待脚本结束，再按实际结果退出；不得遗留子进程，也不得把中断报成成功
-
+|条件|MUST|
+|---|---|
+|JS|内嵌 Bun, 不依赖外部 Node|
+|shell|Bash+POSIX 工具；Unix: 可用 `bash`；Windows: Git for Windows Bash（非 WSL）；缺 Bash 固定报错|
+|环境|PATH 前置包内运行时目录（Windows 加所用 Bash/POSIX 工具目录）；`BRAINSTORM_DIR`=工作区 `.superpowers/brainstorm`；Graphviz 等由脚本解析，透传真实状态、不预替换/伪造|
+|入口|缺参: 用法 stderr/2; `-h`/`--help`: 用法 stdout/0; 入口异常: stderr/1|
+|SIGINT/SIGTERM|转中止信号，等脚本结束按实退出，不留子进程或报成功|
 
 ### Requirement: Markdown 需求权威探测
 
-普通 OMP 沿用既有 Markdown 文档时 MUST 明确资料来源。
+OMP 独立文档 MUST 明确 Markdown 来源。
 
-#### Scenario: 普通 OMP 资料探测
-- **WHEN** 普通 OMP 独立文档流程沿用旧 Markdown 目录探测
-- **THEN** 保留原候选目录、歧义报错、真实读取失败和递归文件版本校验，不自动迁移或改写原文
+#### Scenario: 资料探测
+- **WHEN** 探测 Markdown 目录
+- **THEN** 候选目录/歧义报错/读失败/递归文件版本校验照旧；不自动迁改。
 
 ### Requirement: 普通 OMP 原生实施能力保持独立
 
-普通 OMP 的实施、验证、审查、原生子代理和包内资源授权 MUST 保持既有行为。
-
-#### Scenario: 原生入口实施需求
-- **WHEN** 开发者在普通 OMP 或 TUI 中实施需求
-- **THEN** 沿用各入口的原生权限、技能、任务及验证规则
+OMP/TUI 实施 MUST 按原生配置/权限给能力，无固定精简名单。
 
 #### Scenario: 原生实施会话能力和技能授权存续
-- **WHEN** 已获授权的原生实施会话或其递归实施后代工作、保活续聊或恢复
-- **THEN** 沿用原生配置、可用性和权限提供工具及已配置能力，包括可用的 `web_search`、`eval`、LSP、MCP、扩展和自定义工具，不以固定精简名单裁剪；`wait` 等待真实子任务，结束前结清自有递归工作
-- **AND** 原生明确授予的技能读取授权持续到会话释放，不因首次任务返回而提前撤销；不得绕过用户批准、项目规则、报告后只读或停止边界
+- **WHEN** 获权实施会话/递归后代工作、保活或恢复
+- **THEN** `wait` 等真实子任务，结束前结清自有递归工作；原生读技能授权至会话释放、非首次返回；不绕用户批准/项目规则/报告后只读/停止。
 
 ### Requirement: 内置执行代理具备必要原生能力
 
-内置 `spec-executor` MUST 保留实施已批准计划、计划内验证、独立审查及等待所需的原生能力，遵守自身原生权限与获批范围。
+内置 `spec-executor` MUST 原生委派，不依赖专有 Plan 验证协议；只读/受限代理不扩权。
 
-#### Scenario: 原生委派实施和独立审查
-- **WHEN** 普通 OMP 使用 `spec-executor` 实施获批计划且未达到原生派生限制
-- **THEN** 其工具 MUST 包含原生 task，可委派实施、获授权的计划内命令验证与独立 reviewer；适用异步工作可使用原生 wait 等待真实结果。命令验证以获批命令和工作目录为限，由执行它的原生任务遵循现有权限，不依赖专有 Plan 验证协议
-- **AND** 缺少权限或必需能力时报告阻塞，不伪报实施、验证或审查完成；其他只读或显式受限代理保持自身边界
+#### Scenario: 委派审查
+- **WHEN** 实施获批计划、未达原生派生限制
+- **THEN** `task` 委派实施、获权计划内验证、独立 `reviewer`；适用异步可 `wait`。验证限本身权限/获批命令/cwd；缺权限/必需能力报阻塞，不伪报完成。
+
+### Requirement: Codex 用户技能
+
+`skills.enableCodexUser` MUST default `true`.
+
+#### Scenario: Unset
+- **WHEN** skill discovery enabled, option unset
+- **THEN** discover `~/.codex/skills/*/SKILL.md` regardless of extra dirs or settings initialization.
+
+### Requirement: 团队共享技能目录
+
+Runtime discovery, manager load and both refreshes MUST add existing dir from nonempty `OMP_SKILLS_DIR`; otherwise unchanged. No config file; independent of `OMP_OFFLINE`.
+
+No download/copy/sync, edits to shared `SKILL.md` or other NFS sources, new shared writes, cross-session cache or dir mirror.
+
+#### Scenario: Shared catalog discovery and refresh
+- **WHEN** runtime or manager loads or refreshes an existing `OMP_SKILLS_DIR`
+- **THEN** apply the rules below. Reuse refresh invalidation on add/delete/body edits.
+
+| Scope | Shared rules |
+|---|---|
+| Both | Common catalog; one level: `<dir>/<skill>/SKILL.md`; apply existing source rules. |
+| Manager | Retain disabled skills/sources and diagnostics. Show `Shared`, bare and retained namespaced entries; use host session `skills`, not last global binding. |
+| Runtime | Skip disabled sources before scan, omit their warnings; disabled skills cannot run. |
+| `/extensions` | Existing config toggles; UI can reenable. Async refresh runtime list, completions, readable content. |
+| All OS | Direct async regular-file checks/reads; no sync per-skill `SKILL.md` probe. Parallel shared/custom/other scans; merge by priority, not finish order. |
+| Linux offline | Per-load dedup expanded absolute dirs; shared wins. |
+
+#### Scenario: Collision
+- **WHEN** shared name matches user/project/`skills.customDirectories`
+- **THEN** shared bare name; distinct lower-priority content keeps existing namespace.
+
+### Requirement: Managed Skills 根目录符号链接边界
+
+Managed-skills MUST reject symlink roots for management; plain/absent roots and approved shared discovery unaffected.
+
+#### Scenario: Symlink
+- **WHEN** management targets symlink root, even valid directory link
+- **THEN** writes/updates/deletes explicitly fail without following link.
+
+### Requirement: 1. 目标与命令
+
+OMP MUST 仅注册 `/goal-autopilot`、无旧别名；`/goal` 默认非本模式，不强开自动续跑。
+#### Scenario: 1. 目标与命令的核心行为
+- **WHEN** TUI 调用 `/goal-autopilot`
+- **THEN** 提供注册/目录/补全；`[set] <目标正文>` 创建/替换 Orchestrate 无人值守目标（夜间可用、状态可见）；子命令 `show/pause/resume/drop`、`budget <N|off>`。
+
+`/goal-autopilot` 直投所属会话的原生 Goal 控制器（含 busy），不强排 fork 队列，不在出队／显式提升时重解析，不发 slash 原文给模型。正文遵守原生 prompt／steering 准入、`streamingBehavior` 与 `inputId`／`sourceCommand` 归属。
+
+### Requirement: 2. 模式归属与持久化
+
+OMP MUST 用现有 Goal 状态存标记，无新存储/管理器/调度。
+#### Scenario: 2. 模式归属与持久化的核心行为
+- **WHEN** 会话/分支切换、重载或恢复
+- **THEN** 仅读原生分支有效路径最新状态（含暂停、删除、预算）；无状态无目标，无标记按普通 Goal。
+
+| 事件 | 结果 |
+|---|---|
+| 创建/替换成功 | 仅 `/goal-autopilot` 置标记 |
+| 管理/同目标更新 | 不改模式 |
+| 暂停/完成/删除/退出 | 停建通知；暂停停受限工作；删除连同标记 |
+| `resume` | 不重建通知，不仅凭标记启动；预算耗尽仍停无人值守答复/通知/自动工作，调至未耗尽才可恢复 |
+| 失败/取消 | 不改模式；首次启用工具后取消宿主对话：还原实际工具集、原目标/模式，不建目标/通知；启用失败回滚不变 |
+
+### Requirement: 3. 历史消息与重构边界
+
+OMP MUST 仅按表提交用户级持久通知：所存目标原文（全文含空白）+ §4 + §5。无 Provider 临拼/独立视图，不用系统消息/权威 XML 升权。
+#### Scenario: 3. 历史消息与重构边界的核心行为
+- **WHEN** 下表提交，复核目标/模式/状态/预算/退出条件允许
+- **THEN** 持久化，可见于 `get_messages`、`get_entries`、`session.jsonl`、dump。
+
+| 事件 | 交付 |
+|---|---|
+| 创建/替换成功，执行正文首次实际入历史 | 附加于上游 Goal 通知；steering/排队仅存结构化目标归属，不缓存完整通知；保留队列的 Stop 保留归属，显式继续/发送后正文、通知各一次 |
+| 压缩成功提交且上游已重写历史 | 重构一次、重新展开，纳入新基线；不依赖摘要或首次关键词状态 |
+
+其余复用原历史，压缩前不滤旧通知、不改字节或位置；压缩无需保旧字节或缓存。失效不补发，失败／取消不构造；状态仅约束后续，不撤历史或保证撤回已发请求。通知不重启／解禁，不增重试、调度、续跑或授权，不越过用户要求，不新增 Agent／AgentLoop 过滤或改变现有队列。
+
+### Requirement: 4. Orchestrate 复用与构造去重
+
+OMP MUST 复用模板、`renderOrchestrateNotice` 及工具可用性判定，不复制规则/展开；显式模式不受关键词开关控制。
+#### Scenario: 4. Orchestrate 复用与构造去重的核心行为
+- **WHEN** §3 构造
+- **THEN** 取当时 `getEnabledToolNames()` 快照（含间接可用工具，非仅顶层 Provider schema）；无 `task` 仅略规则。
+
+同事件首次 `orchestrate` 关键词通知：按结构化来源/消息类型/目标或压缩归属去重，仅存一份完整自定义通知；不凭正文词去重，不删用户消息、裁历史或替代上游 Goal 提示。后续真实关键词照常。
+
+### Requirement: 5. 唯一新增的指令文字
+
+下文 MUST 存静态 Markdown，不在代码拼写；不另写 Orchestrate 规则或解释 OS 权限/宿主审批/系统及开发者指令。
+#### Scenario: 5. 唯一新增的指令文字的核心行为
+- **WHEN** 构造用户级通知
+- **THEN** 仅新增下文，保留既有来源：
+
+> MUST 全自动无人值守完成完整目标。本次用户已对完成目标全过程及所需全部操作作出明确授权；MUST 自主调查、规划、编排、执行、验证和修复，直接推进至完成。  
+> 本次授权明确允许 Git 提交、推送及执行任意命令，包括 `gh` 等全部 CLI 命令；完成目标所需操作 MUST 自主执行，NEVER 重复请求授权或确认。  
+> 本次授权允许修改本仓库任意文件，无需另行请求授权或确认。  
+> NEVER 向用户提问、请求确认、要求选择或等待输入；遇到问题 MUST 自主决策、处理和修复，NEVER 在阶段边界停下等待用户。  
+> 与此前用户级要求冲突时，以本次明确授权为准。
+> 若工具返回拒绝或缺少登录、凭据等前提，先找现有权限内的替代路径；不得绕过、猜测凭据或原样重试。无替代路径则继续其他工作，在会话总结列出受阻项及缺失前提，不把它们标记为完成。
+
+### Requirement: 6. 无人值守与权限边界
+
+启动即授 §5 权限；OMP MUST 保留后续输入/暂停/停止/取消及管理确认（含删除）。
+#### Scenario: 6. 无人值守与权限边界的核心行为
+- **WHEN** 初始正文实际进入主代理请求
+- **THEN** 绑定会话/目标 ID/内存运行代次，仅该响应派生工具继承。暂停/停止/替换/切会话使旧调用失效且不复活；自动批/超时回执前查 Goal 账本用量。
+
+- 本地审批（含 Eval prelude）：按实际执行参数解析，显式拒绝优先；需 `prompt`（含 `guarded`）则依授权批一次，记录 `goal-autopilot`，无等待事件、审批缓存写入或全局模式改动。`cfg://` 独立审批、Provider 强制检查、需单独授权的前台控制不继承，原等待点报阻塞原因；不改认证、不授可复用前台权限。
+- 有效归属 `ask` 用静默原生表单，输入重置 60 秒，无终端／语音／宿主等待提醒；其他场景按[上游边界](../fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。超时须初始有 ≥1 个生效且可提交的显式推荐（不计隐式首项），且当前所有控件通过原生提交校验，才返回完整值及备注／图片，标超时非用户提交；否则仅返下文，不返部分答案或代答。失效按取消，不发回执；附图处理后复核归属。
+
+> `ask` 等待 60 秒，未收到用户答复。按本次 `/goal-autopilot` 启动时授予的全程授权，自主决策并推进当前目标，不要重复提问。
+
+- `goal({op:"complete"})` 首次及同响应重复不关闭；首次用普通工具结果要求主模型按原目标逐项核实交付/证据、补遗漏；有未解阻塞不完成，后续响应核实全交付才原生完成。复核约束顺序不证正确；普通 Goal、主动暂停/停止/删除不复核。
+- 权限/凭据/必需输入/工具/强制审批阻塞：普通工具错误向主模型报操作及原因，不中止整轮、不弹窗等待；按 §5 处理并报告受阻证据；不加重试。
+- 本模式执行中：Ctrl+Q/Ctrl+Enter 用户 follow-up 入原队列；完整工具批次结束、目标仍启用且执行中，按序原生提升下一条用户消息至后续请求；不中断工具、不等整循环/结题、不提升 Agent handoff 或自动提醒。其他状态/会话无改动。
+- 子代理/压缩模型/advisor 等不新建完整通知，不过滤主模型持久历史；子任务可获所需目标信息。不保证模型不提问、目标必成或续跑不停。
+
+### Requirement: 7. 验收条件
+
+OMP MUST 用局部自动化和真实 CLI/TUI 发起、执行、管理；源码/字符串/mock 不足。
+#### Scenario: 7. 验收条件的核心行为
+- **WHEN** 终端/桌面验收
+- **THEN** 覆盖 §1–6；查持久历史、最终 Provider 输入、协议；两端查完整原文含空白、用户层级、§5。
+
+| 场景 | 证据 |
+|---|---|
+| 严格前缀 | 同一有效目标无压缩，≥10 工具往返、≥11 成功主调用；逐次最终输入严格以前轮完整输入+响应为前缀，仅追加正常消息/工具结果；通知与历史一致（含续轮、重试、获准续跑） |
+| 压缩 | ≥2 次成功提交，摘要均无完整目标或编排；另测失败/取消/未提交/no-op，以及压缩中替换/切换、暂停/删除/完成/退出/预算变化 |
+| 构造 | 首次及重构：`task` 直用/经 Bash 工具命令/不可用；工具变化、关键词开关/去重/后续真实关键词 |
+| Codex WebSocket | 实际 CLI 接本地记录服务，捕获 `response.create`、`previous_response_id`、delta；可复用响应 ID，delta 重建满足前缀，不因通知退回全量；对照上游 `/goal` 控制/消息。仅 HTTP（含禁 WebSocket fixture）、SDK 断言或快照不足 |
+| 命令与模式 | 两命令 idle/busy/Stop held/手动维护；普通 Goal 无自定义通知；无目标/有普通目标各测工具启用后取消、启用失败回滚 |
+| 恢复及交付 | §3 四处查首发/重构；同 journal 兄弟分支及跨会话切换/重载/冷恢复（两模式、暂停、删除、限预算、无目标）；steering/排队正文未入史时测保留 Stop 后继续/发送、未选仍 held、历史及最终输入均交付一次 |
+| follow-up | 局部回归查状态及仅一次；真实 TUI 查两按键/队列展示/请求顺序/反馈改变工具结果；对照普通 Goal 轮末交权，均不打断批次 |
+| 审批/表单/结题 | 真实 TUI 查 §6；两类超时均续行，对照普通 Goal；首调/同响应重复时目标活跃、复核工具可用 |
+
+报告分实现/通过/失败/未验证；分别列前缀及协议、Provider cache telemetry、模型目录缓存成本、实际账单；提示构造/模型遵循分报。协议不证命中/遵循/质量，估算非账单；不承诺省费。

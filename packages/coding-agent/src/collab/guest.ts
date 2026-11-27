@@ -495,9 +495,16 @@ export class CollabGuestLink {
 		await this.#restoreLocalSession();
 	}
 
-	sendPrompt(text: string, images?: ImageContent[]): void {
-		if (this.#rejectReadOnly()) return;
-		this.#socket?.send({ t: "prompt", text, images: images && images.length > 0 ? images : undefined });
+	sendPrompt(text: string, images?: ImageContent[], mode?: "followUp"): boolean {
+		if (this.#rejectReadOnly()) return false;
+		return (
+			this.#socket?.send({
+				t: "prompt",
+				text,
+				images: images && images.length > 0 ? images : undefined,
+				followUp: mode === "followUp" ? true : undefined,
+			}) ?? false
+		);
 	}
 
 	sendAbort(): void {
@@ -596,6 +603,7 @@ export class CollabGuestLink {
 		// in-flight anchors) so a pending pre-boundary snapshot cannot flush
 		// into the replacement transcript.
 		this.#ctx.eventController.resetTranscriptAnchors();
+		this.#ctx.session.resetReplicatedViewState(pending.state.isStreaming);
 		this.#clearTransientUi();
 		this.#clearAgentMirror();
 		this.state = pending.state;
@@ -705,7 +713,7 @@ export class CollabGuestLink {
 				break;
 			}
 			case "event":
-				// Hosts send every stopped loop as a flagged `agent_end` (see loop-end-wire.ts).
+				// The rich event survives JSON as sent by the host; only loop ends need decoding.
 				this.#applyEvent(fromWireEvent(frame.event));
 				break;
 			case "state": {
@@ -808,6 +816,7 @@ export class CollabGuestLink {
 	 * cannot reorder (message_update → message_end → agent_end).
 	 */
 	#dispatchEvent(event: LocalAgentSessionEvent): void {
+		this.#ctx.session.applyReplicatedViewEvent(event);
 		this.#ctx.eventController.dispatchSessionEvent(event).catch(err => {
 			logger.warn("collab guest event dispatch failed", { type: event.type, error: String(err) });
 		});
@@ -981,7 +990,7 @@ export class CollabGuestLink {
 		this.#clearUiRequests();
 		// The view's transient rows, streaming state and pending tools go; the compaction queue
 		// belonged to the session being left, so it is dropped rather than handed to the editor.
-		this.#ctx.clearTransientSessionUi({ viewOnly: true });
+		this.#ctx.clearTransientSessionUi({ viewOnly: true, clearCompactToolHistory: true });
 		this.#ctx.compactionQueuedMessages = [];
 		this.#ctx.updatePendingMessagesDisplay();
 	}
@@ -1034,6 +1043,7 @@ export class CollabGuestLink {
 		this.#flushPendingTranscripts();
 		// A pending coalesced mirror message_update must not flush after leave.
 		this.#ctx.eventController.resetTranscriptAnchors();
+		this.#ctx.session.resetReplicatedViewState();
 		this.#clearAgentMirror();
 		this.#ctx.syncRunningSubagentBadge();
 		this.#ctx.resetObserverRegistry();

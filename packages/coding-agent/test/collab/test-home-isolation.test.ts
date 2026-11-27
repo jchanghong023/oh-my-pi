@@ -94,6 +94,7 @@ function makeGuestContext(onReplicaSwitch: (replicaPath: string) => void): Inter
 				return true;
 			},
 			newSession: () => Promise.resolve(),
+			resetReplicatedViewState: () => {},
 			messages: [],
 			agent: {
 				state: { model: undefined },

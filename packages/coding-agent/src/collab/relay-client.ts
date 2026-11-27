@@ -109,8 +109,7 @@ export interface CollabSocketOptions {
 export class CollabSocket {
 	/** Fires after every successful (re)connect. */
 	onOpen?: () => void;
-	/** Native transport supplies connection activity; omitted metadata keeps ordinary callback semantics. */
-	onFrame?: (frame: CollabFrame, fromPeer: number, connectionActive?: boolean) => void;
+	onFrame?: (frame: CollabFrame, fromPeer: number) => void;
 	onControl?: (msg: RelayControlMessage) => void;
 	/** Fires on each close; `willReconnect` distinguishes retries from terminal shutdown. */
 	onClose?: (reason: string, willReconnect: boolean) => void;
@@ -850,7 +849,7 @@ export class CollabSocket {
 					this.#retryMissingRoom = false;
 					this.#attempt = 0;
 				}
-				this.onFrame?.(frame, envelope.peerId, this.#ws === ws && this.#isWritable(ws));
+				this.onFrame?.(frame, envelope.peerId);
 			})
 			.catch((err: unknown) => {
 				logger.debug("collab: frame handler failed", { error: String(err) });

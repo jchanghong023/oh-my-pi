@@ -8,18 +8,18 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 ### Package Structure
 
-| Package                 | Description                                                                             |
-| ----------------------- | --------------------------------------------------------------------------------------- |
-| `packages/ai`           | Multi-provider LLM client with streaming support                                        |
-| `packages/catalog`      | Model catalog: bundled models.json, provider descriptors, model identity/classification |
-| `packages/agent`        | Agent runtime with tool calling and state management                                    |
-| `packages/coding-agent` | Main CLI application (primary focus)                                                    |
-| `packages/tui`          | Reactive JSX UI library with terminal-row and native TSP renderers, terminal driver, text, and theme |
-| `packages/natives`      | Bindings for native text/image/grep operations                                          |
-| `packages/stats`        | Local observability dashboard (`omp stats`)                                             |
-| `packages/omptype`      | ArkType-compatible schema validation with a lazy JIT runtime                            |
-| `packages/utils`        | Shared utilities (logger, streams, temp files)                                          |
-| `crates/natives`        | Rust crate `omp-natives` for performance-critical operations and N-API bindings         |
+|Package|Description|
+|---|---|
+|`packages/ai`|Multi-provider LLM client with streaming support|
+|`packages/catalog`|Model catalog: bundled models.json, provider descriptors, model identity/classification|
+|`packages/agent`|Agent runtime with tool calling and state management|
+|`packages/coding-agent`|Main CLI application (primary focus)|
+|`packages/tui`|UI library: reactive JSX nodes, terminal and native (TSP) renderers, terminal driver, text, theme|
+|`packages/natives`|Bindings for native text/image/grep operations|
+|`packages/stats`|Local observability dashboard (`omp stats`)|
+|`packages/omptype`|ArkType-compatible schema validation with a lazy JIT runtime|
+|`packages/utils`|Shared utilities (logger, streams, temp files)|
+|`crates/natives`|Rust crate for performance-critical text/grep ops|
 
 **Catalog import convention**: code in this repo imports catalog _values_ (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort _types_ its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
@@ -55,10 +55,8 @@ When authorized to create or edit a contributor-submitted PR, follow the checkli
   import { workerHostEntry } from "@oh-my-pi/pi-utils";
   const hostEntry = workerHostEntry();
   const worker = hostEntry
-    ? new Worker(hostEntry, { type: "module", argv: ["__omp_worker_<name>"] })
-    : new Worker(new URL("./<worker>.ts", import.meta.url).href, {
-        type: "module",
-      });
+  	? new Worker(hostEntry, { type: "module", argv: ["__omp_worker_<name>"] })
+  	: new Worker(new URL("./<worker>.ts", import.meta.url).href, { type: "module" });
   ```
   When the process was started from the omp CLI — source `cli.ts`, npm-bundle `dist/cli.js`, or compiled binary — `workerHostEntry()` is `Bun.main` and the worker re-enters the single entry module, so no per-worker `--compile` entrypoints or bundle entries exist. Outside a CLI host (`bun test`, SDK embedding, standalone `omp-stats`) it returns `null` and the direct-module fallback loads the worker source. New worker kinds MUST add their selector to the dispatch table in `cli.ts` and keep the fallback branch.
   History: `with { type: "file" }` only copied the entry as a raw asset (workers crashed silently in compiled binaries — issues #1011, #1027), and the later literal-path + extra-entrypoint pattern required keeping spawn literals and two build scripts in sync (issue #1150). The smoke probe below is the live validation of this contract.
@@ -78,20 +76,20 @@ Use Bun APIs where they provide a cleaner alternative; fall back to `node:*` onl
 
 ### Quick reference
 
-| Operation       | Use                                       | Not                                |
-| --------------- | ----------------------------------------- | ---------------------------------- |
-| File read/write | `Bun.file()`, `Bun.write()`               | `readFileSync`, `writeFileSync`    |
-| Spawn process   | `` $`cmd` ``, `Bun.spawn()`               | `child_process`                    |
-| Sleep           | `Bun.sleep(ms)`                           | `setTimeout` promise               |
-| Binary lookup   | `$which("git")` from `@oh-my-pi/pi-utils` | `spawnSync(["which", "git"])`      |
-| HTTP server     | `Bun.serve()`                             | `http.createServer()`              |
-| SQLite          | `bun:sqlite`                              | `better-sqlite3`                   |
-| Hashing         | `Bun.hash()`, `Bun.password.*`, WebCrypto | `node:crypto`                      |
-| Path resolution | `import.meta.dir`, `import.meta.path`     | `fileURLToPath` dance              |
-| JSON5           | `Bun.JSON5.parse()` / `.stringify()`      | `json5` package                    |
-| JSONL           | `Bun.JSONL.parse()` / `.parseChunk()`     | `text.split("\n").map(JSON.parse)` |
-| String width    | `Bun.stringWidth()`                       | `get-east-asian-width`, custom     |
-| Text wrapping   | `Bun.wrapAnsi()`                          | custom ANSI-aware wrappers         |
+|Operation|Use|Not|
+|---|---|---|
+|File read/write|`Bun.file()`, `Bun.write()`|`readFileSync`, `writeFileSync`|
+|Spawn process|`` $`cmd` ``|`child_process`|
+|Sleep|`Bun.sleep(ms)`|`setTimeout` promise|
+|Binary lookup|`$which("git")` from `@oh-my-pi/pi-utils`|`spawnSync(["which", "git"])`|
+|HTTP server|`Bun.serve()`|`http.createServer()`|
+|SQLite|`bun:sqlite`|`better-sqlite3`|
+|Hashing|`Bun.hash()`, `Bun.password.*`, WebCrypto|`node:crypto`|
+|Path resolution|`import.meta.dir`, `import.meta.path`|`fileURLToPath` dance|
+|JSON5|`Bun.JSON5.parse()` / `.stringify()`|`json5` package|
+|JSONL|`Bun.JSONL.parse()` / `.parseChunk()`|`text.split("\n").map(JSON.parse)`|
+|String width|`Bun.stringWidth()`|`get-east-asian-width`, custom|
+|Text wrapping|`Bun.wrapAnsi()`|custom ANSI-aware wrappers|
 
 ### Process execution
 
@@ -102,7 +100,7 @@ import { $ } from "bun";
 
 const result = await $`git status`.cwd(dir).quiet().nothrow();
 if (result.exitCode === 0) {
-  const text = result.text();
+	const text = result.text();
 }
 
 $`do-stuff ${tmpFile}`.quiet().nothrow(); // fire and forget
@@ -152,10 +150,10 @@ Use `node:fs/promises` for directory ops (`fs.mkdir`, `fs.rm`, `fs.readdir`) —
   ```typescript
   import { isEnoent } from "@oh-my-pi/pi-utils";
   try {
-    return await Bun.file(path).json();
+  	return await Bun.file(path).json();
   } catch (err) {
-    if (isEnoent(err)) return null;
-    throw err;
+  	if (isEnoent(err)) return null;
+  	throw err;
   }
   ```
 - Multiple `Bun.file(path)` handles for the same path (including across `checkX`/`loadX` helpers).
@@ -170,7 +168,7 @@ Prefer centralized helpers:
 import { readStream, readLines } from "./utils/stream";
 const text = await readStream(child.stdout);
 for await (const line of readLines(stream)) {
-  /* ... */
+	/* ... */
 }
 ```
 
@@ -263,7 +261,7 @@ For the bash tool specifically:
 - MUST run requested project commands with their existing defaults. NEVER append flags or positional arguments unless the user explicitly requests those arguments.
 - Unless the user explicitly requests WSL for the current task, agents and subagents MUST run tests natively on the current host and NEVER invoke WSL or a WSL-backed runner.
 - Run only affected existing tests unless the user requests broader coverage. NEVER add tests for a bug fix unless the user explicitly requests them. On Windows, skip only tests with a documented platform restriction.
-- Prefer explicit, scoped tests, such as `bun test ./packages/<package>/test/<file>.test.ts`. For broader local validation, use `bun run check` (static checks), `bun run test:ts` (TypeScript suites), `bun run test` (TypeScript and the upstream Rust task), or the applicable `bun run ci:test:*` entrypoint. Run broad suites only when explicitly authorized for this task; see [verification requirements](openspec/specs/fork-verification-gates/spec.md).
+- Prefer explicit, scoped tests, such as `bun test ./packages/<package>/test/<file>.test.ts`. For broader local validation, use `bun run check` (static checks), `bun run test:ts` (TypeScript suites), `bun run test` (TypeScript and the upstream Rust task), or the applicable `bun run ci:test:*` entrypoint. Run broad suites only when explicitly authorized for this task; see [verification requirements](openspec/specs/fork-maintenance/spec.md#requirement-使用上游验证入口).
 - NEVER commit unless asked.
 - Never use `tsc`/`npx tsc` for monorepo typechecking; use `bun run check:ts` or the package's `check:types` script.
 - Use `bun run test:rs` for Rust workspace tests (Nextest and Cargo doctests). The upstream Rust task may skip when Git shows no Rust-affecting changes; a skip is not a pass. Do not run `cargo test` directly.
@@ -273,13 +271,13 @@ For the bash tool specifically:
 
 Profiles live in the root `Cargo.toml`; `.cargo/config.toml` carries the settings Cargo.toml cannot express. Both are committed, so no local `~/.cargo/config.toml` is required.
 
-| Profile     | Use                                                                                  |
-| ----------- | ------------------------------------------------------------------------------------ |
-| `dev`       | Default. Line tables for our crates, no debuginfo for deps, deps at `opt-level = 2`. |
-| `release`   | Shipping build: fat LTO, 1 codegen unit, stripped.                                   |
-| `local`     | Fast local release iteration: no LTO, 16 codegen units, incremental.                 |
-| `profiling` | `release` codegen with symbols kept, for `perf`/`samply`/Instruments.                |
-| `ci`        | Thin LTO, no debuginfo, stripped.                                                    |
+|Profile|Use|
+|---|---|
+|`dev`|Default. Line tables for our crates, no debuginfo for deps, deps at `opt-level = 2`.|
+|`release`|Shipping build: fat LTO, 1 codegen unit, stripped.|
+|`local`|Fast local release iteration: no LTO, 16 codegen units, incremental.|
+|`profiling`|`release` codegen with symbols kept, for `perf`/`samply`/`Instruments`.|
+|`ci`|Thin LTO, no debuginfo, stripped.|
 
 **Never set `split-debuginfo = "off"` on a profile that has debuginfo.** On Mach-O the linker never merges DWARF into the executable — it writes a debug map (`N_OSO`) pointing at the `.o` files, and `"unpacked"` is what keeps those files. With `"off"` every backtrace frame in our own crates silently loses `file:line`; the `panicked at foo.rs:3` header still prints (that is `#[track_caller]`, not debuginfo), which makes the loss easy to miss. `ci` may use `"off"` only because it sets `debug = false`.
 
@@ -352,26 +350,14 @@ Fork releases require explicit user authorization and use the manual CI workflow
 
 ## Fork Requirements and Additional Runbooks
 
-- [已批准需求](openspec/specs/)是 fork 的权威需求目录；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-product-scope/spec.md)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证要求](openspec/specs/fork-verification-gates/spec.md)和[上游基线](openspec/specs/fork-upstream-baseline/spec.md)分别维护相关约束；适用的 fork 约束优先于上游通用约定。
-- 每次功能性改动都 MUST 核对[内网快速指南](docs-zh-CN/quick-start-intranet.md)，在同一变更中更新受影响的现有说明，使其与实际代码一致。指南面向用户快速上手，不要求覆盖所有功能，不要求更新提交数和上游 PR数；新增内容只写上手所需的用法与注意事项，完整需求以 `openspec/specs/` 为准。
-- `ask` 沿用上游 HTML 表单及宿主协议，不保留 `questions[]` 兼容层；活跃 `/goal-autopilot` 的静默超时例外见 [上游继承边界](openspec/specs/fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。
-- OpenSpec 2.0 随 OMP 内置全部 12 项 Skill；任意目录原生发现／补全，使用 `/skill:<name>` 调用及 `skill://<name>` 按需读取，MUST 保留项目／用户同名覆盖机制及 Superpowers／JCH 原有规则。所有执行入口 MUST 使用 `omp openspec ...`，NEVER 要求独立安装 OpenSpec／Node。
-- `omp openspec init` MUST 只初始化项目目录与配置，默认 `spec-driven`；未初始化项目 MUST 先取得显式初始化授权。NEVER 安装、更新或清理用户 Skill、其他 Agent 配置或旧命令；资源仅随 OMP 升级。CLI `update` 与 `opsx` 文件命令已删除，`openspec-update-change` 是保留的变更材料 Skill。
-- 旧 `mini`／`omp-spec` 自定义 schema MUST 由用户显式迁移，NEVER 恢复包内别名或私有 bridge。缺少 `design.md`／`tasks.md` MUST 如实记录待完成，NEVER 仅改 schema 名称宣称完成；历史归档不批量改写。
-- [个人命令](openspec/specs/personal-commands/spec.md)维护 fork 内置斜杠命令及其行为边界。
-- 原生 TUI `/workspace` 是独立持久化的工作区写入提醒，可与 Plan 共存；不是沙箱或 `approvalMode`，不改变工具、模型或审批。状态与范围逻辑位于 `packages/coding-agent/src/workspace-mode.ts`，命令位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；权威边界见[个人命令的工作区提醒需求](openspec/specs/personal-commands/spec.md#requirement-原生-workspace-工作区写入提醒)。
-- Firefox 浏览器测试 MUST 使用 Selenium＋geckodriver 驱动本机真实 Firefox，并使用隔离临时 profile；NEVER 以 Chromium、兼容模式或自写 Marionette 驱动替代。记录实际浏览器版本与验证范围，不自动安装浏览器／驱动，不修改个人浏览器配置。
-- 原生 TUI `/sketch`：`packages/coding-agent/src/sketch/` 及 `packages/coding-agent/src/slash-commands/builtin-sketch.ts`；资源静态内嵌，以 Firefox 128 原生能力为基线，不再兼容 52。画布工作区铺满窗口，支持缩放和平移，视野操作不改变完整 PNG 附件尺寸；本机验证不等于公司实机验证。
-- `OMP_OFFLINE` 标记公司内部网络环境：CentOS 7、使用 NFS、有 `/dev/shm`、无法连接互联网；可用已配置的内网服务。NEVER 把环境标记当作宿主探测，或扩大现有工具禁用范围、URL 拒绝与审批规则。
-- 公司 offline 内网 Git 平台经用户 2026-11-12 实测支持查询／创建 PR／MR，且克隆→改代码→push→建 MR→放弃→删分支链路已跑通。平台支持这些操作不意味着获准自动编码、合并或清理分支。
-- offline 的 `/sketch` 不自动启动浏览器；显示完整地址供手动打开，保留 Linux offline 地址复制。非 offline 与普通链接／文件打开沿用原行为，详见[运行约定](openspec/specs/fork-runtime/spec.md)。
-- Developer Test Agent 内置资源位于 `packages/coding-agent/src/extensibility/plugins/bundled/developer-test-agent/`；其命令和技能使用 OMP 原生接口，业务流程边界见[个人命令](openspec/specs/personal-commands/spec.md)。
-- [OpenWiki](openspec/specs/openwiki/spec.md) 通过 `vendor/openwiki` 子模块维护；`omp openwiki` 默认使用 OMP 的 `default` 模型，内置 `openwiki_*` 查询工具只读。修改子模块源码、技能或资源依赖后运行 `bun run gen:openwiki-resources`；资源指纹不匹配时不得使用旧资源。
-- 父仓静态检查与测试发现 MUST 排除 `vendor/openwiki` 子模块。OpenWiki、OpenSpec、Superpowers 等内置框架仅交付业务代码及资源，不维护专项或宿主集成测试。fork 自有测试只覆盖可观察的功能合同与真实回归，不检查静态文件、打包计划或发行产物。
-- [python/robomp/AGENTS.md](python/robomp/AGENTS.md) 是 GitHub triage/fix bot 子树的架构、命令、开发约定及验证规则。
-
-- 原生 TUI `/todoloop <Markdown 路径> [--check]` 支持首个 checkbox 前置标题层级推断及 Superpowers Step，采用组级编排和组内连续执行；有剩余组时程序先做一次只读 scout 调研，实际结清后通过原生 context 供全部组及接续复用，准备失败即停止，不限制执行 task 自主派生或更改原生缓存策略。实现位于 `packages/coding-agent/src/todoloop/`，命令入口位于 `packages/coding-agent/src/slash-commands/builtin-modes.ts`；现行需求见[个人命令规格](openspec/specs/personal-commands/spec.md)，操作说明见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。
-
-- 原生 TUI `/collab2 <房间号>`、`/collab2 join <房间号>` 和 `/collab2 stop` 通过知识库同端口 HTTP/WS 来宾可写协作。仅新命令使用 `OMP_COLLAB2_IP` 覆盖默认地址；`OMP_OFFLINE` 存在时默认 `10.239.93.104`，否则默认 `127.0.0.1`，端口固定 `9333`。原生 `/collab`、`/join` 不受影响。只用于可信隔离内网；见[内网快速指南](docs-zh-CN/quick-start-intranet.md)。
-
-- 内置 Superpowers 仅保留完整 `skills/`、`LICENSE` 与 ESM／版本读取所需的根 `package.json`；同步时 NEVER 恢复其他宿主插件、扩展、hooks、安装入口或品牌图片。技能正文及脚本保留上游内容，全部 `SKILL.md` 持续保留 `disable-model-invocation: true`；根包元数据不保留指向已删除资源的 `main`／`pi` 注册，详见[原生资源边界](openspec/specs/spec-driven-orchestration/spec.md)。
+- [已批准需求](openspec/specs/)是 fork 权威；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-runtime/spec.md#requirement-项目定位与使用场景)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证要求](openspec/specs/fork-maintenance/spec.md#requirement-按风险选择验证和报告证据)、[上游基线](openspec/specs/fork-upstream-baseline/spec.md)；适用的 fork 约束优先于上游通用约定。
+- 新增、修改、移动或删除文档（含 `AGENTS.md`、规格、README、指南和 changelog）前 MUST 获得用户对该文档范围的明确授权。代码改动授权或文档同步要求不等于文档写入授权；未经授权只读核对并报告需更新之处，不改文件。功能改动仍须核对[内网快启](docs-zh-CN/quick-start-intranet.md)；获授权后只同步受影响的用法和限制，不复写规格。
+- `OMP_OFFLINE` 是公司内网标记，不是宿主探测。不得据此扩大工具、URL 或审批限制，也不得推断内网 Git API 不可用或已获写入授权；见[运行规格](openspec/specs/fork-runtime/spec.md)。
+- OpenSpec 使用 `omp openspec ...`，无需独立 OpenSpec／Node；未初始化项目 MUST 先取得显式初始化授权。内置资源、旧 schema 迁移及 Superpowers 同步边界见[编排规格](openspec/specs/spec-driven-orchestration/spec.md)。
+- `ask` 沿用上游 HTML 表单及宿主协议，不保留 `questions[]`；活跃 `/goal-autopilot` 的例外见[上游继承边界](openspec/specs/fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。
+- [个人命令规格](openspec/specs/personal-commands/spec.md)维护 `/workspace`、`/sketch`、Developer Test Agent、`/todoloop`、`/collab2` 等行为。`/workspace` 不是沙箱或审批模式；`/collab2` 只用于可信隔离内网。
+- Firefox 测试 MUST 使用本机真实 Firefox、Selenium＋geckodriver 与临时隔离 profile。记录实际版本及验证范围；NEVER 换用兼容实现、自动安装浏览器／驱动或改个人配置。本机验证不等于公司实机验证。
+- [OpenWiki](openspec/specs/openwiki/spec.md) 子模块源码、技能或资源依赖变化后 MUST 运行 `bun run gen:openwiki-resources`，不得使用指纹不符的旧资源。
+- 父仓静态检查与测试发现 MUST 排除 `vendor/openwiki` 子模块；框架专项测试和 fork 合同测试遵循[验证要求](openspec/specs/fork-maintenance/spec.md#requirement-使用上游验证入口)。
+- Fork 本地构建、CNB／WSL 前置条件及性能采集见[工程笔记](openspec/fork-engineering-notes.md)。
+- 子级规则：[python/robomp/AGENTS.md](python/robomp/AGENTS.md)。

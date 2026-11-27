@@ -106,7 +106,6 @@ jobs:
          RELEASE_TARGETS: ${{ matrix.target_id }}
          RELEASE_VERSION: ${{ needs.release_metadata.outputs.version }}
          UPDATE_REPOSITORY: ${{ github.repository }}
-         RELEASE_COMMIT: ${{ github.sha }}
       steps:
          - name: Configure release build directories
            run: |

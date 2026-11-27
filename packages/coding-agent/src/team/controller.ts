@@ -51,6 +51,8 @@ export interface StartTeamDiscussionArgs {
 export interface StartTeamDiscussionResult {
 	started: boolean;
 	jobId?: string;
+	/** The job manager refused to register a background discussion; the command itself was handled. */
+	registrationRejected?: true;
 	/** User-facing feedback for the dispatch outcome. */
 	message: string;
 }
@@ -310,7 +312,16 @@ async function startTeamDiscussionImpl(
 	};
 	const report = async (text: string): Promise<void> => {
 		if (!isCurrentSession()) return;
-		hooks.showError?.(text);
+		try {
+			hooks.showError?.(text);
+		} catch (error) {
+			logger.warn("Team error hook failed", {
+				component: "team.controller",
+				event: "team_error_hook_failed",
+				stage: "ui",
+				...logger.diagnosticError(error),
+			});
+		}
 		await emitOutput(text);
 	};
 
@@ -370,6 +381,7 @@ async function startTeamDiscussionImpl(
 	const label = `/team ${previewQuestion(question)}`;
 
 	let jobId: string | undefined;
+	let registering = false;
 	let unregisterSessionChange: (() => void) | undefined;
 	const sessionAbort = new AbortController();
 	const dispatchSignal = requestSignal ? AbortSignal.any([sessionAbort.signal, requestSignal]) : sessionAbort.signal;
@@ -389,6 +401,7 @@ async function startTeamDiscussionImpl(
 			sessionAbort.abort();
 			unregisterSessionChange?.();
 		});
+		registering = true;
 		jobId = manager.register(
 			"task",
 			label,
@@ -588,6 +601,7 @@ async function startTeamDiscussionImpl(
 			"Wait for existing jobs to finish or cancel them through Agent Hub or `hub cancel`, then retry.",
 		].join("\n");
 		await report(message);
+		if (registering && jobId === undefined) return { started: false, registrationRejected: true, message };
 		return { started: false, message };
 	}
 	logger.info("Team job registered", {

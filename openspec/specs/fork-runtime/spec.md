@@ -2,557 +2,411 @@
 
 ## Purpose
 
-规定 fork 的安装、运行数据根、代理、诊断日志及 offline 场景行为。安装失败和日志故障应保留真实状态，运行路径和用户配置按显式输入解析。
+fork 运行、路径、诊断、分发、[审批](#requirement-授权模式与默认值)及交互 [Shell／内建](#requirement-非-utf-8-参数保真与派发)兼容与隔离。审批继承[上游基线](../../../docs/approval-mode.md)。
 
 ## Requirements
 
+### Requirement: 项目定位与使用场景
+
+个人入口 MUST 使用原生 TUI，无需手填 OMP 配置；零配置不禁止持久化。
+
+#### Scenario: 零配置
+- **WHEN** 零配置、服务/认证就绪
+- **THEN** 终端收发/用工具；内网无公网可用、复用凭据。
+
 ### Requirement: 运行诊断日志
 
-OMP MUST 按同一 operation_id 记录安全的阶段、结果与时长；offline 默认记录 WARN／ERROR，允许显式调整级别，日志故障不掩盖业务结果。
+`operation_id` MUST 关联 request/job/goal/session/tool-call，异步/独立响应继承，跨进程尽量透传、不改协议。
 
-#### Scenario: 运行诊断日志的详细边界
+#### Scenario: 日志启停
+- **WHEN** 启停/重启（含 PID 复用）
+- **THEN** [性能根](#requirement-可选性能数据根)或原路由新建日志，重名沿原数字后缀；记启停/刷关键项，原轮转/保留/刷新。
 
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- fork 新增边界诊断覆盖写入统一 logger，不建立平行日志系统或新增必填配置。
-- 异常、超时、重试、降级与部分提交等分支 MUST 留下可识别的阶段和结果；关键调用 MUST 记录安全的结果摘要及耗时。可能阻塞的调用、网络请求、IPC 和子进程 MUST 有开始与成功/失败/取消终态，不能仅依赖 UI、stdout/stderr、协议回包或会话 JSONL。
-- fork 的业务边界诊断补充稳定事件、组件、阶段及 `elapsed_ms`；选择性能数据根时按「可选性能数据根」使用相应日志位置，否则沿用既有路由。
-- 一个日志文件 MUST 仅属于一次进程运行；重启／重跑（包括 PID 被复用）MUST 创建新文件，NEVER 追加已有日志。遇到同名旧日志时沿用数字后缀选择未占用文件；除本次双目录调整日志位置外，级别、日期／大小轮转、保留与刷新规则不变。
-- fork 新增诊断不得将正常取消、服务缺席或协议预期拒绝冒充故障；必要诊断不得全部藏在可关闭的 DEBUG 中。
-- 内网日志例外：`OMP_OFFLINE` 启用时默认记录 WARN／ERROR，保留故障、降级与日志目录回退线索；显式有效的 `OMP_LOG_LEVEL` 优先，可选择 `error`／`warn`／`info`／`debug`，空值或无效值使用 offline 默认级别。超过所选级别的记录在统一 logger 入口直接丢弃，不合并或序列化其上下文、不写本地或控制台日志，也不投递日志接收器。默认不另写正常启动／退出 INFO；显式启用 INFO／DEBUG 时恢复既有阶段与起止诊断。日志目录、轮转与刷新规则不变，WARN／ERROR 立即刷新。此项适用于全部 offline 平台，不改变界面提示、工具结果或协议输出；非 offline 保留原有级别与诊断覆盖。默认级别下正常阶段与成功起止日志仍不保留，空日志不代表没有未记录的问题。
-- 同一操作 MUST 通过 `operation_id` 及现有 request/job/goal/session/tool-call 标识关联起止和阶段；异步分支继承关联上下文，内部跨进程调用尽可能透传现有标识，不为日志改变外部协议。
-- 对话终态须区分用户取消、本地/宿主超时、abort、断连和失败，独立响应仍继承发起操作的标识；后台面板吞掉的异常、已保存但 reload 降级、Goal 工具激活/恢复失败与无效持久状态不得被完成/协议成功日志遮盖。
-- 会话删除须区分主文件删除、备份清理和附件清理，明确已提交、部分清理及未知状态；team 通知发送与后续 UI 更新分别定位，内部终止仅记录安全原因分类。
-- 离线 models/bench 的 cache-only 日志仅描述目录发现/刷新，不代表模型请求离线；初始化及后续 selector-miss 刷新保留起止关联。WSL helper 预检拒绝记录有界原因码，不复制 helper 输出正文。
-- 凭据、Authorization/Cookie、URL 认证与敏感查询参数、用户输入、提示词、源码、文档/响应正文 MUST NOT 直接入日志。仅记录有界、脱敏的类型、代码、状态、计数、长度和必要栈帧；不得无限复制 stdout/stderr 或大对象。
-- 日志目录不可写时 MUST 尝试合理的用户级目录回退；仍失败则向 stderr 有界报告日志初始化故障；日志失败不能递归、掩盖业务结果或使业务崩溃。启动/退出须可追踪并刷新关键记录。
-- 本契约覆盖已保留的 fork 功能及其公共边界：team、Goal、knowledge、AST 通知、company 与向量请求、安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
-
-#### Scenario: offline 默认过滤 INFO／DEBUG
-
-- **WHEN** 启用 `OMP_OFFLINE` 且未设置有效的 `OMP_LOG_LEVEL`
-- **THEN** 仅保留 WARN／ERROR 诊断；正常启动、运行阶段和成功结束的 INFO／DEBUG 记录不进入日志
-
-#### Scenario: 显式启用 INFO／DEBUG 时关联操作起止
-
-- **WHEN** 显式将 `OMP_LOG_LEVEL` 设为 `info` 或 `debug`，且关键操作开始并结束
-- **THEN** 恢复所选级别允许的阶段与起止诊断，包括正常成功的操作；用同一 `operation_id` 关联记录，并记录安全的阶段、结果与时长
+- 共用 logger（Team/Goal/knowledge/AST 通知/company/向量/安装更新），不增系统/必填配置。异常/超时/重试/降级/部分提交：稳定事件/组件/阶段/安全结果/`elapsed_ms`；阻塞风险/网络/IPC/子进程：起止/成败/取消，非仅前台/协议/会话 JSONL。
+- 对话终态：用户取消/宿主或本地超时/abort/断连/失败；正常取消/缺服务/预期拒绝非故障。成功不盖面板异常/保存后重载降级/Goal 激活恢复失败或状态无效；不限 DEBUG。删除：主文件/备份/附件 × 已提交/部分清理/未知。Team 通知/UI 更新分记；内部终止仅安全原因类。
+- offline models/bench cache-only 限目录发现/刷新；关联 init/selector-miss 起止。WSL helper 预检拒绝仅有界原因码。
+- 禁记凭据、Authorization/Cookie、URL 认证/敏感查询、输入/提示/源码/文档/响应正文；仅有界脱敏类型/代码/状态/计数/长度/必要栈帧，stdout/stderr/大对象限量。
+- 写败→用户目录→有界 stderr；禁递归/崩溃/掩结果、改流程/权限/重试/超时。验真实成败/适用网络/IPC/子进程异常/关联重建/脱敏。
+- offline 默认 WARN/ERROR（含故障/降级/目录回退）即时刷；有效 `OMP_LOG_LEVEL`（`error`/`warn`/`info`/`debug`）覆盖。入口滤低优先级、不聚合/序列化上下文/进 sink；INFO/DEBUG 恢复相应起止/正常阶段。空日志不证无故障；普通级别/UI/工具/协议不变。
 
 ### Requirement: offline 环境专用系统提示词
 
-OMP MUST 仅在 offline 会话追加环境规则；CLI、SDK 和 task 子代理 MUST 使用同一静态模板及条件渲染入口，不改写用户配置或改变 Shell 执行器。
+CLI/SDK/task MUST 共用模板/条件渲染，仅 offline 追加。
 
-#### Scenario: 按环境注入而不影响普通模式
+#### Scenario: offline 注入
+- **WHEN** 建/恢复会话或生成最终 provider 上下文
+- **THEN** 保自定义；替换不绕过，完整规则不重加，普通模式不变。
 
-- **WHEN** 会话未启用 offline
-- **THEN** 不追加 offline 规则，已有系统提示词和 Shell 行为保持不变，即使宿主是 Linux/csh。
-- **WHEN** 会话启用 offline
-- **THEN** 说明公司部署环境为 CentOS 7、使用 NFS、有 `/dev/shm`、无法连接互联网；提示模型使用本地资料、已有依赖、团队 Skills 和已配置内网服务，不访问公网、不回退公共下载源或反复联网安装；缺少必要输入时报告具体缺项。
-- **AND** 区分 OMP Python Eval、检查工具和项目业务解释器，不因工具解释器较新而升级项目语法或依赖。
-- **AND** 仅 Linux 追加公司项目存储边界：持久材料及必要备份放获准且可写的 NFS；临时文件与可重建缓存优先放当前用户的 `/dev/shm`，不作为持久数据唯一副本；不足时使用获准的 NFS，不回退 `/local`、`/tmp`、`/run/user`；复用已有数据根和共享技能路径，不自动迁移或改写配置，也不假定 sudo、计算 GPU 或新版系统工具可用。
-- **AND** 仅 Linux 且 `SHELL` 路径 basename 为 `csh` 或 `tcsh` 时追加用户终端语法规则：用户可复制命令用 `setenv`／`unsetenv` 和对应激活脚本；`bash` 工具仍使用自身语法。仅任务确需时确认并显式进入 csh/tcsh 初始化，不假定 `ma`／`module` alias 在工具子进程存在，不用 Bash source `.cshrc`。
-- **AND** Windows offline 不注入 Linux 存储或 csh 规则；公司部署基线不等于当前宿主探测结果，不硬编码用户名、内网地址、软件版本或历史资源余量。
+|范围|静态提示（非隔离/权限/路径机制）|
+|---|---|
+|offline|基线 CentOS 7/NFS/`/dev/shm`/无公网，非检测；不硬编码用户/内网地址/版本/历史余量。用本地资料/依赖/团队 Skills/已配内网服务；禁公网/退公网源/反复联网装；报缺项。区分 Eval/检查/业务 Python，不因工具升级项目语法/依赖。|
+|另：Linux|持久材料/必要备份→获准可写 NFS；临时/可重建优先用户 `/dev/shm`，不存持久唯一副本；不足退获准 NFS，禁 `/local`、`/tmp`、`/run/user`。复用数据根/共享 Skills，不假定 sudo/计算 GPU/新工具。|
+|另：Linux + `SHELL` basename=`csh`/`tcsh`|可复制命令用 `setenv`/`unsetenv`/对应激活脚本；`bash` 工具仍 Bash。必要时确认、显式初始化 csh/tcsh；不假定子进程有 `ma`/`module` alias，不用 Bash source `.cshrc`。|
 
-#### Scenario: 自定义提示词及子代理保持一致
-
-- **WHEN** offline CLI 解析自定义追加提示词，或 SDK／task 子代理创建、恢复会话并向模型发送上下文
-- **THEN** 保留原有提示词内容并追加适用规则；最终 provider 上下文已有完整规则时不重复追加，自定义提示词替换不能绕过 offline 规则。
-- **AND** 这些规则仅指导模型，不替代网络隔离、文件权限或现有数据目录解析，不自动执行安装、环境切换或数据搬迁。
-
-### Requirement: offline 网页入口不自动启动浏览器
-
-`OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 的 `/sketch` MUST 不自动启动浏览器；该规则适用于全部平台与 Shell，不要求额外设置跳过打开的环境变量。
-
-#### Scenario: offline 手动打开网页
-
-- **WHEN** 用户在 offline 环境调用 `/sketch`
-- **THEN** 启动画布并输出完整可访问地址，提示用户手动打开；不调用系统浏览器或 csh／tcsh 的 `ff` 别名，不读取 Shell 启动文件或提示配置别名
-- **AND** 保留 Linux offline 既有地址复制、草稿、图片提交及取消行为
-
-#### Scenario: 非 offline 与显式打开行为
-
-- **WHEN** 未启用 offline，或用户显式打开普通 OMP 链接／文件
-- **THEN** 沿用原系统打开方式，不将禁止自动启动扩大到普通链接／文件打开
-
-### Requirement: 内网网页入口自动复制本机地址
-
-仅在 Linux 且 `OMP_OFFLINE` 按统一真值规则启用时，原生 `/sketch` 打开画布 MUST 自动请求复制对应的完整 `http://127.0.0.1:<port>/…` 地址；保留端口、随机能力路径和查询参数，不选择局域网地址，不改写系统剪贴板设置。
-
-#### Scenario: 浏览器未打开页面时手动粘贴
-
-- **WHEN** `/sketch` 已成功取得可访问的本机地址
-- **THEN** 复用统一剪贴板写入能力，请求终端 OSC 52 与原生剪贴板复制；Linux X11 复用进程保活的 selection owner，不增加下载、安装或外部剪贴板服务
-- **AND** 复制故障不阻断画布或退出，不改变草稿、模型调用及任务状态
-- **AND** 地址仍可手动选择复制；界面仅提示已尝试复制，不将无回执的终端请求冒充客户端剪贴板成功。SSH／X11 到 Windows 的粘贴取决于终端／Exceed 配置，复制回环地址不等于自动建立 SSH 端口转发
-- **AND** 非 offline 或非 Linux 保持原行为，不自动覆盖剪贴板；未显式运行 `/sketch` 不触发复制
+不改 Shell 执行器/配置，不自动装/切环境/迁数据。
 
 ### Requirement: 安装与运行
 
-OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告。
+OMP MUST 按下表路由及换入。
 
-#### Scenario: 安装与运行的详细边界
+#### Scenario: 安装
+- **WHEN** 启动/安装/更新
+- **THEN** 按表；失败留旧/已验产物并实报。
 
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
+|范围|解析|
+|---|---|
+|公司|`OMP_OFFLINE` ∈ `1`/`true`/`yes`/`on`（trim/casefold）；OMP 子进程继承、同数据根/模型 lane；不探测宿主/挂载/网络，已配可达内网可用。|
+|`--offline`（启动/`omp find`）|仅本次 `models.offline` 辅助 provider 限制，非防火墙；与 `OMP_OFFLINE` 独立/可并用。|
+|红/黄|红区启动必设 `OMP_OFFLINE`/可写绝对 `OMP_CONFIG_ROOT`；黄区根可选、同回退。|
+|持久根|绝对 `OMP_CONFIG_ROOT`（展开 `~`、忽略相对）> `PI_CONFIG_DIR` > 上游；不硬编码 `.omp`，保 agent 配置/认证/会话/用户资源/状态/profile 布局、项目 `.omp/`；`-P <name>` = `--profile <name>`，无需 alias。|
+|native/grammar|loader/安装器同 grammar 路径/profile；有效 `PI_NATIVES_DIR` > [性能根](#requirement-可选性能数据根)，持久布局不变。禁 `OMP_WIKI_DIR` 读/排序/专传/别名/专设。|
+|daemon|Linux 单用户 daemon/worker 共享宿主 `PI_NATIVES_DIR`/offline 分流/profile，无 runtime 副本/单会话清理；其他 detached daemon 自有 runtime `natives/`，独立于 creator/core `PI_NATIVES_DIR`。单 client 不关共享 daemon。|
 
-- 维护独立的[内网快启指南](../../../docs-zh-CN/quick-start-intranet.md)，按环境区分下载、启动和常用操作；不得把快启扩展为上游文档翻译或站点。
-- fork 的日志目录与诊断覆盖遵循上文「运行诊断日志」，数据根遵循下述约定。
-- fork 新增 `-P <name>` 作为 `--profile <name>` 的短参数，无需 shell alias。
-- `OMP_OFFLINE` 标记公司内部网络环境：CentOS 7、使用 NFS、有 `/dev/shm`、无法连接互联网；可用已配置且可达的内网服务。此定义不引入操作系统、挂载或网络探测。
-- 公司内网模式只由环境变量 `OMP_OFFLINE` 触发（`1`／`true`／`yes`／`on`，忽略大小写及首尾空白；其他值不触发）。通过环境变量让 OMP 子进程继承同一模式，避免数据根与模型 lane 分裂。
-- 启动和 `omp find` 的 `--offline` 沿用上游语义，仅为本次调用启用 `models.offline` 的辅助服务 Provider 限制，不是网络防火墙。此参数不启用公司内网模式，`OMP_OFFLINE` 也不启用该参数；两者可独立或同时使用。
-- 红区部署启动前必须设置 `OMP_OFFLINE` 和可写的绝对 `OMP_CONFIG_ROOT`；黄区可选设数据根。该部署约定不改变下面的通用目录解析和回退。
-- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 持久数据根：agent 配置与认证、会话、用户资源和未列入性能目录的运行状态及 profiles 沿用根下相对布局，项目级 `.omp/` 不受影响。既有 Cache、统计、日志和默认 native 按「可选性能数据根」选取路径；未启用分离时维持原路径。未设置有效 `OMP_CONFIG_ROOT` 时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定持久根位置。
-- native addon 加载器与 grammar 安装器 MUST 对 grammar 数据使用相同的目录及 profile 解析；addon 二进制和 grammar 缓存均按「可选性能数据根」选择位置。显式有效 `PI_NATIVES_DIR` 优先于默认 native 目录，其既有语义不变；本规则不改变 `OMP_CONFIG_ROOT` 或 profile 的既有语义。
-- **统一持久数据根与独立性能目录**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均通过 `OMP_CONFIG_ROOT` 统一调整持久数据根。
-- **Daemon native 生命周期**：Linux 单用户 daemon 及其子 worker MUST 复用宿主已解析的 native 目录（包括有效 `PI_NATIVES_DIR`；Linux offline 默认按「可选性能数据根」分别解析 addon 二进制与 grammar 数据，保留 profile 布局），不在 daemon runtime 下另建 native 副本，不随单个会话退出删除共享缓存。其他平台的 daemon 自有 native 缓存位于其 runtime 的 `natives/` 下，不以创建者进程为所有者，core 的显式 `PI_NATIVES_DIR` 不约束 detached daemon；验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 daemon，最后 client 关闭后通过 daemon 正常退出释放自有缓存。各平台均不通过关闭单个 client 关闭共享 daemon；两个独立 worker 同时冷提取／加载完整 native，发布后内容不变且无 staging 残留。
+验收 daemon 真加载：creator 退出即删独占叶（Windows 无 EPERM），另一 client 照用；末 client 退出停 daemon/释缓存。双 worker 冷并发提取/加载完整 native，发布字节不变、无 staging。
 
-- `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
-- **内网交互减负**：仅 Linux offline 将普通后台 TUI 重绘合并到最多 10 FPS；输入回显与取消沿用原输入优先调度，强制最终刷新、终端输出反压与自适应限速不变。品牌渐变刷新降为 250ms，活动计时装饰刷新降为 1000ms。Git 状态缓存由普通模式的 10 秒延长到 60 秒，沿用 HEAD／工作目录／显式失效；未显式失效的外部工作树修改可能延后显示，不新增工具修改通知或修改 Git 配置。非 Linux 和非 offline 保持原行为，不要求改变企业远程软件，不预先承诺公司实机提速。
-- **内网运行期显示减负**：所有 `OMP_OFFLINE` 进程将现有累计流式更新合并窗口从普通模式的 50ms 调为 100ms，沿用结束／取消等边界事件立即冲刷、逐增量语音及实时思考阶段处理，不改变输入与终端绘制调度；进程内覆盖 `tui.autoGraph=off`、`tui.titleState=false`、`title.refreshOnReplan=false`，优先于已保存设置且不写配置。保留原始表格、首次 scout 自动标题、手动命名及单词／文件／路径／命令补全；SVG／Mermaid／图片、Markdown 缓存、历史裁剪、LSP 与 MCP 不变。非 offline 保留原合并窗口及配置行为。
-- offline 时，CLI 启动临时将 `web_search.enabled` 和 `browser.enabled`（含 `/crawl`）设为 `false`。Agent 的 `read` 工具和 `omp read` 读取 HTTP(S) 地址时沿用上游 `fetch.enabled` 的默认值与显式设置，审批规则保持不变。`astEdit.enabled` 沿用普通设置；AST 工具可用内置或已缓存的语法包，缺包时只向显式配置的资源源请求，不回退到默认 GitHub 源。`company/Qwen3.8-27B` 的 `contextWindow` 设为 `262144` tokens（256 × 1024），其他 `company` 聊天模型设为 `204800` tokens（200 × 1024）；模型特定限制由既有 KDL 策略维护（不改 `maxTokens`）。这些启动覆盖优先于已保存配置，不写配置文件，退出即消失，普通启动保持原值。Python Eval 的解释器优先级为显式 `python.interpreter` → Linux offline 固定候选 `/software/public/python/3.11.4/bin/python3.11` → 原有自动候选，并补查 PATH 中的版本化 `python3.15` 至 `python3.11`、`python3` 和 `python`；同一路径不重复探测。Linux offline 复用统一的 `OMP_OFFLINE` 真值判断（`1`、`true`、`yes`、`on`，忽略大小写及首尾空白），所有候选均实际检查 Python ≥3.11，旧业务 Python 3.6 或 3.10 不可成为 Eval 解释器；找不到合适版本时明确失败，不降级。显式解释器不可用或不兼容时不 fallback；固定候选缺失或不适合时继续查找，不因 PATH 中已有旧 `python` 而停止。其他平台或非 offline 进程保留原有候选和 Python 3.8+ 门槛。新发现的系统解释器只用于 OMP Eval 子进程，清除其继承的业务 venv／Conda／PYTHONPATH，不修改主进程 PATH、项目虚拟环境或业务 Python，不扫描软件目录找版本、不安装包。系统提示词遵循上文「offline 环境专用系统提示词」。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
-- offline 且 company provider 可用时，仅为未配置的 model role 补充当前进程默认值：`default`、`plan`、`slow` → `company/GLM-5.3-public`；`smol`、`task`、`vision`、`advisor` → `company/Qwen3.8-27B`；`tiny`、`commit` → `company/Qwen3.6-35B-A3B`；`memory` 未配置时继续按既有规则自动解析，不新增固定赋值。已有角色配置（包括显式 `null` 清除项）和显式 CLI 模型参数仍优先，不写配置文件，不限制 `/model`、`Ctrl+T` 或角色切换，也不锁定 company。保存、活动匹配与切换冲突比较统一排除这些隐式默认角色，不误报刚保存的 preset 与公司默认值冲突；用户显式配置或 CLI 选择的角色仍按原规则保存和比较，包括显式选择的 company 模型。普通启动不受影响。
-- offline 当前进程将 `startup.setupWizard` 覆盖为 `false`，不自动弹出或导入首次启动的全屏配置向导；显式启用的启动动画按需独立加载，手动设置入口保持原有行为。
-- offline 启动不读取或展示启动更新日志。模型目录自动发现及手动刷新遵循[公司内网模型规格](../model-providers/spec.md)：自动发现只读缓存，手动刷新只请求显式配置的发现端点。内置和缓存模型照常加载。`OMP_OFFLINE` 不覆盖用户配置的 `models.offline`，实际模型／OAuth 请求、更新命令及 `/changelog` 的其他行为不变。`omp openspec version --check` 在 offline 下仅对 `npm_config_registry` 明确配置的非默认 HTTPS 镜像发起查询，不回退到公网 npm。应用和插件市场更新分别见[全平台轻量启动](#requirement-全平台轻量启动)及[插件市场更新](#requirement-插件市场更新)；Claude 插件来源默认不扫描，见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
+|offline（覆盖不落盘）|生效项|
+|---|---|
+|`@`|补全重扫 `30000`ms；显式 `FS_SCAN_CACHE_TTL_MS`（含 `0`）优先。|
+|Linux 交互|后台 TUI ≤10 FPS、回显/取消优先，终刷/反压/自适应不变。渐变 250ms、活动计时 1000ms；Git 状态 TTL 60s，HEAD/cwd/显式失效不变，外写可滞后。不依赖工具写通知，不改 Git 配置或企业远程软件，不承诺实机提速。|
+|显示|流式 100ms，保留边界即时冲刷、逐增量语音、实时思考、输入/绘制调度。强制 `tui.autoGraph=off`、`tui.titleState=false`、`title.refreshOnReplan=false`；保首 scout 自动标题/手命名/表格/补全/富媒体/缓存裁剪/LSP/MCP。|
+|CLI|强制 `web_search.enabled=false`、`browser.enabled=false`（含 `/crawl`）；`contextWindow` tokens：`company/Qwen3.8-27B` 262144、其他 company 聊天 204800；KDL 专限及 `maxTokens` 不变。|
+|工具|Agent `read`/`omp read` HTTP(S) 按 `fetch.enabled`/审批；保 `astEdit.enabled`，内置/缓存缺包→仅显式源、不退 GitHub。内网模型 API/bash/eval/文件/LSP/Git/Computer Use 保留。|
+|更新/目录|启动不读/显示更新日志；`models.offline`、内置/缓存目录、模型/OAuth 请求、更新/`/changelog` 不变。`omp openspec version --check` 仅 `npm_config_registry` 显式非默认 HTTPS 镜像。|
 
-以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
+**Python Eval**：显式 `python.interpreter` 不可用/不兼容即失败、不回退。Linux offline： `/software/public/python/3.11.4/bin/python3.11` > 原候选 > PATH `python3.15` 至 `python3.11`、`python3`、`python`；去重、实测 ≥3.11，跳失效/旧版（业务 3.6/3.10），无匹配报错；其余原候选/≥3.8。新发现仅 Eval 子进程用，清 venv/Conda/PYTHONPATH，不改主 PATH/项目 venv/业务 Python，不扫/安装。
 
-- 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 仅执行构建、打包及其必要准备，不运行单元、集成、冒烟或安装测试；发布 MUST 等待版本元数据、全部二进制和浏览器扩展构建成功，不依赖测试作业。验证按[验证要求](../fork-verification-gates/spec.md)独立执行，不自动推送、触发／等待 CI、启动 WSL 或创建 Release；发布须单独明确授权。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
-- 本地开发分发额外提供 `bun run local`（Windows 本机编译并直接替换安装目录中的 `omp.exe`：旧可执行文件先改名，再换入新版，不杀任何已有进程；换入失败恢复旧文件，仍被旧进程占用的映像保留）和 `bun run cnb`（先在 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行安全的 `git pull --ff-only`，确认两端工作区干净且 Git 提交一致，再并行构建两平台产物，并行上传到已有 CNB Release；默认目标为 `jchanghong/bin` 仓库的 `omp` 标签，可用 `--repo`、`--tag` 显式覆盖，无需交互输入）。`bun run cnb` MUST 覆盖 `omp-windows-x64.exe`、`omp-linux-x64`、`omp-sdk-win32-x64.zip`、`omp-sdk-linux-x64.zip` 并取得四次上传成功确认，缓存命中也不跳过上传；不另行确认，不修改其他附件，不提供冗余的 `--overwrite` 参数。不上传独立源码归档，不推送 Git 源码，不替代 GitHub 正式 Release，也不改变安装器或 `omp update` 的 GitHub 来源。
-- `local`、`cnb` 和手动发布 CI 的分发构建 MUST NOT 运行任何测试、冒烟、worker 探测、native 加载探测或构建产物试运行。CNB 不执行全仓源码哈希扫描、重复 WSL 预检、Release 附件竞态检查或发布后重复查询；只保留干净工作区、Git 提交一致性、Bun 版本、构建输出及上传接口所必需的检查和确认。WSL 源码及构建脚本 MUST 只通过 Git 远端同步，不通过 stdin 传脚本，也不复制、移动、打补丁或清理用户文件绕过脏工作区检查。两端 Bun 版本 MUST 一致；保留构建资源所必需的 Export viewer 精确字节元数据校验；遗留 `tool-views.generated.js` 仅作为忽略的生成产物保留。
-- CNB 先检查两端父仓和子模块工作树干净，快进后检出父仓固定的 OpenWiki 子模块提交，再检查干净状态；不强制覆盖子模块修改。
-- 仓库仅启用 `.github/workflows/ci.yml`（手动构建发布），不提供 CNB 源码同步工作流。其他上游工作流（`nix.yml`、`bun-cache-warm.yml`、`stale.yml`）保留上游内容，仅追加 `.disabled` 停用，不参与任何触发；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
-- CNB 与手动发布 CI 的 native 入口直接构建并写入版本戳，不加载 addon；`bun run local` 安装 native 时继续显式跳过宿主加载探测（`--skip-load-probe`）。普通 `bun run build:native` 的默认加载探测行为不变。
-- 二进制必须携带 fork 版本和更新仓库信息。
-- `PI_UPDATE_REPOSITORY` MUST 可覆盖 `omp update` 使用的更新仓库；未设置时固定为本 fork 仓库。该变量 MUST NOT 写入配置文件或构建产物。
-- 本地构建脚本 `packages/coding-agent/scripts/build-binary.ts` 同样注入本 fork 更新仓库：本地构建产物的 `omp update` 指向本 fork Release，不会回退官方渠道（版本号不注入，`--version` 无 `+fork.N` 后缀属预期）。
-- 本地二进制构建 MUST 向终端输出目标平台、资源生成、编译、适用的签名及生成文件恢复阶段；仅在全部步骤成功后输出构建完成、实际可执行文件路径和总耗时，避免把编译阶段的静默成功误判为未执行而重复构建。
-- `omp update` 先比较正常 SemVer，再比较同基线的 fork build counter；本地构建未带 `+fork.N` 时按 counter 0 比较，因此可取得同基线的新 fork Release，而不把更高上游基线降级。支持 `%2B` 编码的 `+` 版本 URL；GitHub 元数据和资产统一优先环境令牌，再尝试本机 `gh auth token`，无凭据才匿名请求。
-- `omp update` 下载二进制时，在交互终端显示下载百分比、速度与预计剩余时间；非 TTY 输出（如 CI、管道）不显示动态进度。若 `PATH` 中的 `omp` 与更新目标解析为不同文件，更新前警告并提示更新后运行 `omp --version` 核对实际生效的版本；指向同一文件的符号链接不视为冲突。
-- `update.channel=canary` 在 fork 二进制上不可用：显式执行 `omp update` 时提示该配置并指向 `omp update --stable`；可选启动检查遇到该渠道时静默跳过，不发起版本查询。
-- 发布链路不发布核心或平台 npm 包，也不发布 Homebrew tap；Release notes 由 GitHub 自动生成。CI 只构建 Linux glibc x64 和 Windows x64 二进制，Release 上传的附件仅为 `omp-linux-x64`、`omp-windows-x64.exe` 和 `omp-browser-relay-extension.zip`；GitHub 自动提供的源码归档不属于上传附件。更新器使用 GitHub 资产元数据的 SHA-256。其他平台不再提供新的预编译版本。
-- Fork 的 `omp update` 只原地替换独立二进制；检测到包管理器维护的安装时，提示使用 fork 二进制安装器，不迁移或接管原安装。普通上游更新路径不受影响。
-- 安装器只安装 fork Release 的预编译二进制；当前 Release 仅提供 Linux glibc x64 和 Windows x64，其他 Linux 架构及 musl 无对应新版本资产。`install.sh` 在 macOS 上于联网前明确拒绝安装。安装目标已是所选 Release 版本时提示已安装并跳过下载，同时仍检查 PATH 配置。
-- fork 不提供源码安装：两个安装器都不再有 source 模式，安装验证只覆盖 Release 二进制。上游的源码安装测试 `scripts/install.test.ts` 与 `scripts/install-tests/source.dockerfile` 在 fork 中删除，`run-ci.sh` 不再执行源码安装冒烟；同步时 MUST NOT 恢复这些入口，除非先显式修改本节需求。
-- Windows 安装与更新不要求额外安装 PowerShell 7：安装器必须能在系统自带的 Windows PowerShell 5.1 x64 下直接执行；`omp update` 使用自身 HTTP 下载、SHA-256 校验和二进制替换链路，不依赖 `pwsh.exe`，不得要求用户升级 PowerShell 来绕过兼容问题。
-- 安装器获取 Release 元数据时 MUST 验证 TLS 证书，拒绝不受信任的证书且不得回退到跳过验证的请求。企业代理拦截 TLS 时，安装器的元数据请求客户端必须信任该代理的 CA。此要求仅适用于安装器的 Release 元数据请求，不改变运行时 TLS 默认或 `omp update`。
-- 两个平台的安装器都下载到安装目录中的唯一临时文件。启动下载的二进制之前，MUST 将文件的 SHA-256 与已通过 TLS 验证获取的 Release 元数据中同名资产的 SHA-256 摘要比对；摘要缺失或不匹配时拒绝执行、保留旧安装并清理临时文件。摘要匹配后才可确认二进制可启动且 `omp --version` 与所选 Release 完全一致，两项均通过后才替换现有安装；验证失败保留旧安装并清理临时文件。可执行目标是目录时联网前拒绝，不移动目录内容；已经是所选版本时跳过下载但仍提示 PATH。
-- Windows 优先 `curl.exe`；未设置目标协议的代理环境变量及 `ALL_PROXY` 时，自动解析当前用户的 Windows 系统代理并传给 curl，不要求额外设置环境变量。显式代理环境变量优先，curl 遵循 `NO_PROXY`；curl 失败或不可用时仍回退兼容 PowerShell 5.1 的 `Invoke-WebRequest -UseBasicParsing`。安装器只维护 PATH，不写废弃的 settings.json 或擅自改用户 shell/config.yml。二进制资产下载保留原有 TLS 兼容性：curl 追加 `--insecure`，Windows 安装器另加 `--ssl-no-revoke`；POSIX 安装器仅在 curl 使用 Schannel 且版本支持时追加 `--ssl-no-revoke`。仅对二进制资产下载，PowerShell 5.1 允许使用放行证书回调，PowerShell 7+ 允许使用 `-SkipCertificateCheck`；PowerShell 5.1 保留 TLS 1.2 支持。
-- Windows 主进程的全局 HTTP(S) `fetch`（含 LLM 流、OAuth/usage 探测、模型发现、更新检查与 web 请求）优先使用请求的显式 `proxy`（含按现有规则由 `PI_PROXY_<PROVIDER>`／`PI_PROXY` 设置的代理）。进入系统代理回退层时，已显式设置代理（包括 `proxy: false`）或使用 Unix socket 的请求不由该层改写。
-- 系统代理回退层 MUST 对每一跳 HTTP(S) URL 独立选择路由，不沿用上一跳注入的代理；仅在 `redirect: "follow"` 时跟随，保留 `"manual"`／`"error"` 的原有处理。跨源跳转不转发 `Authorization`、`Proxy-Authorization`、`Cookie` 和 `Host` 请求头。
-- 每跳按「目标协议的 `HTTPS_PROXY`／`HTTP_PROXY` → `ALL_PROXY`（均含小写形式）→ 当前用户 Windows 系统代理 → 直连」回退。只有 Bun HTTP `fetch` 能用的环境代理（HTTP(S) 或不带协议的 `host:port`）才优先；不支持的方案（如 SOCKS）不阻断后续回退。可由 Bun 原生应用的环境代理继续交给 Bun 处理，包括其 `NO_PROXY` 行为。
-- 系统代理仅取 HKCU Internet Settings 的静态 `ProxyEnable`／`ProxyServer`（含 `http=`／`https=` per-protocol 形式，不支持 `socks=`、PAC 或 WPAD），每进程读取一次并缓存。未启用或读取失败时不安装系统代理回退层；该层仅 win32 生效，worker 子进程入口（本地服务）不经此链路。
-- `NO_PROXY` 与回环／内网硬 bypass 继续约束系统代理。系统代理层另有 fork 内网绕行清单（`packages/ai/src/utils/fork-system-proxy-bypass.ts` 的 `FORK_SYSTEM_PROXY_BYPASS`，抄自公司代理 override 清单）：公司域名后缀、点名内网主机、CGNAT/RFC1918 式 IP 前缀（`10.`、`100.64.`–`100.126.`、`172.16.`–`172.32.`、`7.` 等）与 `*` 通配条目命中的目标不走系统代理；清单不约束 `PI_PROXY` 与环境变量代理。条目语义与来源格式对应：前导 `-` 剥离、数字开头为 IP 前缀、含 `*` 为整机名 glob、首尾皆点为点号标签包含、仅前导点为域名后缀、其余为精确或点后缀。
-- 零配置 TLS 默认：主进程网络引导时，未设 `NODE_TLS_REJECT_UNAUTHORIZED` 则默认 `0`，未配置 Git 校验选项则默认让 Git 继承 `GIT_SSL_NO_VERIFY=true`，便于使用拦截代理和私有网关。`NODE_TLS_REJECT_UNAUTHORIZED=1` 与 `GIT_SSL_NO_VERIFY=false` 分别要求恢复严格校验；后者不能把字符串 `false` 传给 Git，因为 Git 按变量是否存在关闭证书和主机名校验。显式 `0`／`true` 仍放宽相应校验。agent 目录 `.env` 先于默认值生效；worker 子进程入口不独立应用此默认。放宽校验会失去 TLS 端点身份验证，仅适用于受控环境。
-- 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。Windows 的已验证下载在替换失败时保留为 `.omp.tmp.*`，包括旧安装已成功回滚的情况；回滚失败同时保留旧映像供恢复。
-- Windows 下载成功后，校验、旧映像重命名/强杀回退、换入、回滚或 PATH 设置失败，MUST 打印失败阶段、原始错误、错误类型/代码、安装目标及可用的诊断日志路径，并输出正确引用路径的可执行 PowerShell 命令：未通过验证的二进制不能引导运行；已验证的保留下载可直接启动；旧映像恢复只在目标不存在时执行；重试固定本次 Release 与安装目录，最后核对目标文件及 PATH 命中的版本。二进制已换入但 PATH 设置失败时明确标为部分完成，不能提前报告安装成功。非致命清理失败须说明具体错误和安全重试命令；仍被旧会话占用的映像可留待会话退出后清理，不影响新版安装结果。详细错误仅向终端展示，落盘日志继续遵循脱敏契约。
+**角色**：offline 缺角色且 company 可用才补（显式含 `null`、CLI 优先）：`default`/`plan`/`slow`=`company/GLM-5.3-public`，`smol`/`task`/`vision`/`advisor`=`company/Qwen3.8-27B`，`tiny`/`commit`=`company/Qwen3.6-35B-A3B`；`memory` 仍自动。不限 `/model`/`Ctrl+T`/角色切换，不锁 company；保存/活动匹配/切换冲突仅排隐式。
 
-#### Scenario: 安装与运行的可观察行为
+|主进程|网络|
+|---|---|
+|Windows 全局 HTTP(S) `fetch`|LLM 流/OAuth/usage/发现/更新检查/web；本地服务 worker 无系统层；Unix socket 不变。逐跳重选；`redirect: "follow"` 才跟随（保 `"manual"`/`"error"`）；跨源剥 `Authorization`、`Proxy-Authorization`、`Cookie`、`Host`。|
+|逐跳优先级|显式 `proxy`（含 `false`、`PI_PROXY_<PROVIDER>`/`PI_PROXY`）> 目标 `HTTPS_PROXY`/`HTTP_PROXY` > `ALL_PROXY`（含小写）> 用户系统代理 > 直连；env 仅 HTTP(S)/裸 `host:port` 交 Bun（`NO_PROXY`）；SOCKS 等跳过。|
+|系统层|HKCU Internet Settings `ProxyEnable`/`ProxyServer` 每进程读一次：静态 `http=`/`https=`，无 `socks=`/PAC/WPAD；禁用/失败不装层。受 `NO_PROXY`/回环/内网硬 bypass/公司清单；清单不限制显式/env。|
+|公司清单|`packages/ai/src/utils/fork-system-proxy-bypass.ts` 的 `FORK_SYSTEM_PROXY_BYPASS`：公司后缀/主机/通配/CGNAT/RFC1918 式前缀（`10.`、`100.64.`–`100.126.`、`172.16.`–`172.32.`、`7.` 等）。去前导 `-` 后：数字开头=IP 前缀，`*`=整机名 glob，首尾点=标签包含，仅首点=域后缀，其余精确/点后缀。|
+|跨平台 TLS|agent `.env` 优先；缺 `NODE_TLS_REJECT_UNAUTHORIZED` 用 `0`、Git 未配校验用 `GIT_SSL_NO_VERIFY=true`。`1`/`false` 严、`0`/`true` 松；Git 禁传字符串 `false`（键存在即禁证书/主机名验证）。worker 不另设；松失端点验证，仅受控环境。|
 
-- **WHEN** 用户在普通或 offline 场景安装、启动或更新
-- **THEN** 按有效持久根、性能目录、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告
+|构建/更新|边界|
+|---|---|
+|发布|仅个人分发；[发布须独立明示授权](../fork-maintenance/spec.md#scenario-验证授权与证据独立)。|
+|Windows `bun run local`|编译换 `omp.exe`：让位、不杀、败则恢复、留占用映像；禁测试/冒烟/启动 worker/native 探测/试跑； `--skip-load-probe`。|
+|嵌入/回执|Release 嵌 fork 版本/更新仓库；本地 `packages/coding-agent/scripts/build-binary.ts` 只嵌仓库（`--version` 可无 `+fork.N`）。终端报平台/资源生成/编译/适用签名/还原生成文件；全过才报完成/实路径/总耗时，编译可静默。|
+|`omp update` 源|`PI_UPDATE_REPOSITORY` > fork GitHub Release，不退官方、不写配置/产物；CNB 不改源。SemVer > 同基线 fork counter（无 `+fork.N`=0）；URL `%2B`。GitHub 元数据/资产认证 env token > `gh auth token` > 匿名，SHA-256 取资产元数据。|
+|执行|仅原位换独立二进制；包管理仅提示 fork 安装器。交互 TTY 才报 %/速度/ETA；PATH 实文件不同→预警、提示事后 `omp --version`。不支持 `update.channel=canary`：显式更新提示配置/`omp update --stable`；启动静默不查。|
+
+|安装顺序|门禁|
+|---|---|
+|资格|仅 fork Release Linux glibc x64/Windows x64 二进制；`install.sh` 联网前拒 macOS；禁源码安装及其 CI 冒烟。|
+|目标/元数据|联网前拒目录目标、不移内容；元数据仅严格 TLS（信企业代理 CA），运行时 TLS/updater 不变。同版报已装、免下载，仍查/提示 PATH。|
+|下载|安装目录唯一临时文件；仅二进制资产可放宽：curl `--insecure`；`--ssl-no-revoke` 限 Windows 或支持的 POSIX Schannel。PS5.1 证书放行回调须保 TLS 1.2；7+ 可 `-SkipCertificateCheck`。|
+|Windows 客户端|支持系统 Windows PowerShell 5.1 x64；`curl.exe` 优先，缺目标代理 env 及 `ALL_PROXY` 才传用户系统代理；遵守 `NO_PROXY`。失败/不可用→ `Invoke-WebRequest -UseBasicParsing`。`omp update` 自办 HTTP/SHA-256/替换，无需 `pwsh.exe`。|
+|验证|已验元数据同名资产 SHA-256（缺/异禁执行）→试启动/`omp --version` 完全匹配 Release→换入；验证败留旧/清临时。|
+|换入|Linux 同目录原子 `mv`；Windows 唯一 `.omp.old.*` 让位、换败回滚；让位失败才[校验后强杀](#requirement-windows-安装器强杀回退的身份校验)。下次尽力清 `.omp.old.*`；换败留已验 `.omp.tmp.*`；回滚失败另留旧。|
+|恢复|Windows 已验留存可跑、未验禁跑；目标不存在才恢复旧；锁 Release/目录重试，核目标/PATH 版本。换后 PATH 失败=部分完成；清理失败给详情/安全重试，占用可等退出；不改结果。|
+|配置/错误|只改 PATH，不写旧 `settings.json`/用户 shell/`config.yml`。Windows 下载后验证/让位或强杀/换入/回滚/PATH 失败：报阶段/原错/类型和代码/目标/可用日志/可执行 PowerShell 命令（正确引用路径）；详情仅终端、日志脱敏。|
 
 ### Requirement: 宿主 Cargo 单变体发布构建
 
-OMP MUST 在 CNB 与手动发布 CI 中共用宿主原生 Cargo 构建及二进制打包入口，严格限制 Linux／Windows 的 addon 变体及兼容边界；实际分发构建 MUST NOT 调用 Bazel。
+CNB/手动 CI MUST 共用宿主 Cargo，禁 Bazel/测试/冒烟/worker/native 探测/试跑；其他平台和 `bun run build:native` 默认探测不变。
 
-#### Scenario: Linux x64 只构建和内嵌 baseline
+#### Scenario: 发布构建
+- **WHEN** 构建 Release
+- **THEN** 对应 x64 宿主跑 `bun scripts/build-release-native.ts`、`bun scripts/ci-release-build-binaries.ts`；只构建/嵌入对应带戳 addon。
 
-- **WHEN** CNB 或手动发布 CI 构建 `omp-linux-x64`
-- **THEN** MUST 在 Linux x64 宿主通过 `bun scripts/build-release-native.ts` 使用 Cargo + Zig，目标固定为 `x86_64-unknown-linux-gnu.2.17`，生成带版本戳的 `pi_natives.linux-x64-baseline.node`。
-- **AND** MUST 通过 `bun scripts/ci-release-build-binaries.ts` 只内嵌该 baseline addon，CPU 基线不要求 AVX2，保持 CentOS 7／glibc 2.17 兼容边界；不构建或内嵌 modern addon，不因宿主支持 AVX2 而提升目标要求。
+|资产|工具链/目标|唯一 addon / 兼容性|
+|---|---|---|
+|`omp-linux-x64`|Cargo+Zig；`x86_64-unknown-linux-gnu.2.17`|`pi_natives.linux-x64-baseline.node`；CentOS 7/glibc 2.17 固定、免 AVX2|
+|`omp-windows-x64.exe`|Cargo/MSVC|`pi_natives.win32-x64-modern.node`；modern/AVX2|
 
-#### Scenario: Windows x64 只构建和内嵌 modern
-
-- **WHEN** CNB 或手动发布 CI 构建 `omp-windows-x64.exe`
-- **THEN** MUST 在 Windows x64 宿主通过相同 native 入口使用 Cargo／MSVC，生成带版本戳的 `pi_natives.win32-x64-modern.node`。
-- **AND** MUST 通过相同二进制入口选择 modern／AVX2 运行时且只内嵌该 modern addon，不构建或内嵌 baseline addon；输出目录中偶然残留的其他变体 MUST NOT 被打包。
-
-#### Scenario: 共享入口与固定缓存配置
-
-- **WHEN** 上述任一宿主执行分发构建
-- **THEN** native 入口 MUST 自动选择本节固定目标，向绝对路径 `OMP_RELEASE_NATIVE_DIR`（默认 `packages/natives/native`）输出唯一所选 canonical addon 及版本戳；二进制入口 MUST 从该目录读取 addon，并按可选 `OMP_RELEASE_BINARY_DIR` 输出既有附件文件名。
-- **AND** native MUST 固定使用 Cargo `local` profile、`CARGO_PROFILE_LOCAL_STRIP=symbols`、thin LTO、16 codegen units 与增量编译；源码及依赖新鲜度由 Cargo 判断，不建立额外 native 源码指纹缓存或全仓扫描。
-- **AND** MUST 复用 Cargo registry／git／target、Bun 依赖及构建资源缓存；配置 `OMP_BUILD_CACHE_DIR` 时允许复用相同字节的 zstd 资源帧。CNB 的持久缓存及构建输出 MUST 位于源码树外，不依赖 Docker，不缓存检查或测试结果。
-- **AND** MUST NOT 运行测试、冒烟、worker 探测、native 加载探测或构建产物试运行；其他平台的既有构建入口与普通 `bun run build:native` 的默认加载探测不在本次切换范围。
-
-#### Scenario: 手动 CI 使用两个宿主而非 Bazel artifact 汇总
-
-- **WHEN** 手动派发 `.github/workflows/ci.yml`
-- **THEN** MUST 分别在 Linux 与 Windows x64 runner 执行本节两个共享入口，安装 `rust-toolchain.toml` 固定的 Rust 工具链；Linux 额外安装固定的 `cargo-zigbuild==0.24.1` 与 `ziglang==0.14.1`。
-- **AND** MUST 复用既有固定版本 GitHub cache actions 持久化 Cargo registry／git／target、Bun 与构建资源缓存；Cargo 缓存按平台、固定 native 变体、工具链及 `local-strip-symbols` 配置隔离，提供稳定恢复前缀，源码和依赖变化仍由 Cargo 失效判断。
-- **AND** MUST NOT 创建 Bazel native matrix、native artifact 汇总或 Bazel cache action 步骤；工作流名和文件路径保持不变，继续按其 `run_number` 生成 `+fork.N`。
-- **AND** 未选择发布时两个二进制和浏览器扩展仍 MUST 可作为 artifact 下载；仅在 `main` 明确授权且全部所需构建成功后发布原有三个附件，不增加 npm、Homebrew 或其他平台附件。
+- 自动选目标；canonical addon/戳读写绝对 `OMP_RELEASE_NATIVE_DIR`（默认 `packages/natives/native`）；可选 `OMP_RELEASE_BINARY_DIR`，名如上。
+- Cargo `local`、`CARGO_PROFILE_LOCAL_STRIP=symbols`、thin LTO、16 codegen units、增量；新鲜度由 Cargo 判；无额外指纹/全仓扫。复用 Cargo registry/git/target、Bun 依赖/资源及 `OMP_BUILD_CACHE_DIR` 同字节 zstd 帧；CNB 持久缓存/输出树外，无 Docker/检查测试缓存。
+- CI 双宿主按 `rust-toolchain.toml` 安装 Rust；Linux 加 `cargo-zigbuild==0.24.1`、`ziglang==0.14.1`。cache actions 固定；Cargo 缓存分平台/变体/工具链/`local-strip-symbols`，稳定恢复前缀；无 Bazel matrix/cache action、native artifact 汇总。
 
 ### Requirement: CNB 精确输入缓存与四附件交付
 
-OMP MUST 在保留 Git-only 源码同步和干净提交边界的前提下并行交付 Windows 与 WSL Linux 的 CLI 二进制和 SDK ZIP，只复用精确输入下已成功完成的产物，始终覆盖并确认四个上传；暖缓存性能目标 MUST 按命令启动至全部附件确认的真实端到端耗时衡量。
+CNB MUST 验 Export viewer 精确字节元数据；忽略生成物 `tool-views.generated.js`。禁全仓哈希/重复 WSL 预检/附件竞态/发布后复查。
 
-#### Scenario: Git-only 同步后才构建或复用
+#### Scenario: Git 同步
+- **WHEN** `bun run cnb`
+- **THEN** Windows 与 Ubuntu-24.04 WSL2 `/root/oh-my-pi`：查父仓/OpenWiki 子模块干净→`git pull --ff-only`/检出父仓固定子模块→复核干净、提交/Bun 版本同→并行建/复用。WSL 源码/脚本仅 Git 远端；禁强盖/stdin 传脚本/复制移动补丁清用户文件绕过。
 
-- **WHEN** 执行 `bun run cnb`
-- **THEN** MUST 先对 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行安全的 `git pull --ff-only`，确认两端工作区干净、Git 提交一致且 Bun 版本一致，再并行构建或复用各宿主产物。
-- **AND** WSL 源码和构建脚本 MUST 只通过 Git 远端同步，不通过 stdin 传脚本，也不复制、移动、打补丁或清理用户文件以绕过脏工作区检查；必要检查不因二进制缓存命中而跳过。
+|阶段|边界|
+|---|---|
+|命中|同宿主成功且齐全的二进制+SDK ZIP，干净提交/Bun/固定目标/发布环境（含版本/仓库/构建设置）全同→跳 native/打包，报复用。其余共享入口实建实包，成功登记；败/缺不复用/上传；中间缓存独立。|
+|SDK ZIP|同次宿主 addon（上表变体），禁残留/重编；含宿主入口/锁/编译输入，无 CLI 二进制/已装依赖/个人设置；解包编译免 Rust，Linux Bun x64 baseline。|
+|上传|两端齐才并行覆盖、逐一确认上表两二进制及 `omp-sdk-win32-x64.zip`、`omp-sdk-linux-x64.zip`。默认既有 `jchanghong/bin` `omp`；`--repo`/`--tag`，无交互/`--overwrite`，禁动他件/传独立源包/推源/替代 GitHub Release。|
+|计时|持久暖缓存目标约 120s（启动至四次上传接口确认）；分宿主报 native、二进制/SDK 打包、上传耗时及命中；实报未测/未达/上传败，局部非交付。|
 
-#### Scenario: 精确输入的完整产物缓存命中仍上传
+### Requirement: 默认设置
 
-- **WHEN** 宿主缓存包含先前成功生成的二进制与 SDK ZIP，且其干净 Git 提交、Bun 版本、固定目标及相关发布环境（包括版本、更新仓库和构建设置）与本次输入完全匹配
-- **THEN** MAY 复用这两个产物而跳过该宿主 native 构建及打包，并 MUST 明确报告缓存命中，不将跳过阶段报告为本次重新构建。
-- **AND** MUST 等两端的四个产物全部就绪，再向默认 `jchanghong/bin` 仓库的 `omp` 标签或显式指定的目标并行上传，覆盖四个同名附件；分别取得成功确认才报告本次交付完成，不得以缓存命中跳过任一上传。
+缺省 MUST 遵循配置/env 优先级；`tools.approvalMode` 见[审批](#requirement-授权模式与默认值)。
 
-#### Scenario: 缓存缺失、不完整或输入变化
+#### Scenario: 应用缺省
+- **WHEN** 无覆盖
+- **THEN** 按表。
 
-- **WHEN** 缓存缺失、二进制或 SDK ZIP 不完整、上次构建未成功完成，或提交、Bun、目标及相关发布环境任一项不匹配
-- **THEN** MUST 将该宿主视为缓存未命中，使用共享入口完成真实构建及打包；未完成或失败产物 MUST NOT 被复用或上传。
-- **AND** MUST 仅在成功完成构建及打包后记录可复用的完整产物；仍可由 Cargo 及资源缓存独立复用有效中间结果，不缓存检查或测试通过结果。
+|设置|值|
+|---|---|
+|`recap.enabled`, `statusLine.compactThinkingLevel`, `commit.enabled`, `providers.thinkingProbe`|`false`；默认关闭 `/commit`/eval `commit`、未知模型探测（含内网/自有/自定义）。|
+|`composer.shape`, `display.showTurnTime`, `mnemopi.embeddingVariant`|`box` (Rounded Box), `true`, `multilingual`|
+|`async.maxJobs`, `startup.setupWizard`, `startup.checkUpdate`, `marketplace.autoUpdate`|`32`, `false`, `false`, `off`|
+|`composer.predictions`|offline 仍用上游缺省 `true`；显式 `false` 优先。|
+|界面|`compact` [契约及验收](../personal-commands/spec.md#requirement-1-三种显示模式)。|
+|`terminal.programStatus`|offline 缺省关闭交互式 OSC 7501 探测/报告；显式优先、不落盘。|
+|`lsp.enabled`|普通/offline `false`；验收 `--no-lsp` 覆盖已保存值、仅本次关；非 CLI 不变。|
+|`stt.language`|`zh-CN`；本地 Whisper/云端转基语言（`zh`）。|
 
-#### Scenario: SDK ZIP 复用同宿主发布 addon
+### Requirement: CLI 默认轻量启动参数
 
-- **WHEN** CNB 打包 SDK ZIP
-- **THEN** MUST 使用同次构建的预编译 addon：Windows x64 仅包含 modern，Linux x64 仅包含 glibc 2.17 baseline；不得打包残留的其他变体或为了 SDK 重复构建 native。
-- **AND** ZIP MUST 包含宿主编译入口、锁文件和所需构建输入，不包含 CLI 二进制、已安装依赖或个人设置；解包后宿主编译不得调用 Rust 编译器，Linux 宿主使用 Bun x64 baseline 运行时。
+交互/print/RPC MUST 默认 `--no-extensions`（含扩展参数重解析）；ACP [原规则](../../../docs/cli-reference.md)。
 
-#### Scenario: 暖缓存端到端目标与阶段耗时
+#### Scenario: 内置命令仍启用
+- **WHEN** CLI 默认或显式关发现（全平台/模式）
+- **THEN** 全 bundled TS commands；实 RPC 来源 `custom`、TUI 补全 `/review`/`/annotate`/`/green`；不探测/遍历/载入用户/项目命令，其他自动扩展关。
 
-- **WHEN** 在持久缓存已就绪的环境衡量一次 `bun run cnb` 交付
-- **THEN** MUST 从命令启动开始计时，到四个附件的上传接口均成功确认为止，目标为约 120 秒；不得只测打包、单宿主构建或单次上传并称为端到端耗时。
-- **AND** MUST 分别报告各宿主 native、二进制及 SDK 打包、上传及缓存命中状态与实际阶段耗时；未实测、未达目标或任一上传失败时 MUST 如实说明，不把性能目标或单端成功冒充已完成的四附件交付。
-- **AND** 计时与分发 MUST NOT 增加测试、冒烟、native／worker 探测、产物试运行、全仓哈希扫描、重复 WSL 预检、附件竞态检查或发布后重复查询；上传接口的四次成功确认即为交付终点。
+显式 `-e <path>`/`--extension`/`--hook`/可信白名单、重解析注册/Skills/规则/上下文/MCP 不变，不落盘。SDK `restrictToolNames === true` 禁全部 custom commands；非限制非 CLI `discover` 缺省/`true`、`discoverCustomTSCommands()` 沿原发现/覆盖/冲突处理。
+
+### Requirement: Claude 插件发现默认关闭
+
+Claude 插件发现 MUST 默认关；无新配置/env/CLI。
+
+#### Scenario: Claude 发现关闭
+- **WHEN** 未启来源时启动/建或恢复会话（全模式/平台）
+- **THEN** 不探测/读 `plugins/installed_plugins.json`、插件缓存、用户/项目 `enabledPlugins`，非扫描后隐藏。预加载/Skills/MCP/规则/命令/工具/子代理同规；坏/缺/不可读不警告。
+
+`CLAUDE_CONFIG_DIR` 仅路径，不关普通 `.claude`/公司配置。原生注册表/`--plugin-dir <path>` 项目优先/去重，Claude manifest 可用、不顺扫其注册表/缓存；显式扩展/hook/可信来源/非插件 Skills 照用。`enabledProviders`（`claude-plugins`/`claude`/通配）或显式发现恢复启停；`disabledProviders` 优先，显式管理可照旧看禁用来源。授权按会话/发现范围，同目录切换不混缓存。
+
+### Requirement: 启动不检查 Python
+
+Eval 注册 MUST 仅依现有后端设置，无新开关。
+
+#### Scenario: 无 Python
+- **WHEN** 启动、建/恢复会话（全入口/模式、含子代理）
+- **THEN** 不测/预热/等 Python（含首提示/后台），不隐藏 Eval/警告；实际 Eval 才验、按需启内核，不可用报错；保留 `omp setup python --check`。
+
+### Requirement: 后台任务并发上限
+
+每根会话 MUST 共享 `async.maxJobs=32`（含 eval `agent()`），可降不可升，原解析/优先级、不落盘。
+
+#### Scenario: 并发满
+- **WHEN** 达有效上限
+- **THEN** 按原注册/报错拒绝启动；排队/完成/失败/取消不占运行位，不加队列/改 `task.maxConcurrency`。
 
 ### Requirement: 全平台轻量启动
 
-OMP MUST 默认省去 OMP 本体版本检查，并按需加载设置向导；offline 认证读取异步并行。不依赖用户新增配置文件，不改变显式操作入口。
+启动 MUST 惰性加载；无新设置，原显式入口。
 
-#### Scenario: 仅普通交互启动可选检查 OMP 新版本
+#### Scenario: 启动
+- **WHEN** 启动
+- **THEN** 按表。
 
-- **WHEN** 普通终端交互启动且 `startup.checkUpdate=true`
-- **THEN** 源码检出及不支持自更新的受管理安装跳过检查；其他安装后台查询自身发行源，按 `update.channel` 检查新版，且只在新版可用时通知。不下载或安装更新，不提供后台自动安装设置。
-- **WHEN** 未开启 `startup.checkUpdate`，或在 `OMP_OFFLINE`、print、RPC、ACP 启动
-- **THEN** 不发起 OMP 版本查询，不为该检查加载更新实现或展示新版通知。`OMP_OFFLINE` 只在本次运行关闭检查，不改写配置。
-- **AND** 显式 `omp update`（含检查模式）沿用既有行为。插件市场遵循[插件市场更新](#requirement-插件市场更新)；Claude 插件来源默认不扫描，具体边界见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
-
-#### Scenario: 未启用的设置向导不参与启动
-
-- **WHEN** `startup.setupWizard=false` 且未强制运行向导，即使已保存的 setupVersion 落后
-- **THEN** 不加载完整设置向导及其场景、认证或浏览器辅助依赖，不执行向导场景选择。
-- **AND** 仅启用启动动画时按需加载独立动画，不为动画初始化完整向导；显式强制设置与用户启用的版本化向导仍按原有条件运行。
-
-#### Scenario: offline 认证读取不串行阻塞启动
-
-- **WHEN** offline 启动需要 company 认证配置
-- **THEN** 提前发起异步快照读取，与配置加载和插件预加载等无认证依赖的步骤并行推进；依赖公司配置的模型注册与 Worker 启动仍等待快照就绪。
-- **AND** 单次读取、终态缓存、错误呈现与凭据继承边界遵循[公司内网模型](../model-providers/spec.md#requirement-公司内网模型仅-omp_offline)，不新增同步读取回退、重试或额外配置。
+|功能|条件→行为|
+|---|---|
+|更新|普通交互 + `startup.checkUpdate=true` + 支持自更新（排除源码/不支持的托管）→后台查发行源/`update.channel`，只提醒新版；无下载/自动安装配置。其余（含 offline/print/RPC/ACP）不加载/查/提醒，保存值/显式更新或检查不变。|
+|向导|非强制且（`startup.setupWizard=false` 或 offline）→即使 setupVersion 旧，不加载完整向导/场景/认证/浏览器、不选场景；offline 仅进程内 `false`。动画独立惰性；手动/强制/普通显式版控向导保留。|
+|认证|offline 按[公司快照契约](../model-providers/spec.md#requirement-公司内网模型仅-omp_offline)初始化。|
 
 ### Requirement: 插件市场更新
 
-OMP MUST 沿用上游 `marketplace.autoUpdate` 的可选自动更新，保持[缺省关闭](../fork-runtime-defaults/spec.md#requirement-默认设置)，且 `OMP_OFFLINE` 进程仅允许手动更新。
+offline MUST 只允许手动更新市场。
 
-#### Scenario: 普通启动显式开启自动更新
+#### Scenario: 市场刷新
+- **WHEN** offline
+- **THEN** 无自动刷新/查/升级（含显式 `notify`/`auto`），不落盘；启用来源照载，浏览/列表只读缓存。
 
-- **WHEN** 普通 CLI 启动且 `marketplace.autoUpdate` 为 `notify` 或 `auto`
-- **THEN** 沿用上游后台调度，尽力刷新至少 24 小时未更新的目录，再检查可用升级；`notify` 只将可用升级写入调试日志，`auto` 还会升级已安装插件。
-
-#### Scenario: 未启用或处于内网模式
-
-- **WHEN** 普通 CLI 启动时 `marketplace.autoUpdate=off`，或 `OMP_OFFLINE` 进程启动时设置为任意值
-- **THEN** 不调度市场自动刷新、检查或升级；offline 只在本次进程覆盖该设置，不改写用户配置。两种模式仍照常加载已启用来源的已安装插件。
-- **AND** 列出或浏览市场只读已有缓存，不自行触发更新。
-
-#### Scenario: 显式刷新和升级
-
-- **WHEN** 用户执行 `/marketplace update [name]` 或 `omp plugin marketplace update [name]`
-- **THEN** 仅刷新指定或全部市场目录，不自动重装或升级已安装插件；添加或刷新市场时清理遗留克隆临时目录，不影响进行中的克隆。
-- **AND** `/marketplace upgrade` 和 `omp plugin upgrade` 继续作为显式插件升级入口，保留原有作用域和状态保留规则。
+普通模式及手动更新沿[市场契约](../../../docs/marketplace.md#updates-removal-and-scope)；添加/刷新仅清遗留临时克隆。
 
 ### Requirement: 发布 CI 的触发、并发与权限
 
-OMP MUST 只允许手动触发发布工作流，并对并发与令牌权限做最小授权。
+发布 CI MUST 仅元数据/构建/打包/发布。
 
-#### Scenario: 发布 CI 的触发、并发与权限的详细边界
+#### Scenario: 手动发布
+- **WHEN** GitHub 发布 CI
+- **THEN** 仅 `workflow_dispatch`；`<工作流名>-<ref>` 排队不取消；默认 `contents: read`，仅建 Release job `contents: write`。
 
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 仓库唯一的发布工作流 MUST 只由 `workflow_dispatch` 触发，MUST NOT 配置推送、标签、定时或上游默认触发。
-- 并发组 MUST 为 `<工作流名>-<ref>`，MUST NOT 取消进行中的运行；同一 ref 的多次手动运行排队执行，不并发改写同一版本的产出。
-- 工作流默认权限 MUST 为 `contents: read`；只有实际创建 Release 的发布 job MAY 提升到 `contents: write`，其他 job（元数据、构建、产物汇总及测试）MUST NOT 获得写权限。
-- 工作流只运行版本元数据、构建、打包和发布所需步骤，不运行测试、冒烟、native／worker 探测或产物试运行；本地验证独立执行，不以工作流构建成功替代测试结果。构建产物可在未选择发布时下载，发布依赖版本元数据、全部二进制和浏览器扩展构建成功，不增加测试框架或 push／PR 触发。
-
-#### Scenario: 发布 CI 的触发、并发与权限的可观察行为
-
-- **WHEN** 查看工作流定义或以非手动方式尝试触发发布
-- **THEN** 只有手动派发会启动，并发组按 `<工作流名>-<ref>` 排队且不取消运行，写权限仅存在于发布 job
+`publish_release=false` 可下载；仅 `main` 显式开启+ 元数据/全部产物成功才发布。GitHub 说明；仅上表两二进制、`omp-browser-relay-extension.zip`（另有自动源码归档），无 npm/Homebrew/其他平台。`+fork.N` = `.github/workflows/ci.yml` `run_number`；不改名/路径/删建，只启此工作流；`nix.yml`、`bun-cache-warm.yml`、`stale.yml` 原样 `.disabled`，不与 CNB 同步；恢复/新增须明示触发和授权。
 
 ### Requirement: 安装器诊断日志
 
-OMP MUST 将安装诊断写入按运行唯一命名的日志文件，字段脱敏且写入失败不阻断安装。
+安装诊断 MUST 脱敏、不阻断。
 
-#### Scenario: 安装器诊断日志的详细边界
+#### Scenario: 独建日志
+- **WHEN** 安装器运行（同 PID 不复用）
+- **THEN** `omp.install.<UTC 日期>.<epoch 毫秒>.<PID>.log`（`YYYY-MM-DD`）； `operation_id`, `stage`, `elapsed_ms`, `platform`, `target_version`、级别/事件/有界结果；版本 `v?` + 三段数字 + 可选 `+fork.<数字>`，否则 `redacted`。
 
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 日志文件名 MUST 为 `omp.install.<UTC 日期>.<epoch 毫秒>.<PID>.log`：日期为 UTC 的 `YYYY-MM-DD`，其余两段使同一进程的不同次安装也各自独立。
-- 每条记录 MUST 含 `operation_id`、`stage`、`elapsed_ms`、`platform`、`target_version`，以及级别、事件名与有界的结果字段；`target_version` MUST 只接受可选的 `v` 前缀加 `<数字>.<数字>.<数字>`、可再带 `+fork.<数字>` 的形式，其他输入 MUST 记为 `redacted`。
-- 选择性能数据根时，安装器日志使用该根下的 `logs/`，保留原有回退规则。未选择性能数据根时，目录选择 MUST 依次尝试：绝对有效的 `OMP_CONFIG_ROOT`（含 profile 子目录）下的 `logs/`，否则用户数据根（`PI_CONFIG_DIR` 或 `.omp`）的 `logs/`；未显式指定根且 `<XDG_STATE_HOME>/omp` 已存在时改用该目录；仍不可写时回退到 `~/.local/state/omp`。Windows 上首选同一数据根，回退到 `%LOCALAPPDATA%\omp`。回退（而非首选目录）生效时 MUST 留下一条 WARN。
-- 保留策略 MUST 只清理本安装器模式的日志：保留最近 20 次尝试、最近 5 天，且 MUST 跳过 PID 仍存活的文件；不得删除应用日志或无关文件。
-- 日志写入失败 MUST 只在 stderr 输出一行提示并继续安装，MUST NOT 使安装失败或改变退出码。
-
-#### Scenario: 安装器诊断日志的可观察行为
-
-- **WHEN** 安装器在可写或不可写的数据根下执行
-- **THEN** 可写时生成唯一命名的安装日志并按 20 次／5 天保留，不可写时仅打印一行提示且安装继续
+性能根 `logs/`（原回退）> 绝对 `OMP_CONFIG_ROOT` 含 profile 或用户根（`PI_CONFIG_DIR`/`.omp`）`logs/`。无显式根且已有 `<XDG_STATE_HOME>/omp` 则用，不可写→`~/.local/state/omp`；Windows 数据根→`%LOCALAPPDATA%\omp`。回退 WARN；仅清同类，留 20 次/5 天，跳活 PID；写败 stderr 一行、不改退出码。
 
 ### Requirement: POSIX 安装器对运行中会话的检测
 
-OMP MUST 在替换已安装二进制前提示仍在使用它的会话，且不终止这些会话。
+POSIX MUST NOT 结束使用目标的会话。
 
-#### Scenario: POSIX 安装器对运行中会话的检测的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 替换前 MUST 扫描 `/proc/*/exe`，把解析后（含 ` (deleted)` 后缀归一化）等于安装目标真实路径的进程收集为运行中会话。
-- 命中时 MUST 提示安装目标、PID 列表及“它们会继续使用旧版本、需重启才能用新版本”，MUST NOT 发送信号或强制结束。
-- 无 `/proc` 时 MUST 降级为无法检测的状态继续安装，MUST NOT 因平台限制失败。
-- 安装目标尚不存在（全新安装）时 MUST 以字面路径参与比较，不因解析失败中断安装。
-
-#### Scenario: POSIX 安装器对运行中会话的检测的可观察行为
-
-- **WHEN** 安装目标正被若干会话使用（或反之）
-- **THEN** 安装器列出对应 PID 并完成原子替换，未命中或无 `/proc` 时静默继续
+#### Scenario: POSIX 换入
+- **WHEN** 换入前
+- **THEN** `/proc/*/exe`（去 ` (deleted)`）与目标实路径（新装字面）匹配→仅报目标/PID/须重启用新版；无 `/proc`/未命中静默。
 
 ### Requirement: Windows 安装器强杀回退的身份校验
 
-OMP MUST 只在能确认进程映像就是安装目标时执行强杀回退。
+强杀 MUST 按完整映像路径，非仅进程名。
 
-#### Scenario: Windows 安装器强杀回退的身份校验的详细边界
+#### Scenario: 让位失败
+- **WHEN** 旧映像无法改名
+- **THEN** 同名进程完整路径与目标一致才可结束（忽略大小写）；任一不可读→`unsafe_identity` + PID，不猜。结束/等待限时，仍活→失败+PID；记路径策略/匹配及剩余数，无命令行。
 
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
+### Requirement: 原生安装替换与回滚
 
-- 强杀回退 MUST 只针对可执行映像已重命名让位失败（如被占用）后的恢复路径执行，MUST NOT 用于常规更新。
-- 每个同名进程 MUST 读取其可执行路径并与安装目标做大小写不敏感的完整路径比较；只有完全相等者 MAY 被强制结束。
-- 任一进程的可执行路径不可读时 MUST 以 `unsafe_identity` 失败并列出这些 PID，MUST NOT 猜测或扩大到其他进程。
-- 结束与等待 MUST 有超时；仍有存活目标进程 MUST 报告剩余 PID 并失败。
-- 日志 MUST 记录匹配策略为精确可执行路径及匹配／剩余数量，MUST NOT 记录进程命令行。
+普通 native 构建 MUST 验宿主加载；分发除外。
 
-#### Scenario: Windows 安装器强杀回退的身份校验的可观察行为
+#### Scenario: 换入
+- **WHEN** 安装 native
+- **THEN** 从真实产物写戳；addon/bindings 带戳字节同且目标可写普通文件→留文件/mtime；不看时间/大小/成功标记。
 
-- **WHEN** 旧 `omp.exe` 无法重命名且存在同名进程
-- **THEN** 仅映像路径完全等于安装目标的进程被结束；路径不可读时安装以 `unsafe_identity` 失败并列出 PID
+同目录唯一临时文件，POSIX 换前 `0644` 无视旧权限；原子盖 > 占用时让位 `<目标>.old.<PID>`（不杀）> 让位失败可删目标。让位后换入失败恢复，回滚失败留新旧报路径；成功立即尽力清本次让位文件，清不掉不撤销/判失败。
 
 ### Requirement: Windows 内嵌 native 缓存的占用替换
 
-OMP MUST 在 Windows 上替换仍被其他进程加载的过期内嵌 addon，而不中断旧进程；不能因替换失败继续使用缺少当前 shell trace API 的旧缓存。
+Windows 换入失败 MUST NOT 用缺当前 shell trace API 的旧 addon。
 
-#### Scenario: 同版本重建后旧进程仍占用缓存
+#### Scenario: 旧 DLL 占用
+- **WHEN** Windows 同版内嵌 addon 大小改变、旧 DLL 仍加载
+- **THEN** 原子换 > 同目录唯一让位；不杀旧、不改缓存路径名；旧用已载 addon，新用 `RunTrace`。失败恢复，回滚失败留新旧报路径；清旧失败非换入失败。
 
-- **WHEN** 新二进制需要提取大小已变化的内嵌 addon，且另一进程仍加载同版本缓存中的旧 DLL
-- **THEN** 优先原子替换；Windows 不允许覆盖时把旧文件重命名到同目录唯一让位路径，再安装新文件，不终止旧进程、不改变现有缓存目录或 addon 文件名
-- **AND** 旧进程仍可调用其已加载 addon，新进程可加载新文件并使用 `RunTrace`；换入失败恢复旧文件，回滚失败保留新旧恢复文件并报出路径，让位文件清理失败不使换入失败
-- **AND** 验收使用真实已加载 DLL 复现替换失败，再确认替换后的文件字节、新进程的 shell trace 能力及旧进程继续运行；普通 native 构建和 `local`／`cnb` 的验证授权边界不变
-
-上游缺陷归属：已集成基线 `can1357/oh-my-pi@88a69582c755bd000e8dc0290981fc787a4f400c` 的 [`writeEmbeddedAddonFile`、`maybeExtractEmbeddedAddon`](https://github.com/can1357/oh-my-pi/blob/88a69582c755bd000e8dc0290981fc787a4f400c/packages/natives/native/loader-state.js#L456-L524) 直接重命名覆盖缓存 DLL；Windows 已映射该文件时返回 `EPERM`。提取失败后 [`loadNative` 仍尝试旧缓存](https://github.com/can1357/oh-my-pi/blob/88a69582c755bd000e8dc0290981fc787a4f400c/packages/natives/native/loader-state.js#L857-L890)，且版本校验接受同版本的旧构建，可能使 Bash 预览实例化 `RunTrace` 时抛出 `undefined is not a constructor`。本条记录该上游基线的缺陷，不断言后续上游版本状态。
+验实际 DLL 占用回退、换后字节、新 shell trace、旧进程；普通 native/`local`/`cnb` 验证授权不变。
 
 ### Requirement: native 能力缺失时的运行期降级
 
-OMP MUST 在加载到的 native addon 缺少管道流能力时降级相关视图而不影响命令执行。
+管道 MUST 可独立于 Bash 降级。
 
-#### Scenario: native 能力缺失时的运行期降级的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 当 addon 不导出管道流类或其实例化失败时，bash 工具 MUST 仍然执行命令并返回正常结果，MUST NOT 抛错、MUST NOT 因此改用交互式 pty 模式。
-- `proc://<id>/streams` 与该 job 的管道组件 MUST 降级为不含流数据的说明性结果（报告该 job 没有可用管道流），MUST NOT 使后台 job 状态、退出码或输出读取失效。
-- 该降级 MUST 只影响管道流视图；其余 native 功能缺失仍按各自既有诊断报错。
-
-#### Scenario: native 能力缺失时的运行期降级的可观察行为
-
-- **WHEN** 一个较早版本的 addon 被加载且命令含管道（如 `| tail`）
-- **THEN** bash 调用成功返回命令结果，`proc://<id>/streams` 报告无可用管道流
+#### Scenario: 无流
+- **WHEN** addon 缺管道流类或实例化失败
+- **THEN** Bash 照常，不抛错/改交互 PTY；`proc://<id>/streams`/管道组件报无流，job 状态/退出码/读输出不变；其他 native 缺失诊断照旧。
 
 ### Requirement: 被中断工具结果的取消标记
 
-OMP MUST 区分“被中断取消”与“执行失败”，并在工具结果中持久化该事实。
+取消 MUST 独立于错误持久化。
 
-#### Scenario: 被中断工具结果的取消标记的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 工具调用因中断在执行前被跳过、在等待用户授权时被取消、或在执行中被信号中断时，持久化的工具结果 MUST 带 `cancelled: true`，并与 `isError` 同时存在。
-- 已产生真实结果的工具 MUST 保留原结果，MUST NOT 因随后到达的中断把结果改标为取消；未开始执行的不可中断工具同样 MUST 继续执行。
-- 该标记 MUST 写入会话记录（含 fork 复制与投影读取），使用户界面与上层消费者能把取消显示为取消而非错误，且 MUST NOT 改变工具自身的内容或退出码。
-
-#### Scenario: 被中断工具结果的取消标记的可观察行为
-
-- **WHEN** 一批工具调用在中断期间被跳过或中断
-- **THEN** 对应工具结果在会话记录中带 `cancelled: true`，已完成调用保留真实结果
+#### Scenario: 中断
+- **WHEN** 中断跳过执行、取消授权等待或信号打断执行
+- **THEN** 持久化 `cancelled: true`（与 `isError` 并存），供会话/fork 复制/投影/上层区分；原内容/退出码，迟到不重标，未启的不可中断工具仍执行。
 
 ### Requirement: 设置写入的版本校验
 
-`omp config set`／`omp config reset` MUST 以 revision 判定快照并做 CAS 写入；无法安全读取当前配置时 MUST 失败而非覆盖。
+`omp config set`/`omp config reset` MUST revision CAS；会话写入不变。
 
-#### Scenario: 设置写入的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 写入前 MUST 取得当前配置 revision；提交时 revision 已变化 MUST 拒绝写入并报冲突，MUST NOT 静默覆盖他人改动。
-- 配置文件不存在、不可解析或 revision 无法确立时 MUST 以非零退出码失败，MUST NOT 退化为整文件覆盖。
-- 成功写入 MUST 保留无关键、注释与结构；CLI 成功回执不输出内部 revision。
-- 该版本校验 MUST NOT 扩大到普通会话中的运行时设置写入。
-
-#### Scenario: 无法安全读取时拒绝写入
-
-- **WHEN** 配置文件损坏或 revision 无法确立时执行 `omp config set`
-- **THEN** 命令以退出码 1 失败，原文件保持不变
+#### Scenario: 提交
+- **WHEN** set/reset 提交
+- **THEN** revision 变更报冲突；无文件/解析失败/无 revision 非零不覆盖（`set` 损坏/无 revision 退出 1）；保留无关键/注释/结构，回执无 revision。
 
 ### Requirement: 会话通信回执
 
-OMP MUST 在 `irc` 发送成功的回执中保留消息身份，使冷恢复能把发送与接收识别为同一条通信。
+`irc` MUST 按身份还原，非按顺序/文本。
 
-#### Scenario: 会话通信回执的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 发送成功（`outcome` 非 `failed`）的回执 MUST 携带原消息的 `id` 与 `ts`，并与写工具结果一起持久化；失败回执保持原样，不伪造身份。
-- 冷恢复只按该身份去重，不按到达顺序或文本猜配对；缺失身份时保留原不完整事实，不推断为两次通信。
-- 该身份只存在于持久化回执，不改 `irc` 的发送参数、路由、唤醒或权限语义。
-
-#### Scenario: 会话通信回执的可观察行为
-
-- **WHEN** 含 `irc` 发送的会话被重新加载
-- **THEN** 已发送消息与对端接收记录按同一 `id`／`ts` 对应，不重复计数
-
-### Requirement: Windows 统计端口恢复
-
-OMP MUST 在恢复 Windows 统计端口时保留进程身份保护和安全回退行为。
-
-#### Scenario: 已占用的统计面板端口
-
-- **WHEN** Windows 统计面板的目标端口被无法正常响应的进程占用
-- **THEN** 仅在能够确认监听进程属于 OMP Stats 时 MAY 回收并重新使用端口；无法确认身份时 MUST NOT 终止该进程，继续使用安全的端口回退行为。
-
-### Requirement: OpenWiki 随 OMP 合并构建和发行
-
-OMP MUST 在现有 Windows x64 与 Linux glibc x64 二进制中合并提供所纳入的 OpenWiki 代码、实际运行依赖、资源及许可证，并通过 OMP 安装和更新。运行 MUST 在 OMP 进程内完成，不要求独立 OpenWiki 包、CLI、MCP 服务、模型网关服务或用户另装 Node／Bun。本要求不增加发布平台、发布渠道或自动发布权限。
-
-#### Scenario: 正式发行使用固定子模块提交
-- **WHEN** 构建包含 OpenWiki 的 OMP 正式发行二进制
-- **THEN** 构建显式初始化并使用父仓库 gitlink 指定的 OpenWiki fork 提交，纳入与该提交对应的代码、所需依赖和资源，不从浮动分支或独立 OpenWiki 已发布包替代源码
-- **AND** 子模块提交不可取得或所需构建输入缺失时明确失败，不将缺少功能的产物报告为完整发行物
-
-#### Scenario: 本地开发构建使用工作区
-- **WHEN** 开发者在本地构建包含 OpenWiki 的 OMP 二进制
-- **THEN** 可使用 `vendor/openwiki` 当前工作区，包括未提交修改；构建不得为匹配父仓库 gitlink 而强制重置这些修改
-- **AND** 此类本地产物不冒充以固定提交构建的可复现正式发行物
-
-#### Scenario: 干净环境直接使用
-- **WHEN** 用户在支持的平台安装 OMP 发行物，环境未安装 OpenWiki、Node、Bun 或其他 JavaScript 包管理器，所选模型及必要 Git 工具已就绪
-- **THEN** 用户可从 `omp openwiki` 使用所纳入功能，并由 OMP 内置 AI 工具查询已有 Wiki，无需额外包安装、源码目录或开发机 `node_modules`
-- **AND** 不在运行时下载缺失的 OpenWiki 依赖或要求用户安装独立 OpenWiki／JavaScript 运行时来绕过依赖缺失
-
-#### Scenario: 运行进程与辅助工具边界
-- **WHEN** 执行 OpenWiki 的生成、查询、链接或可视化
-- **THEN** 不启动独立 OpenWiki CLI、Agent、Node 或 MCP 服务进程，也不要求用户先运行一个模型网关服务
-- **AND** 允许必要的 Git、浏览器等辅助进程，不把“内置”扩大解释为 OMP 进程树绝无子进程
-
-#### Scenario: 依赖与许可证随包完整
-- **WHEN** 从最终 OMP 发行物使用生成、检索、可视化和导出能力，并查看随包许可说明
-- **THEN** 实际使用的 Agent、工具调用、SQLite／FTS5、生成 Agent 的内置 Skill／提示及浏览器资源调用面不依赖发行物之外的 OpenWiki 安装、旧 OpenWiki home 或开发源码；许可说明包含 OpenWiki 及实际纳入第三方资源所需的版权和许可证
-- **AND** 保留原生 Agent 所需的运行依赖和 Skill 资源是允许的，不以“无需单独安装”为由错误排除生成执行所需代码或资源
-
-#### Scenario: 不改变既有发布授权
-- **WHEN** 将 OpenWiki 纳入现有构建与发布链路
-- **THEN** 继续遵循现有手动 CI、发布授权、平台和附件范围，不新增独立 OpenWiki 包或发行渠道，不恢复 npm／Nix 发布，不向发布工作流加入测试作业
-- **AND** 真实功能和发行物验收在单独授权的验证中进行，构建成功不能替代功能验收
-
-### Requirement: OpenWiki 离线资源与模型服务边界
-
-OMP MUST 随发行提供关系图、Markdown 阅读器、Mermaid 等自身可视化功能所需的浏览器资源，使实时浏览和静态导出不依赖公网 CDN 或运行时下载。OpenWiki MUST 遵循 OMP 已有 offline 和模型访问规则；无公网不等于无需可达的模型服务。
-
-#### Scenario: 无公网实时浏览和静态导出
-- **WHEN** 用户在无公网环境使用实时可视化，或通过静态 HTTP 服务访问导出目录
-- **THEN** 图、Markdown 阅读器和 Mermaid 显示使用本地完整资源，不访问 jsDelivr、Google Fonts 等外部资源源站，也不因开发机缓存存在而掩盖资源缺失
-- **AND** 静态导出携带其自身所需资源，不依赖正在运行的 OMP、OpenWiki Agent 或 MCP 服务
-
-#### Scenario: 内网生成与无模型查询
-- **WHEN** `OMP_OFFLINE` 启用且 OMP 已配置的内网模型服务可达
-- **THEN** OpenWiki 可按 OMP 现有 offline 模型与认证规则生成，不启动 OpenWiki 专用在线模型发现、认证向导或外部连接器
-- **AND** 只读查询和浏览已有 Wiki 不要求模型凭据；生成所需模型服务不可达时如实失败，不以离线可视化能力冒充离线模型推理
-
-#### Scenario: 内置路径禁用独立公网遥测
-- **WHEN** 用户在离线或非离线环境通过 OMP 内置路径执行 OpenWiki
-- **THEN** 不发送 OpenWiki 自己的公网遥测，不改变 OMP 自身遥测规则或 OpenWiki fork 独立运行的原有行为
-- **AND** 用户显式使用 `--telemetry-file` 时，仍按上游遥测禁用语义写出本地状态，记录 `disabled: true` 和 `sent: false`，不因此发送公网事件
-
-### Requirement: OpenWiki 数据根与工作区隔离
-
-OpenWiki 仓库内容 MUST 保持在项目的 `openwiki/` 下；OMP 管理的工作区注册表、缓存及仓库数据以外的用户级运行状态 MUST 在离线与非离线环境均遵循既有有效配置根和 profile 规则，不新增平行活动数据根。无需迁移或接管旧独立 OpenWiki 工作区；读取失败 MUST NOT 被当作空注册表静默覆盖。
-
-#### Scenario: 环境变量与 profile 切换
-- **WHEN** 用户设置有效 `OMP_CONFIG_ROOT` 或切换 OMP profile 后使用 OpenWiki，无论是否启用 `OMP_OFFLINE`
-- **THEN** OMP 管理的 OpenWiki 用户级状态跟随该有效数据根和 profile；未设置有效 `OMP_CONFIG_ROOT` 时沿用 OMP 既有默认目录解析，`OMP_OFFLINE` 本身不改变数据根
-- **AND** OMP 内置路径不使用 OpenWiki 独立安装的默认 home 或 `OPENWIKI_CONFIG_DIR` 作为平行活动数据根；独立运行的 OpenWiki fork 保留自身原有目录规则
-
-#### Scenario: 仓库数据保持项目内布局
-- **WHEN** 用户改变 `OMP_CONFIG_ROOT`、profile 或 `OMP_OFFLINE` 后生成、更新或查询仓库 Wiki
-- **THEN** 仓库内既有 `openwiki/`、Claims、manifest 和 checkpoint 仍保持项目内布局，不随用户级数据根搬迁，也不影响已有仓库 Wiki 的格式兼容
-
-#### Scenario: 不接管旧独立工作区
-- **WHEN** 用户首次使用 OMP 内置 OpenWiki 工作区
-- **THEN** 工作区按当前 OMP profile 的状态运行；本次不要求读取、迁移或接管独立 OpenWiki 已有工作区注册表，不修改或删除旧注册表
-- **AND** 只读查询不写工作区注册表，也不导入个人知识库、连接器或独立 OpenWiki 凭据
+#### Scenario: 回执及恢复
+- **WHEN** `outcome` 非 `failed` 或恢复通信
+- **THEN** 成功存原消息 `id`/`ts`；恢复仅按身份/接收记录去重。缺身份保不完整事实、不推断两条；失败不造身份，参数/路由/唤醒/权限不变。
 
 ### Requirement: 可选性能数据根
 
-OMP MUST 提供可选的 `OMP_CACHE_DIR`，用于分离既有 Cache、统计、日志和默认 native；配置、会话及其他持久数据保持原有位置。
+`OMP_CACHE_DIR` MUST NOT 迁持久数据。
 
-#### Scenario: 显式选择性能根
-- **WHEN** `OMP_CACHE_DIR` 经首尾空白处理和 `~` 展开后为绝对路径
-- **THEN** OMP MUST 在 Linux 下以 `<OMP_CACHE_DIR>/<UID>` 作为性能数据根，`<UID>` 为当前用户的数字 UID；Windows 直接以该路径作为性能数据根；保留既有相对布局及命名 profile 的 `profiles/<name>/` 布局，不额外添加哈希、持久根或 SDK 身份目录
-- **AND** 此选择在 offline 和普通模式均生效；已有专用路径覆盖（如 `PI_NATIVES_DIR`）保留原有优先级与行为
+#### Scenario: 选根
+- **WHEN** 解析性能根
+- **THEN** 分流 Cache/统计及配套/运行安装日志/默认 native；保布局/`profiles/<name>/`，无哈希/持久根/SDK 身份目录；保 `PI_NATIVES_DIR`/显式模型库等覆盖。
+
+|顺序（空/相对不按 cwd 解析）|路径|
+|---|---|
+|`OMP_CACHE_DIR` trim/展开 `~` 后绝对|Linux `<OMP_CACHE_DIR>/<UID>`（当前数字 UID）；Windows 原路径|
+|否则 Linux offline|`/dev/shm/omp-<UID>`，不再加 UID|
+|否则|原路由/XDG；`models.db` 仍 agent/XDG data|
 
 #### Scenario: Linux offline 默认性能根
-- **WHEN** 没有有效显式 `OMP_CACHE_DIR`，且 Linux 进程按既有 `OMP_OFFLINE` 真值规则启用 offline
-- **THEN** OMP MUST 使用 `/dev/shm/omp-<UID>` 作为性能数据根，`<UID>` 为当前用户的数字 UID，不再追加 UID，并保留既有 profile 布局
-- **AND** 隐式根不要求挂载允许执行。编译版 JS eval 的可执行 `cache/bun-stub` 与需执行映射的 native addon 二进制 MUST 沿用未选择性能根时的路径（适用的已初始化 XDG cache，否则配置根；保留 profile 布局），不探测挂载选项。grammar 等数据缓存仍走所选性能根；此例外不改显式 `OMP_CACHE_DIR` 或 `PI_NATIVES_DIR` 的既有行为。
-- **AND** WebKit 主程序不使用隐式 `/dev/shm` 根：保留显式性能根优先于显式配置根，未显式指定时沿用上游共享目录。
+- **WHEN** 隐式 `/dev/shm`
+- **THEN** 无可执行挂载要求/探测；编译版 JS eval `cache/bun-stub`/执行映射 addon 绕性能根（已初始化且适用 XDG cache > 配置根，保 profile），grammar 等照用。WebKit 主程序：显式性能根 > 显式配置根 > 上游共享。
 
-#### Scenario: 未选择性能根
-- **WHEN** 没有有效显式 `OMP_CACHE_DIR`，且不是 Linux offline
-- **THEN** OMP MUST 保留原有目录及适用的 XDG 路由，不新增默认目录；空值或相对值不作为显式性能根，也不相对当前工作目录解析
-- **AND** 默认模型目录缓存 `models.db` 保留既有 agent／XDG data 路由
+选根含 `agent/models.db`/运行依赖。持久配置/认证/会话/用户及项目数据、日志级别/回退/错误、非内嵌资源缺失/下载不变。清/切仅可丢性能数据；禁迁/并/删旧、预检/测速/新配置/层级/后台/双写/备份恢复；无实测速益承诺。
 
-#### Scenario: 性能与持久数据归属
-- **WHEN** 选择了性能数据根
-- **THEN** 原有 Cache（含默认模型目录缓存 `agent/models.db` 与运行依赖）、统计数据库及配套文件、运行和安装日志、默认 native 及其缓存使用所选根下既有相对布局，隐式根的可执行文件例外见上
-- **AND** 显式传入的模型缓存数据库路径不受性能根选择影响
-- **AND** 配置、认证、会话、其他未迁移的用户状态和项目数据 MUST 保持原有位置
-- **AND** 原有日志级别、错误处理、回退和专用覆盖规则不因目录选择而改变
+### Requirement: 公司 offline 内网 Git API 可用
 
-#### Scenario: 性能数据丢失或切换
-- **WHEN** 性能目录被清空或切换
-- **THEN** 统计、日志和缓存允许丢失；非内嵌资源的缺失和下载遵循原有规则，其他持久数据不随之删除或重置
-- **AND** 不自动搬迁、合并或删除旧目录，也不新增配置、目录层级、后台进程、双写或备份恢复机制
+MUST 区分无公网与内网 Git API 不可用。
 
-#### Scenario: 轻量目录选择
-- **WHEN** OMP 启动或运行并选择性能目录
-- **THEN** 目录选择 MUST NOT 增加预检查、目录测速或后台服务；本功能旨在减少相关 NFS 访问，不承诺未经测量的性能收益
+#### Scenario: 内网 PR/MR
+- **WHEN** 内网 PR/MR 查询/创建
+- **THEN** 按平台/已配接入判断，不因 offline 要求手工建 MR；能力非授权，不猜产品/API 地址/认证格式/自动合并。
 
-### Requirement: 公司 offline 内网 Git API 可用（2026-11-12 权威补充）
+### Requirement: 授权模式与默认值
 
-OMP MUST 区分无法访问公网与内网 Git API 不可用，不因启用 `OMP_OFFLINE` 就认定用户必须手工创建 MR。
+`tools.approvalMode` 与 `--approval-mode` MUST 均接受新增值 `guarded`，参数非法时的支持值须含 `guarded`；不改上游默认。
 
-#### Scenario: 在公司 offline 环境中判断 PR／MR API 是否可用
+#### Scenario: 启动参数覆盖设置项
 
-- **WHEN** 任务需要在公司 offline 环境中查询或创建内网 PR／MR
-- **THEN** MUST 按目标平台和已配置的接入判断 API 是否可用，不能仅凭无公网判定 API 不可用或要求用户手工创建 MR。
-- **AND** 已确认的平台能力不等于操作授权，也不推断具体 Git 产品、API 地址、认证格式或自动合并能力。
+- **WHEN** 配置 `write`、传入 `--approval-mode guarded`
+- **THEN** MUST 仅本进程用 `guarded`，不写配置
 
-证据：用户已在公司 offline 环境实测确认内网 Git 平台提供 PR／MR 查询和创建 API，并跑通“克隆 → 改代码 → push → 建 MR → 放弃 → 删分支”。这不是本工作区的测试结果。
+### Requirement: 授权模式的放行边界
+
+`guarded` MUST 自动放行未受额外约束的读/写/执行；`always-ask-cached` 的执行调用不得复用文件/目录授权。
+
+#### Scenario: guarded 放行普通调用但危险操作仍确认
+
+- **WHEN** `guarded` 下工具声明本次危险操作覆盖
+- **THEN** MUST 逐次确认，禁复用缓存或记住本次授权
+
+### Requirement: 用户策略与受限目录始终有效
+
+`tools.approval` 的 `prompt` MUST 压过工具声明的 `allow`；`guarded` 不豁免逐工具策略及受限目录。
+
+#### Scenario: 受限目录内调用
+
+- **WHEN** `guarded` 调用触及 `tools.restrictedFolders` 目录或子目录
+- **THEN** MUST 逐次确认，不复用授权
+
+### Requirement: 非 UTF-8 参数保真与派发
+外部 `argv` MUST 用 OS 字符串保留非 UTF-8 参数原字节（禁替换、截断、重编码；含延迟 FIFO 重定向经 `/bin/sh` 转发）。仅参数非 UTF-8：仅声明接受原参的内建可自行处理，其余 MUST 改派外部程序并传原参。
+
+#### Scenario: 原生命令名的派发绕过内建与函数
+- **WHEN** 命令名非 UTF-8
+- **THEN** MUST 绕过内建、函数，直接按 `PATH`（含 cwd 等相对项）查找执行；禁仅因解码失败报“未找到”或复用 UTF-8 名称解析缓存。
+
+### Requirement: 内建命令无法接受非 UTF-8 参数时的失败契约
+内建无法消费非 UTF-8 参数 MUST 明确失败，禁静默丢参续跑。
+- `declare`/`local`/`readonly`（stderr、通用非零退出）：显示模式，操作数非 UTF-8 或含 `=` → `<实际命令名>: <操作数>: not found`（函数内 `local -p` 用 `local:`，非 `declare:`）；定义模式，变量名非 UTF-8 → `<命令名>: <操作数>: not a valid variable name`；合法 `name=value` 不因赋值被拒。
+- `export` 非 UTF-8 操作数 → stderr `export: <操作数>: invalid variable name`，用法码 `2`。
+
+#### Scenario: 通用内建拒绝非 UTF-8 参数
+- **WHEN** 内建的普通字符串参数非 UTF-8
+- **THEN** 内部错误 `builtin cannot accept non-UTF-8 argument`；不得以余参续跑并产生副作用。
+
+### Requirement: Windows 内建 rsync 路径
+Windows 内建 `rsync` MUST 支持 UNC 及 verbatim 路径。
+
+#### Scenario: UNC 和 verbatim 路径
+- **WHEN** 扫描本地目录或访问过滤文件
+- **THEN** 支持两种路径；设 `--confine-root` 时，逐目录 merge 的根内过滤生效，不读根外过滤文件、不改变传输根。
+
+### Requirement: `timeout` 的保留状态退出码
+`timeout` 超时终止操作数 MUST 返回（`--preserve-status`/默认）：非 Windows 投递 KILL `137`/`137`；POSIX 投递其他信号 `N`：`128 + N`/`124`；Windows 无法投递信号而取消进程内操作数 `128`/`124`。
+
+#### Scenario: 信号致死与取消回退
+- **WHEN** Windows 进程内操作数忽略初次取消并达 `-k` 升级期限
+- **THEN** 取消回退仍非 KILL。
+
+### Requirement: 进程树信号的快照式投递
+每波前 MUST 快照目标，禁同波组投递后重枚举、重投组已覆盖成员；仅组投递失败 MUST 按成员句柄回退。本波 TERM 处理器立即创建的清理子进程不收本波信号。
+范围仅限实际启动的外部成员及其进程组；禁向宿主 PID 或其子树发信号，误列宿主为后代须剪除整棵子树。
+
+#### Scenario: 取消作用域与宿主保护
+- **WHEN** 取消清理多进程管道或单进程命令
+- **THEN** 管道覆盖全部此类成员（含脱离子进程组的输入阶段），单进程仅自身。
+
+### Requirement: 取消后的管道等待宽限
+已启动子进程的管道取消时 MUST 保留 TERM 清理宽限，禁提前返回并立即硬杀。
+
+#### Scenario: 取消不缩短清理宽限
+- **WHEN** 管道成员成功启动后收到取消信号
+- **THEN** MUST 等至成员按 TERM 清理规则结束；轮询回收已停止成员，余者按取消语义等待；禁立即销毁进程句柄。
+
+### Requirement: 逐输入元数据边界
+
+Enqueue MUST support per-input metadata; never send as Provider options or widen restricted sessions' tool list or authorization.
+
+#### Scenario: Metadata
+- **WHEN** tool denylist, `sourceCommand.automationId` or attachments (refs/filename/MIME/bytes/etc.) accompany input
+- **THEN** runtime queue and journal retain them for turn tool availability and provenance.

@@ -2558,8 +2558,6 @@ mod tests {
 		assert!(capture.out().contains("UPPER.TXT:hit\n"));
 	}
 
-	// gzip is supplied by the POSIX toolchain, not the default Windows PATH.
-	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn anchored_negative_glob_excludes_under_dot_operand() {
 		let tree = anchored_glob_tree();
@@ -2613,6 +2611,8 @@ mod tests {
 		assert_eq!(capture.out(), "./src/b.txt:1:needle\n");
 	}
 
+	// The fixture requires the external gzip decompressor from the POSIX toolchain.
+	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn search_zip_decompresses_gzip() {
 		let tree = tempfile::tempdir().unwrap();

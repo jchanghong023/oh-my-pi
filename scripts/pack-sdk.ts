@@ -56,8 +56,9 @@ async function pack(out: string): Promise<void> {
 			"patches",
 			"packages",
 			"docs",
-			"docs-zh-CN/team.md",
 			"python/robomp/web/package.json",
+			"vendor/openspec",
+			"vendor/superpowers",
 		)
 	)
 		.split("\0")
@@ -67,7 +68,7 @@ async function pack(out: string): Promise<void> {
 		throw new Error("Initialize vendor/openwiki before packaging the SDK.");
 	}
 	// Git can discover the parent repo if this directory is not an initialized submodule.
-	const vendorPaths = ["src", "skills", "static", "package.json", "tsconfig.json", "tsconfig.client.json", "LICENSE"];
+	const vendorPaths = ["src", "skills", "package.json", "tsconfig.json", "tsconfig.client.json", "LICENSE"];
 	const vendorFiles = (await git(vendor, "ls-files", "--cached", "-z", "--", ...vendorPaths))
 		.split("\0")
 		.filter(Boolean);

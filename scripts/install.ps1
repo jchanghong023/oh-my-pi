@@ -26,10 +26,19 @@ $script:InstallLogPath = $null
 $script:InstallTerminalLogged = $false
 $script:InstallPlatform = "windows-unknown"
 $script:InstallVersion = "unspecified"
+$script:InstallLogLevels = @{ ERROR = 0; WARN = 1; INFO = 2; DEBUG = 3 }
+$configuredLevel = ([string]$env:OMP_LOG_LEVEL).Trim().ToUpperInvariant()
+$script:InstallLogThreshold = if ($script:InstallLogLevels.ContainsKey($configuredLevel)) {
+    $script:InstallLogLevels[$configuredLevel]
+} elseif (([string]$env:OMP_OFFLINE).Trim() -match '\A(?:1|true|yes|on)\z') {
+    $script:InstallLogLevels.WARN
+} else {
+    $script:InstallLogLevels.DEBUG
+}
 
 function Write-InstallLog {
     param([string]$Level, [string]$Event, [hashtable]$Fields = @{})
-    if (-not $script:InstallLogPath) { return }
+    if (-not $script:InstallLogPath -or $script:InstallLogLevels[$Level] -gt $script:InstallLogThreshold) { return }
     try {
         $now = [DateTimeOffset]::UtcNow
         $record = [ordered]@{
@@ -575,10 +584,17 @@ function Install-Binary {
     }
     if ($Ref) {
         Set-InstallStage "release_metadata"
+        # Escape the tag as a single URI segment. EscapeDataString preserves
+        # literal dots, so reject complete dot segments before Uri normalizes them.
+        if ($Ref -in ".", "..") {
+            Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_requested_tag" }
+            throw "Invalid release tag: $Ref"
+        }
+        $refPath = [Uri]::EscapeDataString($Ref)
         Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.github.com"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
         Write-Host "Fetching release $Ref..."
         try {
-            $Release = Invoke-InstallWebRequest -Uri "https://api.github.com/repos/$Repo/releases/tags/$Ref" -TimeoutSec 60
+            $Release = Invoke-InstallWebRequest -Uri "https://api.github.com/repos/$Repo/releases/tags/$refPath" -TimeoutSec 60
         } catch {
             $failureFields = Get-InstallFailureFields $_
             Write-InstallLog ERROR http_request_failed $failureFields
@@ -601,9 +617,13 @@ function Install-Binary {
     Write-InstallLog INFO http_request_completed @{ result = "success"; host = "api.github.com"; endpoint = "release_metadata"; http_status = "success" }
 
     $Latest = $Release.tag_name
-    if (-not $Latest) {
-        Write-InstallLog ERROR release_metadata_invalid @{ result = "missing_tag" }
+    if ($Latest -isnot [string] -or -not $Latest -or $Latest -in ".", "..") {
+        Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_tag" }
         throw "Failed to fetch release tag"
+    }
+    if ($Ref -and -not [string]::Equals($Latest, $Ref, [StringComparison]::Ordinal)) {
+        Write-InstallLog ERROR release_metadata_invalid @{ result = "unexpected_tag" }
+        throw "GitHub metadata did not match the requested release tag."
     }
     Write-Host "Using version: $Latest"
     Set-InstallLogVersion $Latest
@@ -647,7 +667,8 @@ function Install-Binary {
     # install target. Prefer the in-box curl.exe (Windows 10 1803+) for a live
     # progress bar; fall back to Invoke-WebRequest when curl is unavailable or
     # fails.
-    $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
+    $releasePath = [Uri]::EscapeDataString($Latest)
+    $BinaryUrl = "https://github.com/$Repo/releases/download/$releasePath/$BinaryName"
     Write-Host "Downloading $BinaryName..."
     $TmpPath = Join-Path $InstallDir (".omp.tmp.{0}.{1}.exe" -f $PID, [System.Guid]::NewGuid().ToString("N"))
     $renamedAside = $false

@@ -59,7 +59,7 @@ import {
 const SOURCE_LABEL = "rewrite-changelog";
 const DEFAULT_MODEL = "openai-codex/gpt-5.6-luna";
 /** Tried in order after the primary model fails (quota exhaustion, auth, hard API errors). */
-const FALLBACK_MODELS: readonly string[] = [];
+const FALLBACK_MODELS: string[] = [];
 
 // --------------------------------------------------------------------------
 // Prompts

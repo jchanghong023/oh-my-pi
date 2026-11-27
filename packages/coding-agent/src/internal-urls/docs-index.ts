@@ -12,7 +12,7 @@
  * the embed file shipped in the npm package (`dist/docs-index.generated.txt`,
  * written by `gen:bundle`) — so `@oh-my-pi/pi-coding-agent/*` SDK consumers
  * resolve docs and never probe the consumer's `node_modules/docs` — and then to
- * the repo `docs/` tree and the Team guide on disk for a monorepo checkout.
+ * the repo `docs/` tree on disk for a monorepo checkout.
  */
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -25,8 +25,6 @@ const docsEmbed = process.env.PI_DOCS_EMBED ?? "";
 
 /** Repo `docs/` tree backing a monorepo checkout; unreachable from an installed package (see `getIndex`). */
 const DOCS_DIR = path.resolve(import.meta.dir, "../../../../docs");
-const TEAM_GUIDE_DIR = path.resolve(DOCS_DIR, "../docs-zh-CN");
-const TEAM_GUIDE_FILENAME = "team.md";
 
 let gunzipFn: ((buf: Zlib.InputType) => Promise<Buffer>) | undefined;
 function gunzipAsync(buf: Zlib.InputType): Promise<Buffer> {
@@ -85,7 +83,6 @@ function readDocsFromDisk(): DocsIndex | null {
 	const bodies: Record<string, string> = {};
 	try {
 		for (const relativePath of new Glob("**/*.md").scanSync(docsDir)) {
-			if (relativePath === TEAM_GUIDE_FILENAME) continue;
 			const normalized = relativePath.split(path.sep).join("/");
 			filenames.push(normalized);
 			bodies[normalized] = readFileSync(path.join(docsDir, relativePath), "utf8");
@@ -93,12 +90,6 @@ function readDocsFromDisk(): DocsIndex | null {
 	} catch (err) {
 		if (isEnoent(err)) return null;
 		throw err;
-	}
-	try {
-		bodies[TEAM_GUIDE_FILENAME] = readFileSync(path.join(TEAM_GUIDE_DIR, TEAM_GUIDE_FILENAME), "utf8");
-		filenames.push(TEAM_GUIDE_FILENAME);
-	} catch (err) {
-		if (!isEnoent(err)) throw err;
 	}
 	filenames.sort();
 	return { filenames, getBody: relativePath => Promise.resolve(bodies[relativePath]) };
@@ -182,14 +173,14 @@ export function getDocFilenames(): readonly string[] {
 }
 
 /**
- * Filesystem root for an indexed doc, or the main docs root when no path is
+ * Filesystem root for an indexed doc, or the docs root when no path is
  * specified. Embedded and shipped indexes have no filesystem root; renderers
  * must not probe the consumer's own `docs/` tree.
  */
 export function getDocsDiskRoot(relativePath?: string): string | null {
 	const { filenames } = getIndex();
 	if (diskRoot == null || (relativePath !== undefined && !filenames.includes(relativePath))) return null;
-	return relativePath === TEAM_GUIDE_FILENAME ? TEAM_GUIDE_DIR : diskRoot;
+	return diskRoot;
 }
 
 /** Resolve a documentation file's content, or `undefined` when not found. */

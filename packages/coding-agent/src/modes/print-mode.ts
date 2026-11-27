@@ -365,9 +365,7 @@ async function runPrintModeCore(
 				? parseSubcommand(parsed.args).verb === "reauth"
 				: Object.hasOwn(PRINT_DISPATCHED_COMMANDS, parsed.name));
 		if (!dispatched) return false;
-		const { executeAcpBuiltinSlashCommand, isTuiOnlyTodoLoopCommand } =
-			await import("../slash-commands/acp-builtins");
-		if (parsed.name === "todoloop" && !isTuiOnlyTodoLoopCommand(message)) return false;
+		const { executeAcpBuiltinSlashCommand } = await import("../slash-commands/acp-builtins");
 		const consumed = parsed.name === "team" || parsed.name === "todoloop" ? "standalone" : "local";
 		if (parsed.name === "team" && hasCompanions) {
 			writeStderrLine(

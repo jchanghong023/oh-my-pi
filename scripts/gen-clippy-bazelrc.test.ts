@@ -93,9 +93,8 @@ test("coverage flags opted-in binaries not scheduled by ci.yml and passes once s
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-clippy-ci-schedule-"));
 	try {
 		const ciYamlPath = path.join(root, ".github", "workflows", "ci.yml");
-		const ci = (kinds: string) =>
-			`jobs:\n  rust_validate:\n    steps:\n      - name: Strict Clippy\n        run: |\n          bazelisk query "kind('rust_binary', //crates/shell/...)" | xargs bazelisk build --config=clippy-strict --\n      - name: Default Clippy\n        run: |\n          bazelisk query "kind('${kinds}', //crates/... - //crates/shell/... - //crates/builtins/...)" | xargs bazelisk build --config=clippy --\n`;
-		await Bun.write(ciYamlPath, ci("rust_library|rust_shared_library"));
+		const splitCi = `jobs:\n  rust_validate:\n    steps:\n      - name: Strict Clippy\n        run: |\n          bazelisk query "kind('rust_binary', //crates/shell/...)" | xargs bazelisk build --config=clippy-strict --\n      - name: Default Clippy\n        run: |\n          bazelisk query "kind('rust_library|rust_shared_library', //crates/... - //crates/shell/... - //crates/builtins/...)" | xargs bazelisk build --config=clippy --\n`;
+		await Bun.write(ciYamlPath, splitCi);
 
 		await writeCrate(
 			root,
@@ -125,7 +124,8 @@ test("coverage flags opted-in binaries not scheduled by ci.yml and passes once s
 		expect(stderr).not.toContain("shell");
 
 		// Once CI schedules binaries in the fallback/unified query, the same crate passes.
-		await Bun.write(ciYamlPath, ci("rust_library|rust_shared_library|rust_binary"));
+		const unifiedCi = `jobs:\n  rust_validate:\n    steps:\n      - name: Clippy\n        run: |\n          bazelisk query "kind('rust_library|rust_shared_library|rust_binary', //crates/... - //crates/builtins/...)" \\\n            | xargs bazelisk build --config=clippy --\n`;
+		await Bun.write(ciYamlPath, unifiedCi);
 
 		const scheduled = await $`bun ${script} --check --coverage --root ${root}`.quiet().nothrow();
 		expect(scheduled.exitCode).toBe(0);

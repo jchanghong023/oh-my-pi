@@ -70,6 +70,11 @@ export async function handleTeamCommand(
 			output: text => runtime.output(text),
 		},
 	});
+	if (!discussion.started) {
+		return discussion.registrationRejected || runtime.signal?.aborted
+			? { consumed: true }
+			: { consumed: true, failed: true };
+	}
 	const job = discussion.jobId ? jobs?.getJob(discussion.jobId) : undefined;
 	if (job && runtime.runCommandInBackground) {
 		// RPC can admit more input while the report runs, but must keep its
@@ -83,9 +88,6 @@ export async function handleTeamCommand(
 		return isRecord(result) && result.costCapped === true
 			? { consumed: true, failed: true, costCapped: true }
 			: { consumed: true, failed: true };
-	}
-	if (!discussion.started && !runtime.signal?.aborted) {
-		return { consumed: true, failed: true };
 	}
 	return { consumed: true };
 }
@@ -135,7 +137,9 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				restoreDetachedDraft(composer, command.text, runtime.input?.images, runtime.input?.imageLinks);
 			} else {
 				const currentText = composer.expandedText();
-				composer.setCollapsedText([command.text, currentText].filter(part => part.trim()).join("\n\n"));
+				if (currentText !== command.text) {
+					composer.setCollapsedText([command.text, currentText].filter(part => part.trim()).join("\n\n"));
+				}
 			}
 			return { consumed: true };
 		},

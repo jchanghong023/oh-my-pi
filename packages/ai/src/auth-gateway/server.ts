@@ -308,6 +308,15 @@ function chatRouteRejection(model: Model<Api>): string | undefined {
 }
 
 // (handlePassthrough removed — see note above.)
+type EmbeddedToolCallKey = [id: string, name: string, args: Record<string, unknown>];
+
+interface EmbeddedResponsesSpan {
+	end: number;
+	firstCall: number;
+	lastCall: number;
+	key: string | undefined;
+}
+
 /**
  * A foreign chat wire cannot express provider-native signatures and payloads.
  * An embedded caller can retain the exact assistant tool turns and replay them
@@ -326,15 +335,48 @@ class EmbeddedToolTurns {
 	#bytes = 0;
 	#closed = false;
 
-	#key(sessionId: string, message: AssistantMessage, toWireId?: (id: string) => string): string | undefined {
-		const calls: [string, string, Record<string, unknown>][] = [];
+	#appendCalls(calls: EmbeddedToolCallKey[], message: AssistantMessage, toWireId?: (id: string) => string): boolean {
 		for (const part of message.content) {
 			if (part.type !== "toolCall") continue;
 			const id = toWireId ? toWireId(part.id) : part.id;
-			if (!id) return undefined;
+			if (!id) return false;
 			calls.push([id, part.name, part.arguments]);
 		}
-		return calls.length > 0 ? JSON.stringify([sessionId, calls]) : undefined;
+		return true;
+	}
+
+	#key(sessionId: string, message: AssistantMessage, toWireId?: (id: string) => string): string | undefined {
+		const calls: EmbeddedToolCallKey[] = [];
+		return this.#appendCalls(calls, message, toWireId) && calls.length > 0
+			? JSON.stringify([sessionId, calls])
+			: undefined;
+	}
+
+	#responsesSpan(
+		sessionId: string,
+		messages: Context["messages"],
+		start: number,
+		boundaries: ReadonlySet<number>,
+	): EmbeddedResponsesSpan {
+		// Assistant text items start new parser messages, not new turns. Match
+		// the full ordered call list, never a subset or across a turn boundary.
+		const calls: EmbeddedToolCallKey[] = [];
+		let firstCall = -1;
+		let lastCall = -1;
+		let valid = true;
+		let end = start;
+		for (; end < messages.length; end++) {
+			const message = messages[end];
+			if (message.role !== "assistant" || (end > start && boundaries.has(end))) break;
+			if (!valid) continue;
+			const before = calls.length;
+			valid = this.#appendCalls(calls, message);
+			if (calls.length === before) continue;
+			if (firstCall === -1) firstCall = end;
+			lastCall = end;
+		}
+		const key = valid && calls.length > 0 ? JSON.stringify([sessionId, calls]) : undefined;
+		return { end, firstCall, lastCall, key };
 	}
 
 	remember(
@@ -363,12 +405,19 @@ class EmbeddedToolTurns {
 		}
 	}
 
-	restore(sessionId: string, context: Context): void {
+	restore(sessionId: string, context: Context, responsesBoundaries?: ReadonlySet<number>): void {
 		if (this.#turns.size === 0) return;
 		const restored: Context["messages"] = [];
 		let restoredBoundary = 0;
 		let trailingReplay: readonly openaiResponses.ResponsesReplayPart[] | undefined;
-		for (let message of context.messages) {
+		const messages = context.messages;
+		let responsesSpan: EmbeddedResponsesSpan | undefined;
+		for (let index = 0; index < messages.length; index++) {
+			let message = messages[index];
+			if (responsesBoundaries?.has(index)) {
+				restoredBoundary = restored.length;
+				trailingReplay = undefined;
+			}
 			if (trailingReplay && message.role === "assistant") {
 				let start = 0;
 				while (
@@ -381,7 +430,17 @@ class EmbeddedToolTurns {
 				if (start) message = { ...message, content: message.content.slice(start) };
 			}
 			trailingReplay = undefined;
-			const key = message.role === "assistant" ? this.#key(sessionId, message) : undefined;
+			let key: string | undefined;
+			if (message.role === "assistant") {
+				if (responsesBoundaries) {
+					if (!responsesSpan || index >= responsesSpan.end) {
+						responsesSpan = this.#responsesSpan(sessionId, messages, index, responsesBoundaries);
+					}
+					if (index === responsesSpan.firstCall) key = responsesSpan.key;
+				} else {
+					key = this.#key(sessionId, message);
+				}
+			}
 			const turn = key === undefined ? undefined : this.#turns.get(key);
 			if (key === undefined || !turn || message.role !== "assistant") {
 				restored.push(message);
@@ -407,11 +466,17 @@ class EmbeddedToolTurns {
 						break;
 					}
 				}
-				const unrelated = message.content.filter(
-					part =>
-						part.type !== "toolCall" && !openaiResponses.isReplayedOutputPart(part, replay, "matched-message"),
-				);
-				if (unrelated.length) restored.push({ ...message, content: unrelated });
+				const lastCall = responsesSpan?.lastCall ?? index;
+				for (let i = index; i <= lastCall; i++) {
+					const fragment = i === index ? message : (messages[i] as AssistantMessage);
+					const scope = fragment.content.some(part => part.type === "toolCall") ? "matched-message" : "neighbor";
+					const unrelated = fragment.content.filter(
+						part => part.type !== "toolCall" && !openaiResponses.isReplayedOutputPart(part, replay, scope),
+					);
+					if (unrelated.length === fragment.content.length) restored.push(fragment);
+					else if (unrelated.length) restored.push({ ...fragment, content: unrelated });
+				}
+				index = lastCall;
 				trailingReplay = replay;
 			}
 			this.#turns.delete(key);
@@ -476,9 +541,13 @@ async function handleFormatEndpoint(
 	// this id; without it `getApiKey` would re-roundrobin every request
 	// and `markUsageLimitReached` would no-op (it can only mark the
 	// credential it last handed out to that session).
+	const isResponses = route.module === openaiResponses;
+	const responsesBoundaries = isResponses && toolTurns ? new Set<number>() : undefined;
 	let parsed: ParsedFormatRequest;
 	try {
-		parsed = route.module.parseRequest(body, req.headers);
+		parsed = responsesBoundaries
+			? openaiResponses.parseRequest(body, req.headers, responsesBoundaries)
+			: route.module.parseRequest(body, req.headers);
 		if (route.module === openaiChat) openaiChat.adoptReplayedGeminiSignatures(parsed.context, model);
 	} catch (error) {
 		if (controller.signal.aborted) return clientClosedResponse(route);
@@ -527,13 +596,12 @@ async function handleFormatEndpoint(
 				clientKey ?? deriveSessionId(parsed.modelId, { messages: parsed.context.messages.slice(0, 1) }),
 			])
 		: sessionId;
-	const isResponses = route.module === openaiResponses;
 	const rememberResponsesTurn: openaiResponses.ResponsesReplayRecorder | undefined =
 		isResponses && toolTurns
 			? (message, replay) => toolTurns.remember(toolTurnSessionId, message, openaiResponses.wireCallId, replay)
 			: undefined;
 	parsed.options.promptCacheKey = sessionId;
-	toolTurns?.restore(toolTurnSessionId, parsed.context);
+	toolTurns?.restore(toolTurnSessionId, parsed.context, responsesBoundaries);
 
 	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
 	// expected to resolve the credential and pass it as `options.apiKey`.

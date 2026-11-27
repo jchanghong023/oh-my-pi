@@ -115,6 +115,8 @@ async function makeHarness(
 			messages: [],
 			switchSession: () => Promise.resolve(),
 			newSession: () => Promise.resolve(),
+			resetReplicatedViewState: () => {},
+			applyReplicatedViewEvent: () => {},
 			agent: {
 				state: { model: undefined },
 				setModel: () => {},

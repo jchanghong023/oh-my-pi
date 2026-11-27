@@ -2,207 +2,163 @@
 
 ## Purpose
 
-规定沿用上游的 Provider 目录，以及 CodeAgent、Ascend 和公司内网模型接入、发现、认证与请求边界。不同运行环境和显式模型选择的条件必须分别遵守，不推断公网可用。
+Provider 目录、请求路由与[会话模型选择](#requirement-judge-候选池的会话作用域)。可用性依平台、认证、[offline 真值](../fork-runtime/spec.md#requirement-安装与运行)；不推断公网可达。
 
 ## Requirements
 
 ### Requirement: 沿用上游 Provider 目录
 
-OMP MUST 恢复上游完整的 Provider 目录与原生模型准入，不维护 fork 专属的聊天 Provider 允许名单；上游已有的退役 Provider 规则继续适用。
+上游目录 MUST NOT 另设 fork 聊天 allowlist。
 
-#### Scenario: 生成目录和运行时准入一致
+#### Scenario: 目录准入
 
-- **WHEN** 生成内置目录、合并旧缓存、发现模型或注册扩展与运行时模型
-- **THEN** 沿用上游目录、发现、缓存与注册规则，不因 fork 专属允许名单过滤 Provider 或聊天模型。
-- **AND** `opencode-zen` 沿用上游模型与登录目录，包括其 judge 模型，不在 fork 中额外标记退役。
-- **AND** `company`、CodeAgent 和 Ascend 仍遵守下述 offline、平台和认证条件；目录中存在不等于所有环境下均可用。
-- **AND** `alibaba-token-plan` 沿用上游原生登录、模型发现及聊天请求；登录可选择中国北京区或国际新加坡区，发现与推理使用凭据所属区域端点；其他 Provider 是否退役由上游规则决定。
+- **WHEN** 合并目录、注册模型或列登录入口
+- **THEN** 不另退役 `opencode-zen`（含 judge），不增选择器语法/SDK 拦截，不迁移/删用户数据。
 
-#### Scenario: 登录和共用能力
+CodeAgent/Ascend/`company` 凭据不写配置/日志；后两者不自发现/回退厂商公网 API。
 
-- **WHEN** 列出登录入口或使用共用协议与非聊天能力
-- **THEN** 沿用上游原生登录支持判断，不因 fork 聊天允许名单隐藏登录入口；保留共用协议、向量／重排、其他非聊天模型及内部 `local-inference` 的既有行为与必要认证。
-- **AND** 旧凭据仍可管理和登出，不删除凭据、配置或会话历史。
-
-#### Scenario: 已有引用和数据
-
-- **WHEN** 旧配置或会话引用上游已退役或其他不可用模型
-- **THEN** 沿用既有的模型缺失处理，不增加选择器语法、SDK 拦截层或迁移机制，不删除用户数据。
+CodeAgent/Ascend：reasoning/tools，`maxTokens=32768`。
 
 ### Requirement: CodeAgent 内置模型
 
-OMP MUST 无需单独登录或手写模型配置即可发现内置模型，认证轮换仅按规定条件重试。
+MUST 仅 Windows 非 offline 注册 `codeagent/deepseek-v4.1-flash-1017`(末段=ID=名称)，免登录/手配；offline 无入口。
 
-#### Scenario: CodeAgent 内置模型的详细边界
+#### Scenario: 内置请求
 
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
+- **WHEN** 使用 CodeAgent
+- **THEN** 固定 `https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2`、`openai-completions`、`auth: none`、`supports-strict-mode #false`(非 `disableStrictTools`)、`contextWindow=409600`。
 
-- Windows 非 offline 启动内置 `codeagent/deepseek-v4.1-flash-1017`，无需配置或登录；非 Windows 平台不注册该内置模型，`OMP_OFFLINE` 生效时所有入口隐藏，其他 Provider 行为不变。
-- 固定 base URL `https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2`，API `openai-completions`，`auth: none`，禁用严格工具模式（OpenAI 兼容轴 `supports-strict-mode #false`，不使用仅适用于 Anthropic 的 `disableStrictTools`）；模型 ID 与名称均为 `deepseek-v4.1-flash-1017`，支持 reasoning 与 tools，contextWindow `409600`，maxTokens `32768`。
-- 在没有强制或禁止工具选择的情况下，思考级别为 `low`、`high` 或 `max` 时发送 `thinking: {type: "enabled"}` 和相应的 `reasoning_effort`；关闭思考或未指定级别时发送 `thinking: {type: "disabled"}`，不得无条件开启思考。
-- 此模型按 DeepSeek Flash 4.1 分类，继承 DeepSeek V4 的思考可携带规则；历史 assistant 思考内容必须通过 `reasoning_content` 回传。
-- Windows 启动直接读取 `HKCU\Environment\JCH_CODEAGENT3_X_AUTH_TOKEN` 并在内存缓存，作为 `x-auth-token` 请求头；正常请求不重读注册表，不使用进程环境变量快照。
-- 认证或 API 请求失败时重读注册表；新 Token 与请求所用 Token 不同则刷新缓存，并仅在尚无流式正文、思考或工具输出且未取消时自动重试一次；Token 未变化不重试。此限制覆盖对话、压缩摘要与 handoff，不允许外层重试或认证、模型、压缩方法回退重新发送失败请求。已产生流式输出的请求只刷新后续请求的缓存，禁止重放；刷新无需重启、切模型或创建新会话。
-- 凭据不写配置或日志，不改变其他 Provider 的缓存、认证或重试行为；注册表读取失败不清除已缓存 Token。
-- `models.yml` 的 `providers.codeagent` 为保留 ID，整段忽略并提示，不允许该段的格式或字段错误使其他自定义 Provider 配置失效。
+不强制/禁用工具选择。`low`/`high`/`max` → `thinking: {type: "enabled"}` + 对应 `reasoning_effort`；关/未指定 → `thinking: {type: "disabled"}`。思考延续同 DeepSeek V4；历史 assistant 思考用 `reasoning_content` 回传。
 
-#### Scenario: CodeAgent 内置模型的可观察行为
+启动直读 `HKCU\Environment\JCH_CODEAGENT3_X_AUTH_TOKEN`（非进程 env），内存缓存供 `x-auth-token`；仅认证/API 失败重读，读失败留缓存。新 Token ≠ 请求 Token 才更新（免重启/切模型/新会话）；无流式正文/思考/工具输出且未取消才自动重试一次。
 
-- **WHEN** Windows 非 offline 启动并选择 CodeAgent
-- **THEN** 无需单独登录或手写模型配置即可发现内置模型，认证轮换仅按规定条件重试
+对话/压缩摘要/handoff 仅 CodeAgent 禁外层重试及认证/模型/压缩方法回退重发。
+
+#### Scenario: 提交消息和标题的生成回退
+- **WHEN** CodeAgent 快速生成 commit 消息失败，或标题候选认证/请求/结果解析失败
+- **THEN** 不因 CodeAgent 特判提前终止上游分析/重试/回退。
 
 ### Requirement: Ascend 内置模型
 
-OMP MUST 普通或 offline 场景使用内置模型目录与固定服务，不要求额外模型文件或改变默认模型。
+MUST 内置下表；不改默认模型/角色，免 `models.yml`/登录，无内置密钥。
 
-#### Scenario: Ascend 内置模型的详细边界
+#### Scenario: 显式选用
 
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
+- **WHEN** 普通/offline 列 `ascend` 或设 `ASCEND_API_KEY` 后显式选用
+- **THEN** env 解析/Bearer；固定 `http://models.ascend.huawei.com`(用户指定明文)、`anthropic-messages`、禁严格工具模式。
 
-- 内置 `ascend`，设置环境变量 `ASCEND_API_KEY` 即可使用，无需创建 `models.yml` 或登录；普通与 offline 进程均可显式选择，不改变现有默认模型或角色。密钥不内置、不写入 OMP 配置或日志，认证复用现有环境变量解析与 Bearer 请求头。
-- 固定地址 `http://models.ascend.huawei.com`，使用 `anthropic-messages`，禁用严格工具模式；不进行 Ascend 模型目录发现，不回退至厂商公网地址。HTTP 为用户指定地址，传输不加密。
+均含文本。
 
-  | Model ID | 输入 | 上下文 | 最大输出 |
-  | --- | --- | ---: | ---: |
-  | `minimax2.7` | 文本 | 200000 | 32768 |
-  | `kimi-k2.6` | 文本 | 200000 | 32768 |
-  | `deepseek-v4-flash` | 文本 | 200000 | 32768 |
-  | `qwen3.8-27b` | 文本 | 256000 | 32768 |
-  | `qwen-aw-35b` | 文本、图片 | 200000 | 32768 |
-  | `qwen3.8-flash-next` | 文本、图片 | 256000 | 32768 |
+|ID|图片|上下文(tokens)|
+|---|---|---:|
+|`minimax2.7`, `kimi-k2.6`, `deepseek-v4-flash`|否|200000|
+|`qwen3.8-27b`|否|256000|
+|`qwen-aw-35b`|是|200000|
+|`qwen3.8-flash-next`|是|256000|
 
-- 全部模型支持 reasoning 与 tools；两个 `qwen3.8-*` 模型使用 `anthropic-budget-effort`，档位为 `low`、`medium`、`high`、`xhigh`，默认 `xhigh`，`high` 映射为服务端 `xhigh`。未提供计费信息，不将占位零费率视为免费承诺。
-- 使用示例（PowerShell）：`$env:ASCEND_API_KEY = "<你的密钥>"`，随后运行 `omp --model ascend/qwen3.8-flash-next`；`omp models ascend` 查看内置目录。
-
-#### Scenario: Ascend 内置模型的可观察行为
-
-- **WHEN** 用户显式选择 Ascend 且提供 ASCEND_API_KEY
-- **THEN** 普通或 offline 场景使用内置模型目录与固定服务，不要求额外模型文件或改变默认模型
+`qwen3.8-*` 用 `anthropic-budget-effort`: `low`/`medium`/`high`/`xhigh`(默认)，`high` → 服务端 `xhigh`。无计费数据，零费占位≠免费。
 
 ### Requirement: 公司内网模型（仅 `OMP_OFFLINE`）
 
-OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损坏配置明确报错且不泄露凭据。
+MUST 仅 offline 读公司认证；有效即注册 `company`(下表)，允许向量回退。lane/角色缺省/发现策略限进程。
 
-#### Scenario: 公司内网模型（仅 `OMP_OFFLINE`）的详细边界
+#### Scenario: 准入与发现
 
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
+- **WHEN** 非 offline 初始化/使用目录或角色
+- **THEN** 无公司模型/启动告警；显式 `--provider company`/`--model company/...` 报错提示启用 `OMP_OFFLINE`。
 
-- `company` lane 仅在 `OMP_OFFLINE` 按[运行规格的统一真值规则](../fork-runtime/spec.md#requirement-安装与运行)启用的进程中存在。未启用时不注册该 provider，没有 company 模型、向量回退或启动警告；显式 `--provider company` 或 `--model company/...` 直接报错，提示启用 `OMP_OFFLINE`（例如 `OMP_OFFLINE=1`）。`models.yml` 中名为 `company` 的 provider 段整段忽略（该 id 为 fork 保留），命中时启动会输出保留提示（不阻断启动）。以下条目均限于 offline 进程。
-- offline 进程中的 `omp models` 与 `omp bench <selector…>` 先翻转 company lane 再构建 registry，可列出或压测 company 模型。自动刷新、登录或保存凭据后的目录同步，以及 selector-miss 的发现回退均只读缓存。只有 `omp models refresh` 和模型面板手动刷新可请求显式配置的发现端点（`models.yml` 的 `discovery` 和 `baseUrl`，或本地模型服务的端点环境变量）；内置公网目录、默认探测和扩展动态发现回调仍只读缓存。公司配置缺失或无效时将具体原因写到 stderr。`omp dry-balance`、`omp read`、`omp render`、`omp usage` 按实际需要复用现有初始化与自动发现策略，不新增平行注册流程：
-  - `dry-balance` 在解析模型前初始化 company lane；`read "<图片路径>?q=<问题>"` 按需初始化 company 与 vision 角色，再向选中的模型发出真实请求。显式配置且解析成功的非 `company` vision／default 角色仍按用户选择执行，公司配置错误须可见但不阻断该显式路径；需要默认或显式选择的 `company` 模型时，配置缺失或无效须明确失败，不允许隐式回退到其他 Provider。
-  - 普通 `read` 本地文件与 `render` 渲染已有会话不需要公司配置，不为此触发 auth discovery 或在线模型发现；实际需要 MCP、远端服务或模型的读取仍沿用相应能力的认证与请求流程。
-  - `usage` 复用现有账号与 usage provider 流程，只将模型目录发现限制为 cache-only；不禁用真实 usage／公司模型 API 请求，不虚构 company usage 接口或额度数据。实际需要初始化 company 的路径须让配置错误可见且不泄露凭据。
-  - 上述 lane、角色默认值与发现策略仅在当前 offline 进程生效，不持久化；非 offline 行为不变，不注册公司 provider，也不把 cache-only 扩展为所有网络请求的禁令。
-- `omp compress`、`omp commit` 与 Git AI 提交等独立模型消费者同样在注册／解析前启用 company lane、进程角色默认值及 cache-only 目录发现；未显式传递 offline 选项也不能绕过进程 offline 策略。实际模型／OAuth 请求仍按用户选择执行，不将目录发现限制扩大成网络请求总禁令。
-- 内置 `company` provider，无需登录、填写凭据或创建 `models.yml`。OMP 启动时异步读取一次 Claude Code 配置目录（默认 `~/.claude`，可用 `CLAUDE_CONFIG_DIR` 覆盖，与其它 Claude 发现路径同一入口）下 `settings.json` 的 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；并发初始化共享同一进行中读取，成功和失败均缓存，运行期间不重读、不监听文件。同进程 Worker 及受管子进程继承已就绪的内存快照，不自行读取凭据文件，修改配置须重启 OMP。
-- URL 和 Token 仅保存在内存，不复制到 OMP 配置；配置缺失、字段错误或 JSON 无效时 provider 不可用，启动提示不包含凭据。
-- 公司配置诊断由入口负责呈现：交互式启动使用现有 TUI 警告通知，独立模型命令使用 stderr；共享 SDK 初始化、认证发现、会话及子代理创建不得直接写终端流，同一命令内重复初始化不得重复输出启动警告。不可用状态与具体配置错误仍可查询，显式选择不可用公司模型仍按原规则失败。
-- 聊天使用 Anthropic Messages 协议和 Bearer 认证，仅请求上述 Claude Code 配置中的地址，不做公司模型发现，也不自动发现或回退到对应厂商的公网 API。内置参数固定如下（token 数）：
+发现只读缓存：自动刷新、凭据登录/保存后同步、selector-miss；内置公网目录/默认探测/扩展动态发现无例外。仅 `omp models refresh`/模型面板手动刷新可访问显式端点（`models.yml` 的 `discovery`/`baseUrl` 或本地模型端点 env）。模型/OAuth 请求依用户选。
 
-   | Model ID                   | 输入       |    上下文 | 最大输出 |
-   | -------------------------- | ---------- | --------: | -------: |
-   | `DeepSeek-V4-Flash-public` | 文本       | 1,000,000 |   81,920 |
-   | `Deepseek-v4.1-Flash`      | 文本、图片 | 1,000,000 |   81,920 |
-   | `GLM-5.2-public`           | 文本       | 1,000,000 |   81,920 |
-   | `GLM-5.3-public`           | 文本       | 1,000,000 |   81,920 |
-   | `MiniMax-M2.7`             | 文本       |   204,800 |   81,920 |
-   | `Qwen3.6-27B-public`       | 文本、图片 |   262,144 |   81,920 |
-   | `Qwen3.6-35B-A3B`          | 文本、图片 |   262,144 |   81,920 |
-   | `Qwen3.8-27B`              | 文本、图片 |   262,144 |   81,920 |
+`models`/`bench <selector…>`：建 registry 前开 lane。`compress`/`commit`/Git AI 提交等独立消费者：注册/解析前开 lane、角色缺省、cache-only；无需显式 offline 参数。
 
-- 公司网关的 `Qwen3.8-27B` 与 `Deepseek-v4.1-Flash` MUST 声明文本和图片输入；`GLM-5.3-public` MUST 保持纯文本声明，不依据模型名称或厂商能力推断公司部署支持图片。
-- 公司 Provider 的默认模型为 `GLM-5.3-public`，原有 `GLM-5.2-public` 继续保留供显式选择。GLM-5.3 支持工具调用，默认思考级别 MUST 为 `medium`；可选级别为 `low`／`medium`／`xhigh`／`max`，其中 OMP 的 `xhigh` MUST 映射为公司网关实测的 `ultra`。沿用 Anthropic Messages 预算思考，并通过 `output_config.effort` 发送所选级别；不提供实测不稳定的 `high` 或未验证的 `minimal`／`none` effort 值。`low` 用于极简单问题，`medium` 用于日常，`ultra` 用于稳定的深度思考，`max` 用于接受波动的最大思考深度；实测字符数不作为固定输出保证。沿用上述公司网关协议与认证。表中为内置目录参数；运行时上下文覆盖及各默认角色遵循[offline 启动约定](../fork-runtime/spec.md)。
-- Mnemopi 已启用且没有显式向量配置时，自动使用 `Qwen3-Embedding-8B`（4096 维），复用启动缓存中的 URL 和 Token，不改变记忆系统的启用状态。显式向量模型、地址、凭据，以及显式设置的 `mnemopi.embeddingVariant` 仍优先（只有它的 schema 默认值会让位给公司模型）；不会将公司 Token 发送给显式配置的其他地址。
-- company 嵌入默认值同样让位于通用 API 路由：company lane 激活时，若 `OPENROUTER_BASE_URL` 指向非 openrouter 主机（自定义通用网关），或 `MNEMOPI_EMBEDDINGS_VIA_API` 为真值（显式要求向量走 API），向量改按通用 API 配置解析（模型、地址、密钥），不注入公司 URL 与 Token；仅有共享的通用 API 密钥而无自定义网关地址时不构成让位条件。官方嵌入地址判定仅认可 `openrouter.ai` 和既有 `www.openrouter.ai` 别名，不因路径、相似域名或任意子域包含该字符串就信任它。
-- 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
-- 检索模型目录包含 `Qwen3-Embedding-8B`（文本、32768 token、4096 维）、`Qwen3-Reranker-8B`（文本、32768 token），以及 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，四种检索模型不作为聊天模型展示。记忆仍使用现有多样性排序，不接入远端重排。向量请求遇到可重试的临时过载时复用公共重试机制，最多四次请求（首次加三次重试），默认按 1s → 2s → 4s 指数退避，尊重服务端重试提示并受请求超时及取消约束；不自动混用或覆盖旧模型向量。
+按需复用初始化/自动发现，不另注册：
+- `dry-balance`：lane → 解析。
+- `usage`：目录仅缓存；请求如常，不虚构公司接口/额度。
+- 本地 `read`/已有会话 `render`：无公司配置依赖/认证发现/在线发现；MCP/远端/模型原认证。
+- `read "<图片路径>?q=<问题>"`：按需初始化 company/vision、请求选中模型。配置错误可见；显式已解析的非 `company` vision/default 继续，需 `company` 则失败、不回退。
 
-#### Scenario: 公司内网模型（仅 `OMP_OFFLINE`）的可观察行为
+#### Scenario: 认证快照
 
-- **WHEN** OMP_OFFLINE 开启且有效 Claude Code 配置可用
-- **THEN** 注册固定 company 模型与未配置角色默认值；缺失或损坏配置明确报错且不泄露凭据
+- **WHEN** offline 启动或 SDK/独立命令初始化认证
+- **THEN** 真异步读 `settings.json`（目录 `CLAUDE_CONFIG_DIR` > `~/.claude`）的 `env.ANTHROPIC_BASE_URL`/`env.ANTHROPIC_AUTH_TOKEN`。免登录/另填凭据/建 `models.yml`；禁 Promise 包同步读，主线程独立步骤不停。
 
-#### Scenario: 认证读取与独立启动步骤并行
+读→校验→仅内存发布 URL/Token。异步入口/调用方显式等就绪→公司 registry 建/刷、公司模型/默认角色解析、依赖快照的认证返回或 Worker/受管子进程启动。后者只继承父进程就绪快照，源文件更换/删除无影响。同步查询只用就绪/继承快照，不读文件/误报缺失。
 
-- **WHEN** offline 启动或 SDK、独立命令初始化 company 认证快照
-- **THEN** 使用真正的异步文件读取，不用同步读取外包 Promise；在等待快照前推进配置加载、插件预加载等无认证依赖的现有启动步骤，不阻塞主线程处理独立工作。
-- **AND** 构建或刷新公司模型注册表、解析公司模型与默认角色、返回依赖公司配置的认证结果、启动依赖快照的 Worker 或受管子进程之前，必须等待快照读取、校验及内存发布完成。
-- **AND** 所有异步初始化入口及其调用方显式等待同一就绪边界；同步查询仅消费已就绪或已继承快照，不隐式发起文件读取，不将尚在读取的状态误报为配置缺失。
+同进程并发/重复共享单读终态(成功/缺失/坏 JSON/错字段)，不重读/监听/重试/回退；变更须重启。
 
-#### Scenario: 并发初始化与终态缓存
+缺失/无效：禁用 `company`，显式选用失败；脱敏原因走原 TUI 警告/独立模型命令 stderr，每命令一次。共享 SDK 初始化/认证发现/会话或子代理创建不直写终端，状态/错误可查。
 
-- **WHEN** 多个入口同时初始化，或快照就绪后重复初始化
-- **THEN** 同一进程只执行一次认证文件读取；所有并发调用等待同一结果，文件缺失、损坏及字段错误同样终态缓存，不因异步改造增加重读、重试或回退。
-- **AND** 普通非 offline 入口不发起该读取；worker 和受管子进程在原文件被替换或删除后仍使用父进程传入的成功或不可用快照，凭据不进入日志或持久配置。
+聊天：仅快照、Anthropic Messages + Bearer；文本、`maxTokens=81920`。[KDL 覆盖及角色缺省/优先级](../fork-runtime/spec.md#requirement-安装与运行)另计。
 
+|ID|图片|上下文(tokens)|
+|---|---|---:|
+|`DeepSeek-V4-Flash-public`, `GLM-5.2-public`, `GLM-5.3-public`|否|1000000|
+|`Deepseek-v4.1-Flash`|是|1000000|
+|`MiniMax-M2.7`|否|204800|
+|`Qwen3.6-27B-public`, `Qwen3.6-35B-A3B`, `Qwen3.8-27B`|是|262144|
 
-#### Scenario: offline 选择 GLM-5.3-public
-
-- **WHEN** offline 进程具有有效公司配置并列出模型或解析 `company/GLM-5.3-public`
-- **THEN** 新模型可列出和选择，使用公司网关及缓存凭据，不发起公网目录发现；运行时上下文为 204,800，最大输出保持 81,920。
-- **AND** 未显式配置的默认主模型、PLAN 和 SLOW 角色使用该模型，其他角色沿用既有规则；原有 `GLM-5.2-public` 仍可显式选择，已有角色配置及显式 CLI 选择优先，普通模式不注册该 company 模型。
+- `GLM-5.3-public`：Provider 默认、tools；预算思考 `output_config.effort` 仅 `low`/`medium`(MUST 默认)/`xhigh`(MUST 映射 `ultra`)/`max`。
+- Mnemopi 启用、无显式向量配置 → 文本向量 + 公司快照；启用不变。显式模型/地址/凭据及 `mnemopi.embeddingVariant` 优先，仅其 schema 默认让位；公司 Token 不发显式其他地址。
+- `OPENROUTER_BASE_URL` 非官方或 `MNEMOPI_EMBEDDINGS_VIA_API` 真 → 通用 API 模型/地址/密钥，不用公司快照。仅共享密钥、无自定义网关不触发；官方主机仅 `openrouter.ai`/`www.openrouter.ai`，不认路径/相似域/其他子域。
+- OpenAI 兼容 `/v1/embeddings`：去尾斜杠、不重复 `/v1`、保留其他前缀；禁探测其他路径/回退公网；须内网实测。临时过载可重试：最多 4 次(1+3)，默认指数退避 1s/2s/4s，公共策略；尊重服务端提示/超时/取消。
+- 检索专用：文本向量 `Qwen3-Embedding-8B`(4096 维)、文本重排 `Qwen3-Reranker-8B` 均 32768 tokens；`Qwen3-VL-Embedding-2B`、`Qwen3-VL-Reranker-2B`。记忆用多样性排序，不远端重排、不自动混用/覆盖旧向量。
 
 ### Requirement: 保留 Provider ID 的运行时注册
 
-扩展与运行时 MUST NOT 替换 `company`、`codeagent` 两个保留 Provider；注册这类 ID MUST 失败并返回明确错误，而不是静默覆盖。
+MUST 忽略 `models.yml` `providers.codeagent`/`providers.company` 整段并提示；公司段不阻启动；CodeAgent 段格式/字段错不影响其他自定义 Provider。
 
-#### Scenario: 扩展或运行时注册保留 ID
+#### Scenario: 拒绝替换
 
-- **WHEN** 扩展或运行时通过 Provider 注册入口注册名为 `company` 或 `codeagent` 的 Provider
-- **THEN** 注册 MUST 失败，并返回指明该 Provider 为内置或实时 Provider、不可替换的错误
-- **AND** 既有注册状态、模型目录与其他 Provider 的注册行为保持不变。
-
-#### Scenario: 注册其他 Provider
-
-- **WHEN** 扩展或运行时注册其他 ID 的 Provider
-- **THEN** 聊天模型沿用上游原生注册与模型准入规则，不受 fork 专属允许名单限制；非聊天能力沿用既有注册、校验与凭据解析行为，不受上述保留 ID 限制影响。
+- **WHEN** 扩展/运行时注册 `company` 或 `codeagent`
+- **THEN** 报错(禁换内置/实时 Provider)，注册/目录/其他 Provider 不变。
 
 ### Requirement: 重试回退链的路由剥离
 
-重试回退链 MUST 只在目标 Provider 与来源 Provider 相同时保留 `@upstream` 路由；跨 Provider 复制模型 ID MUST 剥离该路由。
+含 `@` 字面 ID MUST 优先匹配，不作路由。
 
-#### Scenario: 回退项指向其他 Provider
+#### Scenario: 同源路由
 
-- **WHEN** 回退链把失败模型解析到与来源不同的 Provider
-- **THEN** 生成的候选选择器 MUST NOT 携带来源 Provider 的 `@upstream` 后缀
-- **AND** 目录中确实存在的字面模型 ID（本身含 `@`）优先按字面解析，不被当作路由选择器。
-
-#### Scenario: 通配回退项仍指向同一 Provider
-
-- **WHEN** 通配回退项解析后的 Provider 与来源 Provider 相同
-- **THEN** 候选 MUST 保留原 `@upstream` 路由。
+- **WHEN** 重试回退复制 ID(含通配项)
+- **THEN** 跨 Provider 剥离 `@upstream`，同 Provider 保留。
 
 ### Requirement: 容量未知的模型
 
-模型的上下文窗口或最大输出缺失时 MUST 视为未知，MUST NOT 当作本地预算、零容量或已知上限。
+缺值 MUST 显示未知，不代填零/本地预算或估值/他模型值/已知上限。
 
-#### Scenario: 容量未知的展示与选择
+#### Scenario: 缺值判定
 
-- **WHEN** 模型的 `contextWindow` 或 `maxTokens` 为空
-- **THEN** 界面 MUST 以未知占位形式显示，不得补 0、不得借用其他模型或本地估算的数值
-- **AND** 该模型 MUST NOT 因本地估算的对话体量被标记为超出上下文，也 MUST NOT 触发“先压缩再切换”路径。
+- **WHEN** `contextWindow` 或 `maxTokens` 缺失
+- **THEN** 不按本地体量估算标超上下文/触发“先压缩再切换”。
 
 ### Requirement: Anthropic 思考块保真
 
-Anthropic 兼容流经本地投影器重建 assistant 消息时，`redacted_thinking` 块 MUST 按源位置原样保留。
+本地投影器 MUST 为 Anthropic 兼容流保留不带增量的 `redacted_thinking`。
 
-#### Scenario: 缺少增量事件的加密思考块
+#### Scenario: 无增量块
 
-- **WHEN** 流中出现仅有开始与结束事件、没有增量事件的 `redacted_thinking` 内容块
-- **THEN** 该块 MUST 按原始内容与源位置合并进持久化的 assistant 消息，并在后续请求中原样回传
-- **AND** MUST NOT 伪造签名、改写内容，也 MUST NOT 因其缺少增量事件而丢弃。
+- **WHEN** 本地投影器重建 Anthropic 兼容流 assistant 消息
+- **THEN** 仅有首尾事件的块也原位原样持久化/回传，不改写或伪造签名。
 
-### Requirement: CodeAgent 在提交消息和标题生成中的回退
+### Requirement: Judge 候选池的会话作用域
 
-CodeAgent 的 commit 消息及会话标题生成 MUST 沿用上游既有失败、重试和候选回退行为；对话、压缩摘要与 handoff 的认证轮换限制保持不变。
+Auto thinking/image/text/etc. judges MUST filter primary/fallback by session/project `enabledModels` before role-chain resolution, as in `ModelControls.getAvailableModels` and Team config. Unset: original pool. `withSessionFallback` still appends unfiltered session model. Judge only: main selection, other roles, compaction, title and Team member config unchanged; no user config rewrite or result caching.
 
-#### Scenario: commit 快速生成失败
-- **WHEN** CodeAgent 的 commit 消息快速生成请求失败
-- **THEN** MUST 按上游既有流程处理该失败和后续分析／回退，不因 CodeAgent 专属标记提前终止整个生成流程。
+#### Scenario: 作用域外模型不参与判定
+- **WHEN** scope excludes remote judge default
+- **THEN** scoped candidate or session model; no out-of-scope remote primary/fallback calls.
 
-#### Scenario: 会话标题候选失败
-- **WHEN** CodeAgent 的会话标题生成候选认证、请求或结果解析失败
-- **THEN** MUST 按上游既有候选、重试和回退规则继续或结束，不得仅因该 Provider 而新增停止候选链的例外。
+### Requirement: 补全层级的模型角色解析
+
+`completion()` MUST 保留层级角色的回退身份；层级中仅 `slow` 发送思考档位。
+
+#### Scenario: Tiers
+- **WHEN** 以 `smol`、`default` 或 `slow` 层级补全
+- **THEN** `slow` 用角色配置的档位；`auto`/未配置时，仅支持推理的模型请求最高支持档。`smol`/`default` 不因用户档位发送思考。启用回退时沿层级角色追加既有链，思考按上游回退规则及上述层级边界。
+
+### Requirement: 自动角色别名的来源保留
+
+Agent model overrides MUST retain matching auto-role origin, not expand to model ID.
+
+#### Scenario: Alias
+- **WHEN** subagent or vibe startup agent/task override matches auto-role alias
+- **THEN** execution resolves inherited retry fallback by role.

@@ -73,6 +73,7 @@ import { resolveXaiBaseUrl } from "./xai-base-url";
 export type { OpenAIPromptCacheOptions } from "../types";
 
 import {
+	getHeaderCaseInsensitive,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
 	hasRequestAuthMaterial,
@@ -398,13 +399,24 @@ export function resolveOpenAIRequestSetup(
 	if (model.provider === "xai" || model.provider === "xai-oauth") {
 		setHeaderIfAbsent(headers, "User-Agent", USER_AGENT);
 	}
+	// An explicit key (including one transformed or consumed by the adapter)
+	// displaces inherited Authorization, but not a header declared with that key.
+	if (
+		options.requestAuth !== undefined &&
+		(explicitApiKey || options.requestAuth.apiKey?.trim()) &&
+		getHeaderCaseInsensitive(options.requestAuth.headers, "Authorization") === undefined
+	) {
+		for (const name in headers) {
+			if (name.toLowerCase() === "authorization") delete headers[name];
+		}
+	}
 	const requestHeaders = { ...headers };
 	// A keyless provider (`auth: none` in models.yml) resolves to the `N/A`
 	// sentinel rather than a real key. Injecting `Authorization: Bearer N/A`
 	// breaks custom endpoints that authenticate via their own headers (e.g.
 	// `headers.x-api-key`) and reject the bogus bearer — mirror the sentinel
 	// guards in google-vertex / amazon-bedrock and send no Authorization here
-	// (#6188). A caller-supplied Authorization in `model.headers` still wins.
+	// (#6188). Without explicit auth, configured Authorization still wins.
 	if (apiKey && apiKey !== NO_AUTH_SENTINEL) {
 		setHeaderIfAbsent(headers, "Authorization", `Bearer ${apiKey}`);
 	}

@@ -170,19 +170,19 @@ describe("CollabSocket guest room recovery", () => {
 		expect(ScriptedWebSocket.instances).toHaveLength(1);
 	});
 
-	it("marks retained decryptions inactive without dropping goodbye or UI ends and marks reconnected traffic active", async () => {
+	it("delivers queued goodbye and UI-end frames across disconnect and continues receiving after reconnect", async () => {
 		vi.useFakeTimers();
 		vi.spyOn(Math, "random").mockReturnValue(0.5);
 		installScriptedWebSocket();
 		const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 		const socket = guestSocket(key);
-		const received: Array<{ frame: CollabFrame; active: boolean | undefined }> = [];
+		const received: CollabFrame[] = [];
 		let finishBatch!: () => void;
 		let batch = new Promise<void>(resolve => {
 			finishBatch = resolve;
 		});
-		socket.onFrame = (frame, _peer, active) => {
-			received.push({ frame, active });
+		socket.onFrame = frame => {
+			received.push(frame);
 			if (frame.t === "bye" || frame.t === "error") finishBatch();
 		};
 		try {
@@ -197,10 +197,7 @@ describe("CollabSocket guest room recovery", () => {
 			instance(0).deliver(byeEnvelope);
 			instance(0).relayClose(1006, "transient drop");
 			await batch;
-			expect(received).toEqual([
-				{ frame: end, active: false },
-				{ frame: bye, active: false },
-			]);
+			expect(received).toEqual([end, bye]);
 			batch = new Promise<void>(resolve => {
 				finishBatch = resolve;
 			});
@@ -209,7 +206,7 @@ describe("CollabSocket guest room recovery", () => {
 			const fresh = { t: "error", message: "fresh connection" } satisfies CollabFrame;
 			instance(1).deliver(packEnvelope(0, await seal(key, fresh)));
 			await batch;
-			expect(received.at(-1)).toEqual({ frame: fresh, active: true });
+			expect(received).toEqual([end, bye, fresh]);
 		} finally {
 			socket.close();
 		}

@@ -142,6 +142,8 @@ export interface StructuredSubagentRequest {
 	 */
 	steps?: string[];
 	agent?: string;
+	/** A definition pinned by the host instead of resolving a discoverable name. */
+	agentDefinition?: AgentDefinition;
 	/**
 	 * Model chosen by host code (SDK callers, `omp cleanse --model`).
 	 * Not gated by `task.perCallModel`.
@@ -507,7 +509,7 @@ export async function resolveEffectiveSubagentPolicy(
 		includeParents: request.perCallModel !== undefined,
 	});
 	const spawnPolicy = resolveSpawnPolicy(request.session.getSessionSpawns());
-	const agentName = request.agent?.trim() || spawnPolicy.defaultAgent;
+	const agentName = request.agentDefinition?.name ?? (request.agent?.trim() || spawnPolicy.defaultAgent);
 	const planMode = request.session.getPlanModeState?.()?.enabled === true;
 	assertPlanControlsAllowed(request, planMode);
 	const denial = spawnDenial(request.session, agentName, request.blockedAgent);
@@ -516,7 +518,7 @@ export async function resolveEffectiveSubagentPolicy(
 	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
 	const sessionAgents = request.session.getSessionAgents?.() ?? [];
 	const agents = [...discovery.agents, ...sessionAgents];
-	const agent = getAgent(agents, agentName);
+	const agent = request.agentDefinition ?? getAgent(agents, agentName);
 	if (!agent) {
 		const available =
 			agents

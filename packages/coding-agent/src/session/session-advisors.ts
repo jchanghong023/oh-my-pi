@@ -108,6 +108,8 @@ import {
 	toReasoningEffort,
 	automaticThinkingLevel,
 } from "../thinking/levels";
+import { OPENWIKI_QUERY_TOOL_NAMES } from "../tools/builtin-names";
+import { cfgOpenWikiToolsEnabled } from "../tools/settings";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type { ClientBridge } from "./client-bridge";
 import { resolveCompactionMethodOrder, resolveMethodSettings } from "./compaction-methods";
@@ -1297,6 +1299,9 @@ export class SessionAdvisors {
 		thinkingLevel: ThinkingLevel | typeof AUTO_THINKING,
 	): string {
 		const tools = config.tools?.length ? config.tools.join("\u001e") : "";
+		const openWikiEnabled =
+			config.tools?.some(name => OPENWIKI_QUERY_TOOL_NAMES.includes(name)) &&
+			cfgOpenWikiToolsEnabled.get(this.#host.settings);
 		const instructions = config.instructions?.trim() ?? "";
 		const budget = this.#advisorMaxNotesPerUpdate(config);
 		// The service tier is bound at build time, so a `tier.advisor` edit must rebuild.
@@ -1309,6 +1314,7 @@ export class SessionAdvisors {
 			formatModelStringWithRouting(model),
 			thinkingLevel,
 			tools,
+			openWikiEnabled === true ? "1" : "0",
 			instructions,
 			budget,
 			tier,

@@ -2,18 +2,18 @@
 
 ## Purpose
 
-记录个人 fork 最近一次成功集成的上游 `main` 精确提交与发布版本，供同步过程、发布元数据和本地验证范围读取。这里的基线是状态元数据，不表示集成后的功能已经验收。
+记录 fork 最近成功集成的上游 `main` 提交和版本，供同步、发布元数据和本地验证范围读取；此状态不代表功能验收。
 
 ## Requirements
 
 ### Requirement: 唯一的已集成上游基线
 
-仓库 MUST 以本规格的唯一有效完整 `Upstream commit` 值记录最近成功集成的 `can1357/oh-my-pi@main`，该提交 MUST 是本地 `main` 的祖先；版本取该上游目标的 `packages/coding-agent/package.json`，同步日期使用 UTC。成功集成时在同一提交更新这些值，且本节只保留唯一版本行。
+成功集成时 MUST 同提交更新本节：唯一有效的完整 `Upstream commit` 为本地 `main` 祖先；唯一版本行用 `* **版本**：` 或 `- **版本**：` 加反引号内的 `v数字.数字.数字`，取上游 `packages/coding-agent/package.json`；日期用 UTC。
 
 #### Scenario: 成功集成新的上游 main
 
-- **WHEN** 上游 `main` 的目标提交已成功并入本地 `main`
-- **THEN** 本节的版本、完整上游提交和 UTC 同步日期与已集成目标一致，且该提交是本地 `main` 的祖先。
+- **WHEN** 目标提交成功并入本地 `main`
+- **THEN** 下列版本、完整提交和同步日期与本次集成一致。
 
 ## 当前上游基线
 

@@ -54,7 +54,6 @@ import {
 	clampOpenAIResponsesImageDetailForReplay,
 	createOpenAIResponsesHistoryPayload,
 	dropMalformedOpenAIResponsesToolCalls,
-	getHeaderCaseInsensitive,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
 	normalizeSystemPrompts,
@@ -73,7 +72,7 @@ import {
 import { hasVisibleAssistantContent } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
-import type { RawHttpRequestDump } from "../utils/http-inspector";
+import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
 	getOpenAIStreamFirstEventTimeoutMs,
@@ -726,6 +725,8 @@ export function createOpenAICodexCompatibilityMetadata(
 interface CodexRequestContext {
 	apiKey: string;
 	accountId?: string;
+	credentialKey: string;
+	debug: boolean;
 	baseUrl: string;
 	url: string;
 	requestHeaders: Record<string, string>;
@@ -1291,13 +1292,9 @@ function createCodexRequestContext(
 	},
 ): CodexRequestContext {
 	const auth = options?.requestAuth;
-	const apiKey = auth === undefined ? options?.apiKey || getEnvApiKey(model.provider) : resolveRequestAuthBearer(auth);
-	if (!apiKey) {
-		throw new AIError.MissingApiKeyError(model.provider);
-	}
-
-	const accountId =
-		getHeaderCaseInsensitive(auth?.headers, OPENAI_HEADERS.ACCOUNT_ID)?.trim() || getCodexAccountId(apiKey);
+	const credentials = resolveCodexRequestCredentials(model, options);
+	if (!credentials) throw new AIError.MissingApiKeyError(model.provider);
+	const { apiKey, accountId, credentialKey, requestHeaders } = credentials;
 	applyCodexAccessPrograms(transformedBody, model, accountId, options?.codexAccessPrograms);
 	dropUnofferedServiceTier(transformedBody, model, accountId);
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
@@ -1305,16 +1302,6 @@ function createCodexRequestContext(
 
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const codexClientVersion = getCodexClientVersion();
-	const requestHeaders =
-		auth === undefined
-			? { ...model.headers, ...options?.headers }
-			: mergeHeaders(model.headers, options?.headers, auth.headers);
-	if (auth !== undefined && !accountId) {
-		// Never pair an explicit token with an inherited account identity.
-		for (const name in requestHeaders) {
-			if (name.toLowerCase() === OPENAI_HEADERS.ACCOUNT_ID) delete requestHeaders[name];
-		}
-	}
 	const rawRequestDump: RawHttpRequestDump = {
 		provider: model.provider,
 		api: model.api,
@@ -1322,6 +1309,7 @@ function createCodexRequestContext(
 		method: "POST",
 		url,
 		body: transformedBody,
+		requestAuth: auth,
 	};
 
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
@@ -1331,7 +1319,7 @@ function createCodexRequestContext(
 			: undefined;
 	const transportProviderSessionState = isolatedTransportState ?? providerSessionState;
 	const responsesLite = resolveCodexResponsesLite(options?.responsesLite);
-	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, accountId, apiKey, baseUrl, responsesLite);
+	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, credentialKey, baseUrl, responsesLite);
 	const publicSessionKey = transportSessionId ? `${baseUrl}:${model.id}:${transportSessionId}` : undefined;
 	if (sessionKey && publicSessionKey) {
 		transportProviderSessionState?.webSocketPublicToPrivate.set(publicSessionKey, sessionKey);
@@ -1376,6 +1364,8 @@ function createCodexRequestContext(
 	return {
 		apiKey,
 		accountId,
+		credentialKey,
+		debug: auth === undefined && CODEX_DEBUG,
 		baseUrl,
 		url,
 		requestHeaders,
@@ -1548,7 +1538,7 @@ async function openInitialCodexEventStream(
 				);
 				const activateFallback = isFatal || websocketRetries >= websocketRetryBudget;
 				recordCodexWebSocketFailure(websocketState, activateFallback);
-				CODEX_DEBUG &&
+				requestContext.debug &&
 					logger.debug("[codex] codex websocket fallback", {
 						error: error.message,
 						retry: websocketRetries,
@@ -1761,6 +1751,7 @@ async function openCodexWebSocketTransport(
 		toWebSocketUrl(requestContext.url),
 		websocketHeaders,
 		model.provider,
+		requestContext.debug,
 		requestSetup.requestSignal,
 	);
 	let releaseReservation = websocketConnection.reserveForRequest();
@@ -1791,7 +1782,13 @@ async function openCodexWebSocketTransport(
 				liveSteers.flatMap(steer => steer.items),
 			);
 			if (plan.kind === "attach") {
-				recordCodexTurnRequestDiagnostics(websocketState, chainedBody, "websocket", canAppendBeforeRequest);
+				recordCodexTurnRequestDiagnostics(
+					websocketState,
+					chainedBody,
+					"websocket",
+					canAppendBeforeRequest,
+					requestContext.debug,
+				);
 				requestContext.rawRequestDump.body = chainedBody;
 				return {
 					eventStream: websocketConnection.streamRequest(
@@ -1826,6 +1823,7 @@ async function openCodexWebSocketTransport(
 					toWebSocketUrl(requestContext.url),
 					websocketHeaders,
 					model.provider,
+					requestContext.debug,
 					requestSetup.requestSignal,
 				);
 				releaseReservation = websocketConnection.reserveForRequest();
@@ -1859,7 +1857,13 @@ async function openCodexWebSocketTransport(
 				? requestContext.transformedBody.input
 				: [...chainCarriedInput, ...(websocketRequest.input ?? [])];
 		}
-		recordCodexTurnRequestDiagnostics(websocketState, websocketRequest, "websocket", canAppendBeforeRequest);
+		recordCodexTurnRequestDiagnostics(
+			websocketState,
+			websocketRequest,
+			"websocket",
+			canAppendBeforeRequest,
+			requestContext.debug,
+		);
 		const requestBodyForState = cloneJsonTree(requestContext.transformedBody);
 		// `onPayload` may rewrite the outgoing frame (e.g. drop `stream_options` or
 		// change `service_tier`); recorded state must reflect what was actually
@@ -1876,7 +1880,7 @@ async function openCodexWebSocketTransport(
 			requestBodyForState.service_tier = websocketRequest.service_tier;
 		}
 		requestContext.rawRequestDump.body = websocketRequest;
-		CODEX_DEBUG &&
+		requestContext.debug &&
 			logger.debug("[codex] codex websocket request", {
 				url: toWebSocketUrl(requestContext.url),
 				model: requestContext.transformedBody.model,
@@ -1889,7 +1893,10 @@ async function openCodexWebSocketTransport(
 				retryBudget: CODEX_WEBSOCKET_RETRY_BUDGET,
 			});
 		const eventStream = websocketConnection.streamRequest(
-			{ send: withCodexRoutingFieldsFirst(websocketRequest), suppressRawDebug: options?.requestAuth !== undefined },
+			{
+				send: withCodexRoutingFieldsFirst(websocketRequest),
+				suppressRawDebug: requestContext.rawRequestDump.requestAuth !== undefined,
+			},
 			timeouts,
 			requestSetup.requestSignal,
 			onSseEvent,
@@ -1983,7 +1990,7 @@ async function openCodexSseTransport(
 				requestSetup.requestSignal,
 				requestSetup.firstEventTimeoutMs,
 				options?.codexSseMaxAttempts,
-				options?.requestAuth !== undefined,
+				requestContext.rawRequestDump.requestAuth !== undefined,
 				event => options?.onSseEvent?.(event, model),
 				wrapFetchForRequestCompression(options?.fetch ?? fetch, model),
 			),
@@ -1995,7 +2002,7 @@ async function openCodexSseTransport(
 	if (replacementWireBody !== undefined) {
 		wireBody = replacementWireBody as RequestBody;
 	}
-	recordCodexTurnRequestDiagnostics(state, wireBody, "sse", canAppendBeforeRequest);
+	recordCodexTurnRequestDiagnostics(state, wireBody, "sse", canAppendBeforeRequest, requestContext.debug);
 	// SSE turns never chain, so later reads need only the per-turn knobs (summary
 	// delivery, service tier); copying the whole transcript would be wasted work.
 	const requestBodyForState: RequestBody = {
@@ -2107,7 +2114,12 @@ async function handleCodexStreamFailure(context: CodexStreamFailureContext, erro
 	output.stopReason = result.stopReason;
 	output.errorStatus = result.status;
 	output.errorId = result.id;
-	output.errorMessage = result.message;
+	// The finalizer can bypass the inspector for abort reasons or formatter failures.
+	const dump = context.requestContext.rawRequestDump;
+	output.errorMessage =
+		dump.requestAuth === undefined
+			? result.message
+			: await appendRawHttpRequestDumpFor400(result.message, undefined, dump);
 	output.duration = performance.now() - context.startTime;
 	if (context.firstTokenTime) {
 		output.ttft = context.firstTokenTime - context.startTime;
@@ -2430,8 +2442,8 @@ class CodexStreamProcessor {
 
 	/** The server-side turn lane this request runs on: what the endpoint sees, not the local model entry. */
 	get #steeringLaneKey(): string {
-		const { url, transformedBody, accountId, apiKey, responsesLite } = this.requestContext;
-		return JSON.stringify([url, transformedBody.model, getCodexCredentialKey(accountId, apiKey), responsesLite]);
+		const { url, transformedBody, credentialKey, responsesLite } = this.requestContext;
+		return JSON.stringify([url, transformedBody.model, credentialKey, responsesLite]);
 	}
 
 	/** Start delivering caller steering into the response `response.created` announced. */
@@ -2659,7 +2671,7 @@ class CodexStreamProcessor {
 		const endTurn = response && "end_turn" in response ? response.end_turn : undefined;
 
 		populateResponsesUsageFromResponse(output, usage);
-		recordCodexTurnUsageDiagnostics(runtime.websocketState, usage, output.usage);
+		recordCodexTurnUsageDiagnostics(runtime.websocketState, usage, output.usage, this.requestContext.debug);
 		if (responseId) {
 			output.responseId = responseId;
 		}
@@ -2677,7 +2689,9 @@ class CodexStreamProcessor {
 		// complete and the server continues from it, so it chains and ends like a
 		// completed response.
 		const steered = status === "incomplete" && incompleteReason === "steered";
-		if (steered) logger.debug("Codex response stopped for steering", { responseId });
+		if (steered && this.requestContext.rawRequestDump.requestAuth === undefined) {
+			logger.debug("Codex response stopped for steering", { responseId });
+		}
 
 		const state = runtime.websocketState;
 		if (state) {
@@ -3061,7 +3075,7 @@ class CodexStreamProcessor {
 			isFatal ||
 			this.runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET;
 		recordCodexWebSocketFailure(state, activateFallback);
-		CODEX_DEBUG &&
+		this.requestContext.debug &&
 			logger.debug("[codex] codex websocket stream fallback", {
 				error: streamError.message,
 				retry: this.runtime.websocketStreamRetries,
@@ -3159,7 +3173,7 @@ class CodexStreamProcessor {
 			websocketState.modelsEtag = undefined;
 		}
 
-		CODEX_DEBUG &&
+		this.requestContext.debug &&
 			logger.debug("[codex] retrying codex provider stream error", {
 				error: error instanceof Error ? error.message : String(error),
 				retry: this.runtime.providerRetryAttempt,
@@ -3209,7 +3223,7 @@ class CodexStreamProcessor {
 			// instead of surfacing a raw transport error to the caller. A socket busy
 			// with another request is not a failure and stays untouched.
 			if (!(error instanceof CodexWebSocketBusyError)) recordCodexWebSocketFailure(state, true);
-			CODEX_DEBUG &&
+			this.requestContext.debug &&
 				logger.debug("[codex] codex websocket reopen failed, falling back to SSE", {
 					error: error.message,
 					retry: this.runtime.websocketStreamRetries,
@@ -3316,6 +3330,8 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 					requestContext: requestContext ?? {
 						apiKey: "",
 						accountId: "",
+						credentialKey: "",
+						debug: false,
 						baseUrl: model.baseUrl || CODEX_BASE_URL,
 						url: "",
 						requestHeaders: {},
@@ -3330,6 +3346,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 							method: "POST",
 							url: "",
 							body: { model: model.id },
+							requestAuth: options?.requestAuth,
 						},
 					},
 					startTime,
@@ -3340,11 +3357,17 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			} catch (failureError) {
 				// Last resort — the failure handler itself threw (exotic error object or
 				// request-dump formatting). Never leave the stream un-ended.
-				logger.error("Codex stream failure handler threw", {
-					error: failureError instanceof Error ? failureError.message : String(failureError),
-				});
+				const explicitAuth = options?.requestAuth !== undefined;
+				logger.error(
+					"Codex stream failure handler threw",
+					explicitAuth ? {} : { error: failureError instanceof Error ? failureError.message : String(failureError) },
+				);
 				output.stopReason = "error";
-				output.errorMessage ??= error instanceof Error ? error.message : String(error);
+				output.errorMessage ??= explicitAuth
+					? "OpenAI Codex request failed"
+					: error instanceof Error
+						? error.message
+						: String(error);
 				stream.push({ type: "error", reason: "error", error: output });
 			}
 			stream.end();
@@ -3362,6 +3385,7 @@ export async function prewarmOpenAICodexResponses(
 		OpenAICodexResponsesOptions,
 		| "apiKey"
 		| "headers"
+		| "requestAuth"
 		| "sessionId"
 		| "signal"
 		| "preferWebsockets"
@@ -3370,16 +3394,16 @@ export async function prewarmOpenAICodexResponses(
 		| "serviceTier"
 	>,
 ): Promise<void> {
-	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-	if (!apiKey) return;
-	const accountId = getCodexAccountId(apiKey);
+	const credentials = resolveCodexRequestCredentials(model, options);
+	if (!credentials) return;
+	const { apiKey, accountId, credentialKey, requestHeaders } = credentials;
 	const baseUrl = model.baseUrl || CODEX_BASE_URL;
 	const url = resolveCodexResponsesUrl(baseUrl);
 	const transportSessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	const promptCacheKey = transportSessionId;
 	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
 	const responsesLite = resolveCodexResponsesLite(options?.responsesLite);
-	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, accountId, apiKey, baseUrl, responsesLite);
+	const sessionKey = getCodexWebSocketSessionKey(transportSessionId, model, credentialKey, baseUrl, responsesLite);
 	const publicSessionKey = transportSessionId ? `${baseUrl}:${model.id}:${transportSessionId}` : undefined;
 	if (publicSessionKey && sessionKey) {
 		providerSessionState?.webSocketPublicToPrivate.set(publicSessionKey, sessionKey);
@@ -3400,7 +3424,7 @@ export async function prewarmOpenAICodexResponses(
 	const headers = logger.time(
 		"prewarmCodex:createHeaders",
 		createCodexHeaders,
-		{ ...model.headers, ...options?.headers },
+		requestHeaders,
 		accountId,
 		apiKey,
 		codexClientVersion,
@@ -3440,6 +3464,7 @@ export async function prewarmOpenAICodexResponses(
 			toWebSocketUrl(url),
 			headers,
 			model.provider,
+			options?.requestAuth === undefined && CODEX_DEBUG,
 			options?.signal,
 		);
 	} catch (error) {
@@ -3449,20 +3474,53 @@ export async function prewarmOpenAICodexResponses(
 	state.prewarmed = true;
 }
 
-function getCodexCredentialKey(accountId: string | undefined, apiKey: string): string {
-	return accountId ? `account:${accountId}` : `token:${Bun.hash(apiKey).toString(36)}`;
+function resolveCodexRequestCredentials(
+	model: Model<"openai-codex-responses">,
+	options: Pick<OpenAICodexResponsesOptions, "apiKey" | "headers" | "requestAuth"> | undefined,
+): { apiKey: string; accountId?: string; credentialKey: string; requestHeaders: Record<string, string> } | undefined {
+	const auth = options?.requestAuth;
+	if (auth === undefined) {
+		const apiKey = options?.apiKey || getEnvApiKey(model.provider);
+		if (!apiKey) return undefined;
+		const accountId = getCodexAccountId(apiKey);
+		return {
+			apiKey,
+			accountId,
+			credentialKey: accountId ? `account:${accountId}` : `token:${Bun.hash(apiKey).toString(36)}`,
+			requestHeaders: { ...model.headers, ...options?.headers },
+		};
+	}
+
+	// Normalize duplicate names with the same precedence as the wire merge, then
+	// let Headers canonicalize names, values, and iteration order.
+	const declaredHeaders = auth.headers ? Object.fromEntries(new Headers(mergeHeaders(auth.headers))) : undefined;
+	const apiKey = resolveRequestAuthBearer({ apiKey: auth.apiKey, headers: declaredHeaders });
+	if (!apiKey) return undefined;
+	if (declaredHeaders?.authorization?.trim()) declaredHeaders.authorization = `Bearer ${apiKey}`;
+	const accountId = declaredHeaders?.[OPENAI_HEADERS.ACCOUNT_ID]?.trim() || getCodexAccountId(apiKey);
+	const requestHeaders = mergeHeaders(model.headers, options?.headers, declaredHeaders);
+	if (!accountId) {
+		// Never pair an explicit token with an inherited account identity.
+		for (const name in requestHeaders) {
+			if (name.toLowerCase() === OPENAI_HEADERS.ACCOUNT_ID) delete requestHeaders[name];
+		}
+	}
+	// Account IDs and the effective bearer alone cannot distinguish explicit
+	// gateway identities. Include the declared key even when Authorization wins.
+	const digest = new Bun.CryptoHasher("sha256")
+		.update(JSON.stringify([auth.apiKey?.trim() || undefined, declaredHeaders ?? {}]))
+		.digest("hex");
+	return { apiKey, accountId, credentialKey: `explicit:${digest}`, requestHeaders };
 }
 
 function getCodexWebSocketSessionKey(
 	normalizedSessionId: string | undefined,
 	model: Model<"openai-codex-responses">,
-	accountId: string | undefined,
-	apiKey: string,
+	credentialKey: string,
 	baseUrl: string,
 	responsesLite: boolean,
 ): string | undefined {
 	if (!normalizedSessionId) return undefined;
-	const credentialKey = getCodexCredentialKey(accountId, apiKey);
 	// Responses Lite is connection-scoped on the WebSocket upgrade, so lite and
 	// non-lite turns must never share a pooled socket or append state.
 	const liteSuffix = responsesLite ? ":lite" : "";
@@ -3683,6 +3741,7 @@ function recordCodexTurnRequestDiagnostics(
 	request: Record<string, unknown>,
 	transport: CodexTransport,
 	canAppendBeforeRequest: boolean,
+	debug: boolean,
 ): void {
 	if (!state) return;
 	const input = request.input;
@@ -3703,13 +3762,14 @@ function recordCodexTurnRequestDiagnostics(
 	state.stats.lastTurn = {
 		request: buildCodexTurnRequestDiagnostics(request, transport, canAppendBeforeRequest),
 	};
-	CODEX_DEBUG && logger.debug("[codex] codex turn request diagnostics", { diagnostics: state.stats.lastTurn.request });
+	debug && logger.debug("[codex] codex turn request diagnostics", { diagnostics: state.stats.lastTurn.request });
 }
 
 function recordCodexTurnUsageDiagnostics(
 	state: CodexWebSocketSessionState | undefined,
 	rawUsage: CodexResponseUsage | undefined,
 	displayedUsage: Usage,
+	debug: boolean,
 ): void {
 	if (!state?.stats.lastTurn || !rawUsage) return;
 	const details = rawUsage.input_tokens_details;
@@ -3744,7 +3804,7 @@ function recordCodexTurnUsageDiagnostics(
 		...state.stats.lastTurn,
 		usage: usageDiagnostics,
 	};
-	CODEX_DEBUG && logger.debug("[codex] codex turn diagnostics", { diagnostics: state.stats.lastTurn });
+	debug && logger.debug("[codex] codex turn diagnostics", { diagnostics: state.stats.lastTurn });
 }
 
 const CODEX_CHAIN_TOP_LEVEL_EXCLUDE_MAP = {
@@ -3823,12 +3883,14 @@ interface CodexSteerWaiter {
 interface CodexWebSocketConnectionOptions {
 	onHandshakeHeaders?: (headers: Headers) => void;
 	proxy?: string;
+	debug: boolean;
 }
 
 /** Codex steering and legacy error boundary around the shared physical channel. */
 class CodexWebSocketConnection {
 	#channel: ResponsesWebSocketConnection;
 	#headers: Record<string, string>;
+	#debug: boolean;
 	#pendingRequests = 0;
 	#steerWaiters: CodexSteerWaiter[] = [];
 	#acceptedSteers = new Set<string>();
@@ -3837,6 +3899,7 @@ class CodexWebSocketConnection {
 
 	constructor(url: string, headers: Record<string, string>, options: CodexWebSocketConnectionOptions) {
 		this.#headers = headers;
+		this.#debug = options.debug;
 		this.#channel = new ResponsesWebSocketConnection({
 			url,
 			headers,
@@ -3975,7 +4038,7 @@ class CodexWebSocketConnection {
 				},
 			);
 		} catch (error) {
-			CODEX_DEBUG &&
+			this.#debug &&
 				logger.debug("[codex] codex websocket transport failure", {
 					error: error instanceof Error ? error.message : String(error),
 				});
@@ -4031,7 +4094,7 @@ class CodexWebSocketConnection {
 			this.#takeSteerWaiter(previousResponseId)?.resolve({ accepted: false, code, message });
 			return;
 		}
-		CODEX_DEBUG && logger.debug("[codex] codex steering event", { type: event.type, id, previousResponseId });
+		this.#debug && logger.debug("[codex] codex steering event", { type: event.type, id, previousResponseId });
 	}
 
 	#takeSteerWaiter(previousResponseId: string): CodexSteerWaiter | undefined {
@@ -4064,6 +4127,7 @@ async function getOrCreateCodexWebSocketConnection(
 	url: string,
 	headers: Headers,
 	provider: string,
+	debug: boolean,
 	signal?: AbortSignal,
 ): Promise<CodexWebSocketConnection> {
 	const proxy = getProxyForUrl(provider, new URL(url));
@@ -4116,6 +4180,7 @@ async function getOrCreateCodexWebSocketConnection(
 			updateCodexSessionMetadataFromHeaders(turnState, state, handshakeHeaders);
 		},
 		proxy,
+		debug,
 	});
 	await state.connection.connect(signal);
 	return state.connection;
@@ -4216,7 +4281,8 @@ async function openCodexSseEventStream(
 		// instead of surfacing the runtime's bare `getaddrinfo …` text.
 		throw AIError.networkFailureError(error, url);
 	}
-	CODEX_DEBUG &&
+	!explicitAuth &&
+		CODEX_DEBUG &&
 		logger.debug("[codex] codex response", {
 			url: response.url,
 			status: response.status,

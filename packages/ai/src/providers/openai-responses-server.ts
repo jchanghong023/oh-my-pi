@@ -266,9 +266,14 @@ function buildTools(tools: Array<OpenAIResponsesTool | { type: string }> | undef
 	return out.length > 0 ? out : undefined;
 }
 
-function ensureAssistantPlaceholder(messages: Message[], modelId: string, now: number): AssistantMessage {
+function ensureAssistantPlaceholder(
+	messages: Message[],
+	modelId: string,
+	now: number,
+	startsNewMessage?: boolean,
+): AssistantMessage {
 	const last = messages[messages.length - 1];
-	if (last && last.role === "assistant") return last;
+	if (!startsNewMessage && last?.role === "assistant") return last;
 	const placeholder: AssistantMessage = {
 		role: "assistant",
 		content: [],
@@ -352,7 +357,7 @@ function functionOutputContent(output: string | readonly unknown[] | undefined):
 
 // ─── parseRequest ───────────────────────────────────────────────────────────
 
-export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
+export function parseRequest(body: unknown, headers?: Headers, replayBoundaries?: Set<number>): ParsedRequest {
 	// The gateway forwards allow-listed request headers itself, for the gateway
 	// token only (`applyCallerTrust` in `auth-gateway/caller-options.ts`). We
 	// consult `headers` here to populate `options.promptCacheKey` when the
@@ -369,6 +374,8 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	const now = Date.now();
 	const messages: Message[] = [];
 	const systemPrompt: string[] = [];
+	const assistant = () =>
+		ensureAssistantPlaceholder(messages, data.model, now, replayBoundaries?.has(messages.length));
 
 	if (typeof data.instructions === "string" && data.instructions.length > 0) {
 		systemPrompt.push(data.instructions);
@@ -405,8 +412,11 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 								},
 								timestamp: now,
 							});
-						} else if (flat.length > 0) {
-							systemPrompt.push(flat);
+						} else {
+							// Plain system items are lifted out of the messages, but still
+							// separate assistant turns in the embedded caller's wire input.
+							replayBoundaries?.add(messages.length);
+							if (flat.length > 0) systemPrompt.push(flat);
 						}
 						break;
 					}
@@ -458,7 +468,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 					thinkingSignature: JSON.stringify(reasoning),
 					...(reasoning.id ? { itemId: reasoning.id } : {}),
 				};
-				ensureAssistantPlaceholder(messages, data.model, now).content.push(thinking);
+				assistant().content.push(thinking);
 				continue;
 			}
 			if (effectiveType === "function_call") {
@@ -481,7 +491,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 					...(call.namespace ? { namespace: call.namespace } : {}),
 					...(call.id ? { thoughtSignature: call.id } : {}),
 				};
-				ensureAssistantPlaceholder(messages, data.model, now).content.push(toolCall);
+				assistant().content.push(toolCall);
 				continue;
 			}
 			if (effectiveType === "custom_tool_call") {
@@ -498,7 +508,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 					...(call.namespace ? { namespace: call.namespace } : {}),
 					...(call.id ? { thoughtSignature: call.id } : {}),
 				};
-				ensureAssistantPlaceholder(messages, data.model, now).content.push(toolCall);
+				assistant().content.push(toolCall);
 				continue;
 			}
 			if (effectiveType === "computer_call") {
@@ -518,7 +528,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 						pendingSafetyChecks: call.pending_safety_checks as ComputerSafetyCheck[],
 					},
 				};
-				ensureAssistantPlaceholder(messages, data.model, now).content.push(toolCall);
+				assistant().content.push(toolCall);
 				continue;
 			}
 			if (effectiveType === "function_call_output") {

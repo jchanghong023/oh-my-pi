@@ -22,6 +22,7 @@ import { isPromise } from "node:util/types";
 import type { NativeChildCapabilities } from "../sdk";
 
 import {
+	activeThinkingIndexAfterEvent,
 	type AfterToolCallContext,
 	type AfterToolCallResult,
 	type Agent,
@@ -1251,6 +1252,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	readonly #liveToolOutput = new LiveToolOutputState();
 	#modelStage: ModelStage | null = null;
 	readonly #latestTurnToolDiffs = new LatestTurnToolDiffs();
+	/** Guest view activity is independent of the local loop and its run-state subscribers. */
+	#replicatedViewRunActive = false;
 	#runStateListeners = new Set<(state: "running" | "idle", at: number) => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
@@ -4416,8 +4419,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	// Event Subscription
 	// =========================================================================
 
-	/** Emit an event to all listeners */
-	#emit(event: LocalAgentSessionEvent): void {
+	#observeSessionViewEvent(event: LocalAgentSessionEvent, runActive: boolean): void {
 		this.#modelStage = nextModelStage(this.#modelStage, event);
 		if (
 			event.type === "message_start" &&
@@ -4426,6 +4428,30 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		) {
 			this.#latestTurnToolDiffs.start(this.sessionId);
 		}
+		if (event.type === "agent_start") {
+			this.#liveToolOutput.observe(event, Date.now());
+		} else if (
+			event.type === "tool_execution_start" ||
+			event.type === "tool_execution_update" ||
+			event.type === "tool_execution_end"
+		) {
+			if (runActive) this.#latestTurnToolDiffs.observe(this.sessionId, event);
+			this.#liveToolOutput.observe(event, Date.now());
+			if (event.type === "tool_execution_update") {
+				// Returned background calls have no later tool result to persist their
+				// terminal frame. Keep the latest update for future focus rebuilds;
+				// logical session transitions clear the cache.
+				this.#activeToolExecutionUpdates.delete(event.toolCallId);
+				this.#activeToolExecutionUpdates.set(event.toolCallId, event);
+			} else if (event.type === "tool_execution_end") {
+				this.#activeToolExecutionUpdates.delete(event.toolCallId);
+			}
+		}
+	}
+
+	/** Emit an event to all listeners */
+	#emit(event: LocalAgentSessionEvent): void {
+		this.#observeSessionViewEvent(event, this.#runActive);
 		// Listener array is copy-on-write (see `subscribe`), so iterating the
 		// current array is safe against (un)subscribes made by a listener.
 		for (const l of this.#eventListeners) {
@@ -4448,16 +4474,17 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 	}
 
+	#setRunViewActive(active: boolean, wasActive: boolean, at: number): void {
+		if (!active) this.#modelStage = null;
+		else if (!wasActive) this.#latestTurnToolDiffs.start(this.sessionId);
+		this.#liveToolOutput.setRunActive(active, at);
+	}
+
 	#emitRunState(state: "running" | "idle"): void {
 		const at = Date.now();
-		if (state === "idle") {
-			this.#runStartedAt = undefined;
-			this.#modelStage = null;
-		} else {
-			if (this.#runStartedAt === undefined) this.#latestTurnToolDiffs.start(this.sessionId);
-			this.#runStartedAt ??= at;
-		}
-		this.#liveToolOutput.setRunActive(state === "running", at);
+		const active = state === "running";
+		this.#setRunViewActive(active, this.#runStartedAt !== undefined, at);
+		this.#runStartedAt = active ? (this.#runStartedAt ?? at) : undefined;
 		for (const listener of this.#runStateListeners) {
 			try {
 				listener(state, at);
@@ -4577,24 +4604,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	async #emitSessionEvent(event: LocalAgentSessionEvent, options: { detachExtensions?: boolean } = {}): Promise<void> {
-		if (
-			this.#runActive &&
-			(event.type === "tool_execution_start" ||
-				event.type === "tool_execution_update" ||
-				event.type === "tool_execution_end")
-		) {
-			this.#latestTurnToolDiffs.observe(this.sessionId, event);
-		}
-		this.#liveToolOutput.observe(event, Date.now());
-		if (event.type === "tool_execution_update") {
-			// Returned background calls have no later tool result to persist their
-			// terminal frame. Keep the latest update for future focus rebuilds;
-			// logical session transitions clear the cache.
-			this.#activeToolExecutionUpdates.delete(event.toolCallId);
-			this.#activeToolExecutionUpdates.set(event.toolCallId, event);
-		} else if (event.type === "tool_execution_end") {
-			this.#activeToolExecutionUpdates.delete(event.toolCallId);
-		}
 		if (event.type === "message_update") {
 			this.#emit(event);
 			// Per-delta hot path: only queue the serialized extension emit when
@@ -6765,6 +6774,59 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			listeners.splice(index, 1);
 			this.#eventListeners = listeners;
 		};
+	}
+
+	/** Project a decoded Collab event without running the local loop, publishing, or journaling. */
+	applyReplicatedViewEvent(event: LocalAgentSessionEvent): void {
+		const state = this.agent.state;
+		switch (event.type) {
+			case "agent_start":
+			case "agent_pause":
+			case "agent_end": {
+				// A pause ends a model loop, not the run that owns Output and Diff.
+				const active = event.type !== "agent_end";
+				this.#setRunViewActive(active, this.#replicatedViewRunActive, Date.now());
+				this.#replicatedViewRunActive = active;
+				state.pendingToolCalls.clear();
+				state.streamMessage = null;
+				state.activeThinkingIndex = undefined;
+				break;
+			}
+			case "message_start":
+				state.streamMessage = event.message;
+				state.activeThinkingIndex = undefined;
+				break;
+			case "message_update":
+				state.streamMessage = event.message;
+				state.activeThinkingIndex = activeThinkingIndexAfterEvent(
+					state.activeThinkingIndex,
+					event.assistantMessageEvent,
+				);
+				break;
+			case "message_end":
+				state.streamMessage = null;
+				state.activeThinkingIndex = undefined;
+				break;
+			case "tool_execution_start":
+				state.pendingToolCalls.add(event.toolCallId);
+				break;
+			case "tool_execution_end":
+				state.pendingToolCalls.delete(event.toolCallId);
+				break;
+		}
+		this.#observeSessionViewEvent(event, this.#replicatedViewRunActive);
+	}
+
+	/** A Collab snapshot contains history and a busy bit, not in-flight tool or model progress. */
+	resetReplicatedViewState(isStreaming = false): void {
+		const state = this.agent.state;
+		state.pendingToolCalls.clear();
+		state.streamMessage = null;
+		state.activeThinkingIndex = undefined;
+		this.#modelStage = null;
+		this.#clearToolViewState();
+		this.#replicatedViewRunActive = isStreaming;
+		this.#liveToolOutput.setRunActive(isStreaming, Date.now());
 	}
 
 	/**
@@ -9420,6 +9482,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#tools.clearAcpPermissionDecisions();
 		this.#tools.resetAnnouncedMounts();
 		this.#tools.clearEvalPreludeCalls();
+		this.#clearToolViewState();
+	}
+
+	#clearToolViewState(): void {
 		// A `/new`, session switch, or tree navigation reuses tool-call ids, so a
 		// still-cached background-task snapshot from the old conversation must not
 		// survive to be replayed by a focus rebuild in the reset session (#10447).
@@ -10550,14 +10616,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						.filter((content): content is TextContent => content.type === "text")
 						.map(content => content.text)
 						.join("");
+		const goalAutoOrchestrateInitialId = options?.goalAutoOrchestrateInitialId;
 		const resumeGoalId = this.#pendingAutopilotResumeId();
-		const goalAutoOrchestrateInitialId =
-			options?.goalAutoOrchestrateInitialId ??
-			(message.customType === "goal-continuation" &&
+		const goalAutopilotResumeId =
+			goalAutoOrchestrateInitialId === undefined &&
+			message.customType === "goal-continuation" &&
 			resumeGoalId !== undefined &&
 			textContent === this.#goalRuntime.buildContinuationPrompt()
 				? resumeGoalId
-				: undefined);
+				: undefined;
 
 		let keywordNotices: CustomMessage[] = [];
 		// Queued deliveries bypass the idle-turn notice injection, so a queued user
@@ -10596,6 +10663,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				queueChipText: options?.queueChipText,
 				prependMessages: queuedNotices,
 				goalAutoOrchestrateInitialId,
+				goalAutopilotResumeId,
 				onPromptAdmitted: onPromptQueuedAdmitted,
 				onPromptQueued: options?.onPromptQueued,
 			});
@@ -10643,6 +10711,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				preprocessed: { content: preparedMessage.content },
 				prependMessages: queuedNotices,
 				goalAutoOrchestrateInitialId,
+				goalAutopilotResumeId,
 				onPromptAdmitted: onPromptQueuedAdmitted,
 				onPromptQueued: options?.onPromptQueued,
 			});
@@ -10653,6 +10722,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		outcome.sessionClaimed = await this.#promptWithMessage(preparedMessage, textContent, {
 			...options,
 			goalAutoOrchestrateInitialId,
+			goalAutopilotResumeId,
 			followUpBatch: followUps,
 			prependMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
 		});
@@ -10974,6 +11044,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			acceptTerminalEmptyStop?: boolean;
 			/** Follow-ups held until this run goes live; queued behind it then. */
 			followUpBatch?: PromptFollowUps;
+			goalAutopilotResumeId?: string;
 		},
 	): Promise<boolean> {
 		// Returns false when the prompt was dropped before reaching the agent —
@@ -10994,8 +11065,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// Restore the previous task's planning model before checking credentials.
 			// If Escalate moves this task to a planner, that settles before usage preflight.
 			const userTask = this.#isUserTask(message);
-			const goalAutoOrchestrateInitialId =
-				options?.goalAutoOrchestrateInitialId ?? this.#pendingAutopilotResumeId(message);
+			const goalSourceId =
+				options?.goalAutoOrchestrateInitialId ??
+				options?.goalAutopilotResumeId ??
+				this.#pendingAutopilotResumeId(message);
 			if (userTask) await this.#prewalk.beginAutoTask(message);
 			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 			// A capped session hands the prompt back without spending on judges or moving to a planner.
@@ -11297,10 +11370,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			try {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 				options?.onPromptAdmitted?.();
-				if (goalAutoOrchestrateInitialId)
+				if (goalSourceId)
 					this.#rememberGoalAutoOrchestrateInitialSource(
 						message,
-						goalAutoOrchestrateInitialId,
+						goalSourceId,
 						options?.goalAutoOrchestrateInitialId === undefined,
 					);
 				const dispatch = () =>
@@ -12382,6 +12455,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			/** Hidden notices published immediately before this message, in the same synchronous group. */
 			prependMessages?: readonly CustomMessage[];
 			goalAutoOrchestrateInitialId?: string;
+			goalAutopilotResumeId?: string;
 			/** Called synchronously once the message is pushed onto its queue. See {@link PromptOptions.onPromptAdmitted}. */
 			onPromptAdmitted?: () => void;
 			/** Called synchronously with the messages pushed onto the queue. See {@link PromptOptions.onPromptQueued}. */
@@ -12440,6 +12514,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 		if (options?.goalAutoOrchestrateInitialId !== undefined) {
 			this.#rememberGoalAutoOrchestrateInitialSource(normalizedAppMessage, options.goalAutoOrchestrateInitialId);
+		} else if (options?.goalAutopilotResumeId !== undefined) {
+			this.#rememberGoalAutoOrchestrateInitialSource(normalizedAppMessage, options.goalAutopilotResumeId, true);
 		}
 		this.#allowQueuedMessageDrainRetry();
 		// Keyword notices and their user message must enter the queue in one synchronous phase.

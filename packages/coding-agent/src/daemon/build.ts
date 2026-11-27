@@ -1,5 +1,5 @@
 /**
- * Build identity exchanged in the daemon hello/welcome: `VERSION+<stamp>`.
+ * Build identity exchanged in the daemon hello/welcome; see `formatDaemonBuild`.
  *
  * Two installs of the same `VERSION` (a rebuilt binary, a source checkout with
  * a fresh native addon) must not be mistaken for one build, or a client would
@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isCompiledBinary, logger, VERSION } from "@oh-my-pi/pi-utils";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
+import { formatDaemonBuild } from "./protocol";
 
 let cached: string | undefined;
 
@@ -50,8 +51,8 @@ function buildStamp(): number {
 	return mtimeMs * 1000 + (size % 1000);
 }
 
-/** This process's build identity, `VERSION+<stamp>`; compare with `compareDaemonBuilds`. */
+/** This process's build identity; compare with `compareDaemonBuilds`. */
 export function daemonBuildId(): string {
-	cached ??= `${VERSION}+${buildStamp()}`;
+	cached ??= formatDaemonBuild(VERSION, buildStamp());
 	return cached;
 }

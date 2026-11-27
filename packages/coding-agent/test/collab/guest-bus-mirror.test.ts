@@ -38,6 +38,7 @@ function makeGuestContext(eventBus: EventBus): InteractiveModeContext {
 			messages: [],
 			switchSession: () => Promise.resolve(),
 			newSession: () => Promise.resolve(),
+			resetReplicatedViewState: () => {},
 			agent: {
 				state: { model: undefined },
 				setModel: () => {},

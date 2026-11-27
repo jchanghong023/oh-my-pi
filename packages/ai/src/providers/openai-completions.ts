@@ -1099,6 +1099,7 @@ export const streamOpenAICompletionsOnce = (
 						headers: headersWithTimeout,
 						body: params,
 						signal: requestSignal,
+						redirect: options?.requestAuth !== undefined ? "error" : undefined,
 						maxAttempts: model.provider === "codeagent" ? 1 : options?.maxHttpAttempts,
 						fetch: wrapFetchForCopilotFallback(
 							wrapFetchForRequestCompression(options?.fetch ?? fetch, model),
@@ -2162,13 +2163,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (mo
 	if (model.provider === "codeagent") {
 		if (options?.requestAuth !== undefined) {
 			// Explicit caller credentials must never trigger the local token handler.
-			// Keep CodeAgent's single attempt and prohibit credential-bearing redirects.
-			const fetchImpl = options.fetch ?? fetch;
-			return streamOpenAICompletionsOnce(resolvedModel, context, {
-				...options,
-				onSseEvent: undefined,
-				fetch: (input, init) => fetchImpl(input, { ...init, redirect: init?.redirect ?? "error" }),
-			});
+			return streamOpenAICompletionsOnce(resolvedModel, context, { ...options, onSseEvent: undefined });
 		}
 		return codeAgentStreamHandler
 			? codeAgentStreamHandler(resolvedModel, context, options)

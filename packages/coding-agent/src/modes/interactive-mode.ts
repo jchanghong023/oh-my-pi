@@ -1381,11 +1381,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncHudPills();
 	}
 
-	clearTransientSessionUi(options?: { viewOnly?: boolean }): void {
+	clearTransientSessionUi(options?: { viewOnly?: boolean; clearCompactToolHistory?: boolean }): void {
 		if (options?.viewOnly) suspendTodoLoopView(this);
 		this.#hideSessionInfo();
 		this.#working.clear();
-		this.compactThinkingPreview.clear();
+		this.compactThinkingPreview.clear(options?.clearCompactToolHistory ? this.session : undefined);
 		this.compactToolOutputPreview.clear();
 		this.compactFileDiff.clear();
 		this.#refreshCompact();

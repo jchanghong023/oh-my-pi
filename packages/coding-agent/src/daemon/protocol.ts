@@ -48,7 +48,7 @@ export interface DaemonHello {
 	token: string;
 	client: {
 		pid: number;
-		/** omp `VERSION` of the client. */
+		/** Daemon build identity (see {@link formatDaemonBuild}). */
 		build: string;
 		/** Command that re-enters the client's build (`resolveCliEntryCmd()`); the daemon re-execs it on `upgrade`. */
 		exe: string[];
@@ -279,20 +279,48 @@ export function projectScope(dir: string): UnitScope {
 
 export const GLOBAL_SCOPE: UnitScope = { kind: "global" };
 
-/** Split a build identity `VERSION+<stamp>` (see `build.ts`); a missing or malformed stamp is 0. */
-export function parseDaemonBuild(build: string): { version: string; stamp: number } {
-	const plus = build.indexOf("+");
-	if (plus < 0) return { version: build, stamp: 0 };
-	const stamp = Number(build.slice(plus + 1));
-	return { version: build.slice(0, plus), stamp: Number.isSafeInteger(stamp) && stamp > 0 ? stamp : 0 };
+// Deployed peers convert everything after the first "+" with Number() and
+// accept only positive safe integers. At MAX_SAFE_INTEGER, the fractional
+// payload (< 0.1) rounds away, so they see a stamp that beats an ordinary
+// file stamp or the zero from an old "+fork.N+stamp" identity.
+const FORK_STAMP_PREFIX = `${Number.MAX_SAFE_INTEGER}.0`;
+
+function safeStamp(stamp: number): number {
+	return Number.isSafeInteger(stamp) && stamp > 0 ? stamp : 0;
 }
 
-/** Order two build identities: `VERSION` by semver first, then the stamp. Positive when `left` is newer. */
+/** Keep the plain `VERSION+stamp` format; fork builds carry the run and full file stamp. */
+export function formatDaemonBuild(version: string, stamp: number): string {
+	const fork = /\+fork\.(\d+)$/.exec(version);
+	if (!fork) return `${version}+${stamp}`;
+	const base = version.slice(0, fork.index);
+	const run = BigInt(fork[1]);
+	if (run === 0n) return `${base}+${stamp}`;
+	return `${base}+${FORK_STAMP_PREFIX}${run}${String(safeStamp(stamp)).padStart(16, "0")}`;
+}
+
+/** Parse the legacy or corrected build identity; a missing or malformed stamp is 0. */
+export function parseDaemonBuild(build: string): { version: string; stamp: number; fork?: bigint } {
+	const plus = build.indexOf("+");
+	if (plus < 0) return { version: build, stamp: 0 };
+	const version = build.slice(0, plus);
+	const suffix = build.slice(plus + 1);
+	const fork = suffix.startsWith(FORK_STAMP_PREFIX)
+		? /^(\d+)(\d{16})$/.exec(suffix.slice(FORK_STAMP_PREFIX.length))
+		: /^fork\.(\d+)\+(\d+)$/.exec(suffix);
+	const stamp = safeStamp(Number(fork?.[2] ?? suffix));
+	return fork ? { version, stamp, fork: BigInt(fork[1]) } : { version, stamp };
+}
+
+/** Order build identities by SemVer precedence, then fork run, then file stamp. Positive when `left` is newer. */
 export function compareDaemonBuilds(left: string, right: string): number {
 	const a = parseDaemonBuild(left);
 	const b = parseDaemonBuild(right);
 	const byVersion = Bun.semver.order(a.version, b.version);
 	if (byVersion !== 0) return byVersion;
+	const aFork = a.fork ?? 0n;
+	const bFork = b.fork ?? 0n;
+	if (aFork !== bFork) return aFork > bFork ? 1 : -1;
 	return Math.sign(a.stamp - b.stamp);
 }
 

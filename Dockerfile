@@ -227,11 +227,11 @@ RUN bun install --frozen-lockfile --ignore-scripts
 # hoisted node_modules that `bun install` just produced.
 COPY . /pi/
 
-# Generate the hosted viewer metadata and the embedded relay extension that
-# `--ignore-scripts` skipped above. The root prepare script normally handles
-# them on a vanilla install.
-RUN bun --cwd=packages/coding-agent run gen:export-viewer && \
-    bun --cwd=packages/browser-relay run gen:embedded
+# Restore generated assets skipped by --ignore-scripts. The OpenWiki
+# postinstall uses the vendored source only when it is present.
+RUN bun run gen:export-viewer && \
+    bun run gen:relay-extension && \
+    bun run postinstall
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/omp"]
 CMD ["--help"]
