@@ -57,6 +57,7 @@ async function pack(out: string): Promise<void> {
 			"packages",
 			"docs",
 			"python/robomp/web/package.json",
+			"vendor/developer-test-agent",
 			"vendor/openspec",
 			"vendor/superpowers",
 		)

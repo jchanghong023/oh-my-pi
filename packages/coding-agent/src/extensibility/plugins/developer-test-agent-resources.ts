@@ -5,13 +5,14 @@ import { gunzipSync } from "node:zlib";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import type { Skill } from "../skills";
 import bundledArchive from "./developer-test-agent-archive";
+import { developerTestAgentSourceRoot } from "./developer-test-agent-source";
 
 export const BUNDLED_DEVELOPER_TEST_NAMESPACE = "bundled-developer-test-agent";
 const BUNDLED_SKILL_NAMES = new Set(["generate-ut", "fix-ut", "improve-coverage", "improve-validity", "test-report"]);
 
 /** Resolve the real resource root, materializing the build's immutable resources in the active profile if needed. */
 export async function getDeveloperTestAgentRoot(agentDir: string = getAgentDir()): Promise<string> {
-	if (!bundledArchive) return fs.realpath(path.join(import.meta.dir, "bundled/developer-test-agent"));
+	if (!bundledArchive) return fs.realpath(developerTestAgentSourceRoot());
 
 	const { digest } = bundledArchive;
 	const parent = path.join(agentDir, "developer-test-agent", "resources");

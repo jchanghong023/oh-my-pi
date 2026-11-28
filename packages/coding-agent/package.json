@@ -29,6 +29,7 @@
 	},
 	"files": [
 		"src",
+		"!src/extensibility/plugins/developer-test-agent-source.ts",
 		"!src/export/html/shell.html",
 		"!src/export/html/template.css",
 		"!src/export/html/template.js",
@@ -38,6 +39,7 @@
 		"dist/export-viewer.generated.js",
 		"dist/spec-driven-resources*.gz",
 		"dist/developer-test-agent-resources*.gz",
+		"dist/developer-test-agent",
 		"dist/openwiki-vendor.js",
 		"dist/openwiki-resources.generated.txt",
 		"dist/CHANGELOG-*.md",

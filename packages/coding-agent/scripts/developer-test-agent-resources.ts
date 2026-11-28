@@ -3,10 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gzipSync } from "node:zlib";
 import type { BunPlugin } from "bun";
+import { developerTestAgentSourceRoot } from "../src/extensibility/plugins/developer-test-agent-source";
 
 /** Capture the current plugin tree, including binary files, without generated sidecars. */
 export async function buildDeveloperTestAgentResources(): Promise<Buffer> {
-	const root = path.resolve(import.meta.dir, "../src/extensibility/plugins/bundled/developer-test-agent");
+	const root = developerTestAgentSourceRoot();
 	const entries: Array<[string, { data: string; mode: number } | null]> = [];
 	async function collect(prefix: string): Promise<void> {
 		const children = await fs.readdir(path.join(root, prefix), { withFileTypes: true });

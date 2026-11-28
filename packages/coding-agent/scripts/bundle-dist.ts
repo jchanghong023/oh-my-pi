@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { exportViewerDistName } from "../src/export/html/viewer-resource";
+import { developerTestAgentSourceRoot } from "../src/extensibility/plugins/developer-test-agent-source";
 import { createBundlePlugins } from "./bundle-plugins";
 import { embeddedRelayExtensionFiles } from "./embed-relay-extension";
 import { readGeneratedExportViewer } from "./export-viewer";
@@ -91,6 +92,7 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 					entry === "docs-index.generated.txt" ||
 					entry === exportViewerDistName ||
 					/^spec-driven-resources.*\.gz$/.test(entry) ||
+					entry === "developer-test-agent" ||
 					/^developer-test-agent-resources\.json-[^/]+\.gz$/.test(entry) ||
 					entry.endsWith(".node") ||
 					entry.endsWith(".js.map") ||
@@ -98,7 +100,7 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 					(entry.startsWith("CHANGELOG-") && entry.endsWith(".md")) ||
 					obsoleteHtmlExportAssetPattern.test(entry),
 			)
-			.map(entry => fs.rm(path.join(outDir, entry), { force: true })),
+			.map(entry => fs.rm(path.join(outDir, entry), { force: true, recursive: entry === "developer-test-agent" })),
 	);
 }
 
@@ -179,6 +181,8 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		await Bun.write(path.join(outDir, "docs-index.generated.txt"), docsPayload.payload);
 		await Bun.write(path.join(outDir, exportViewerDistName), exportViewer);
 		await Bun.write(path.join(outDir, "spec-driven-resources.tar.gz"), specDrivenArchive);
+		// npm SDK imports run from src/ without the CLI's build-time archive plugin.
+		await fs.cp(developerTestAgentSourceRoot(), path.join(outDir, "developer-test-agent"), { recursive: true });
 		await Bun.write(path.join(outDir, "openwiki-resources.generated.txt"), openWikiText);
 	} catch (error) {
 		failures.push(error);
