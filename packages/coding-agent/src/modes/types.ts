@@ -387,6 +387,8 @@ export interface InteractiveModeInitOptions {
 	autoStartCollab?: boolean;
 	/** A command-line prompt runs once startup ends: report `working` from the first frame. */
 	startupRun?: boolean;
+	/** Host-owned work that can wait until the live composer has had time to handle input. */
+	startupBackgroundWork?: () => void;
 }
 
 export type InteractiveSelectorDialogOptions = ExtensionUIDialogOptions &

@@ -33,6 +33,7 @@ import {
 import { pollFile } from "@oh-my-pi/pi-natives/file-poll";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { JSONC, YAML } from "bun";
+import { configOverlayPaths, readConfigOverlay } from "./config-overlays";
 import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-roles";
@@ -900,9 +901,7 @@ export class Settings {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
 		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
-		const configFiles = process.env.PI_CONFIG_FILES?.split(path.delimiter).filter(Boolean) ?? [];
-		if (options.configFiles) configFiles.push(...options.configFiles);
-		this.#configFiles = configFiles.map(file => path.resolve(this.#cwd, expandTilde(file)));
+		this.#configFiles = configOverlayPaths(this.#cwd, options.configFiles);
 		this.#persist = !options.inMemory && options.readOnly !== true;
 		if (!projection) registerSettingsInstance(this);
 		if (options.overrides) this.#overrides = this.#overrideLayer(options.overrides);
@@ -3203,7 +3202,7 @@ export class Settings {
 		let shellPathSource: string | undefined;
 		let settings: RawSettings = {};
 		for (const filePath of this.#configFiles) {
-			const overlay = await this.#loadOverlayYaml(filePath, captureLegacyChangelogVersion);
+			const overlay = this.#migrateRawSettings(await readConfigOverlay(filePath), captureLegacyChangelogVersion);
 			settings = this.#deepMerge(settings, overlay, { arrays: "combine" });
 			if (Object.hasOwn(overlay, "shellPath")) shellPathSource = filePath;
 		}
@@ -3214,35 +3213,6 @@ export class Settings {
 		const result = await this.#readConfigOverlays();
 		this.#overlayShellPathSource = result.shellPathSource;
 		return result.settings;
-	}
-
-	/**
-	 * Strict loader for explicit `--config` overlays: unlike `#loadYaml`,
-	 * missing or malformed files are hard errors so a typo'd path cannot
-	 * silently fall back to the persistent settings.
-	 */
-	async #loadOverlayYaml(filePath: string, captureLegacyChangelogVersion = true): Promise<RawSettings> {
-		let content: string;
-		try {
-			content = await Bun.file(filePath).text();
-		} catch (error) {
-			throw new Error(
-				isEnoent(error)
-					? `Config overlay not found: ${filePath}`
-					: `Failed to read config overlay ${filePath}: ${String(error)}`,
-			);
-		}
-		let parsed: unknown;
-		try {
-			parsed = YAML.parse(content);
-		} catch (error) {
-			throw new Error(`Failed to parse config overlay ${filePath}: ${String(error)}`);
-		}
-		if (parsed === null || parsed === undefined) return {};
-		if (typeof parsed !== "object" || Array.isArray(parsed)) {
-			throw new Error(`Config overlay must be a YAML mapping: ${filePath}`);
-		}
-		return this.#migrateRawSettings(parsed as RawSettings, captureLegacyChangelogVersion);
 	}
 
 	async #migrateFromLegacy(): Promise<void> {

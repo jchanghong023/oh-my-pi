@@ -743,6 +743,8 @@ export interface CreateAgentSessionOptions {
 	hydrateStartupModelCaches?: HydrateStartupModelCaches;
 	/** @internal Interactive host starts any deferred offline catalog reads after its first live frame. */
 	deferStartupModelCacheHydration?: boolean;
+	/** @internal Leave speculative credential reads and MCP discovery to the interactive host's warmup. */
+	deferInteractiveStartupWork?: boolean;
 	/** Raw model pattern(s) (e.g. from --model CLI flag) to resolve after extensions load.
 	 * Used when model lookup is deferred because extension-provided models aren't registered yet. */
 	modelPattern?: string | string[];
@@ -1183,6 +1185,8 @@ export interface CreateAgentSessionResult {
 	startBackgroundModelDiscovery?: () => Promise<void>;
 	/** @internal Replay the remaining offline catalog before starting interactive background discovery. */
 	hydrateDeferredModelCaches?: () => Promise<void>;
+	/** @internal Starts deferred MCP discovery and credential prefetch once the composer is live. */
+	startDeferredInteractiveWork?: () => void;
 	/** Shared event bus for tool/extension communication */
 	eventBus: EventBus;
 	/** Root-scoped bus carrying this session tree's `task:subagent:*` frames. */
@@ -2218,7 +2222,8 @@ async function createAgentSessionScoped(
 			? [options.modelPattern.trim()]
 			: [];
 	const hasExplicitModel = options.model !== undefined || deferredModelPatterns.length > 0;
-	const hydrateStartupModelCaches = options.hydrateStartupModelCaches ?? modelRegistry.createStartupModelCacheHydrator();
+	const hydrateStartupModelCaches =
+		options.hydrateStartupModelCaches ?? modelRegistry.createStartupModelCacheHydrator();
 	const startStartupModelCacheHydration = (providers?: ReadonlySet<string>) => {
 		const hydration = hydrateStartupModelCaches(providers);
 		// A worker's owner call may reject before we reach the first reader.
@@ -2548,7 +2553,10 @@ async function createAgentSessionScoped(
 			await hydrateFullStartupModelCaches();
 		} else {
 			if (startupProvider) providers.delete(startupProvider);
-			await Promise.all([startupProviderHydration, providers.size > 0 ? hydrateStartupModelCaches(providers) : undefined]);
+			await Promise.all([
+				startupProviderHydration,
+				providers.size > 0 ? hydrateStartupModelCaches(providers) : undefined,
+			]);
 		}
 	}
 	let defaultRoleSpec: ResolvedModelRoleValue = {
@@ -2657,36 +2665,32 @@ async function createAgentSessionScoped(
 	// provisional level shown until the first per-turn classification resolves;
 	// `auto` itself stays a session-only concept handled by AgentSession.
 	let effectiveThinkingLevel: ThinkingLevel | undefined = concreteThinkingLevel(thinkingLevel);
+	const prefetchCredentialUsage = (selected: Model, sessionId: string): void => {
+		// Only warm the usage report; the request still owns credential eligibility and selection.
+		void logger
+			.time("prefetchCredentialUsage", () =>
+				modelRegistry.authStorage.keys.prefetchUsage(selected.provider, sessionId, {
+					baseUrl: selected.baseUrl,
+					modelId: selected.id,
+					accountIds: selected.accountAccess && Object.keys(selected.accountAccess),
+				}),
+			)
+			.catch(error => {
+				logger.debug("Startup credential usage prefetch failed", {
+					provider: selected.provider,
+					error: String(error),
+				});
+			});
+	};
 	if (model) {
 		const resolvedModel = model;
 		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
 			resolveConfiguredThinkingLevel(resolvedModel, thinkingLevel),
 		);
-		// Fire-and-forget connection warm-up so the handshake overlaps the rest
-		// of session setup (extension/skill load, tool registry, system prompt
-		// build). Effective for endpoints known before any request (official
-		// Anthropic); others warm once a request has revealed their real origin.
-		// Every mode benefits (interactive, print, rpc, acp).
-		void prewarmModelConnection(model);
-		// Usage-aware credential selection may need a cold remote usage report.
-		// Start only that metadata read while tools/extensions/context are loading;
-		// the selector owns eligibility and still chooses/pins the account at request
-		// time. A preliminary model can change after extensions register, so this
-		// must never validate or commit credentials for it.
-		void logger
-			.time("prefetchCredentialUsage", () =>
-				modelRegistry.authStorage.keys.prefetchUsage(resolvedModel.provider, providerSessionId, {
-					baseUrl: resolvedModel.baseUrl,
-					modelId: resolvedModel.id,
-					accountIds: resolvedModel.accountAccess && Object.keys(resolvedModel.accountAccess),
-				}),
-			)
-			.catch(error => {
-				logger.debug("Startup credential usage prefetch failed", {
-					provider: resolvedModel.provider,
-					error: String(error),
-				});
-			});
+		if (!options.deferInteractiveStartupWork) {
+			void prewarmModelConnection(resolvedModel);
+			prefetchCredentialUsage(resolvedModel, providerSessionId);
+		}
 	}
 
 	// The terminal host can finish the catalog after paint on an ordinary
@@ -3296,8 +3300,9 @@ async function createAgentSessionScoped(
 		toolSession.enableMCP = enableMCP;
 		const deferMCPDiscoveryForUI = enableMCP && !mcpManager && options.hasUI === true;
 		const initialMcpManagerTools: CustomTool[] = [];
-		let startDeferredMCPDiscovery: ((liveSession: AgentSession) => void) | undefined;
-		/** Startup discovery must settle before a cwd-scoped reload can publish its results. */
+		let startDeferredMCPDiscovery: ((liveSession: AgentSession) => Promise<void>) | undefined;
+		let startupMcpSuperseded = false;
+		/** Startup-deferred discovery in flight; an owned-manager reload waits for it so stale results never land after. */
 		let initialMcpDiscovery: Promise<void> | undefined;
 		const onMCPStatus = (event: McpConnectionStatusEvent) => {
 			if (!options.hasUI || cfgStartupQuiet.get(settings)) return;
@@ -3329,6 +3334,8 @@ async function createAgentSessionScoped(
 					deferredMCPManager.setNotificationsEnabled(true);
 				}
 				startDeferredMCPDiscovery = liveSession => {
+					if (initialMcpDiscovery) return initialMcpDiscovery;
+					if (startupMcpSuperseded || liveSession.isDisposed) return Promise.resolve();
 					// Each configured server's first mount, whether discovery or a later `onToolsChanged`
 					// (a slow or retried connect) brings it, is part of this startup, not a change.
 					liveSession.setMCPStartupMounts(toolName => deferredMCPManager.isStartupMount(toolName));
@@ -3367,7 +3374,7 @@ async function createAgentSessionScoped(
 						}
 					})();
 					initialMcpDiscovery = discovery;
-					liveSession.setPendingMCPDiscovery(discovery);
+					return discovery;
 				};
 			} else {
 				const mcpResult = await logger.time("discoverAndLoadMCPTools", discoverAndLoadMCPTools, cwd, {
@@ -5997,6 +6004,8 @@ async function createAgentSessionScoped(
 		const owningMcpManager = ownedMcpManager;
 		const reloadOwnedMcpServers = owningMcpManager
 			? (): Promise<MCPLoadResult | undefined> => {
+					const takesOverStartup = startDeferredMCPDiscovery && !initialMcpDiscovery && !startupMcpSuperseded;
+					startupMcpSuperseded = true;
 					const reload = async (): Promise<MCPLoadResult | undefined> => {
 						await initialMcpDiscovery;
 						// Dispose already ran its one disconnect; never spawn servers after it.
@@ -6021,11 +6030,15 @@ async function createAgentSessionScoped(
 					};
 					const next = ownedMcpReload.catch(() => {}).then(reload);
 					ownedMcpReload = next;
+					if (takesOverStartup) session.setPendingMCPDiscovery(next.then(() => {}));
 					return next;
 				}
 			: undefined;
 		// Settings can opt into a synchronous startup reader while other setup yields.
-		if (!fullStartupModelCaches && (cfgAdvisorEnabled.get(settings) || modelGrantAdvertisementNeedsCatalog(settings))) {
+		if (
+			!fullStartupModelCaches &&
+			(cfgAdvisorEnabled.get(settings) || modelGrantAdvertisementNeedsCatalog(settings))
+		) {
 			await hydrateFullStartupModelCaches();
 		}
 		// Advisor spend recorded before this resume is restored off the critical
@@ -7211,7 +7224,10 @@ async function createAgentSessionScoped(
 				await extensionRunner.addExtensions(loaded.extensions);
 			});
 		}
-		startDeferredMCPDiscovery?.(session);
+		if (startDeferredMCPDiscovery) {
+			const startDiscovery = startDeferredMCPDiscovery.bind(undefined, session);
+			session.setPendingMCPDiscovery(options.deferInteractiveStartupWork ? startDiscovery : startDiscovery());
+		}
 
 		startupCleanup.move();
 		sessionOwnsSettings = releaseSettings !== undefined;
@@ -7224,6 +7240,15 @@ async function createAgentSessionScoped(
 			lspServers,
 			startBackgroundModelDiscovery: startRuntimeDiscovery,
 			hydrateDeferredModelCaches: fullStartupModelCaches === undefined ? hydrateFullStartupModelCaches : undefined,
+			startDeferredInteractiveWork: options.deferInteractiveStartupWork
+				? () => {
+						if (session.isDisposed) return;
+						session.startPendingMCPDiscovery();
+						if (session.model) {
+							prefetchCredentialUsage(session.model, options.providerSessionId ?? sessionManager.getSessionId());
+						}
+					}
+				: undefined,
 			eventBus,
 			subagentEventBus,
 		};

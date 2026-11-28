@@ -130,6 +130,13 @@ describe("session status line", () => {
 		expect(unknown).not.toMatch(/\d%/);
 	});
 
+	it("shows capacity before startup finishes, then fills in the real token estimate", () => {
+		const line = statusLines.track(new SessionStatusLine(makeSession(), { deferStartupReads: true }));
+		expect(line.facts().context).toEqual({ window: 128000, tokens: 0, percent: null });
+		line.finishStartup();
+		expect(line.facts().context).toEqual({ window: 128000, tokens: 42, percent: (42 / 128000) * 100 });
+	});
+
 	it("shows primary and advisor costs separately on different billing plans", () => {
 		expect(costText(makeSession(false, { cost: 2.67, advisorCost: 0.41, usingSubscription: true }))).toContain(
 			"S2.67 + 👁 $0.41",

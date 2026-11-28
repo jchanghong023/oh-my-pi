@@ -78,6 +78,7 @@ export const cfgGitChildRepoDiscovery = register({
 // Theme
 export const cfgThemeDark = register({
 	id: "theme.dark",
+	prepaint: true,
 	type: "string",
 	default: "titanium",
 	ui: {
@@ -92,6 +93,7 @@ effect(cfgThemeDark, name => setThemeSlot("dark", name));
 
 export const cfgThemeLight = register({
 	id: "theme.light",
+	prepaint: true,
 	type: "string",
 	default: "light",
 	ui: {
@@ -106,6 +108,7 @@ effect(cfgThemeLight, name => setThemeSlot("light", name));
 
 export const cfgSymbolPreset = register({
 	id: "symbolPreset",
+	prepaint: true,
 	type: "enum",
 	values: ["unicode", "nerd", "ascii"] as const,
 	default: "unicode",
@@ -129,6 +132,7 @@ effect(cfgSymbolPreset, setSymbolPreset);
 
 export const cfgColorBlindMode = register({
 	id: "colorBlindMode",
+	prepaint: true,
 	type: "boolean",
 	default: false,
 	ui: {
@@ -143,6 +147,7 @@ effect(cfgColorBlindMode, setColorBlindMode);
 // Composer
 export const cfgComposerShape = register({
 	id: "composer.shape",
+	prepaint: true,
 	type: "string",
 	default: "band",
 	ui: {
@@ -383,6 +388,7 @@ export const cfgTuiMaxInlineImages = register({
 
 export const cfgTuiResizeScrollback = register({
 	id: "tui.resizeScrollback",
+	prepaint: true,
 	type: "enum",
 	values: ["append", "rebuild", "preserve"] as const,
 	default: "rebuild",
@@ -413,6 +419,7 @@ export const cfgTuiResizeScrollback = register({
 
 export const cfgTuiScreen = register({
 	id: "tui.screen",
+	prepaint: true,
 	type: "enum",
 	values: ["inline", "fullscreen"] as const,
 	default: "inline",
@@ -1055,6 +1062,7 @@ export const cfgShowHardwareCursor = register({
 
 export const cfgTuiImeSafeCursor = register({
 	id: "tui.imeSafeCursor",
+	prepaint: true,
 	type: "boolean",
 	default: false,
 	ui: {
@@ -1125,6 +1133,7 @@ export const cfgBtwInject = register({
 
 export const cfgTuiVimMode = register({
 	id: "tui.vimMode",
+	prepaint: true,
 	type: "boolean",
 	default: false,
 	ui: {
@@ -1322,6 +1331,7 @@ export const cfgTreeFilterMode = register({
 
 export const cfgAutocompleteMaxVisible = register({
 	id: "autocompleteMaxVisible",
+	prepaint: true,
 	type: "number",
 	default: 10,
 	ui: {
@@ -1461,6 +1471,7 @@ export const cfgPasteLargeMenuThreshold = register({
 
 export const cfgStartupQuiet = register({
 	id: "startup.quiet",
+	prepaint: true,
 	type: "boolean",
 	default: false,
 	ui: {

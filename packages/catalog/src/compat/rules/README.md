@@ -373,7 +373,7 @@ behavior {
 
 ## Auth grammar
 
-Every provider has exactly one `auth "<id>" { … }` node under `auth/`; `auth/_order.kdl` holds a single `login-order "id" …` node pinning the `/login` roster order (every provider with a `login` and `show-in-login-list` unset/true must appear; providers without a login sort alphabetically after it). Runtime accessors live in `src/compat/auth.ts`; the id unions in the generated `src/compat/auth-ids.ts`. Every provider in `provider-models/descriptors.ts` needs an auth node (`@oh-my-pi/pi-ai` type-checks this).
+Every provider has exactly one `auth "<id>" { … }` node under `auth/`; `auth/_order.kdl` holds a single `login-order "id" …` node pinning the `/login` roster order (every provider with a `login` and `show-in-login-list` unset/true must appear; providers without a login sort alphabetically after it). Runtime accessors live in `src/compat/auth.ts`. Every catalog provider (a `providers/<id>.kdl` with `default-model`) needs an auth node; `gen:compat` rejects one without.
 
 ```kdl
 auth "anthropic" {
@@ -458,9 +458,9 @@ Hook names are validated against the hook tables in `@oh-my-pi/pi-ai/src/registr
 
 ## Provider catalog grammar
 
-The root `provider "<id>"` node of `providers/<id>.kdl` carries a catalog entry or explicit runtime-only policy next to the cascade rules. Catalog entries declare `default-model`. Runtime-only entries may omit it only with `automatic-default #false` and without `discovery`, `kind-apis`, `seed`, or `skip-cross-provider-reference-fills`; their permitted metadata is `env`, `allow-unauthenticated`, and `dynamic-models-authoritative`. No placeholder default or model rows are created. Both entry kinds belong to the generated `KnownProvider` union in `src/compat/provider-ids.ts`: membership does not imply a known default model or bundled roster. Files carrying only cascade rules remain wire-compat only (custom provider ids such as `llama.cpp`) and do not create entries.
+The root `provider "<id>"` node of `providers/<id>.kdl` carries a catalog entry or explicit runtime-only policy next to the cascade rules. Catalog entries declare `default-model`. Runtime-only entries may omit it only with `automatic-default #false` and without `discovery`, `kind-apis`, `seed`, `skip-cross-provider-reference-fills`, or `keep-bundled-names`. No placeholder default or model rows are created. Files carrying only cascade rules remain wire-compat only (custom provider ids such as `llama.cpp`) and do not create entries.
 
-The compiled entries live in `rules.json` under `providers`, keyed by id; runtime accessors are in `src/compat/providers.ts`. `provider-models/descriptors.ts` pairs entries that have a default model with their model-manager factory — the only provider fact that stays in code. Runtime-only policy does not enroll a provider in this catalog factory table or generation-time discovery.
+The compiled entries live in `rules.json` under `providers`, keyed by id; runtime accessors are in `src/compat/providers.ts`. `provider-models/descriptors.ts` pairs entries that have a default model with their model-manager factory. Runtime-only policy does not enroll a provider in this catalog factory table or generation-time discovery.
 
 ```kdl
 provider "sakana" {
