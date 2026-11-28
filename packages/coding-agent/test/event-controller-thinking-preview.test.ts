@@ -330,7 +330,7 @@ describe("compact action dock", () => {
 		const running = plain(h.dock.render(80));
 		expect(running[0]).toBe("");
 		expect(running[1]).toContain("Agent: Reading  workspace/src/config.ts · Checking presets");
-		expect(running[2]).toBe("");
+		expect(running).toHaveLength(2);
 		expect(h.dock.render(80)[1]).toContain(
 			theme.fg("dim", "workspace/") + theme.fg("text", "src/config.ts") + theme.fg("dim", " · Checking presets"),
 		);
@@ -341,7 +341,7 @@ describe("compact action dock", () => {
 			result: { content: [] },
 			isError: false,
 		});
-		for (const rows of [h.dock.render(80), h.nativeRows(80)]) expect(plain(rows)).toEqual(["", "", ""]);
+		for (const rows of [h.dock.render(80), h.nativeRows(80)]) expect(plain(rows)).toEqual(["", ""]);
 	});
 
 	it("labels edits as writes and falls back to Calling for unknown tools", async () => {
@@ -392,7 +392,7 @@ describe("compact action dock", () => {
 			result: { content: [{ type: "text", text: "boom" }] },
 			isError: true,
 		});
-		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)).toEqual(["", "", ""]);
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)).toEqual(["", ""]);
 	});
 
 	it("separates request, thinking and reply from the tool row", async () => {
@@ -726,7 +726,7 @@ describe("compact action dock", () => {
 		const narrow = plain(h.dock.render(44));
 		expect(narrow[0]).toBe("");
 		expect(narrow[1]).toContain("宽字符");
-		expect(narrow[2]).toBe("");
+		expect(narrow).toHaveLength(2);
 	});
 
 	it("shows a new message's thinking when its content index repeats", async () => {
@@ -853,11 +853,11 @@ describe("compact action dock", () => {
 			isError: false,
 		});
 		await live.emit({ type: "agent_end", messages: [] });
-		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)).toEqual(["", "", ""]);
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)).toEqual(["", ""]);
 		await h.focus.focusAgent(MAIN_AGENT_ID);
-		expect(h.rows()).toEqual(["", "", ""]);
+		expect(h.rows()).toEqual(["", ""]);
 		await h.focus.focusAgent("Worker");
-		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)).toEqual(["", "", ""]);
+		for (const rows of [h.rows(), h.nativeRows()]) expect(plain(rows)).toEqual(["", ""]);
 	});
 
 	it.each(["display tier", "focused agent"])("does not revive thinking that ended outside the %s", async change => {

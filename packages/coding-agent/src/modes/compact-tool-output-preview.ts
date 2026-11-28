@@ -378,7 +378,7 @@ export class CompactToolOutputPreview {
 		if (!header) return [];
 		const theme = currentTheme();
 		const bg = PREVIEW_BLOCK_BG[header.state];
-		const paint = (row: string) => header.left + theme.bgFill(bg, padTo(row, header.contentWidth));
+		const paint = (row: string) => theme.bgFill(bg, header.left + padTo(row, header.contentWidth));
 		const { lines, diagnosticCount } = this.#body(header);
 		return [
 			paint(header.spans.map(span => theme.style(span.s, span.t)).join("")),

@@ -402,7 +402,7 @@ export class CompactThinkingPreview {
 		}
 		const left = width > 1 ? " " : "";
 		const rows = this.rows(width);
-		return [rows[0] ? left + this.#paintAnsi(rows[0]) : "", rows[1] ? left + this.#paintAnsi(rows[1]) : "", ""];
+		return [rows[0] ? left + this.#paintAnsi(rows[0]) : "", rows[1] ? left + this.#paintAnsi(rows[1]) : ""];
 	}
 
 	#thinkingDetail(stage: ModelStage | null, width: number): string {

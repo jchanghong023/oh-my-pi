@@ -577,7 +577,6 @@ export class AppFrame {
 											<text role="omp.compact.wait.stop" actions={{ click: "interrupt" }} text="Stop" />
 										)}
 									</row>,
-									<text text=" " wrap="none" />,
 								];
 							}}
 						</col>
