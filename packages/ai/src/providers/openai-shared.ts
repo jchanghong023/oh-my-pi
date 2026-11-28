@@ -4449,7 +4449,10 @@ export function resolveReasoningSummaryOption(
 	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
 	options: { reasoning?: string; reasoningSummary?: "auto" | "detailed" | "concise" | null } | undefined,
 ): "auto" | "detailed" | "concise" | null | undefined {
-	if (model.compat.supportsReasoningSummary) return options?.reasoningSummary;
+	if (model.compat.supportsReasoningSummary) {
+		if (options?.reasoningSummary !== undefined) return options.reasoningSummary;
+		return options?.reasoning === undefined ? undefined : model.compat.reasoningSummaryDefault;
+	}
 	return options?.reasoning === undefined ? undefined : null;
 }
 
