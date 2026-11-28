@@ -3,7 +3,7 @@ import { UiNode } from "@oh-my-pi/pi-tui";
 import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
 import { renderBlock } from "@oh-my-pi/pi-tui/term/render";
 import { renderDiff, wrapDiffRow } from "@oh-my-pi/pi-tui/text/diff";
-import { replaceTabs, spaces, truncate } from "@oh-my-pi/pi-tui/text/width";
+import { replaceTabs, truncate } from "@oh-my-pi/pi-tui/text/width";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { TurnToolDiff } from "../session/latest-turn-tool-diffs";
@@ -170,7 +170,7 @@ export class CompactFileDiff {
 		}
 		const latest = source[source.length - 1]!;
 		if (!matches(latest)) return undefined;
-		const bodyWidth = width - Math.min(1, width - 1);
+		const bodyWidth = Math.max(1, width - 1);
 		if (!this.#previewRows(latest, cwd, bodyWidth, height).length) return undefined;
 		return this.#preview?.complete ? latest.diff : undefined;
 	}
@@ -244,16 +244,13 @@ export class CompactFileDiff {
 		if (!source || maxRows < 1) return [];
 		const latest = source.at(-1);
 		if (!latest) return [];
-		const left = spaces(Math.min(1, width - 1));
-		const bodyWidth = width - left.length;
+		const bodyWidth = Math.max(1, width - 1);
 		const cwd = this.ctx.viewSession.sessionManager.getCwd();
 		const expanded = this.#expanded;
 		const theme = currentTheme();
 		if (!expanded) {
 			const preview = this.#previewRows(latest, cwd, bodyWidth, maxRows);
-			return preview.length
-				? preview.map(line => left + line)
-				: [left + theme.fg("accent", truncate(filePathLabel(cwd, latest), bodyWidth))];
+			return preview.length ? preview : [theme.fg("accent", truncate(filePathLabel(cwd, latest), bodyWidth))];
 		}
 		let entry = this.#expandedRows;
 		if (
@@ -276,6 +273,6 @@ export class CompactFileDiff {
 		this.#page = Math.min(maxRows, lines.length);
 		this.#maxOffset = Math.max(0, lines.length - this.#page);
 		this.#offset = Math.min(this.#offset, this.#maxOffset);
-		return lines.slice(this.#offset, this.#offset + this.#page).map(line => left + line);
+		return lines.slice(this.#offset, this.#offset + this.#page);
 	}
 }
