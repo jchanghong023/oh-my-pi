@@ -85,7 +85,13 @@ impl Callouts {
 	/// a subshell of a callout.
 	pub fn on_done(&mut self, shell: &Shell, run: RunId, status: i32) {
 		if let Some(tools) = &mut self.tools {
-			tools.on_done(run, status, shell.exec_signal(run), shell.run_usage(run));
+			tools.on_done(
+				run,
+				status,
+				shell.exec_signal(run),
+				shell.ended_by_virtual_signal(run),
+				shell.run_usage(run),
+			);
 		}
 	}
 
