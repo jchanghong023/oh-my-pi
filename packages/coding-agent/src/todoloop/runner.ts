@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { errorMessage, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobDetails } from "../async/job-manager";
 import type { EvalHandleSnapshot, EvalHandleState } from "../eval/handle-bridge";
 import { buildTodoLoopGroupPrompt, buildTodoLoopScoutPrompt, type TodoLoopPreviousAttempt } from "./context";
@@ -56,10 +56,6 @@ export interface TodoLoopRunOptions {
 	onAttempt?: (event: TodoLoopAttemptEvent) => void;
 }
 
-function errorText(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
 /** Presentation never owns job control or file validation. */
 function notify<T>(observer: ((value: T) => void) | undefined, value: T): void {
 	try {
@@ -106,7 +102,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 	try {
 		await reread();
 	} catch (error) {
-		return state("file_error", errorText(error));
+		return state("file_error", errorMessage(error));
 	}
 	const execute = async (id: string, activeGroup?: TodoLoopGroup): Promise<EvalHandleSnapshot | TodoLoopState> => {
 		const event = (type: TodoLoopAttemptEvent["type"], fields: Partial<TodoLoopAttemptEvent> = {}): void => {
@@ -138,7 +134,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 					state(phase);
 				})
 				.catch(error => {
-					fileError = errorText(error);
+					fileError = errorMessage(error);
 					cancel();
 				});
 		};
@@ -164,7 +160,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 						cancel();
 					}
 				} catch (error) {
-					executionError = errorText(error);
+					executionError = errorMessage(error);
 					cancel();
 				}
 			}
@@ -177,10 +173,10 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 			await progress;
 			if (announced)
 				event("end", {
-					error: errorText(error),
+					error: errorMessage(error),
 					details: native.session.asyncJobManager?.getJob(id)?.latestDetails,
 				});
-			return state("settlement_failed", errorText(error));
+			return state("settlement_failed", errorMessage(error));
 		} finally {
 			acceptingProgress = false;
 			await progress;
@@ -196,7 +192,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 		try {
 			await reread(activeGroup?.id);
 		} catch (error) {
-			return state("file_error", errorText(error));
+			return state("file_error", errorMessage(error));
 		}
 		if (options.signal?.aborted) return state("stopped");
 		return { kind: "agent", id, status: job.status, text, error, data: result?.data };
@@ -209,12 +205,12 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 		preparationPrompt = await buildTodoLoopScoutPrompt(filePath, options.cwd);
 	} catch (error) {
 		if (options.signal?.aborted) return state("stopped");
-		return state("failed", `TodoLoop background preparation failed: ${errorText(error)}`);
+		return state("failed", `TodoLoop background preparation failed: ${errorMessage(error)}`);
 	}
 	try {
 		await reread();
 	} catch (error) {
-		return state(options.signal?.aborted ? "stopped" : "file_error", errorText(error));
+		return state(options.signal?.aborted ? "stopped" : "file_error", errorMessage(error));
 	}
 	if (options.signal?.aborted) return state("stopped");
 	let preparationId: string;
@@ -224,7 +220,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 		});
 	} catch (error) {
 		if (options.signal?.aborted) return state("stopped");
-		return state("failed", `TodoLoop background dispatch failed: ${errorText(error)}`);
+		return state("failed", `TodoLoop background dispatch failed: ${errorMessage(error)}`);
 	}
 	const preparation = await execute(preparationId);
 	if ("phase" in preparation) return preparation;
@@ -240,7 +236,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 		try {
 			await reread();
 		} catch (error) {
-			return state("file_error", errorText(error));
+			return state("file_error", errorMessage(error));
 		}
 		const next = snapshot!.groups.find(item => item.tasks.some(task => !task.done));
 		if (!next) return state("completed");
@@ -260,7 +256,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 			});
 			await reread();
 		} catch (error) {
-			return state(options.signal?.aborted ? "stopped" : "file_error", errorText(error));
+			return state(options.signal?.aborted ? "stopped" : "file_error", errorMessage(error));
 		}
 		if (options.signal?.aborted) return state("stopped");
 		let id: string;
@@ -268,7 +264,7 @@ export async function runTodoLoop(options: TodoLoopRunOptions, native: TodoLoopN
 			id = await native.start(prompt, `TodoLoop group ${group.id} · ${attempt + 1}/3`, options.signal, { context });
 		} catch (error) {
 			if (options.signal?.aborted) return state("stopped");
-			return state("failed", `TodoLoop group ${group.id} dispatch failed: ${errorText(error)}`);
+			return state("failed", `TodoLoop group ${group.id} dispatch failed: ${errorMessage(error)}`);
 		}
 		attempt++;
 		const activeGroup = group;

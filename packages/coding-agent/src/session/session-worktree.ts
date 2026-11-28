@@ -4,6 +4,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $which, hashPath, isEnoent, pathIsWithin } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
@@ -144,11 +145,7 @@ async function readWorktreeMarker(gitDir: string): Promise<string | undefined> {
 	});
 }
 
-async function resolveSessionWorktree(
-	repository: ReturnType<typeof vcs.requireGit>,
-	cwd: string,
-	branch: string,
-): Promise<SessionWorktree> {
+async function resolveSessionWorktree(repository: VcsGitRepo, cwd: string, branch: string): Promise<SessionWorktree> {
 	const branchRef = `refs/heads/${branch}`;
 	const branchCommit = await repository.resolveRef(branchRef);
 	const createdBranch = branchCommit === null || branchCommit === undefined;

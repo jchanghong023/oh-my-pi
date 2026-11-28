@@ -5,6 +5,7 @@ import { renderBlock } from "@oh-my-pi/pi-tui/term/render";
 import { renderDiff, wrapDiffRow } from "@oh-my-pi/pi-tui/text/diff";
 import { replaceTabs, truncate } from "@oh-my-pi/pi-tui/text/width";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import type { ResolvedTheme } from "@oh-my-pi/pi-tui/theme/theme";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { TurnToolDiff } from "../session/latest-turn-tool-diffs";
 import type { EditCard, EditTerm } from "../ui/tools/edit";
@@ -35,14 +36,14 @@ export class CompactFileDiff {
 	#maxOffset = 0;
 	#page = 0;
 	#diffRows = new WeakMap<TurnToolDiff, readonly string[]>();
-	#cachedTheme?: ReturnType<typeof currentTheme>;
+	#cachedTheme?: ResolvedTheme;
 	#expanded?: readonly TurnToolDiff[];
 	#expandedRows?: {
 		source: readonly TurnToolDiff[];
 		count: number;
 		width: number;
 		cwd: string;
-		theme: ReturnType<typeof currentTheme>;
+		theme: ResolvedTheme;
 		rows: string[];
 	};
 	#preview?: {
@@ -50,7 +51,7 @@ export class CompactFileDiff {
 		cwd: string;
 		width: number;
 		height: number;
-		theme: ReturnType<typeof currentTheme>;
+		theme: ResolvedTheme;
 		rows: readonly string[];
 		complete: boolean;
 	};

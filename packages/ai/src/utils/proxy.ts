@@ -499,13 +499,14 @@ function setGitProcessEnv(key: string, value: string | undefined): void {
 				setenv: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
 				unsetenv: { args: [FFIType.ptr], returns: FFIType.i32 },
 			});
-		let libc: ReturnType<typeof openLibc>;
-		try {
-			libc = openLibc(process.platform === "darwin" ? "libSystem.B.dylib" : "libc.so.6");
-		} catch (error) {
-			if (process.platform !== "linux") throw error;
-			libc = openLibc("libc.so");
-		}
+		const libc = (() => {
+			try {
+				return openLibc(process.platform === "darwin" ? "libSystem.B.dylib" : "libc.so.6");
+			} catch (error) {
+				if (process.platform !== "linux") throw error;
+				return openLibc("libc.so");
+			}
+		})();
 		try {
 			const name = Buffer.from(`${key}\0`);
 			const result =

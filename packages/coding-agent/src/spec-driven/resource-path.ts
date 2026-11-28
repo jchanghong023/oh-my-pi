@@ -1,10 +1,6 @@
 import { realpath } from "node:fs/promises";
 import * as path from "node:path";
-
-export function isPathInside(root: string, target: string): boolean {
-	const relative = path.relative(root, target);
-	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
-}
+import { pathIsWithinLexical } from "@oh-my-pi/pi-utils";
 
 export function resolveSpecDrivenResourceTarget(root: string, relativePath: string): string {
 	if (
@@ -25,7 +21,7 @@ export function resolveSpecDrivenResourceTarget(root: string, relativePath: stri
 		throw new Error(`Invalid bundled resource path: ${relativePath}`);
 	}
 	const target = path.resolve(root, relativePath);
-	if (!isPathInside(path.resolve(root), target)) throw new Error("Bundled resource escapes root");
+	if (!pathIsWithinLexical(path.resolve(root), target)) throw new Error("Bundled resource escapes root");
 	return target;
 }
 
@@ -34,6 +30,6 @@ export async function resolveSpecDrivenResourcePath(root: string, relativePath: 
 	const target = resolveSpecDrivenResourceTarget(root, relativePath);
 	const canonicalRoot = await realpath(root);
 	const canonical = await realpath(target);
-	if (!isPathInside(canonicalRoot, canonical)) throw new Error("Bundled resource escapes canonical root");
+	if (!pathIsWithinLexical(canonicalRoot, canonical)) throw new Error("Bundled resource escapes canonical root");
 	return canonical;
 }

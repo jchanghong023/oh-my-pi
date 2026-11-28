@@ -204,6 +204,7 @@ import {
 	messageThreadsBeta,
 } from "./anthropic-headers";
 import {
+	type AnthropicThreadChain,
 	type AnthropicThreadChains,
 	AnthropicThreadTurn,
 	anthropicThreadChain,
@@ -437,7 +438,7 @@ function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 // A session's thread belongs to the credentials that created it. Keep only a
 // digest, and replace the chain on an auth change so an in-flight old request
 // cannot publish its anchor into the new credential's chain.
-const anthropicThreadAuth = new WeakMap<ReturnType<typeof anthropicThreadChain>, string>();
+const anthropicThreadAuth = new WeakMap<AnthropicThreadChain, string>();
 
 function anthropicThreadChainForAuth(
 	chains: AnthropicThreadChains,
@@ -445,7 +446,7 @@ function anthropicThreadChainForAuth(
 	apiKey: string,
 	headers: Record<string, string> | undefined,
 	declaredHeaders: Record<string, string> | undefined,
-): ReturnType<typeof anthropicThreadChain> {
+): AnthropicThreadChain {
 	// Custom credential headers must be declared through requestAuth; ordinary
 	// request metadata (such as a correlation ID) does not own the thread.
 	const declaredNames = declaredHeaders && new Set(Object.keys(declaredHeaders).map(name => name.toLowerCase()));

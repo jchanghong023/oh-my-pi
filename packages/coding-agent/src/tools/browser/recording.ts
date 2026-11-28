@@ -8,7 +8,7 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries, TempDir } from "@oh-my-pi/pi-utils/temp";
 import type { Protocol } from "devtools-protocol";
 import type { CDPSession, Page } from "puppeteer-core";
-import { resizeImage } from "../../utils/image-resize";
+import { resizeImage, type ResizedImage } from "../../utils/image-resize";
 import { buildChangedFrameContactSheetPng, requireMediaBinary, runFfmpeg } from "../../utils/video";
 import { resolveToCwd } from "../path-utils";
 import { readPageViewport } from "./launch";
@@ -671,7 +671,7 @@ export class RecordingController {
 		try {
 			await encodeRecording(active, videoPath, durationMs, context.signal);
 			const bytes = (await fs.stat(videoPath)).size;
-			let image: Awaited<ReturnType<typeof resizeImage>> | undefined;
+			let image: ResizedImage | undefined;
 			if (stagedSheet) {
 				const sheet = await buildChangedFrameContactSheetPng(
 					videoPath,

@@ -1,5 +1,3 @@
-export { readShellWord } from "@oh-my-pi/pi-utils/shell";
-
 /**
  * Conservative shell command tokenizer shared by the bash approval-pattern
  * matcher, the gh-cache invalidator, and the session anonymizer.

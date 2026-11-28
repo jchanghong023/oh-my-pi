@@ -8,6 +8,7 @@ export declare const resolvePageConcurrency: OpenWikiVendor["resolvePageConcurre
 export declare function getActiveOpenWikiHomeDir(): string;
 export declare const setEmbeddedOpenWikiHomeDir: OpenWikiVendor["setEmbeddedOpenWikiHomeDir"];
 export declare const resolveRepositoryRoot: OpenWikiVendor["resolveRepositoryRoot"];
+export declare const previewRepositoryFiles: OpenWikiVendor["previewRepositoryFiles"];
 export declare const readRepositoryRunState: OpenWikiVendor["readRepositoryRunState"];
 export declare const SearchInput: OpenWikiVendor["SearchInput"];
 export declare const ReadInput: OpenWikiVendor["ReadInput"];

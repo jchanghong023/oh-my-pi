@@ -572,6 +572,7 @@ import {
 	extractSessionInit,
 	type PersistedSessionInit,
 	type SessionManager,
+	type SessionManagerStateSnapshot,
 } from "./session-manager";
 import { SessionMemory, type SessionMemoryHost } from "./session-memory";
 import { buildSessionMetadata } from "./session-metadata";
@@ -617,7 +618,7 @@ interface SessionSwitchOptions {
 }
 
 interface SuspendedInMemorySession {
-	state: ReturnType<SessionManager["captureState"]>;
+	state: SessionManagerStateSnapshot;
 	messages: AgentMessage[];
 	model: Model | undefined;
 	thinkingLevel: ThinkingLevel | undefined;

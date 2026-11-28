@@ -13,10 +13,10 @@ import {
 	AppendOnlyContextManager,
 	filterProviderReplayMessages,
 	resolveTelemetry,
-	type StreamFn,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import type {
+	AssistantMessageEventStream,
 	Context,
 	CredentialDisabledEvent,
 	Effort,
@@ -5530,7 +5530,7 @@ async function createAgentSessionScoped(
 			context: Context,
 			streamOptions?: SimpleStreamOptions,
 			mainRequest = false,
-		): ReturnType<StreamFn> => {
+		): AssistantMessageEventStream | Promise<AssistantMessageEventStream> => {
 			try {
 				assertOfflineDispatchModel(streamModel);
 			} catch (error) {
@@ -5565,7 +5565,7 @@ async function createAgentSessionScoped(
 			context: Context,
 			streamOptions?: SimpleStreamOptions,
 			mainRequest = false,
-		): ReturnType<StreamFn> => {
+		): AssistantMessageEventStream | Promise<AssistantMessageEventStream> => {
 			const kimiApiFormat = cfgProvidersKimiApiFormat.get(settings);
 			return settingsAwareStreamFn(
 				streamModel,

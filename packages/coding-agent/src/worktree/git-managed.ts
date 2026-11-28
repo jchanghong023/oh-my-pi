@@ -2,6 +2,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
+import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getWorktreesDir, hashPath, isEnoent, resolveEquivalentPath } from "@oh-my-pi/pi-utils";
 import { hasLiveIsolationOwner, ISOLATION_OWNER_FILE, readRetainedMountBackend } from "../task/isolation-ownership";
@@ -72,7 +73,7 @@ export async function managedGitWorktrees(cwd?: string): Promise<ManagedWorktree
 	for (const wt of (await repo.worktrees()).slice(1)) {
 		const root = resolveEquivalentPath(wt.path);
 		if (known.has(root)) continue;
-		const belongsToRepo = (checkout: ReturnType<typeof vcs.requireGit>) => {
+		const belongsToRepo = (checkout: VcsGitRepo) => {
 			const info = checkout.info();
 			return (
 				resolveEquivalentPath(info.repoRoot) === root &&

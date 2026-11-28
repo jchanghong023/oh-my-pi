@@ -20,6 +20,7 @@ import {
 	DIAGNOSTICS_PIPELINE_GRACE_MS,
 	deferredDiagnosticsWaitMs,
 	formatContent,
+	type FormatContentResult,
 	getDiagnosticsForFile,
 	INLINE_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 	limitDiagnosticMessages,
@@ -550,7 +551,7 @@ async function runLspWritethrough(
 	// there (the caller already wrote `content` when `contentAlreadyWritten`).
 	let diskContent = contentAlreadyWritten ? content : undefined;
 	let pendingWrite: Promise<void> | undefined;
-	let pendingFormat: ReturnType<typeof formatContent> | undefined;
+	let pendingFormat: Promise<FormatContentResult> | undefined;
 	const writeContent = async (value: string, writeSignal?: AbortSignal) => {
 		writeSignal?.throwIfAborted();
 		pendingWrite = (async () => {

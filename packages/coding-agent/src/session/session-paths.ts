@@ -323,8 +323,16 @@ function matchesSessionCwd(expectedCwd: string, recordedCwd: string): boolean {
 	);
 }
 
+/** Identifies this worktree family's session buckets and their recorded-cwd membership. */
+interface ManagedWorktreeSessionMatcher {
+	matchesCwd(recordedCwd: string): boolean;
+	matchesMovedCwd(currentCwd: string, recordedCwd: string): boolean;
+	hasCollision(cwd: string): boolean;
+	matchesDir(entry: string): boolean;
+}
+
 /** Worktree session buckets are identifiable by the repo hash even after Git prunes the checkout. */
-function managedWorktreeSessionMatcher(primaryRoot: string, prefix: string) {
+function managedWorktreeSessionMatcher(primaryRoot: string, prefix: string): ManagedWorktreeSessionMatcher {
 	const prefixParts = prefix ? path.normalize(prefix).split(path.sep).filter(Boolean) : [];
 	const relativeCwd = prefixParts.join(path.sep);
 	const suffix = encodeRelativeSessionDirName("", relativeCwd);
@@ -397,7 +405,7 @@ function managedWorktreeSessionMatcher(primaryRoot: string, prefix: string) {
 function addManagedWorktreeSessionDirs(
 	sessionsRoot: string,
 	dirs: Map<string, (recordedCwd: string) => boolean>,
-	matcher: ReturnType<typeof managedWorktreeSessionMatcher>,
+	matcher: ManagedWorktreeSessionMatcher,
 ): void {
 	let entries: string[];
 	try {
