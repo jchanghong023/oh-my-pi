@@ -1,5 +1,12 @@
 # Development Rules
 
+## Fork Rules
+
+- 本仓库是上游仓库的 Fork。以本地 `upstream` 分支为上游基准；该分支必须跟踪 `upstream/main`，远端 `upstream` 为 `https://github.com/can1357/oh-my-pi.git`。
+- 在满足 Fork 需求的前提下，必须选择与上游差异最小的实现。禁止过度设计或扩大改动范围；能改一个文件完成，就不要改两个。仅在确有必要时新增测试。
+- 不得修改上游的 `docs/`。Fork 自身的需求文档只记录在 `openspec/`；修改代码前，必须阅读 `openspec/` 中与当前需求相关的目录和文档。
+- `openspec/` 和根目录 `AGENTS.md` 是本项目的权威文档，未经用户明确授权不得修改。
+
 ## Default Context
 
 This repo contains multiple packages, but **`packages/coding-agent/`** is the primary focus. Unless otherwise specified, assume work refers to this package.
