@@ -192,8 +192,7 @@ description: '指定文件列表生成单元测试，串行调度 developer-test
   - Constants.java / constants.h / constants.go / constants.py - 常量类/定义文件，无业务逻辑
   - OrderDTO.java / OrderData.h / OrderData.go / OrderData.py - 数据传输对象/纯数据类，无业务逻辑
 
-覆盖率模式: class-level
-覆盖率阈值: 80%
+覆盖率模式和门槛（按文件）: Python module-level 90%；其他 class-level 80%
 ```
 
 过滤后的文件列表作为步骤 4 创建任务的输入。跳过的文件仍需在步骤 6 执行报告中体现。
@@ -215,10 +214,11 @@ description: '指定文件列表生成单元测试，串行调度 developer-test
 
 业务类: {filename}
 生成类型: 全量生成
-覆盖率模式: class-level
-覆盖率阈值: 80%
+目标语言: {language}
+覆盖率模式: {mode}
+覆盖率阈值: {threshold}%
 
-目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。
+目标：测试通过，覆盖率达到当前文件的门槛，且断言有效。
 
 使用 developer-test-agent 完成上面的测试任务。
 ```
@@ -229,6 +229,7 @@ description: '指定文件列表生成单元测试，串行调度 developer-test
 |------|------|------|
 | `{filename}` | 步骤2验证结果 | 被测文件的相对路径 |
 | `{ClassName}` | 从 filename 推导 | 去掉路径和后缀的类名/文件名 |
+| `{language}`, `{mode}`, `{threshold}` | 每个文件的语言；Python `module-level` / 90，其他 `class-level` / 80 | 按文件交给子代理 |
 
 ### 5. 串行执行任务
 
@@ -272,8 +273,7 @@ description: '指定文件列表生成单元测试，串行调度 developer-test
 文件 DT 执行报告
 ==========================================
 
-覆盖率模式: class-level
-阈值: 80%
+覆盖率模式和门槛: 按文件列出
 
 文件统计:
 - 输入文件: {Total}
@@ -344,8 +344,8 @@ description: '指定文件列表生成单元测试，串行调度 developer-test
 4. 前置过滤跳过的文件（DTO/Config/Enum 等无业务逻辑类）不创建任务，但仍需在步骤6执行报告中体现
 5. 无效文件（不存在或测试文件）不创建任务，但仍需在步骤6执行报告中体现
 6. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
-7. 覆盖率阈值默认 80%，未达标时 Agent 内部循环补充测试
+7. Python 模块行覆盖率默认 90%，其他语言默认 80%；未达标在对应语言的预算内补测
 8. 任务由主 Agent 按创建顺序串行调度
 9. 已存在测试文件时，优先使用内置 `improve-coverage` 分析覆盖率，若已达标则跳过测试生成
-10. 本命令为全量生成模式，所有文件均为全量生成，覆盖率模式固定为 class-level
+10. 本命令按文件全量生成，不收集变更范围
 11. 仅使用 `todo` 跟踪任务，使用 `task` 逐个串行调度

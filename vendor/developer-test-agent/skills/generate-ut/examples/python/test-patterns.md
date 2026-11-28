@@ -1,5 +1,7 @@
 # Test Patterns for Python Unit Testing
 
+Examples using pytest syntax apply only to pytest. For pure unittest, put tests in `unittest.TestCase` methods, use standard-library assertions and `setUp`/`addCleanup`, and follow [the Python version and runner rules](../../references/python/generation-rules.md).
+
 ## Pattern 1: Mocking with unittest.mock
 
 ### 1.1 Function Patching with Argument Verification
@@ -358,31 +360,19 @@ def test_timestamp_boundary(mock_now):
     result_clearly_greater = check_timestamp(timestamp_after)
 ```
 
-## Pattern 9: Coverage Approach
+## Pattern 9: Running Tests and Measuring Coverage
 
-**Primary approach** (bypasses .coveragerc issues):
-
-> `$PYTHON` is the project interpreter selected in [generation-rules.md](../../references/python/generation-rules.md); replace `{SKILL_DIR}` with the baseDir returned when loading `generate-ut`. Use that reference's coverage commands on Windows.
+Reuse the interpreter, runner, working directory and command from the project or calling stage. If no command is specified, run only the selected runner:
 
 ```bash
-COV_DIR=$(mktemp -d) || exit 1
-# Step 1: Run tests with coverage
-"$PYTHON" -m coverage run --rcfile=/dev/null --data-file="$COV_DIR/.coverage" -m pytest "<test_file>" -v
+# pytest
+"$PYTHON" -m pytest "<test_file>" -v --tb=short
 
-# Step 2: Generate JSON report
-"$PYTHON" -m coverage json --rcfile=/dev/null --data-file="$COV_DIR/.coverage" -o "$COV_DIR/coverage.json"
-
-# Step 3: Parse with function-specific script
-"$PYTHON" "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" "<func>" "<start>" "<end>" "<source_path>"
+# unittest: use the test file's directory and basename, not a dotted module name
+"$PYTHON" -m unittest discover -s "<test-dir>" -p "<test-filename>" -v
 ```
 
-**Fallback** (if primary fails):
-
-```bash
-COVERAGE_FILE="$COV_DIR/.coverage" "$PYTHON" -m pytest "<test_file>" "--cov=<source_module>" --cov-report=term-missing "--cov-report=json:$COV_DIR/coverage.json" -v
-```
-
-After measurement, remove only `$COV_DIR`. NEVER modify the project's `.coveragerc` or `.coverage`.
+Follow [the coverage instructions](../../references/python/generation-rules.md#覆盖率测量与清理) for shell commands, isolated run data and target scope. Keep project coverage configuration in effect. Use coverage.py with either runner; use pytest-cov only for pytest when the plugin is already available. If coverage data is unavailable, report the test result without claiming the coverage gate passed.
 
 ## Pattern 10: Logging Call Verification
 

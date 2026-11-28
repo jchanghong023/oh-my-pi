@@ -1,35 +1,27 @@
 /**
- * 从 coverage.py 生成的 coverage.json 中提取指定文件的覆盖率信息，
- * 从 pytest -v 输出中提取测试执行结果，
- * 生成 .codecovcli/cache 格式的 JSON 文件。
- *
- * 用法: node extract-python-coverage.js <模块名/源文件路径> <coverage.json路径> [pytest-v输出路径]
- * 示例: node extract-python-coverage.js user_service coverage.json
- *       node extract-python-coverage.js user_service coverage.json pytest-output.txt
- *
- * 如果不指定 pytest-v 输出路径，测试执行结果相关字段将填 0。
- *
- * 输出: <cwd>/.codecovcli/cache/python_<类名>.json
+ * 从 coverage.py JSON 和可选的 pytest/unittest -v 日志生成单模块缓存。
+ * 用法: node extract-python-coverage.js <源文件.py> <coverage.json> [测试日志]
+ * 输出: <cwd>/.codecovcli/cache/python_<源路径指纹>.json
  */
 
+const { createHash, randomUUID } = require('node:crypto');
 const fs = require('fs');
 const path = require('path');
 const { stripVTControlCharacters } = require('node:util');
 
 // ========== 参数解析 ==========
 const args = process.argv.slice(2);
-if (args.length < 2) {
-  console.error('用法: node extract-python-coverage.js <模块名/源文件路径> <coverage.json路径> [pytest-v输出路径]');
-  console.error('示例: node extract-python-coverage.js user_service coverage.json');
-  console.error('示例: node extract-python-coverage.js user_service coverage.json pytest-output.txt');
+if (args.length < 2 || !args[0].endsWith('.py')) {
+  console.error('用法: node extract-python-coverage.js <源文件.py> <coverage.json> [测试日志]');
   process.exit(1);
 }
 
 const source = args[0].replace(/\\/g, '/');
 const className = path.posix.basename(source, '.py');
-const sourcePath = source.includes('/') ? fileIdentity(source.endsWith('.py') ? source : `${source}.py`) : null;
+const sourcePath = fileIdentity(source);
+const relativeSource = path.relative(fileIdentity(process.cwd()), sourcePath).split(path.sep).join('/');
 const coverageJsonPath = path.resolve(args[1]);
-const pytestVPath = args[2] ? path.resolve(args[2]) : null;
+const testLogPath = args[2] ? path.resolve(args[2]) : null;
 
 // ========== 兜底变量 ==========
 // 当 coverage.json 不存在或解析失败时，使用 0 覆盖率数据写入 JSON，
@@ -76,13 +68,13 @@ if (!fs.existsSync(coverageJsonPath)) {
 
 if (coverageData) {
   const matches = Object.entries(coverageData.files || {}).filter(([filePath]) =>
-    sourcePath ? fileIdentity(filePath) === sourcePath : path.posix.basename(filePath.replace(/\\/g, '/')) === `${className}.py`
+    fileIdentity(filePath) === sourcePath
   );
 
   if (matches.length !== 1) {
     errorDetail = matches.length === 0
       ? `未在 coverage.json 中找到目标文件: ${source}`
-      : `coverage.json 中的目标文件不唯一，请指定源文件路径: ${matches.map(([filePath]) => filePath).join(', ')}`;
+      : `coverage.json 中有重复的目标文件: ${matches.map(([filePath]) => filePath).join(', ')}`;
     console.error(`[ERROR] ${errorDetail}`);
   } else {
     const [[filePath, fileData]] = matches;
@@ -110,7 +102,7 @@ if (coverageData) {
   }
 }
 
-// ========== 从 pytest -v 输出中提取测试执行结果 ==========
+// ========== 从 pytest / unittest -v 输出中提取测试执行结果 ==========
 // pytest -v 输出格式:
 //   test_file.py::test_function PASSED [ 50%]
 //   test_file.py::test_function FAILED [100%]
@@ -124,13 +116,14 @@ let testName = '';
 let testFilePath;
 let testFileLines = 0;
 
-if (pytestVPath && fs.existsSync(pytestVPath)) {
-  const testBytes = fs.readFileSync(pytestVPath);
+if (testLogPath && fs.existsSync(testLogPath)) {
+  const testBytes = fs.readFileSync(testLogPath);
   // Windows PowerShell 5.1 redirects text as UTF-16LE with a BOM.
   const encoding = testBytes[0] === 0xff && testBytes[1] === 0xfe ? 'utf-16le' : 'utf-8';
   const testOutput = new TextDecoder(encoding).decode(testBytes);
   const testResults = new Map();
   const reportedTestFiles = new Set();
+  let pendingUnittestId;
 
   for (const line of testOutput.split('\n')) {
     const trimmed = stripVTControlCharacters(line).trimEnd();
@@ -152,6 +145,21 @@ if (pytestVPath && fs.existsSync(pytestVPath)) {
     if (collection) {
       compileErrors++;
       if (collection[1].endsWith('.py')) reportedTestFiles.add(collection[1]);
+      continue;
+    }
+
+    // unittest on Python 3.6 prints `method (module.Class) ... ok`.
+    // A test docstring or subtest can put the outcome on the following line.
+    const unit = /^\s*(?<testId>\S+ \([^)]+\))(?: \(.+\))?(?: \.\.\.(?: (?<status>.+))?)?$/.exec(trimmed);
+    const testId = unit?.groups.testId ?? pendingUnittestId;
+    const status = unit ? unit.groups.status : / \.\.\. (ok|FAIL|ERROR|unexpected success)$/.exec(trimmed)?.[1];
+    pendingUnittestId = unit && !status ? testId : undefined;
+    if (!testId || !status) continue;
+    if (status === 'ERROR' && /^(?:setUp|tearDown)(?:Class|Module) |\(unittest\.loader\._FailedTest[.)]/.test(testId)) {
+      compileErrors++;
+    } else if (status === 'ok' || status === 'FAIL' || status === 'ERROR' || status === 'unexpected success') {
+      if (status !== 'ok' || !testResults.has(testId)) testResults.set(testId, status === 'ok' ? 'PASSED' : 'FAILED');
+      if (!testName) testName = testId;
     }
   }
 
@@ -238,31 +246,25 @@ const result = {
   metadata: {
     language: 'python',
     projectDir: process.cwd(),
+    sourceFile: relativeSource,
     version: '1.0.0',
   },
   errorDetail: errorDetail,
 };
 
-// ========== 清除历史文件并写入 ==========
+// 每个源路径只替换自己的结果，不读取或删除其他模块的缓存。
 const outputDir = path.join(process.cwd(), '.codecovcli', 'cache');
-
-if (!fs.existsSync(outputDir)) {
-  fs.mkdirSync(outputDir, { recursive: true });
-} else {
-  const existingFiles = fs.readdirSync(outputDir);
-  for (const file of existingFiles) {
-    const filePath = path.join(outputDir, file);
-    if (fs.statSync(filePath).isFile()) {
-      fs.unlinkSync(filePath);
-    }
-  }
-  if (existingFiles.length > 0) {
-    console.log(`已清除 ${existingFiles.length} 个历史缓存文件`);
-  }
+fs.mkdirSync(outputDir, { recursive: true });
+const key = createHash('sha256').update(relativeSource).digest('hex');
+const outputPath = path.join(outputDir, `python_${key}.json`);
+const temporary = path.join(outputDir, `.${randomUUID()}.tmp`);
+try {
+  fs.writeFileSync(temporary, JSON.stringify(result, null, 2), { encoding: 'utf-8', flag: 'wx' });
+  fs.renameSync(temporary, outputPath);
+} catch (error) {
+  fs.rmSync(temporary, { force: true });
+  throw error;
 }
-
-const outputPath = path.join(outputDir, `python_${className}.json`);
-fs.writeFileSync(outputPath, JSON.stringify(result, null, 2), 'utf-8');
 console.log(`覆盖率文件已生成: ${outputPath}`);
 
 // ========== 辅助函数 ==========

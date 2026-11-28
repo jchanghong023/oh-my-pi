@@ -12,9 +12,9 @@
 
 | 维度 | 检查内容 |
 |------|---------|
-| **缺失断言** | 测试函数执行代码但无assert/pytest.raises；仅print/console.log手动判断 |
+| **缺失断言** | 没有 pytest 或 `unittest.TestCase` 断言；仅 `print` 手动判断 |
 | **伪断言** | `assert True`；`assert x is not None`（仅存在性无内容验证）；与SUT输出无关的断言 |
-| **异常断言合规** | `pytest.raises`使用；try-except无断言；except块suppress但用pytest.raises |
+| **异常断言合规** | 保留选定框架：`pytest.raises`、`self.assertRaises` 或 `self.assertRaisesRegex`；捕获异常但无断言，或预期抛出而业务代码吞掉异常 |
 | **断言可读性** | 缺失失败消息；多断言无描述（Assertion Roulette） |
 | **Mock影响** | verify不断言返回值；仅验证调用不验证参数 |
 | **门禁标准** | 测试是否验证业务逻辑而非仅验证mock基础设施 |
@@ -35,7 +35,7 @@
 
 | 维度 | 检查内容 |
 |------|---------|
-| **缺失断言** | 测试函数无assert/pytest.raises/verify |
+| **缺失断言** | 无 pytest 或 `TestCase` 断言，且未验证对外副作用 |
 | **伪断言** | 恒为真、仅存在性、仅调用次数 |
 | **提前退出** | if内return导致后续断言未执行 |
 
@@ -65,6 +65,6 @@
 |------|---------|
 | 仅verify不断言返回值 | 添加返回值字段级断言 |
 | dict仅检查key | 添加value相等断言 |
-| 异常suppress用raises | 改为验证正常返回和副作用 |
+| 吞掉异常却断言会抛出 | 验证正常返回和副作用 |
 | Exception子类属性假设 | 验证类定义了该属性，否则用.args[0] |
 | bound method用`is`或仅用名称比较 | 分别用`is`比较`__self__`（接收者）和`__func__`（函数） |

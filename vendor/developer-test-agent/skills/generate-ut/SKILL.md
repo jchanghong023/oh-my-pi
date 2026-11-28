@@ -63,18 +63,15 @@ disable-model-invocation: true
 
 ### 步骤1：被测函数识别
 
-**用户直接指定** — 用户明确提供被测函数代码、名称或文件路径，直接进入步骤2
+**目标来源** — 用户明确提供的函数代码、名称、文件路径，或增量任务给出的函数与文件。信息足以定位时可跳过宽范围搜索，但不得跳过存在性验证。
 
 **搜索策略**：优先使用 `grep` 或 `repo` 索引搜索定位目标函数，避免广度枚举。
 
-**函数存在性验证门**：识别被测函数后，确认函数在源码中实际存在。如果任务描述的函数不存在：
-1. 使用grep搜索整个项目确认该函数确实不存在
-2. 使用glob搜索相似命名的模块/文件
-3. 在输出中标注错配
-4. 测试实际存在的最接近函数
-5. 在输出总结中包含期望-测试映射表
+**函数存在性验证门**：在指定文件、类或模块中核对每个目标的名称及已提供的签名/范围；未指定位置时按名称和签名定位定义。找不到精确目标时，用 `grep` 或 `repo` 确认并排除同名异处的定义。
 
-**必须输出**：被测函数完整签名、信息来源、跳过搜索的原因（如有）
+**Python 硬性约束（优先于 reference 和示例）**：用户明确指定或增量任务给出的目标有任何错配 → 停止本次生成，不进入步骤2，也不启动后续测试流水线。列出错配目标（预期文件/模块、签名或范围、实际查找结果）；可附候选供用户确认，但绝不改测最接近的函数，也不将候选计入测试结果。非 Python 目标错配按对应语言规则处理。
+
+**验证通过后必须输出**：被测函数完整签名、信息来源、跳过搜索的原因（如有）。
 
 ### 步骤2：项目环境与测试框架识别
 
@@ -85,7 +82,7 @@ disable-model-invocation: true
     - 需要Mock → 按决策流程选择合适的Mock框架
 4. **检查已有测试模式**：读取项目中已有的测试文件，分析Fixture基类、Mock使用模式、数据构造辅助函数，保持风格一致
 
-**必须输出**：编译命令、测试框架选择、Mock框架选择、信息来源
+**必须输出**：编译或执行命令、测试框架选择、Mock框架选择、信息来源。Python 还须记录所选解释器、版本、工作目录、runner 和针对目标测试的命令，交给后续阶段复用。
 
 ### 步骤3：依赖识别与上下文获取（强制执行）
 
@@ -193,7 +190,7 @@ C/C++ MUST 优先用已定位源文件提取上下文；按[依赖分析](refere
 - 测试函数：列出所有测试用例签名及描述
 - 验证范围：覆盖的正常路径、边界条件、异常场景
 - 未解决问题（如有）
-- 期望-测试映射表（如有任务-代码错配）
+- 任务-代码错配时按对应规则报告；Python 步骤1因错配停止时仅输出错配清单，不输出替代测试映射。
 
 #### 流水线后续步骤（不由本 SKILL 决定）
 
@@ -203,7 +200,7 @@ C/C++ MUST 优先用已定位源文件提取上下文；按[依赖分析](refere
 - **路径 2（关键词匹配）**：full-generate intent 同样触发完整流水线
 - **单阶段声明**：用户显式指定 `fix-ut` / `improve-coverage` 等其他 skill 时，由 Agent 定义的 Gap Analysis 决定是否链式调用
 
-**本 SKILL.md 不做流水线调度决策。** 无论 generate-ut 执行过程中是否已自行完成编译验证或覆盖率测量，均不得作为跳过后续 skill 的理由。
+**本 SKILL.md 不做流水线调度决策。** Python 目标验证失败时不得将早停视为生成完成；正常完成生成后，不得以已自行通过编译验证或覆盖率测量为由跳过后续 skill。
 
 ## Bundled Resources
 
@@ -216,7 +213,7 @@ C/C++ MUST 优先用已定位源文件提取上下文；按[依赖分析](refere
 - `references/go/generation-rules.md`：Go生成规则导航索引（必读入口）。子文件按需加载：
   - `mock-tier-guide.md`（Mock层级F1-F13）、`test-patterns.md`（测试生成Phase 0/1/2）、`assertion-patterns.md`（断言规范+可观测验证模式+表驱动）、`coverage-and-concurrency.md`（覆盖率与并发安全）、`mock-errors-and-patterns.md`（错误诊断14种+高级模式4种）、`unavailable-mode.md`（Go不可用模式）、`anti-patterns.md`（反模式禁令14条）
 
-- `references/python/generation-rules.md`：Python生成规则导航索引（必读入口）。子文件按需加载：
+- `references/python/generation-rules.md`：Python 必读入口（Python 3.6+ 兼容性、解释器/runner 选择与交接、pytest/unittest 执行及覆盖率采集）。子文件或示例的 pytest 写法仅在选用 pytest 时适用，执行与版本要求以此入口为准。子文件按需加载：
   - `project-type-strategies.md`（Flask/nameko/Standalone框架检测与mocking策略）、`branch-coverage-matrix.md`（分支覆盖矩阵模板）、`sequential-workflow-testing.md`（顺序调用+状态标志+多异常+递归+嵌套逻辑）、`attribute-and-lifecycle-patterns.md`（描述符+动态属性+context manager+semaphore+generator）、`decorator-and-closure-patterns.md`（装饰器可选参数+闭包回调捕获+contextmanager-factory）、`conditional-patterns-index.md`（条件测试规划模式）、`mock-patching-rules.md`（断言质量+mock patching规则+异常对象mock+属性初始化）、`anti-patterns.md`（反模式禁令）
 
 ### scripts/
@@ -236,4 +233,4 @@ C/C++ MUST 优先用已定位源文件提取上下文；按[依赖分析](refere
 ### examples/
 - `examples/cpp/test_example.cpp`：完整C/C++测试用例示例（基本结构、Mock使用、数据清理、Fixture状态跟踪、void函数状态验证、EXPECT_DEATH、#include .c模式、SetUp零重置、计算辅助函数、#define private public顺序、GIVEN阶段约束、显式NULL指针测试）。步骤5参考。
 - `examples/cpp/mock_wrapper_example.h`：虚函数Mock包装层示例（非虚函数Mock的接口类→Mock类→适配器三步法）。步骤5参考。
-- `examples/python/test-patterns.md`：Python测试用例示例。步骤5参考。
+- `examples/python/test-patterns.md`：Python 测试设计示例。步骤5参考；按所选 runner 和目标 Python 版本改写，不照搬其中的执行或覆盖率命令。

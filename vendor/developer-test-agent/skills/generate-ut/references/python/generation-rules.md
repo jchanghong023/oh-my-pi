@@ -2,12 +2,14 @@
 
 本文件汇总 Python 单元测试生成的语言专属规则。
 
-## 测试框架
+## Python 版本与框架选择
 
-- **测试框架**：pytest（首选），unittest（兼容）
-- **Mock框架**：unittest.mock（patch、MagicMock、PropertyMock）
-- **覆盖率工具**：pytest-cov / coverage.py，目标 ≥ 90%
-- **执行环境**：`$PYTHON` 为所选解释器；Windows 优先 `.venv/Scripts/python.exe`，Linux/macOS 优先 `.venv/bin/python`，回退到父项目 .venv 或系统 Python。
+- **兼容范围**：Python 3.6+。以项目声明或用户指定的最低支持版本编写测试；项目须支持 3.6 时，测试及辅助代码也须兼容 3.6，且只用实际 3.6 上的运行结果声明 3.6 验证通过。
+- **解释器与 runner**：优先使用用户明确提供的命令、工作目录和解释器，其次沿用项目已有测试入口、解释器及框架。未指定解释器时，优先项目环境（Windows `.venv/Scripts/python.exe`；Linux/macOS `.venv/bin/python`），其次父项目环境或系统 Python，确认版本符合项目要求。`$PYTHON` 是所选解释器的路径，不是含参数的命令。
+- **没有明确框架时**：若所选解释器能运行兼容的 pytest，可选 pytest；若未安装或不可用，生成纯标准库 `unittest` 测试，不依赖 pytest、pytest fixture 或插件。验证已有 pytest 专用测试时，不得把只发现部分用例的 unittest 运行作为替代；如项目要求 pytest 但不可用，报告环境阻塞。不要为了找到 pytest 更换已选解释器或自动安装依赖。
+- **交接**：记录解释器及版本、工作目录、runner、命令和必要的环境设置。修复、覆盖率提升和报告复用该选择，不因缺少可选工具而换环境或 runner。
+- **Mock**：两个 runner 均可用 `unittest.mock`（`patch`、`MagicMock`、`PropertyMock`）。目标含 Python 3.6 时，禁止 `AsyncMock`、`IsolatedAsyncioTestCase`、`asyncio.run()` 等较新 API，以及赋值表达式、`match` 等较新语法。异步依赖用返回实际协程的 `async def` 测试替身（需要时在其中用 Mock 记录调用），用事件循环的 `run_until_complete()` 执行协程并清理循环；不要用同步 Mock 冒充可等待对象。
+- **参考示例**：pytest 专用写法只适用于 pytest；unittest 用 `TestCase`、`setUp`/`addCleanup`、`subTest` 和对应的断言（如 `assertRaises`、`assertWarns`、`assertAlmostEqual`），保持等价的场景和断言。
 
 ## 项目类型检测与策略
 
@@ -73,57 +75,99 @@
 
 - 测试文件：`tests/test_<module>_unit.py`（如已存在则用`_unit.py`后缀）
 - 测试函数：`test_<action>_<condition>_<expected>`，snake_case
-- 简单函数（<15测试）：flat函数；复杂函数（≥15测试）：class-based + shared setup
+- pytest：简单函数（<15测试）可用独立函数；复杂函数（≥15测试）用测试类和共享 setup。unittest：使用继承 `unittest.TestCase` 的类及 `test_` 方法。
 
 ## 编译与执行
 
-```bash
-# 语法检查
-"$PYTHON" -c "import ast, sys; from pathlib import Path; ast.parse(Path(sys.argv[1]).read_bytes(), filename=sys.argv[1]); print('Syntax OK')" "<test_file>"
+从已选工作目录执行。优先复用用户或项目的测试命令；无既有命令时，用下列与 runner 匹配的一条：
 
-# 执行测试
+```bash
+# 语法检查（使用所选解释器，不产生 .pyc）
+"$PYTHON" -c "import ast, sys; from pathlib import Path; ast.parse(Path(sys.argv[1]).read_bytes(), filename=sys.argv[1])" "<test_file>"
+
+# pytest
 "$PYTHON" -m pytest "<test_file>" -v --tb=short
+
+# unittest：分别填入目标文件的父目录、文件名（含 .py）
+"$PYTHON" -m unittest discover -s "<test-dir>" -p "<test-filename>" -v
 ```
 
-PowerShell 用 `& $PYTHON`；Windows 下 Bash 路径用 `/`。仅当 `pytest --help` 列出 `--timeout` 时，才传 `--timeout=10`；否则使用 shell 工具的超时。
+用 `discover -s … -p …` 按路径定位文件，无须将路径转成点分模块名，也无须为测试目录添加 `__init__.py`。Bash 引用 `"$PYTHON"`（Windows 路径用 `/`），PowerShell 用 `& $PYTHON`；每个路径参数单独加引号。仅当所选解释器的 `-m pytest --help` 列出 `--timeout` 时才加 `--timeout=10`；其余情况用 shell 工具超时。
 
 ## 覆盖率测量与清理
 
-覆盖率产物统一输出到临时目录，避免污染项目目录。
+- 优先使用项目已配置且与所选 runner 相符的覆盖率工具。coverage.py 可运行 pytest 或 unittest；pytest-cov 只在 pytest runner 且所选解释器有该插件时使用。不要嵌套 coverage.py 与已启用的 pytest-cov。
+- 保留 `.coveragerc`、`setup.cfg`、`pyproject.toml` 等项目配置的发现与设置；沿用项目指定的配置文件。不要用 `NUL` 或 `/dev/null` 绕过配置，也不要改写配置。将本轮测试日志、覆盖率数据及报告放在独立临时目录（作用域内设置 `COVERAGE_FILE` 并指定报告路径）；项目启用了并行数据文件时，在同一临时目录隔离设置下执行 `-m coverage combine "$COV_DIR"` 再出报告。
+- 使用所选解释器确认已安装的工具及子命令可用（如 `-m coverage --version`、`-m coverage help json`）。不自动安装或升级依赖。没有兼容覆盖率工具时，直接执行同一 runner，用下方同样的重定向和退出码记录方式保存测试结果；报告覆盖率不可用、门槛未验证。不能用静态估算或全项目汇总值代替目标覆盖率。
+- **验收**：保存本轮 verbose 测试日志 `test-output.txt`，执行后在同一 shell 立即保存退出码，再生成诊断报告。失败运行可采集数据，但不能算验收成功；必须实际执行目标用例（零用例不算通过）并通过测试，再用有效的目标范围覆盖数据判定门槛。JSON 缺失时仍可从日志和退出码报告真实测试结果，不得宣称覆盖率达标。
 
-`{SKILL_DIR}` 替换为加载 `generate-ut` 时返回的 baseDir，脚本路径加引号。
+### coverage.py
 
-```powershell
-# Windows (PowerShell) - 创建临时目录
-$COV_DIR = (New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString())) -ErrorAction Stop).FullName
-
-# 运行覆盖率
-& $PYTHON -m coverage run --rcfile=NUL "--data-file=$COV_DIR\.coverage" --branch -m pytest "<test_file>" -v --tb=short
-
-# 生成JSON报告到临时目录
-& $PYTHON -m coverage json --rcfile=NUL "--data-file=$COV_DIR\.coverage" -o "$COV_DIR\coverage.json"
-
-# 解析函数级覆盖率
-& $PYTHON "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR\coverage.json" "<function_name>" "<start_line>" "<end_line>" "<source_file_path>"
-```
+以下示例用 unittest；若选的是 pytest，把 `-m unittest discover … -v` 换成步骤中已选定的 `-m pytest …` 参数。项目已有 runner 参数须保留。
 
 ```bash
-# Unix (bash) - 创建临时目录
 COV_DIR=$(mktemp -d) || exit 1
+if COVERAGE_FILE="$COV_DIR/.coverage" "$PYTHON" -m coverage run -m unittest discover -s "<test-dir>" -p "<test-filename>" -v > "$COV_DIR/test-output.txt" 2>&1; then
+    TEST_RC=0
+else
+    TEST_RC=$?
+fi
+# 单进程示例：仅在本轮产生数据时出报告；并行数据先合并。
+REPORT_RC=not-generated
+if [ -f "$COV_DIR/.coverage" ]; then
+    if COVERAGE_FILE="$COV_DIR/.coverage" "$PYTHON" -m coverage json -o "$COV_DIR/coverage.json"; then
+        REPORT_RC=0
+    else
+        REPORT_RC=$?
+    fi
+fi
+printf 'test exit=%s; JSON report exit=%s; artifacts=%s\n' "$TEST_RC" "$REPORT_RC" "$COV_DIR"
+```
 
-# 运行覆盖率
-"$PYTHON" -m coverage run --rcfile=/dev/null --data-file="$COV_DIR/.coverage" --branch -m pytest "<test_file>" -v --tb=short
+```powershell
+$COV_DIR = (New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString())) -ErrorAction Stop).FullName
+$PreviousCoverageFile = $env:COVERAGE_FILE
+try {
+    $env:COVERAGE_FILE = Join-Path $COV_DIR '.coverage'
+    & $PYTHON -m coverage run -m unittest discover -s "<test-dir>" -p "<test-filename>" -v *> "$COV_DIR/test-output.txt"
+    $TestCode = $LASTEXITCODE
+    $ReportCode = 'not-generated'
+    if (Test-Path -LiteralPath $env:COVERAGE_FILE) {
+        & $PYTHON -m coverage json -o (Join-Path $COV_DIR 'coverage.json')
+        $ReportCode = $LASTEXITCODE
+    }
+} finally {
+    $env:COVERAGE_FILE = $PreviousCoverageFile
+}
+Write-Output "test exit=$TestCode; JSON report exit=$ReportCode; artifacts=$COV_DIR"
+```
 
-# 生成JSON报告到临时目录
-"$PYTHON" -m coverage json --rcfile=/dev/null --data-file="$COV_DIR/.coverage" -o "$COV_DIR/coverage.json"
+在同一 shell 调用中输出或交接测试退出码、`test-output.txt` 和报告状态（无报告时标明原因）；不得把后续报告命令的退出码当作测试退出码。`coverage json` 不可用时，仅当项目已有可核实相同目标范围行覆盖率的报告方式才用其替代；否则报告目标覆盖率不可用。
 
-# 解析函数级覆盖率
-"$PYTHON" "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" "<function_name>" "<start_line>" "<end_line>" "<source_file_path>"
+### pytest-cov（仅 pytest）
+
+沿用同一临时目录与退出码记录方式，用 pytest 的原命令加覆盖率参数；不额外指定覆盖率源，除非用户或项目有要求。PowerShell 沿用上方的 `try`/`finally` 和 `& $PYTHON`，用 `*> "$COV_DIR/test-output.txt"` 保存日志并立即保存 `$LASTEXITCODE`。
+
+```bash
+if COVERAGE_FILE="$COV_DIR/.coverage" "$PYTHON" -m pytest "<test_file>" -v --tb=short --cov --cov-report=term-missing "--cov-report=json:$COV_DIR/coverage.json" > "$COV_DIR/test-output.txt" 2>&1; then
+    TEST_RC=0
+else
+    TEST_RC=$?
+fi
+printf 'pytest exit=%s; artifacts=%s\n' "$TEST_RC" "$COV_DIR"
+```
+
+### 目标覆盖率
+
+在采集覆盖率的同一工作目录执行。`{SKILL_DIR}` 替换为加载 `generate-ut` 返回的 baseDir；`--source` 指定目标源码文件，默认判定该模块。函数任务传 `--function`，增量行覆盖率任务改用 `--changed-lines '<JSON 行号数组>'`（互斥）。显式门槛传 `--threshold <percent>`，否则默认 90%。解析器非零时，按诊断区分有效数据未达标和无有效数据；都不得宣称通过。
+
+```bash
+"$PYTHON" "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" --source "<source_file_path>" --function "<function_name>" <start_line> <end_line>
 ```
 
 ### 环境清理
 
-覆盖率测量完成后，仅删除本次创建的临时目录；不得修改或删除项目原有的 `.coverage`。
+本轮结果分析和交接完成后，仅删除本次创建的临时目录；不得修改或删除项目原有的 `.coverage`。
 
 ```powershell
 # Windows (PowerShell) - 删除临时目录

@@ -84,9 +84,9 @@ disable-model-invocation: true
 
 1. **重新获取覆盖率数据**：使用与 Step 1 相同的方法重新获取覆盖率。
 2. **达标判定**：
-    - 覆盖率 ≥ 80% → 达标，输出覆盖率提升总结
-    - 覆盖率 < 80% → 返回 Step 2，继续修复循环
-3. **修复循环限制**：最多 10 轮。达到限制后仍有未覆盖语句，输出未覆盖语句清单及原因分析，标注为不可达或受限于 Mock 框架能力。
+    - Python：显式任务门槛优先，否则 90%。按 Python reference 使用实测门禁结果；有失败用例、未运行用例或覆盖率无数据时 NEVER 宣称达标。
+    - 其他语言：显式任务门槛优先，否则 80%。达到门槛输出总结，否则返回 Step 2。
+3. **修复循环限制**：最多 10 轮。预算耗尽仍未达标，报告实测结果与剩余缺口；不得把未验证的代码归为不可达。Python 运行或测量受阻时报告原因，不空转。
 
 ## 最终输出
 
@@ -117,7 +117,7 @@ disable-model-invocation: true
 - `scripts/java/extract-maven-config.js`：输出 `settingsPath`、Maven CLI 参数 `mavenProperties` 及 JVM 参数 `vmOptions`（用于 `MAVEN_OPTS`）。
 - `scripts/java/extract-jacoco-coverage.js`：codecovcli 失败时，从 `jacoco.xml` 将类级统计写入兼容的 `.codecovcli/cache/java_{className}.json`。源文件行列表不代表目标类的覆盖行，按 Java 规则核对后使用。
 - `scripts/go/extract-go-coverage.js`：Go 覆盖率提取脚本。从 `go test -coverprofile` 输出中提取指定文件的覆盖率数据，从 `go test -v` 输出中提取测试执行结果，生成 `.codecovcli/cache/go_{className}.json`（格式与 codecovcli 一致）。
-- `scripts/python/extract-python-coverage.js`：Python 覆盖率提取脚本。从 `coverage.json`（coverage.py 格式）中提取指定文件的覆盖率数据，从 `pytest -v` 输出中提取测试执行结果，生成 `.codecovcli/cache/python_{className}.json`（格式与 codecovcli 一致）。
+- `scripts/python/extract-python-coverage.js`：读取 coverage.py JSON 和测试日志，按源路径写入该模块的 `.codecovcli/cache/python_*.json`；不做达标判定。
 - `references/cpp/coverage-rules.md`：C/C++覆盖率规则导航索引（必读入口）。子文件按需加载：
     - `coverage-strategies.md`（未覆盖场景策略11种+异常覆盖检测+覆盖率路由4类+报告模板）
 - `references/go/coverage-rules.md`：Go覆盖率规则导航索引（必读入口）。子文件按需加载：

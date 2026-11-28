@@ -1,8 +1,8 @@
 ---
-description: '获取云端UT问题（MR门禁级/codecov报告/版本级）进行用例修复&覆盖率提升'
+description: '修复 Java MR/CodeCov 门禁及版本 testcodecheck Java 断言告警；Python 缺少云门禁验证契约，不执行修复。'
 ---
 
-基于链接自动修复云端 UT 问题。支持三种链接类型：MR 链接、codecov 报告链接和版本testcodecheck检查任务链接。根据链接类型自动路由到对应处理流程。
+基于 MR、CodeCov 报告或版本 testcodecheck 链接修复 Java 云端 UT 问题。MR/CodeCov 中的 Python job 缺少已确认的云端验证协议，其他非 Java job 不支持；版本 testcodecheck 仅处理 Java 断言类告警。
 
 ## 参数
 命令输入原文：{{{rawArguments}}}
@@ -78,6 +78,14 @@ codecovcli analyze --scenario codecovJobId --codecovid q(jobId)
 ```
 
 从输出中解析以下信息。两种场景的返回结构不同，需分别处理：
+
+**先按 job 语言门控**：MR 从每个 `jobs[]` 项的 `language` 读取；CodeCov 报告从 `branchInfo.language` 读取。仅明确为 Java（去首尾空白，不区分大小写）才继续解析下述 Java 专用字段并进入 Step 2–5。
+
+- Python：记录 jobId 和「缺少已确认的 Python 云端 CodeCov 验证契约，未修复、未验证」。
+- 其他明确非 Java：记录 jobId、语言和「不支持该语言的云门禁修复」。
+- 语言缺失、值无效或无法确认：记录「无法确认 job 语言」，NEVER 从后缀、仓库或默认值猜测。
+
+以上情况 MUST 在创建待办、委托、写入项目文件或 Maven 验证前跳过该 job。继续处理同一 MR 的其他 job；单报告直接汇总。NEVER 猜测 Python 的云端 API 或 CLI 参数，也不得用本地 pytest/coverage.py、JaCoCo 或上报缓存代替云端门禁验证。
 
 #### MR 链接场景输出结构
 
@@ -193,7 +201,7 @@ Job ID: {jobId}
 ==========================================
 ```
 
-当前 job 的覆盖率已达标且无失败用例 → 记录通过，继续检查下一 job；只有全部 job 都不需要修复时才结束，无需调度任务。
+当前 Java job 的覆盖率已达标且无失败用例 → 记录已报告的云端状态，继续检查下一 job。无需要调度的 job 时直接进入 Step 6 汇总，已跳过的 job 不计为通过。
 
 若 CodeCov 报告需要修复，进入 Step 3 前必须用 `ask` 获取该报告实际用于增量对比的目标分支名，并保存为 `targetBranch`，后续修复任务及本地检查均使用此值。不得使用空值、远端默认分支或推测值；用户无法提供时终止流程并说明原因。
 
@@ -326,7 +334,7 @@ codecovcli analyze --tests q(testClasses) --scenario incremental --targetbranch 
 
 ### Step 6: 输出执行报告
 
-按 jobId 分列汇总；包含通过、无法修复及已修复的任务，覆盖率和阈值不跨 job 合并。
+按 jobId 分列汇总；包含通过、无法修复、未验证及已修复的任务，覆盖率和阈值不跨 job 合并。若有不支持或缺契约的 job，列出语言及原因，不得宣称整个 MR 或报告已达标。
 
 ```
 ==========================================
@@ -369,6 +377,8 @@ MR/CodeCov 门禁修复报告
 
 ## 4. 版本testcodecheck检查任务流程
 
+此流程只修复已确认的 Java 测试断言告警，不是通用版本告警修复。
+
 ### Step 1: 检查 codecheck 是否已安装及版本更新
 
 加载安装文档进行检查：使用 `read` 工具读取 `{{pluginRoot}}/skills/fix-ut/references/java/codecheck-check.md`，按文档检查 codecheck 安装状态及版本更新。
@@ -388,6 +398,8 @@ codecheck version-defect --taskUrl q(url)
 - **问题描述**：问题描述
 - **代码片段**：问题代码片段
 - **代码行**：问题代码行号
+
+分组前 MUST 核对告警规则属于 Java 断言类，且测试文件路径为 `.java`。Python、其他非 Java 或语言/规则无法确认的告警仅统计并报告不支持或无法确认，NEVER 创建任务、写入项目文件或套用 Maven。没有支持的告警则直接输出报告。步骤 3 仍需核对实际文件路径。
 
 **告警分组概览输出**：
 
@@ -462,6 +474,7 @@ taskUrl: {url}
 告警统计:
 - 总告警数: {Total}
 - 涉及测试类: {ClassCount}
+- 不支持或无法确认（未修复）: {Skipped}，列出告警规则、路径及原因
 
 任务执行结果:
 ┌──────┬─────────────────────┬──────────┬──────────────────────────┐

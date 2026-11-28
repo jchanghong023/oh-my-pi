@@ -3,21 +3,19 @@
 ## When to Use
 
 - Step 4: After 3 debugging attempts without resolving test failures
-- Step 5.1: After 3 coverage validation cycles without reaching >=90%
+- Coverage improvement: After 3 measured cycles without reaching the explicit task threshold (default: 90% for Python)
 - Tests consistently fail with same error pattern
 - Coverage stuck at specific percentage despite targeted test additions
 
 ## Offline Mode (`ENV_MODE=offline`)
 
-When no Python interpreter is available, the entire workflow runs in offline mode:
-- **Step 4**: Skipped — tests are generated but not executed. All recovery strategies below apply only to normal mode.
-- **Step 5**: Static coverage estimation replaces runtime coverage. Recovery for estimation shortfalls uses the same branch-specific test addition logic, but cannot verify whether mocks correctly trigger branches.
-- **Step 5.1**: Applies with static estimation — create one test per uncovered branch, re-estimate. Max 3 cycles.
-- **Key risk**: Mock setup errors that would only surface at runtime are undetectable in offline mode. Strongly recommend re-running with a live interpreter when one becomes available.
+When no compatible interpreter is available, mark runtime verification blocked:
+- **Step 4**: Not run; record the missing interpreter. When the interpreter is available but a required test dependency is missing, report that dependency instead of switching runners or installing it.
+- **Coverage validation**: Static branch analysis may guide test design, but is not measured coverage and cannot satisfy the gate. If only coverage tooling is unavailable, still run tests with the selected runner and report coverage as unverified.
 
 ## Terminal Fallback
 
-If all recovery cycles (3 in Step 4 + 3 in Step 5.1) are exhausted without reaching >=90%: report the following to the user: (a) the achieved coverage percentage, (b) the list of uncovered lines mapped to their branch conditions, (c) a summary of recovery strategies attempted for each uncovered branch. Suggest that the user manually review the uncovered branches — they may require runtime state, framework internals, or environment conditions that cannot be simulated in unit tests. Do NOT silently finalize with <90% coverage.
+If the test or coverage recovery budget is exhausted, report the failing tests and attempted fixes, plus the measured coverage, uncovered lines mapped to branch conditions and coverage strategies attempted where available. Distinguish missing data and diagnostic data from a failed run from a measured shortfall; none can be marked as passing the coverage gate.
 
 ## Step 4 Recovery: Test Failure After 3 Debugging Attempts
 
@@ -51,23 +49,19 @@ Replace complex mock chains with simple return values. Remove `side_effect` lamb
 
 ### Strategy 3: Use Real Fixtures
 
-Check `tests/conftest.py` for existing fixtures. Use `app`, `client`, `authenticate` fixtures instead of mocking. Use real framework test context (e.g., test_request_context) instead of mocking request. Use `pytest.mark.settings` or framework config override for configuration instead of mocking config.
+Reuse existing project helpers. With pytest, use existing `conftest.py` fixtures (`app`, `client`, `authenticate`) or settings markers if the project provides them. With unittest, use `setUp`/`addCleanup` or project helpers, not pytest fixtures or markers. Prefer a real framework test context (e.g., `test_request_context`) to mocking it.
 
 ### Strategy 4: Check Environment
 
-> `$PYTHON` refers to the interpreter selected in [fix-rules.md](./fix-rules.md).
-> Quote its path in Bash; invoke it with `& $PYTHON` in PowerShell.
+> Keep the interpreter, runner, command and working directory selected in [fix-rules.md](./fix-rules.md). Use `"$PYTHON"` in Bash and `& $PYTHON` in PowerShell.
 
 ```bash
 # Verify module importable
-$PYTHON -c "from module import function; print('OK')"
-$PYTHON -c "import sys; print(sys.path)"
-
-# If $PYTHON is the system interpreter (venv creation failed during setup):
-# - Project deps may not be installed; install missing ones: $PYTHON -m pip install --user <package>
-# - Check whether $PYTHON points to a venv or system: $PYTHON -c "import sys; print(sys.prefix)"
-#   A venv prefix differs from the system site-packages prefix.
+"$PYTHON" -c "from module import function; print('OK')"
+"$PYTHON" -c "import sys; print(sys.executable, sys.version, sys.prefix); print(sys.path)"
 ```
+
+If the chosen environment lacks a required dependency, report the missing package and the chosen environment. Never install dependencies automatically or switch interpreters to make a failing run pass.
 
 ### Strategy 5: Reduce Test Complexity
 
@@ -77,17 +71,17 @@ Break complex multi-assertion tests into simpler single-assertion tests. Isolate
 
 Document failure pattern: function name, error message, debugging attempts, strategies tried, root cause hypothesis.
 
-## Step 5.1 Recovery: Coverage <90% After 3 Cycles
+## Coverage Recovery: Below the Target After 3 Cycles
 
 ### Strategy 1: Branch-Specific Tests
 
-Use the current coverage report; if missing, follow .coveragerc Recovery below. Use `read` to load `skill://bundled-developer-test-agent/generate-ut` for its baseDir only; NEVER start the generation workflow. From the project directory, run:
+Use the current coverage report; if missing, follow [Coverage Data Recovery](#coverage-data-recovery). Use `read` to load `skill://bundled-developer-test-agent/generate-ut` for its baseDir only; NEVER start the generation workflow. From the project directory, run:
 
 ```bash
-"$PYTHON" "{GENERATE_SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" "<function_name>" "<start_line>" "<end_line>" "<source_file_path>"
+"$PYTHON" "{GENERATE_SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" --source "<source_file_path>" --function "<function_name>" <start_line> <end_line>
 ```
 
-Replace `{GENERATE_SKILL_DIR}` with the returned baseDir. Map each missing line to its branch condition. Create exactly ONE targeted test per missing branch.
+Replace `{GENERATE_SKILL_DIR}` with the returned baseDir. Pass `--threshold <percent>` when the task specifies a threshold. Omit `--function` for module scope or replace it with `--changed-lines '<JSON line-number array>'` for incremental line scope. A nonzero parser status means below threshold or no valid data; distinguish them in the report. Map valid missing lines to their branch conditions and create one targeted test per missing branch.
 
 ### Strategy 2: Integration Approach
 
@@ -95,11 +89,11 @@ Use real helper functions instead of mocking them. This covers helper branches t
 
 ### Strategy 3: Alternative Patterns
 
-1. Configuration-based branches: `pytest.mark.settings` or `PropertyMock`
+1. Configuration-based branches: a project-provided pytest marker (pytest only), framework config override or `PropertyMock`
 2. Exception simulation: mock specific exception types (not generic Exception)
 3. State-dependent branches: test different object states explicitly
 4. Direct function call: if HTTP client approach misses branches
-5. PropertyMock for properties: if `@pytest.mark.settings` doesn't trigger branch
+5. Use `PropertyMock` if the framework config override does not reach a property-based branch
 
 ### Strategy 4: Document Limitations
 
@@ -113,7 +107,7 @@ Document: current coverage, missing lines, strategies attempted, remaining gaps.
 | Import errors | Check environment | Fix imports | Escalate |
 | Logic errors | Reduce complexity | Break tests | Escalate |
 | Coverage stuck | Branch-specific tests | Integration approach | Document |
-| Config branches | pytest.mark.settings | PropertyMock | Document |
+| Config branches | Framework config override (or existing pytest marker with pytest) | PropertyMock | Document |
 | Exception branches | Mock specific types | Integration test | Document |
 | Self-call interception | Instance-level mock | Simplify mocking | Escalate |
 | Infinite loop in while-generator | side_effect with state mutation | Real objects for loop control | Escalate |
@@ -142,27 +136,26 @@ Document: current coverage, missing lines, strategies attempted, remaining gaps.
 ### Web Framework Recovery
 
 1. Proxy/thread-local object RuntimeError: never patch proxy objects directly; use framework test client or patch underlying function
-2. AsyncMock coroutine warnings: replace with MagicMock for sync methods
+2. Async mocking: use `MagicMock` only for synchronous methods. For a Python 3.6 target, use an `async def` stub and `loop.run_until_complete()` for coroutines; do not introduce `AsyncMock` or other newer APIs/syntax.
 3. DetachedInstanceError: use simple mock classes instead of real ORM objects
-4. Custom fixture conflicts: use existing conftest.py fixtures; never create new framework app instances
+4. Custom setup conflicts: reuse pytest fixtures or unittest setup helpers according to the chosen runner; avoid duplicate framework app instances
 5. Missing model fields: include required fields in custom model classes or use existing fixtures
 
-## .coveragerc Recovery
+## Coverage Data Recovery
 
-1. **Primary approach**: Follow the temporary-directory setup and `coverage run` / `coverage json` commands in `skill://bundled-developer-test-agent/generate-ut/references/python/generation-rules.md`. Use the selected interpreter.
-2. Fallback: Scope `COVERAGE_FILE` to the pytest command and set it to `$COV_DIR/.coverage`. Run `"$PYTHON" -m pytest "<test_file>" "--cov=<source_module>" "--cov-report=json:$COV_DIR/coverage.json" -v`.
-3. Do NOT modify tracked project configuration files — always use command-line overrides or temporary configs
-4. If `parse_coverage.py` reports `total_executable_lines=0`: re-run coverage to generate fresh data
-5. If `parse_coverage.py` reports unexpected results but direct coverage.json inspection confirms >=90%, accept the direct evidence and proceed
-6. If both coverage commands fail: check for import errors in the test output, fix imports and retry
+1. Reuse the selected interpreter and runner; follow the temporary-directory, project configuration and exit-code rules in `skill://bundled-developer-test-agent/generate-ut/references/python/generation-rules.md`. `coverage run` supports unittest discovery and pytest; pytest-cov is an option only for a pytest run with the plugin already available.
+2. Keep project config unchanged. Use only this run's isolated data. Save the test exit status in the same shell before generating any diagnostic report; data from a failed run cannot satisfy the gate.
+3. If no compatible coverage tool is available, run tests without coverage and report the gate unverified. Do not install dependencies or change runners.
+4. If the parser reports zero executable lines, verify the source identity and scope. Regenerate isolated data only if the previous measurement used the wrong scope or is stale; never accept an empty denominator.
+5. If reporting fails, inspect the test/coverage output for the actual error. Use a project-provided alternative only if it yields verifiable coverage for the same target scope, not merely an aggregate percentage.
 
 ## parse_coverage.py Troubleshooting
 
 If parse_coverage.py reports significantly lower coverage than expected:
-1. Ensure `source_file_path` argument is provided to prevent cross-file contamination
-2. Verify the source_file_path matches the actual file path in coverage.json (check keys in `files` dict)
+1. Supply the exact target source file with `--source`; add the requested line scope if not measuring the whole module
+2. Verify that the source path resolves to the same file as a key in `coverage.json`'s `files` map
 3. If results still seem wrong, inspect coverage.json directly: `"$PYTHON" -c "import json, sys; print(*json.load(open(sys.argv[1], encoding='utf-8'))['files'], sep='\n')" "$COV_DIR/coverage.json"`
-4. Accept direct coverage.json evidence over script output when they conflict
+4. If inspecting JSON directly, verify the same source and target line scope. Do not replace scoped evidence with project totals or infer success from missing data.
 
 ## Recovery Anti-Patterns
 
@@ -170,9 +163,9 @@ If parse_coverage.py reports significantly lower coverage than expected:
 2. Over-writing working tests to fix style → Only fix failing tests
 3. Coverage scope loss during rewrite → Enumerate branches before rewriting
 4. Silent partial coverage → Document missing branches
-5. Accepting `total_executable_lines=0` from parse_coverage.py → Re-run coverage to generate fresh data
-6. Modifying project config files to work around tool issues → Use command-line overrides instead
-7. Insisting on script output when direct evidence confirms the result → Accept direct evidence and proceed
+5. Accepting zero executable lines → Verify source and scope; report unavailable if not resolvable
+6. Modifying project config to work around tool issues → Keep the config and isolate only the new data and reports
+7. Treating aggregate or failed-run coverage as acceptance evidence → Require passing tests and valid scoped data
 8. Full file rewrites when only specific tests need fixes → Use targeted edits instead
 9. Using patch.object for self-calls → Use instance-level assignment instead
 10. Assuming exception constructor args are named attributes → Check with .args tuple
@@ -190,19 +183,19 @@ These failure branches supplement the Step 4 common fixes list with explicit rec
 
 | Error Pattern | Root Cause | Fix |
 |---|---|---|
-| ModuleNotFoundError for package | Module not installed in venv | Run `$PYTHON -c "import X"` to verify. If missing, install via `$PYTHON -m pip install X` |
+| ModuleNotFoundError for package | Module is missing from the chosen environment | Run `"$PYTHON" -c "import X"` to verify; report a missing dependency |
 | ImportError: cannot import name | Wrong import path or name | Re-read source file to verify exact class/function name and import path |
-| ModuleNotFoundError for project modules | sys.path does not include project root | Add sys.path.insert(0, project_root) at top of test file |
-| AttributeError after correct import | Importing from wrong submodule | Check __init__.py re-exports; import from actual defining module instead |
-| Wrong Python executable | Using wrong interpreter | Run pytest with the interpreter selected in [fix-rules.md](./fix-rules.md) |
+| ModuleNotFoundError for project modules | Wrong working directory or project import path | Reuse the project working directory and existing import setup |
+| AttributeError after correct import | Importing from wrong submodule | Check __init__.py re-exports; import from the defining module instead |
+| Wrong Python executable | Runner invoked outside its intended runtime | Reuse the interpreter and runner recorded in [fix-rules.md](./fix-rules.md) |
 
 **Recovery steps**:
 1. Read the error traceback to identify the exact failing import
-2. Verify the module exists: `$PYTHON -c "import module_name"`
-3. If module not found: install via `$PYTHON -m pip install module_name` or check sys.path
-4. If name not found: re-read source file to verify exact export names
-5. If path issue: add sys.path.insert(0, ...) at test file top
-6. Re-run tests after each fix. Max 3 import-fix iterations within the Step 4 budget
+2. Verify the module exists: `"$PYTHON" -c "import module_name"`
+3. If a required third-party module is absent, report it; do not install it
+4. If the imported name is absent, verify exact exports in the source
+5. For project import errors, follow its working directory and import setup; do not hide environment errors by injecting paths into tests
+6. Re-run the same test command after each fix. Max 3 import-fix iterations within the Step 4 budget
 
 ### Failure Branch 2: Mock Setup Failures / AttributeError During Execution
 
@@ -220,10 +213,10 @@ These failure branches supplement the Step 4 common fixes list with explicit rec
 
 **Recovery steps**:
 1. Read the error traceback to identify the failing attribute/method
-2. Check if the mock uses spec=ClassName - if so, replace with __new__ + manual attributes (Step 3 rule 15)
+2. Check if the mock uses `spec=ClassName`; if needed, construct the subject with `__new__` and initialize required attributes as described in [fix-rules.md](./fix-rules.md)
 3. Check if the attribute is a property - if so, use patch.object with new_callable=PropertyMock
 4. Check if the mock is for a self-call - if so, use instance-level assignment instead of patch.object
-5. Check if dict-like attributes are uninitialized - initialize as real empty dicts (Step 3 rule 18)
+5. Initialize uninitialized dict-like attributes as real empty dicts where the test scenario requires them
 6. Re-run tests after each fix. Max 3 mock-fix iterations within the Step 4 budget
 
 ### Failure Branch 3: Test Timeout or Fixture Conflict
@@ -238,11 +231,11 @@ These failure branches supplement the Step 4 common fixes list with explicit rec
 | Test hangs in while-loop | side_effect single value causes infinite loop | Use side_effect list: [None, Exception()] to ensure termination |
 | Fixture teardown error | Fixture dependency ordering | Replace @patch decorators with with patch(...) context managers |
 | pytest.timeout expired | Complex mock chain causing slow execution | Simplify mock setup; reduce test interdependence |
-| Fixture scope conflict | Shared fixture state leaking between tests | Use function-scoped fixtures; reset shared state in setup_method |
-| RuntimeError: generator ignored GeneratorExit | Generator not properly closed in test | Use with pytest.raises(...) context instead of manual next() calls |
+| Fixture scope conflict | Shared fixture state leaking between tests | Use function-scoped fixtures with pytest or reset state in unittest `setUp` / `addCleanup` |
+| RuntimeError: generator ignored GeneratorExit | Generator not properly closed in test | Close the generator and assert expected errors with `pytest.raises` or `TestCase.assertRaises` |
 
 **Recovery steps**:
-1. If a test hangs: add `--timeout=10` only if the pytest-timeout option is available; otherwise use the shell tool's timeout
+1. If a test hangs, add `--timeout=10` only for pytest when the selected interpreter's `-m pytest --help` lists it; otherwise use the shell tool's timeout
 2. Identify the hanging test from output
 3. Check for real blocking primitives (Event, Queue, sleep) - mock all of them
 4. Check for while-loops - ensure side_effect lists provide termination
@@ -250,13 +243,13 @@ These failure branches supplement the Step 4 common fixes list with explicit rec
 6. Simplify mock setup: remove complex side_effect chains; use direct return_value
 7. Re-run with the same timeout mechanism. Max 3 timeout-fix iterations within the Step 4 budget
 
-## Step 5.1 Failure Branch: Coverage Shortfall After Tests Pass
+## Failure Branch: Coverage Shortfall After Tests Pass
 
-**Symptom**: All tests pass but coverage is below 90%.
+**Symptom**: The target tests pass but measured coverage is below the explicit task threshold (default: 90% for Python).
 
-**Recovery steps** (supplements existing Step 5.1 guidance):
+**Recovery steps** (supplement [Coverage Recovery](#coverage-recovery-below-the-target-after-3-cycles)):
 
-1. Reuse the coverage commands under .coveragerc Recovery. With pytest-cov, add `--cov-report=term-missing` to see uncovered lines in the terminal.
+1. Reuse [Coverage Data Recovery](#coverage-data-recovery). With pytest-cov, use `--cov-report=term-missing` for diagnostics; evaluate the gate with scoped line data.
 2. Map each uncovered line to its branch condition by re-reading the source
 3. For each uncovered branch, identify WHY existing tests do not cover it:
    - Missing branch test: No test triggers this condition - Create a targeted test
@@ -266,4 +259,4 @@ These failure branches supplement the Step 4 common fixes list with explicit rec
 4. Create ONE targeted test per uncovered branch (not per uncovered line)
 5. After adding tests, re-run coverage validation
 6. Maximum 3 coverage-improvement cycles
-7. Terminal fallback: If coverage remains below 90% after 3 cycles, report: (a) achieved coverage %, (b) uncovered lines mapped to branch conditions, (c) recovery strategies attempted. Do NOT silently finalize below the gate.
+7. Terminal fallback: If coverage stays below the gate, report achieved coverage, uncovered lines mapped to branch conditions and strategies attempted. If valid scoped data is unavailable, report coverage unverified instead.

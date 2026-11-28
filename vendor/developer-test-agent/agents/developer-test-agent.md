@@ -56,6 +56,10 @@ Then proceed to STEP 2. The detected language selects the Skill set:
 - **Go** → generate-ut / fix-ut / improve-coverage / improve-validity / test-report
 - **Python** → generate-ut / fix-ut / improve-coverage / improve-validity / test-report
 
+Python 使用项目选定的同一解释器、测试框架和执行参数贯穿各阶段。MUST 按目标 Python 版本生成测试（最低支持 3.6），包括标准库 `unittest`。按 `generate-ut` 的 Python reference 识别工具，不自动安装。
+
+Python 覆盖率门槛：显式任务值优先，否则为 90%；其他语言保留原默认值 80%。Python 默认按目标模块的可执行行计算；`incremental` 任务仅计 `变更新侧行` 中的可执行行，NEVER 用全模块或项目总覆盖率代替。缺少运行数据、零个用例或测试失败时不算通过。
+
 ## STEP 2: Intent Detection (MANDATORY — do this after Language Detection)
 
 Read the user's request and determine the execution path. **路径 1 优先于路径 2。**
@@ -116,10 +120,10 @@ generate-ut 执行完成后，**必须直接按顺序执行完整流水线**（f
 Gap 1: 测试文件是否存在？（read/glob 检查目标类对应的 Test 文件）
   ├─ 否 → 读取并执行 `skill://bundled-developer-test-agent/generate-ut` → 重新评估 Gap 1
   └─ 是 ↓
-Gap 2: 测试是否编译通过？（读取并执行 `skill://bundled-developer-test-agent/fix-ut`，Skill-Only 规则禁止直接 mvn/cmake/gcc）
+Gap 2: 测试是否实际运行并通过？（读取并执行 `skill://bundled-developer-test-agent/fix-ut`）
   ├─ 否 → 执行 fix-ut 修复后 → 重新评估 Gap 2
   └─ 是 ↓
-Gap 3: 覆盖率 >=80%？（fix-ut 执行后检查结果，或读取并执行 `skill://bundled-developer-test-agent/improve-coverage`）
+Gap 3: 实测覆盖率达到当前任务门槛？（读取 `skill://bundled-developer-test-agent/improve-coverage` 确认范围和门槛）
   ├─ 否 → 执行 improve-coverage → 重新评估 Gap 3
   └─ 是 ↓
 Gap 4: 断言质量合格？（read 检查测试中是否存在 trivial 断言）
@@ -133,6 +137,7 @@ Gap 5: 已生成报告？
 #### Gap Analysis 通用规则
 
 - **不重复执行**：如果用户指定的 skill 已经完成了某个阶段，跳过该阶段
+- **Python 阻断**：目标不存在、无可用运行数据或修复预算耗尽时，MUST 报实因并退出 Gap 循环；NEVER 替换目标或以估算达标。
 - **Skill-Only 规则不变**：评估过程中禁止未经对应 skill 指导直接运行 mvn/jacoco/cmake/gcc/g++/gcov/go test/pytest，必须读取并执行对应 skill
 - **用户可见**：每步输出一行声明，如 `Gap analysis: tests exist, compilation not verified → running bundled fix-ut`
 
@@ -244,8 +249,8 @@ Step 2: read and execute skill://bundled-developer-test-agent/fix-ut
   v  (after completion)
 Step 3: read and execute skill://bundled-developer-test-agent/improve-coverage
   |
-  +-- coverage < 80%? --> go back to Step 1
-  +-- coverage >= 80%? --> continue
+  +-- coverage gate not met? --> apply the language-specific failure rule below
+  +-- coverage gate met? --> continue
   |
   v
 Step 4: read and execute skill://bundled-developer-test-agent/improve-validity
@@ -254,10 +259,13 @@ Step 4: read and execute skill://bundled-developer-test-agent/improve-validity
 Step 5: read and execute skill://bundled-developer-test-agent/test-report
 ```
 
+Python 阶段因指定目标不存在而停止时，MUST 报错并停止委托；没有生成或确认的目标，不进入下一阶段。
+
 **After Step 1 completes → You MUST immediately start Step 2.**
 **After Step 2 completes → You MUST immediately start Step 3.**
-**After Step 3: If coverage < 80%, go back to Step 1. If >= 80%, proceed to Step 4.**
+**After Step 3:** For Python, `improve-coverage` owns bounded retries; if it returns unmet or unverified, report that state. NEVER restart Step 1 or claim acceptance. For other languages, retain the existing loop to Step 1 below the applicable threshold.
 **After Step 4 completes → You MUST immediately start Step 5.**
+**Python final acceptance:** Step 5 MUST re-run the selected tests and recompute the same coverage scope and threshold after assertion edits; an earlier pass cannot certify the final files.
 
 ## Hard Rules
 

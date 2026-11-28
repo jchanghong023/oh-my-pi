@@ -1,145 +1,33 @@
 # Python 覆盖率规则
 
-## 覆盖率数据获取
+## 测量
 
-### 方法1：coverage.py（首选）
+MUST 沿用 [Python 生成与执行规则](../../../generate-ut/references/python/generation-rules.md) 选定的解释器、runner、项目配置和临时目录。用同一份 `coverage.json`、`test-output.txt` 和测试退出状态判定测试及覆盖率；`unittest` 用 coverage.py，不要求 pytest 或 pytest-cov。没有兼容的覆盖率工具？报告测试结果及覆盖率未验证，NEVER 自动安装。
 
-覆盖率产物统一输出到临时目录，避免污染项目目录。
+## 门禁
 
-`{SKILL_DIR}` 替换为加载 `improve-coverage` 时返回的 baseDir；脚本路径加引号。
-`$PYTHON` 为项目解释器：Windows 优先 `.venv/Scripts/python.exe`，Linux/macOS 优先 `.venv/bin/python`。Bash 用 `"$PYTHON"`，PowerShell 用 `& $PYTHON`。
-
-```powershell
-# Windows (PowerShell) - 创建临时目录
-$COV_DIR = (New-Item -ItemType Directory -Path (Join-Path $env:TEMP ([guid]::NewGuid().ToString())) -ErrorAction Stop).FullName
-
-# 步骤1：运行覆盖率并保存同次 pytest -v 输出
-& $PYTHON -m coverage run --rcfile=NUL "--data-file=$COV_DIR\.coverage" --branch -m pytest "<test_file>" -v *> "$COV_DIR\pytest-output.txt"
-
-# 步骤2：生成 JSON 报告到临时目录
-& $PYTHON -m coverage json --rcfile=NUL "--data-file=$COV_DIR\.coverage" -o "$COV_DIR\coverage.json"
-
-# 步骤3：生成覆盖率上报缓存 JSON（写入 .codecovcli/cache/python_{className}.json）
-# {className} 为被测 Python 源文件名（不含 .py 扩展名，如 user_service）
-node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" {className} "$COV_DIR\coverage.json" "$COV_DIR\pytest-output.txt"
-```
+显式任务阈值优先，否则 90%。MUST 实际运行至少一个用例且测试成功。已声明的变更对象、覆盖率范围和阈值 MUST 在补测与最后报告时保持一致。`{GENERATE_SKILL_DIR}` 是 `skill://bundled-developer-test-agent/generate-ut` 返回的 baseDir。
 
 ```bash
-# Unix (bash) - 创建临时目录
-COV_DIR=$(mktemp -d) || exit 1
-
-# 步骤1：运行覆盖率并保存同次 pytest -v 输出
-"$PYTHON" -m coverage run --rcfile=/dev/null --data-file="$COV_DIR/.coverage" --branch -m pytest "<test_file>" -v > "$COV_DIR/pytest-output.txt" 2>&1
-
-# 步骤2：生成 JSON 报告到临时目录
-"$PYTHON" -m coverage json --rcfile=/dev/null --data-file="$COV_DIR/.coverage" -o "$COV_DIR/coverage.json"
-
-# 步骤3：生成覆盖率上报缓存 JSON（写入 .codecovcli/cache/python_{className}.json）
-# {className} 为被测 Python 源文件名（不含 .py 扩展名，如 user_service）
-node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" {className} "$COV_DIR/coverage.json" "$COV_DIR/pytest-output.txt"
+# 模块级（默认）：传目标源路径，不读取报告的项目总计
+"$PYTHON" "{GENERATE_SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" --source "<source_file.py>" --threshold "<percent>"
 ```
 
-### 方法2：pytest-cov（回退）
+- 函数级：追加 `--function "<qualified_name>" <start_line> <end_line>`，范围只包括确认过的函数。
+- Python 增量模式：追加 `--changed-lines '[12,17,18]'`（示例；实际使用任务的 `变更新侧行` JSON 数组）。只计变更行与目标模块 `executed_lines`/`missing_lines` 的交集；未提供范围时 MUST 报缺项，NEVER 退回模块级结果。新增文件可传全文件的 1-based 行号。
+- 脚本零退出且 `pass: true` 表示覆盖率通过。`success: true, pass: false` 表示有数据但未达标；找不到目标或无可执行行（含仅删除/非代码改动）时不能标为通过。覆盖率通过不覆盖失败、未运行或结果未知的测试状态。
 
-沿用上述临时目录。PowerShell 中仅对此次调用设置 `COVERAGE_FILE` 为 `$COV_DIR/.coverage`，并沿用上方的日志重定向方式。
+## 缓存
+
+首次测量和最终复测后 MUST 更新目标模块的缓存。用当次测试 `-v` 日志；无日志则省略，NEVER 复用上次日志。`{SKILL_DIR}` 是 `improve-coverage` 的 baseDir。
 
 ```bash
-COVERAGE_FILE="$COV_DIR/.coverage" "$PYTHON" -m pytest "<test_file>" "--cov=<source_module>" --cov-report=term-missing "--cov-report=json:$COV_DIR/coverage.json" -v > "$COV_DIR/pytest-output.txt" 2>&1
+node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" "<source_file.py>" "$COV_DIR/coverage.json" "$COV_DIR/test-output.txt"
 ```
 
-如coverage包缺失，尝试 `pip install coverage`。
-
-### 覆盖率上报集成（强制）
-
-> **此步骤为强制要求，不可跳过。** 覆盖率数据必须写入 `.codecovcli/cache/python_{className}.json`，供外部 DTAgent-Plugin 在子代理执行结束后扫描并通过 OTel 上报；OMP 内置运行时不提供此自动上报。在 improve-coverage 的 Step 1（首次获取覆盖率）和 Step 4（校验覆盖率提升结果）中**均需执行**。
-
-#### 转换脚本
-
-通过 `extract-python-coverage.js` 脚本完成从 coverage.py 原生 JSON 报告到上报 JSON 的转换：
-
-```bash
-node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" <模块名或源文件路径> <coverage.json路径> [pytest-v输出路径]
-```
-
-**参数说明**：
-
-| 参数 | 必填 | 说明 |
-|------|------|------|
-| 模块名或源文件路径 | 是 | 不含 `.py` 扩展名的模块名（如 `user_service`），或源文件的项目相对路径（如 `src/user_service.py`）或绝对路径 |
-| coverage.json路径 | 是 | `coverage json` 生成的 JSON 覆盖率报告文件路径 |
-| pytest-v输出路径 | 否 | `pytest -v` 输出文件路径；不指定时测试结果相关字段填 `0` |
-
-根目录下的模块可直接用模块名匹配；若覆盖率报告包含同名文件，脚本不会任选其一。请传入源文件路径来消歧；根目录文件可写为 `./user_service.py`。
-
-**示例**：
-
-```bash
-# 仅覆盖率数据（测试结果字段填0）
-node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" user_service "$COV_DIR/coverage.json"
-
-# 覆盖率数据 + 测试执行结果
-node "{SKILL_DIR}/scripts/python/extract-python-coverage.js" user_service "$COV_DIR/coverage.json" "$COV_DIR/pytest-output.txt"
-```
-
-#### 输出文件
-
-- **路径**：`<项目根目录>/.codecovcli/cache/python_{className}.json`
-- **写入前清除历史缓存**：脚本在写入前会删除 `.codecovcli/cache/` 目录下的所有历史缓存文件，避免脏数据
-- **异常兜底**：当 coverage.json 文件不存在（如 `coverage run` 失败未生成覆盖率文件）、目标文件未在 coverage.json 中找到（className 不匹配）、或覆盖率数据校验失败时，脚本**仍会写入 JSON 文件**（含 `errorDetail` 字段和 0 覆盖率数据），供外部 DTAgent-Plugin 上报测试执行结果（含编译失败场景）。若提供了 `pytest -v` 输出路径，测试结果会正常解析并写入 `metrics` 字段。
-
-#### JSON 格式
-
-生成的 JSON 符合覆盖率上报规范（详见 `coverage-reporting-integration-guide.md`）：
-
-- `scenario`：固定 `"class-level"`（DTAgent-Plugin 仅上报 class-level 场景，其他值会被跳过）
-- `metrics`：10 个字段，供外部 DTAgent-Plugin 透传到 OTel attributes
-  - `compiled_testcase_num`：`pytest -v` 日志中有 `PASSED`、`FAILED` 或 `ERROR` 结果的用例数，按用例 ID 去重；收集错误不计入
-  - `passed_testcase_num`：运行通过的用例数；fixture 初始化或清理报错的用例不计入
-  - `covered_line_num`：已覆盖行数
-  - `total_compile_error_num`：编译错误总数（pytest 收集错误等价物）
-  - `total_line_num`：可执行总行数
-  - `accept_testcase_num`：验收通过的测试用例数
-  - `generate_testcase_num`：生成的测试用例数
-  - `total_testcase_num`：测试用例总数
-  - `accept_line_num`、`generate_line_num`：日志只指向一个可读取的测试文件时，填该文件代码行数，否则为 `0`
-- `metadata.language`：固定 `"python"`
-
-#### 完整流程
-
-覆盖率数据获取与上报的完整流程：
-
-1. **运行 `coverage run -m pytest ... -v` 或 `pytest --cov ... -v`**：生成覆盖率数据；需要上报测试结果时，保存同次 `pytest -v` 日志。
-2. **运行 `coverage json`**：生成 `coverage.json`；`pytest --cov` 已直接生成 JSON 时跳过。
-3. **执行 `extract-python-coverage.js`（强制）**：写入 `.codecovcli/cache/python_{className}.json`。
-
-> improve-coverage 的 Step 1 和 Step 4 均须执行转换脚本。不提供 pytest 日志时，测试结果相关字段填 `0`。
-
-### 函数级覆盖率解析
-
-使用 `read` 加载 `skill://bundled-developer-test-agent/generate-ut`，将其返回的 baseDir 作为 `{GENERATE_SKILL_DIR}`，调用：
-```bash
-"$PYTHON" "{GENERATE_SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" "<function_name>" "<start_line>" "<end_line>" "<source_file_path>"
-```
-
-始终提供 `source_file_path` 防止跨文件污染，并在生成覆盖率报告的项目目录中运行解析脚本。找不到唯一的文件记录或函数范围内没有可执行行时，不视为覆盖率达标。
-
-### 环境清理
-
-覆盖率测量完成后，仅删除本次创建的临时目录；不得修改或删除项目原有的 `.coverage`。
-
-```powershell
-# Windows (PowerShell)
-Remove-Item -LiteralPath "$COV_DIR" -Recurse -Force
-```
-
-```bash
-# Unix (bash)
-rm -rf -- "$COV_DIR"
-```
-
-### 覆盖率目标
-
-行覆盖率 ≥ 90%。
+- 用项目根相对或绝对源文件路径（含 `.py`），不是模块 basename。输出 `.codecovcli/cache/python_<源路径指纹>.json`；同名模块分开，仅替换当前路径的记录。缓存是模块级统计，不是增量门禁结果。OMP 不自动上报。
+- 报告缺失、目标匹配失败或数据无效时，缓存含 `errorDetail` 和本次可解析的测试结果；即使脚本生成了缓存，NEVER 视为覆盖率证据。
+- 测量完成仅删除当前临时目录，不删除或改动项目原有覆盖率文件。
 
 ## 未覆盖代码分析
 
@@ -164,17 +52,13 @@ rm -rf -- "$COV_DIR"
 
 对try/except块执行覆盖检测：
 - 验证except块是re-raise还是suppress
-- re-raise：用pytest.raises验证
+- re-raise：pytest 用 `pytest.raises`，unittest 用 `self.assertRaises` / `self.assertRaisesRegex`。
 - suppress：验证函数正常返回和副作用
 - 多except类型：每种异常类型独立测试
 
 ## 不可达代码归因
 
-- 互斥路径：`if x > 0: return` 后的 `if x <= 0:`
-- 防御性代码：穷尽switch后的default
-- 框架管理代码：无法在单元测试中触发的路径
-
-将不可达代码从覆盖率分母中排除，记录原因。
+MUST 验证不可达归因并单独说明；NEVER 手工从实测分母扣减行数或修改覆盖率配置来通过门槛。
 
 ## 覆盖率提升策略
 

@@ -33,10 +33,10 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 
 ### 1. 确定目录路径
 
-将上述命令输入作为 `{dir}`，路径外围的配对引号不属于路径。若未传入，必须使用 `ask` 让用户通过自动提供的 Other 输入目录路径；取消则终止，未得到路径则继续询问：
+将上述命令输入作为 `{dir}`，路径外围的配对引号不属于路径。未传入时 MUST 用 `ask` 获取目录；取消或未填写时终止：
 
 ```json
-{"questions":[{"id":"directory","question":"请输入需要生成测试的源码目录路径，使用 Other 输入绝对或相对路径。","header":"目录路径","options":[{"label":"输入路径","description":"通过 Other 输入目录路径"},{"label":"取消","description":"终止执行"}]}]}
+{"html":"<form><label>源码目录 <input type=\"text\" name=\"directory\" required></label></form>"}
 ```
 
 确定后续步骤的执行参数：
@@ -44,13 +44,16 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 | 参数 | 值 |
 |------|---|
 | 目录路径 | 命令参数中的 `{dir}` 或用户交互输入 |
-| 覆盖率模式 | class-level |
+| 覆盖率模式 | Python `module-level`；其他语言 `class-level` |
 
 > 本命令为全量生成模式，不依赖 Git 变更，直接扫描指定目录下所有业务类。
 
 ### 2. 扫描目录文件
 
-根据用户提供的 `{dir}`，使用 `read` 读取目录并递归读取所有子目录，收集 `.java`、`.cpp`、`.c`、`.cc`、`.cxx`、`.h`、`.hpp`、`.hxx`、`.go` 和 `.py` 文件，自动检测目标语言。目录列表被截断时按 `read` 提示分页，确保扫描完整。
+从 `{dir}` 用 `read` 逐层扫描业务源码，收集 `.java`、`.cpp`、`.c`、`.cc`、`.cxx`、`.h`、`.hpp`、`.hxx`、`.go`、`.py`。目录列表截断时按提示分页。
+
+- 进入目录前 MUST 排除 `.git`、`.venv`、`venv`、`env`、`site-packages`、`dist-packages`、`__pycache__`、`node_modules`、`vendor`、`third_party` 和 `third-party`。使用 `pyvenv.cfg` 识别任意命名的虚拟环境；不读取其子目录或创建任务。
+- 不跟随符号链接或 Windows junction 到扫描根以外；若指定的根就是环境或第三方目录，报告原因并停止。
 
 **语言检测规则**：
 - 若扫描到 `.java` 文件 → 目标语言为 Java
@@ -187,8 +190,7 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
   - Constants.java / constants.h / constants.go / constants.py - 常量类/定义文件，无业务逻辑
   - OrderDTO.java / OrderData.h / OrderData.go / OrderData.py - 数据传输对象/纯数据类，无业务逻辑
 
-覆盖率模式: class-level
-覆盖率阈值: 80%
+覆盖率模式和门槛（按文件）: Python module-level 90%；其他 class-level 80%
 ```
 
 过滤后的文件列表作为步骤 4 创建任务的输入。跳过的文件仍需在步骤 6 执行报告中体现。
@@ -211,10 +213,11 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 目录: {dir}
 业务类: {filename}
 生成类型: 全量生成
-覆盖率模式: class-level
-覆盖率阈值: 80%
+目标语言: {language}
+覆盖率模式: {mode}
+覆盖率阈值: {threshold}%
 
-目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。
+目标：测试通过，覆盖率达到当前文件的门槛，且断言有效。
 
 使用 developer-test-agent 完成上面的测试任务。
 ```
@@ -226,6 +229,7 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 | `{dir}` | 命令参数 | 源码目录路径（绝对或相对） |
 | `{filename}` | 步骤2扫描结果 | 业务类/源文件的相对路径 |
 | `{ClassName}` | 从 filename 推导 | 去掉路径和后缀的类名/文件名 |
+| `{language}`, `{mode}`, `{threshold}` | 每个文件的语言；Python `module-level` / 90，其他 `class-level` / 80 | 不按多数语言给其他文件套用门槛 |
 
 ### 5. 串行执行任务
 
@@ -270,8 +274,7 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 ==========================================
 
 目录: {dir}
-覆盖率模式: class-level
-阈值: 80%
+覆盖率模式和门槛: 按文件列出
 
 扫描统计:
 - 扫描文件: {Total}
@@ -329,8 +332,8 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 3. 串行执行中，单个任务失败不阻塞后续任务执行
 4. 前置过滤跳过的文件（DTO/Config/Enum 等无业务逻辑类）不创建任务，但仍需在步骤6执行报告中体现
 5. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
-6. 覆盖率阈值默认 80%，未达标时 Agent 内部循环补充测试
+6. Python 模块行覆盖率默认 90%，其他语言默认 80%；未达标在对应语言的预算内补测
 7. 任务由主 Agent 按创建顺序串行调度
 8. 已存在测试文件时，优先使用内置 `improve-coverage` 分析覆盖率，若已达标则跳过测试生成
-9. 本命令为全量生成模式，所有文件均为全量生成，无需解析变更方法，覆盖率模式固定为 class-level
+9. 本命令按文件全量生成，不收集变更范围
 10. 仅使用 `todo` 跟踪任务，使用 `task` 逐个串行调度
