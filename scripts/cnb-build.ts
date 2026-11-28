@@ -183,7 +183,7 @@ async function nativeInputs(env: NodeJS.ProcessEnv) {
 		tool(env.CMAKE || "cmake", env, "--version"),
 		tool("ninja", env, "--version"),
 		linux ? Promise.all([
-			tool("cargo-zigbuild", env), tool("cargo", env, "zigbuild", "--version"), zigInput(env),
+			tool("cargo-zigbuild", env, "--version"), zigInput(env),
 			tool("readelf", env, "--version"), tool("cc", env, "--version"), tool("c++", env, "--version"),
 			tool("ld", env, "--version"), tool("ar", env, "--version"),
 		]) : windowsNativeTools(env),

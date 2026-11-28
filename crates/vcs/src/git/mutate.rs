@@ -335,6 +335,7 @@ impl GitRepo {
 					path,
 					gix::lock::acquire::Fail::Immediately,
 					None,
+					0,
 				)
 				.map_err(|err| Error::backend("git isolated stage", err))?,
 			);
@@ -724,6 +725,7 @@ impl GitRepo {
 			&self.info().head_path,
 			gix::lock::acquire::Fail::Immediately,
 			None,
+			0,
 		)
 		.map_err(|err| Error::backend(OP, err))?;
 		let HeadState::Ref { ref_name: head_ref, commit: Some(head_sha), .. } = self.head()? else {
@@ -811,18 +813,21 @@ impl GitRepo {
 				&real_path,
 				gix::lock::acquire::Fail::Immediately,
 				None,
+				0,
 			)
 			.map_err(|err| Error::backend(OP, err))?;
 			let _commit_lock = gix::lock::Marker::acquire_to_hold_resource(
 				&commit_path,
 				gix::lock::acquire::Fail::Immediately,
 				None,
+				0,
 			)
 			.map_err(|err| Error::backend(OP, err))?;
 			let _reconciled_lock = gix::lock::Marker::acquire_to_hold_resource(
 				&reconciled_path,
 				gix::lock::acquire::Fail::Immediately,
 				None,
+				0,
 			)
 			.map_err(|err| Error::backend(OP, err))?;
 			require_no_scoped_git_operation(repo.git_dir())?;
@@ -933,7 +938,6 @@ impl GitRepo {
 				let sign = repo
 					.config_snapshot()
 					.try_boolean("commit.gpgSign")
-					.transpose()
 					.map_err(|err| Error::backend(OP, err))?
 					.unwrap_or(false);
 				let committer = repo
@@ -1748,7 +1752,6 @@ impl GitRepo {
 			}
 			let configured = config
 				.trusted_path("core.hooksPath")
-				.transpose()
 				.map_err(|err| Error::backend("git hook path", err))?;
 			if configured.is_none() && config.string("core.hooksPath").is_some() {
 				return Err(Error::backend(
@@ -1758,7 +1761,7 @@ impl GitRepo {
 			}
 			configured.map_or_else(
 				|| self.info().common_dir.join("hooks"),
-				|value| self.root().join(value.as_ref()),
+				|value| self.root().join(value),
 			)
 		} else {
 			// Preserve the ordinary commit path's existing lookup behavior.
@@ -1953,7 +1956,7 @@ fn hook_configured(repository: &GitRepo, name: &str) -> Result<bool> {
 /// resets prior events for its id; an enabled event with no command is also
 /// a blocker because Git would reject it, even with the event disabled.
 fn has_enabled_hook_registration(
-	config: &gix::config::File<'_>,
+	config: &gix::config::File,
 	name: &str,
 	supports_event_disable: impl FnOnce() -> bool,
 ) -> bool {
@@ -1988,7 +1991,7 @@ fn has_enabled_hook_registration(
 		}
 		let (registered, enabled, has_command) = hooks.entry(id).or_insert((false, Some(true), false));
 		for event in events {
-			if event.is_empty() || event.as_ref() == name {
+			if event.is_empty() || event.as_bstr() == name {
 				*registered = !event.is_empty();
 			}
 		}
@@ -2776,7 +2779,7 @@ fn worktree_id(
 }
 
 fn lock_head_for_update(path: &Path, op: &'static str) -> Result<gix::lock::File> {
-	gix::lock::File::acquire_to_update_resource(path, gix::lock::acquire::Fail::Immediately, None)
+	gix::lock::File::acquire_to_update_resource(path, gix::lock::acquire::Fail::Immediately, None, 0)
 		.map_err(|err| Error::backend(op, err))
 }
 

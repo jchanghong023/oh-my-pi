@@ -218,7 +218,8 @@ pub(super) fn require_owned_filter_success(repo: &mut gix::Repository) -> Result
 		config
 			.section_mut_by_id(id)
 			.expect("section is present in the same config snapshot")
-			.set("required".try_into().expect("valid config key"), "true".into());
+			.set("required", "true")
+			.map_err(|err| Error::backend("git owned patch filter policy", err))?;
 	}
 	config
 		.commit()
