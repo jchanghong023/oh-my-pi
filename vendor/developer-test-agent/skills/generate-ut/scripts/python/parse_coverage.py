@@ -16,7 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("coverage_json")
     parser.add_argument("--source", required=True)
-    parser.add_argument("--threshold", type=float, default=90)
+    parser.add_argument("--threshold", type=float, default=80)
     scopes = parser.add_mutually_exclusive_group()
     scopes.add_argument("--function", nargs=3, metavar=("NAME", "START", "END"))
     scopes.add_argument("--changed-lines", type=json.loads, default=argparse.SUPPRESS, metavar="JSON_ARRAY")

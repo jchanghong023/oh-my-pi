@@ -3,7 +3,7 @@
 ## When to Use
 
 - Step 4: After 3 debugging attempts without resolving test failures
-- Coverage improvement: After 3 measured cycles without reaching the explicit task threshold (default: 90% for Python)
+- Coverage improvement: After 3 measured cycles without reaching the applicable task threshold
 - Tests consistently fail with same error pattern
 - Coverage stuck at specific percentage despite targeted test additions
 
@@ -245,7 +245,7 @@ These failure branches supplement the Step 4 common fixes list with explicit rec
 
 ## Failure Branch: Coverage Shortfall After Tests Pass
 
-**Symptom**: The target tests pass but measured coverage is below the explicit task threshold (default: 90% for Python).
+**Symptom**: The target tests pass but measured coverage is below the applicable task threshold.
 
 **Recovery steps** (supplement [Coverage Recovery](#coverage-recovery-below-the-target-after-3-cycles)):
 

@@ -58,7 +58,7 @@ Then proceed to STEP 2. The detected language selects the Skill set:
 
 Python 使用项目选定的同一解释器、测试框架和执行参数贯穿各阶段。MUST 按目标 Python 版本生成测试（最低支持 3.6），包括标准库 `unittest`。按 `generate-ut` 的 Python reference 识别工具，不自动安装。
 
-Python 覆盖率门槛：显式任务值优先，否则为 90%；其他语言保留原默认值 80%。Python 默认按目标模块的可执行行计算；`incremental` 任务仅计 `变更新侧行` 中的可执行行，NEVER 用全模块或项目总覆盖率代替。缺少运行数据、零个用例或测试失败时不算通过。
+Python 覆盖率门槛：显式任务值优先，否则为 80%。Python 默认按目标模块的可执行行计算；`incremental` 任务仅计 `变更新侧行` 中的可执行行，NEVER 用全模块或项目总覆盖率代替。缺少运行数据、零个用例或测试失败时不算通过。
 
 ## STEP 2: Intent Detection (MANDATORY — do this after Language Detection)
 

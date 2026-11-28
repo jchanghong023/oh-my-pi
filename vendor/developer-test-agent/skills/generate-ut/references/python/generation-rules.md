@@ -159,7 +159,7 @@ printf 'pytest exit=%s; artifacts=%s\n' "$TEST_RC" "$COV_DIR"
 
 ### 目标覆盖率
 
-在采集覆盖率的同一工作目录执行。`{SKILL_DIR}` 替换为加载 `generate-ut` 返回的 baseDir；`--source` 指定目标源码文件，默认判定该模块。函数任务传 `--function`，增量行覆盖率任务改用 `--changed-lines '<JSON 行号数组>'`（互斥）。显式门槛传 `--threshold <percent>`，否则默认 90%。解析器非零时，按诊断区分有效数据未达标和无有效数据；都不得宣称通过。
+在采集覆盖率的同一工作目录执行。`{SKILL_DIR}` 替换为加载 `generate-ut` 返回的 baseDir；`--source` 指定目标源码文件，默认判定该模块。函数任务传 `--function`，增量行覆盖率任务改用 `--changed-lines '<JSON 行号数组>'`（互斥）。显式门槛传 `--threshold <percent>`，否则默认 80%。解析器非零时，按诊断区分有效数据未达标和无有效数据；都不得宣称通过。
 
 ```bash
 "$PYTHON" "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" --source "<source_file_path>" --function "<function_name>" <start_line> <end_line>

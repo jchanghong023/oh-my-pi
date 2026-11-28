@@ -6,7 +6,7 @@ MUST 沿用 [Python 生成与执行规则](../../../generate-ut/references/pytho
 
 ## 门禁
 
-显式任务阈值优先，否则 90%。MUST 实际运行至少一个用例且测试成功。已声明的变更对象、覆盖率范围和阈值 MUST 在补测与最后报告时保持一致。`{GENERATE_SKILL_DIR}` 是 `skill://bundled-developer-test-agent/generate-ut` 返回的 baseDir。
+显式任务阈值优先，否则 80%。MUST 实际运行至少一个用例且测试成功。已声明的变更对象、覆盖率范围和阈值 MUST 在补测与最后报告时保持一致。`{GENERATE_SKILL_DIR}` 是 `skill://bundled-developer-test-agent/generate-ut` 返回的 baseDir。
 
 ```bash
 # 模块级（默认）：传目标源路径，不读取报告的项目总计

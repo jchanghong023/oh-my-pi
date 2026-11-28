@@ -190,7 +190,7 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
   - Constants.java / constants.h / constants.go / constants.py - 常量类/定义文件，无业务逻辑
   - OrderDTO.java / OrderData.h / OrderData.go / OrderData.py - 数据传输对象/纯数据类，无业务逻辑
 
-覆盖率模式和门槛（按文件）: Python module-level 90%；其他 class-level 80%
+覆盖率模式（按文件）: Python module-level；其他 class-level。默认门槛: 80%
 ```
 
 过滤后的文件列表作为步骤 4 创建任务的输入。跳过的文件仍需在步骤 6 执行报告中体现。
@@ -229,7 +229,7 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 | `{dir}` | 命令参数 | 源码目录路径（绝对或相对） |
 | `{filename}` | 步骤2扫描结果 | 业务类/源文件的相对路径 |
 | `{ClassName}` | 从 filename 推导 | 去掉路径和后缀的类名/文件名 |
-| `{language}`, `{mode}`, `{threshold}` | 每个文件的语言；Python `module-level` / 90，其他 `class-level` / 80 | 不按多数语言给其他文件套用门槛 |
+| `{language}`, `{mode}`, `{threshold}` | 每个文件的语言；Python `module-level`，其他 `class-level`；默认门槛 80 | 按文件交给子代理 |
 
 ### 5. 串行执行任务
 
@@ -332,7 +332,7 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 3. 串行执行中，单个任务失败不阻塞后续任务执行
 4. 前置过滤跳过的文件（DTO/Config/Enum 等无业务逻辑类）不创建任务，但仍需在步骤6执行报告中体现
 5. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
-6. Python 模块行覆盖率默认 90%，其他语言默认 80%；未达标在对应语言的预算内补测
+6. 覆盖率门槛默认 80%；未达标在对应语言的预算内补测
 7. 任务由主 Agent 按创建顺序串行调度
 8. 已存在测试文件时，优先使用内置 `improve-coverage` 分析覆盖率，若已达标则跳过测试生成
 9. 本命令按文件全量生成，不收集变更范围

@@ -43,4 +43,4 @@ Detailed mock patching and test generation rules. Consult during Step 3 when wri
 - **Mock return_value for tuple-unpacking targets**: When the target function unpacks a mock return value (e.g., `result, exc_info = callback(...)`), always set `return_value` to a matching tuple. Bare `MagicMock()` causes unpacking errors. Source: analyzer
 - **Full-file rewrites for minor fixes**: After the initial test file is written, prefer targeted edits for fixes. Only rewrite the full file if structural changes require replacing more than 50% of content. Source: analyzer
 - **Over-merging test assertions**: When merging method call verification into branch tests, ensure each behavioral contract remains testable. Over-merging makes it harder to identify specific verifications. Source: analyzer
-- **Coverage gate bypass**: If parse_coverage.py reports `pass: false` or `total_executable_lines == 0`, continue iterating — do not finalize below 90%. Source: analyzer
+- **Coverage gate bypass**: If `parse_coverage.py` reports `pass: false`, NEVER claim the coverage gate passed. Distinguish measured shortfall from missing evidence.

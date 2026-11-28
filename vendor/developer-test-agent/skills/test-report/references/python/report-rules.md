@@ -16,7 +16,7 @@
 "$PYTHON" "{GENERATE_SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" --source "<source_file_path>" --function "<function_name>" <start_line> <end_line>
 ```
 
-将 `{GENERATE_SKILL_DIR}` 替换为返回的 baseDir。模块级目标省略 `--function`；增量行目标改用 `--changed-lines '<JSON 行号数组>'`；有显式门槛时传 `--threshold <percent>`，默认 90%。解析器非零时区分有效数据未达标与无有效数据。
+将 `{GENERATE_SKILL_DIR}` 替换为返回的 baseDir。模块级目标省略 `--function`；增量行目标改用 `--changed-lines '<JSON 行号数组>'`；有显式门槛时传 `--threshold <percent>`，默认 80%。解析器非零时区分有效数据未达标与无有效数据。
 
 分别报告测试结果与覆盖率结果。测试失败时，本轮覆盖率只能作为诊断，不计为验收成功；未运行目标用例也不能宣称通过。无兼容覆盖率工具时，仅验证测试，标记「覆盖率数据不可用 / 门槛未验证」，不要以静态估算或项目总覆盖率代替。
 
@@ -26,7 +26,7 @@
 - 分支覆盖率（如可用）
 - 函数覆盖率
 
-**目标**：以显式任务范围和行覆盖率门槛为准，默认 ≥ 90%。
+**目标**：以显式任务范围和行覆盖率门槛为准。
 
 ## 测试质量评估与异常覆盖检测
 

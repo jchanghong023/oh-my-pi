@@ -25,7 +25,7 @@ Use branch coverage matrices during Step 2 (Plan Test Coverage) for complex func
 
 ## Security-Critical Branch Markers
 
-Mark as CRITICAL when involving: auth/authorization, CSRF, passwords/tokens, input sanitization, session management, access control. CRITICAL branches MUST be covered even if overall coverage >=90%.
+Mark as CRITICAL when involving: auth/authorization, CSRF, passwords/tokens, input sanitization, session management, access control. CRITICAL branches MUST be covered even when the coverage gate passes.
 
 ## Compound Condition Decomposition
 
