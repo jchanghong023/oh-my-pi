@@ -39,12 +39,17 @@ function release(binary: string, tag = "omp", reported = version): Response {
 	});
 }
 
+interface RecordedRequest {
+	url: string;
+	init?: RequestInit | BunFetchRequestInit;
+}
+
 function recordFetch(
 	respond: (url: string) => Response = url => {
 		throw new Error(`Unexpected updater request: ${url}`);
 	},
 ) {
-	const requests: Array<{ url: string; init?: RequestInit | BunFetchRequestInit }> = [];
+	const requests: RecordedRequest[] = [];
 	vi.spyOn(globalThis, "fetch").mockImplementation(
 		Object.assign(
 			async (input: string | URL | Request, init?: RequestInit | BunFetchRequestInit) => {
@@ -58,7 +63,7 @@ function recordFetch(
 	return requests;
 }
 
-function expectReleaseRequest(request: ReturnType<typeof recordFetch>[number], url: string, authenticated = false): void {
+function expectReleaseRequest(request: RecordedRequest, url: string, authenticated = false): void {
 	expect(request.url).toBe(url);
 	const headers = new Headers(request.init?.headers);
 	expect(headers.get("accept")).toBe("application/vnd.cnb.api+json");

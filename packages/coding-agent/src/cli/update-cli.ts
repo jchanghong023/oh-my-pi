@@ -117,7 +117,12 @@ export function parseCnbRelease(body: unknown, tag: string, binaryName: string):
 	return { version, size, sha256: hash.toLowerCase() };
 }
 
-function releaseSource(): { repo: string; tag: string } {
+interface CnbReleaseSource {
+	repo: string;
+	tag: string;
+}
+
+function releaseSource(): CnbReleaseSource {
 	const [repo = DEFAULT_REPOSITORY, tag = DEFAULT_TAG, extra] = (
 		process.env.PI_UPDATE_REPOSITORY || DEFAULT_REPOSITORY
 	).split("@");
@@ -156,10 +161,12 @@ async function fetchCnbReleaseRoute(route: CnbReleaseRoute, endpoint: string): P
 	return response;
 }
 
-async function fetchRelease(
-	{ repo, tag }: ReturnType<typeof releaseSource>,
-	binaryName: string,
-): Promise<{ asset: CnbReleaseAsset; route: CnbReleaseRoute }> {
+interface RoutedCnbRelease {
+	asset: CnbReleaseAsset;
+	route: CnbReleaseRoute;
+}
+
+async function fetchRelease({ repo, tag }: CnbReleaseSource, binaryName: string): Promise<RoutedCnbRelease> {
 	const releasePath = `/${repo}/-/releases`;
 	const endpoint = `tags/${encodeURIComponent(tag)}`;
 	let route: CnbReleaseRoute = { base: `${CNB_WEB}${releasePath}` };
@@ -412,7 +419,7 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 		if (!currentVersion) return unsupported(`The update target ${target} does not report an OMP version.`);
 		console.log(chalk.dim(`Current version: ${currentVersion}`));
 		const source = releaseSource();
-		let release: Awaited<ReturnType<typeof fetchRelease>>;
+		let release: RoutedCnbRelease;
 		try {
 			release = await fetchRelease(source, binaryName);
 		} catch (error) {
