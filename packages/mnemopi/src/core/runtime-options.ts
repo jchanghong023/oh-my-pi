@@ -58,7 +58,7 @@ export interface MnemopiEmbeddingRuntimeOptions {
 	provider?: MnemopiEmbeddingProvider | ((texts: readonly string[]) => EmbeddingOutput | Promise<EmbeddingOutput>);
 	/** Override `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS`. `0` disables the cap. See `config.embeddingMaxInputChars`. */
 	maxInputChars?: number;
-	/** Override `MNEMOPI_EMBEDDING_BATCH_SIZE`: max texts per embedding API request. */
+	/** Override `MNEMOPI_EMBEDDING_BATCH_SIZE`: max texts per local or hosted embedding request. */
 	batchSize?: number;
 	/** Total HTTP attempts, including the initial request; defaults to three. */
 	requestMaxAttempts?: number;

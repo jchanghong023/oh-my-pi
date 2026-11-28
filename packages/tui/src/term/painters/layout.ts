@@ -17,6 +17,7 @@ import {
 	type Hit,
 	type PaintContext,
 } from "../paint";
+import { defineWidget } from "../widgets";
 
 /** Blank rows a spacing step stands for. */
 export function spaceRows(space: TspSpace | undefined): number {
@@ -232,7 +233,9 @@ function paintText(node: UiNode, cx: PaintContext): Block {
 
 function paintCanvas(node: UiNode, cx: PaintContext): Block {
 	const props = node.props() as CanvasProps;
-	return { rows: props.paint(cx.width) };
+	const rows = props.paint(cx.width);
+	if (!props.onMouse || rows.length === 0) return { rows };
+	return { rows, hits: [{ node, row: 0, col: 0, width: cx.width, height: rows.length }] };
 }
 
 function paintRows(node: UiNode): Block {
@@ -245,4 +248,10 @@ definePainter("spacer", paintSpacer);
 definePainter("rule", paintRule);
 definePainter("text", paintText);
 definePainter("canvas", paintCanvas);
+defineWidget("canvas", {
+	mouse(node, mouse, at) {
+		const props = node.props();
+		return "onMouse" in props ? (props.onMouse?.({ ...mouse, ...at }) ?? false) : false;
+	},
+});
 definePainter("rows", paintRows);

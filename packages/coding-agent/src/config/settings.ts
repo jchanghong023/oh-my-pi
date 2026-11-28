@@ -776,6 +776,8 @@ function physicalTargetSegments(target: string, pathApi: typeof path = path): st
 
 export class Settings {
 	#configPath: string | null;
+	/** A writable root's loaded global layer, or a read-only root's original disk snapshot. */
+	#loadedGlobalSettings?: true | RawSettings;
 	#cwd: string;
 	#agentDir: string;
 	#storage: AgentStorageApi | null = null;
@@ -1714,6 +1716,7 @@ export class Settings {
 			});
 			cloned.#storage = this.#storage;
 			cloned.#configPath = this.#configPath;
+			cloned.#loadedGlobalSettings = this.#loadedGlobalSettings;
 			cloned.#project = this.#persist
 				? cloned.#adoptProjectRead(await cloned.#readProjectSettings(true), {
 						global: this.#global,
@@ -2036,6 +2039,16 @@ export class Settings {
 	getGlobalSettings(): RawSettings {
 		const own = structuredClone(this.#global);
 		return this.#parent ? this.#deepMerge(this.#parent.getGlobalSettings(), own) : own;
+	}
+
+	/**
+	 * This root's already-loaded main config, excluding project, overlay and runtime values.
+	 * `undefined` means it never loaded global settings; `{}` is a loaded but empty layer.
+	 * A read-only root can have local writes; those are not part of its disk snapshot.
+	 */
+	getPersistedGlobalSettings(): RawSettings | undefined {
+		const loaded = this.#loadedGlobalSettings;
+		return loaded === undefined ? undefined : structuredClone(loaded === true ? this.#global : loaded);
 	}
 
 	/**
@@ -2578,6 +2591,7 @@ export class Settings {
 			this.#global = await this.#loadYaml(this.#configPath!);
 		}
 		await this.#seedLastChangelogVersionMarker();
+		this.#loadedGlobalSettings = true;
 	}
 
 	async #loadReadOnly(): Promise<Settings> {
@@ -2591,6 +2605,7 @@ export class Settings {
 		if (globalResult.value.settings) {
 			this.#global = globalResult.value.settings;
 		}
+		if (this.#configPath !== null) this.#loadedGlobalSettings = structuredClone(this.#global);
 
 		const overlays = await this.#readConfigOverlays(false);
 		this.#configOverlay = overlays.settings;

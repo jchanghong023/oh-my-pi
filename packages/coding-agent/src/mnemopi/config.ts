@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MnemopiOptions } from "@oh-my-pi/pi-mnemopi";
 import { isOpenRouterEmbeddingUrl } from "@oh-my-pi/pi-mnemopi/config";
-import { getMemoriesDir, logger, withLoopPhase } from "@oh-my-pi/pi-utils";
+import { $envExact, getMemoriesDir, logger, withLoopPhase } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { expandTilde } from "../tools/path-utils";
 import { getCompanyEmbeddingDefaults } from "./company-embeddings";
@@ -100,7 +100,7 @@ export function resolveMnemopiEmbeddingOptions(
 		// Explicit settings (including empty strings) remain authoritative.
 		embeddingApiUrl,
 		embeddingApiKey:
-			cfgMnemopiEmbeddingApiKey.get(settings) ??
+			resolveKeyReference(cfgMnemopiEmbeddingApiKey.get(settings)) ??
 			// Let the managed OpenRouter resolver run before the environment fallback.
 			(embeddingApiUrl && !isOpenRouterEmbeddingUrl(embeddingApiUrl)
 				? Bun.env.MNEMOPI_EMBEDDING_API_KEY || Bun.env.OPENROUTER_API_KEY || Bun.env.OPENAI_API_KEY || undefined
@@ -121,6 +121,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const recallBanks =
 		scoping === "global" ? scope.recallBanks : extendRecallWithLegacyBanks(scope.recallBanks, dbPath, cwd);
 	const llmMode = cfgMnemopiLlmMode.get(settings);
+	const llmApiKey = resolveKeyReference(cfgMnemopiLlmApiKey.get(settings));
 	const { embeddings, ...embeddingOptions } = resolveMnemopiEmbeddingOptions(settings);
 	return {
 		dbPath,
@@ -154,14 +155,14 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 				llmMode === "remote"
 					? {
 							baseUrl: cfgMnemopiLlmBaseUrl.get(settings),
-							apiKey: cfgMnemopiLlmApiKey.get(settings),
+							apiKey: llmApiKey,
 							model: cfgMnemopiLlmModel.get(settings),
 						}
 					: false,
 		},
 		llmMode,
 		llmBaseUrl: cfgMnemopiLlmBaseUrl.get(settings),
-		llmApiKey: cfgMnemopiLlmApiKey.get(settings),
+		llmApiKey,
 		llmModel: cfgMnemopiLlmModel.get(settings),
 	};
 }
@@ -342,4 +343,10 @@ export function truncateApproxTokens(text: string, tokenLimit: number): string {
 	const maxChars = Math.max(0, tokenLimit * 4);
 	if (text.length <= maxChars) return text;
 	return `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+/** Resolve an API key setting that names an environment variable, like `models.yml` `apiKey`; literals pass through. */
+function resolveKeyReference(value: string | undefined): string | undefined {
+	if (!value) return value;
+	return $envExact(value) || value;
 }

@@ -48,7 +48,6 @@ import { type FactoryDroidOptions, streamFactoryDroid } from "./providers/factor
 import { streamGitLabDuo } from "./providers/gitlab-duo";
 import { type GitLabDuoWorkflowOptions, streamGitLabDuoWorkflow } from "./providers/gitlab-duo-workflow";
 import type { GoogleOptions } from "./providers/google";
-import { perturbContext } from "./prompts/perturbation";
 import { getVertexAccessToken } from "./providers/google-auth";
 import type { GoogleInteractionsOptions } from "./providers/google-interactions";
 import type { GoogleVertexOptions } from "./providers/google-vertex";
@@ -479,7 +478,6 @@ function streamDispatch<TApi extends Api>(
 ): AssistantMessageEventStream {
 	// A provider turned off in its auth rules is never called, even with a key passed in directly.
 	assertProviderEnabled(model.provider);
-	context = perturbContext(model, context);
 	const requestOptions = withSupportedSamplingParams(
 		model,
 		withTransportFetch(model, withExplicitRequestAuth(model.provider, (options || {}) as StreamOptions)),
@@ -1563,6 +1561,7 @@ function mapOptionsForApi<TApi extends Api>(
 		fetch: options?.fetch,
 		fallbacks: options?.fallbacks,
 		acceptEmptyResponse: options?.acceptEmptyResponse,
+		onDiscardedAttempt: options?.onDiscardedAttempt,
 		anthropicPrefixMismatchBehavior: options?.anthropicPrefixMismatchBehavior,
 		omitDemotedReasoning: options?.omitDemotedReasoning,
 		anthropicCompaction: options?.anthropicCompaction,

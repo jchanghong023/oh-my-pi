@@ -4,6 +4,7 @@ import {
 	getAgentDbPath,
 	getStatsDbPath,
 	isRecord,
+	logger,
 	preparePerformanceCacheDirectory,
 	workerHostEntry,
 } from "@oh-my-pi/pi-utils";
@@ -21,6 +22,8 @@ import {
 	markSessionBackfillsComplete,
 	type ParsedSession,
 	prepareSessionSync,
+	replayInheritedPrefixes,
+	setFileOffset,
 } from "./db";
 import {
 	getSessionEntry,
@@ -168,7 +171,7 @@ function spawnWorker(): WorkerHandle {
 		if (!resolve || !reject) return;
 		const data = event.data;
 		if (!data.ok) {
-			reject(new Error(data.error));
+			reject(Object.assign(new Error(data.error), { code: data.code }));
 			return;
 		}
 		if (data.kind === "pong") {
@@ -223,7 +226,7 @@ export async function smokeTestSyncWorker({ timeoutMs = 5_000 }: { timeoutMs?: n
 	worker.onmessage = (event: MessageEvent<SyncWorkerResponse>) => {
 		const data = event.data;
 		if (!data.ok) {
-			reject(new Error(data.error));
+			reject(Object.assign(new Error(data.error), { code: data.code }));
 			return;
 		}
 		if (data.kind !== "pong") {
@@ -278,7 +281,9 @@ const INGEST_TIERS_MS = [24 * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000];
  * ownership of the entries the fork copied (first writer wins). The only
  * exception is a from-scratch ingest where a fork was touched more recently
  * than a parent idle for a day: the fork then owns the copied entries, which
- * changes per-session attribution but never totals.
+ * changes per-session attribution but never totals. A reset fork's copied calls
+ * never become its rows at all (`inheritedThroughEntryId`), since their cost was
+ * zeroed in the copy and would otherwise displace the parent's.
  */
 async function orderForIngest(files: string[]): Promise<string[]> {
 	const now = Date.now();
@@ -306,6 +311,7 @@ async function syncAllSessionsLocked(
 	opts?: SyncOptions,
 ): Promise<{ processed: number; files: number; reconcile: boolean }> {
 	await initDb();
+	await replayInheritedPrefixes();
 	const replay = prepareSessionSync();
 
 	const files = opts?.files ?? (await orderForIngest(await listAllSessionFiles()));
@@ -358,6 +364,14 @@ async function syncAllSessionsLocked(
 	};
 	if (files.length === 0) return finish();
 
+	// Set the obligation before finish() clears the global replay marker. The next successful
+	// parse writes a fresh cursor, leaving other unchanged transcripts on the fast path.
+	const deferReplay = (file: string, stored: FileOffset | undefined) => {
+		if (replay && stored?.parserState && !stored.parserState.replayPending) {
+			setFileOffset(file, stored.offset, stored.lastModified, { ...stored.parserState, replayPending: true });
+		}
+	};
+
 	const prepareFile = async (
 		index: number,
 		parse: (
@@ -378,6 +392,7 @@ async function syncAllSessionsLocked(
 					try {
 						return { fileStats: await fs.promises.stat(sessionFile), stored };
 					} catch {
+						deferReplay(sessionFile, stored);
 						return {};
 					}
 				}),
@@ -387,8 +402,9 @@ async function syncAllSessionsLocked(
 		const metadataIndex = index - metadataStart;
 		const { fileStats, stored } = (await metadata)[metadataIndex];
 		if (failed || !fileStats) return null;
+		const replayFile = replay || stored?.parserState?.replayPending === true;
 		if (
-			!replay &&
+			!replayFile &&
 			stored?.parserState &&
 			stored.lastModified === fileStats.mtimeMs &&
 			stored.parserState.size === fileStats.size &&
@@ -400,7 +416,21 @@ async function syncAllSessionsLocked(
 		const sessionFile = files[index];
 		const unknownIdentity = stored !== undefined && !stored.parserState;
 		const fromOffset = unknownIdentity ? 0 : (stored?.offset ?? 0);
-		const result = await parse(sessionFile, fromOffset, stored?.parserState, replay);
+		let result: ParseSessionResult;
+		try {
+			result = await parse(sessionFile, fromOffset, stored?.parserState, replayFile);
+		} catch (error) {
+			// One transcript the OS refuses to read (antivirus lock, permissions) must not fail the whole history.
+			if (!(error instanceof Error && "code" in error && typeof error.code === "string")) throw error;
+			deferReplay(sessionFile, stored);
+			logger.warn("Skipping unreadable session file in stats sync", {
+				sessionFile,
+				code: error.code,
+				error: error.message,
+			});
+			return null;
+		}
+		if (!result.parserState) deferReplay(sessionFile, stored);
 		if (unknownIdentity && result.parserState) result.reset = true;
 		return {
 			sessionFile,
@@ -408,10 +438,10 @@ async function syncAllSessionsLocked(
 			// During a full replay, a changed file can be a rewrite even if its old tail checkpoint matches.
 			rebuild:
 				!stored?.parserState ||
-				(replay &&
+				(replayFile &&
 					(result.parserState?.size !== stored.parserState.size ||
 						result.parserState?.mtimeMs !== stored.parserState.mtimeMs)),
-			replay,
+			replay: replayFile,
 		};
 	};
 

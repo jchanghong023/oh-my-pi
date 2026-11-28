@@ -75,6 +75,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import type { KeyEvent } from "@oh-my-pi/pi-tui";
+import type { MouseTracking } from "@oh-my-pi/pi-tui/driver/io";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
 import type { Keybinding } from "../../config/keybindings/app-keybindings";
 import type { AutocompleteItem, AutocompleteProvider } from "../../autocomplete/autocomplete";
@@ -110,7 +111,7 @@ import type { BashToolInput, GlobToolInput, GrepToolInput, ReadToolInput, WriteT
 import type { GlobToolDetails } from "../../tools/details/glob";
 import type { GrepToolDetails } from "../../tools/details/grep";
 import type { ReadToolDetails } from "../../tools/details/read";
-import type { TodoPhase } from "../../tools/details/todo";
+import type { TodoOperation, TodoPhase } from "../../tools/details/todo";
 import type { ApprovalMode } from "../../tools/approval";
 import type { BashToolDetails } from "../../tools/details/bash";
 import type { FileDeleteFallbackHandler, FileWriteFallbackHandler } from "../../tools/file-write-fallback";
@@ -297,6 +298,8 @@ export interface ExtensionOverlayHandle {
 	readonly closed: boolean;
 	/** Close the overlay (idempotent); the `custom()` promise stays pending until `done` is called. */
 	close(): void;
+	/** Whether keyboard focus is on the overlay or a node inside it (false once closed). */
+	isFocused(): boolean;
 }
 
 /** Options for `ExtensionUIContext.custom()`. */
@@ -305,6 +308,8 @@ export interface ExtensionCustomOptions {
 	overlay?: boolean;
 	/** Take the whole screen (the terminal's alternate screen) while the overlay is open. */
 	fullscreen?: boolean;
+	/** Terminal mouse reporting while the overlay is open; omitted inherits the underlying mode. */
+	mouse?: MouseTracking;
 	/** Invoked with the overlay handle once the overlay is open (overlay mode only). */
 	onHandle?: (handle: ExtensionOverlayHandle) => void;
 	/** Abort the custom UI and reject its promise. */
@@ -628,6 +633,12 @@ export interface ExtensionModelQuery {
 /** Runtime host mode exposed to Pi-compatible extensions. */
 export type ExtensionMode = "tui" | "rpc" | "json" | "print";
 
+/** Host wiring for the owning session's async jobs, backing `ctx.getAsyncJobSnapshot`/`ctx.cancelAsyncJob`. */
+export interface ExtensionAsyncJobAccess {
+	getSnapshot(): AsyncJobSnapshot | null;
+	cancel(id: string): boolean;
+}
+
 /**
  * The agent a session runs. Extension factories are rebound to every subagent session
  * (task tool, eval `agent()`, `/tan` clones), so this tells a handler which agent it is serving.
@@ -838,6 +849,11 @@ export interface ExtensionContext {
 	getContextUsage(): ContextUsage | undefined;
 	/** Get a read-only snapshot of async jobs owned by this session. */
 	getAsyncJobSnapshot(): AsyncJobSnapshot | null;
+	/**
+	 * Cancel a running async job this session owns (an id from {@link getAsyncJobSnapshot}), as `/jobs kill <id>`
+	 * does. Returns false when this session owns no running job by that id, or no session owns the context.
+	 */
+	cancelAsyncJob(id: string): boolean;
 	/** Compact the session context (interactive mode shows UI). */
 	compact(instructionsOrOptions?: string | CompactOptions): Promise<void>;
 	/** Whether UI is available (false in print/RPC mode) */
@@ -1271,6 +1287,10 @@ export interface BeforeSubagentSpawnEvent {
 	patterns: string[];
 	/** Stable per-spawn key for deterministic selection, when the caller supplies one. */
 	spawnKey?: string;
+	/** ID of the `task` tool call that dispatched this child; absent for eval and direct SDK spawns. */
+	parentToolCallId?: string;
+	/** Position of this child's item in that call's `tasks[]` (0 for the flat shape); set with `parentToolCallId`. */
+	itemIndex?: number;
 }
 
 export type {
@@ -1589,6 +1609,20 @@ export interface ModeChangedEvent {
 	state: SessionModeState;
 }
 
+/**
+ * The interactive TUI switched the session it shows: focused a subagent, hopped to another one,
+ * or returned to the main session. Fires on the main session once the new view is attached.
+ */
+export interface AgentViewChangedEvent {
+	type: "agent_view_changed";
+	/** Agent now shown; undefined for the main session. */
+	agentId: string | undefined;
+	/** Agent shown before; undefined for the main session. */
+	previousAgentId: string | undefined;
+	/** Session id of the session now shown. */
+	sessionId: string;
+}
+
 interface ToolEventIdentity {
 	toolCallId: string;
 	/** ID of the eval or kernel-defined tool invocation that dispatched this call. Absent for direct calls. */
@@ -1773,7 +1807,8 @@ export type ExtensionEvent =
 	| ToolApprovalResolvedEvent
 	| PlanReviewRequestedEvent
 	| PlanReviewResolvedEvent
-	| ModeChangedEvent;
+	| ModeChangedEvent
+	| AgentViewChangedEvent;
 
 // ============================================================================
 // Event Results
@@ -1872,6 +1907,22 @@ export interface RegisteredCommand {
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 }
 
+/** What a `todo` tool call is about to change, as handed to {@link TodoBackendDefinition.apply}. */
+export interface TodoBackendChange {
+	op: Exclude<TodoOperation, "view">;
+	/** The list omp holds now. */
+	previous: TodoPhase[];
+	/** The list omp commits if the backend accepts. */
+	next: TodoPhase[];
+}
+
+/** What {@link TodoBackendDefinition.apply} returns: `{ block: true, reason }` refuses the call, as a `tool_call` handler blocks one. */
+export interface TodoBackendApplyResult {
+	block?: boolean;
+	/** Shown to the model on one line. */
+	reason?: string;
+}
+
 /**
  * A todo backend registered with `pi.registerTodoBackend()`. omp keeps the todo list; the backend
  * the `todo.backend` setting selects is told about every change to it.
@@ -1897,6 +1948,17 @@ export interface TodoBackendDefinition {
 	 * up after the `session_shutdown` handler timeout, without an error.
 	 */
 	replace(phases: TodoPhase[], ctx: ExtensionContext): void | Promise<void>;
+	/**
+	 * Optional veto, asked before the main session's model commits a change with a `todo` call,
+	 * eval cells included. Return `{ block: true, reason }` to refuse; a throw is an extension
+	 * error and fails the call without refusing it. omp commits `next` only on an accept within
+	 * `min(10s, the extension handler timeout)` of an unchanged list. Writes here are tolerated:
+	 * omp resyncs through `replace` after every outcome. Full contract: `docs/extensions.md`.
+	 */
+	apply?(
+		change: TodoBackendChange,
+		ctx: ExtensionContext,
+	): TodoBackendApplyResult | void | Promise<TodoBackendApplyResult | void>;
 }
 
 // ============================================================================
@@ -2028,6 +2090,7 @@ export interface ExtensionAPI {
 	on(event: "plan_review_requested", handler: ExtensionHandler<PlanReviewRequestedEvent>): void;
 	on(event: "plan_review_resolved", handler: ExtensionHandler<PlanReviewResolvedEvent>): void;
 	on(event: "mode_changed", handler: ExtensionHandler<ModeChangedEvent>): void;
+	on(event: "agent_view_changed", handler: ExtensionHandler<AgentViewChangedEvent>): void;
 	on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
 	on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;
 	on(event: "user_bash", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
@@ -2313,7 +2376,7 @@ export interface ExtensionAPI {
 	 * // Own an existing provider's wire requests and flip a KDL rule for its models
 	 * pi.registerProvider("google-generative-ai", {
 	 *   stream: myGeminiStream,
-	 *   rules: { "prompt-perturbation": true },
+	 *   rules: { "requires-native-tools": true },
 	 * });
 	 *
 	 * @example

@@ -199,9 +199,12 @@ const RAW_OUTPUT_PREFIX = "[raw output: ";
 
 const RAW_OUTPUT_SUFFIX = "]";
 
-/** The footer naming the spill that holds the raw output a tool result was cut from. */
+/** The `:raw` read selector: bare spill reads are paged and column-capped like any read. */
+export const RAW_SELECTOR = ":raw";
+
+/** The footer naming the spill that holds the raw output a tool result was cut from, with the `:raw` selector for verbatim reads. */
 export function formatRawOutputNotice(artifactId: string): string {
-	return `${RAW_OUTPUT_PREFIX}${spillUrl(artifactId)}${RAW_OUTPUT_SUFFIX}`;
+	return `${RAW_OUTPUT_PREFIX}${spillUrl(artifactId)}${RAW_SELECTOR}${RAW_OUTPUT_SUFFIX}`;
 }
 
 /** Output without its trailing raw-output footer, and the bare spill it named. */
@@ -211,7 +214,9 @@ export function stripRawOutputNotice(text: string): { text: string; artifactId?:
 		if (!line.startsWith(RAW_OUTPUT_PREFIX) || !line.endsWith(RAW_OUTPUT_SUFFIX)) return false;
 		const url = line.slice(RAW_OUTPUT_PREFIX.length, line.length - RAW_OUTPUT_SUFFIX.length);
 		const id = parseSpillUrl(url);
-		if (id === undefined || spillUrl(id) !== url) return false;
+		if (id === undefined) return false;
+		const bare = spillUrl(id);
+		if (url !== bare && url !== `${bare}${RAW_SELECTOR}`) return false;
 		artifactId = String(id);
 		return true;
 	});

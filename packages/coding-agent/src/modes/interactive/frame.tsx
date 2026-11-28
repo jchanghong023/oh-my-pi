@@ -20,7 +20,7 @@ import {
 	type UiNode,
 } from "@oh-my-pi/pi-tui";
 import type { ResizeScrollback, TerminalDriverOptions } from "@oh-my-pi/pi-tui/driver/index";
-import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
+import { DEFAULT_SPINNER_INTERVAL_MS, staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
 import type { ScreenMode, SelectionMotion, TranscriptScroll } from "@oh-my-pi/pi-tui/term/backend";
 import { renderBlock } from "@oh-my-pi/pi-tui/term/render";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
@@ -147,6 +147,10 @@ export class AppFrame {
 	#barRoutes: ReadonlyMap<string, (value?: string) => void> | undefined;
 	/** Shortest gap between terminal frames, ms (`1000 / tui.maxFps`). */
 	readonly frameInterval: Signal<number> = signal(16);
+	/** Milliseconds per terminal spinner frame (`tui.motion` / `tui.spinnerInterval`); 0 draws them still. */
+	readonly spinnerInterval: Signal<number> = signal(DEFAULT_SPINNER_INTERVAL_MS);
+	/** Decorative motion off in the terminal renderer (`tui.motion` reduced or none). */
+	readonly reduceMotion: Signal<boolean> = signal(false);
 	/** `tui.hyperlinks` as an override of the terminal's capability (`undefined` under `auto`). */
 	readonly hyperlinks: Signal<boolean | undefined> = signal(undefined);
 	/** `tui.textSizing`: sized headings where the terminal supports them. */
@@ -246,6 +250,8 @@ export class AppFrame {
 				? {}
 				: { native: options.native ?? this.#terminal?.native }),
 			frameInterval: this.frameInterval,
+			spinnerInterval: this.spinnerInterval,
+			reduceMotion: this.reduceMotion,
 			hyperlinks: this.hyperlinks,
 			textSizing: this.textSizing,
 			screen: this.screen,
@@ -271,6 +277,11 @@ export class AppFrame {
 	/** `tui.imeSafeCursor`: keep prompt chrome out of the hardware cursor's IME preedit space. */
 	setImeSafeCursor(enabled: boolean): void {
 		this.composer.setImeSafeCursor(enabled);
+	}
+
+	/** `tui.resizeScrollback` changed: resizes that settle from now on follow `mode` (start takes the initial one). */
+	setResizeScrollback(mode: ResizeScrollback): void {
+		this.shell.host?.driver.setResizeScrollback(mode);
 	}
 
 	/** Draw the bar. A startup prediction has no session routes, so it advertises no click actions. */

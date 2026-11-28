@@ -185,7 +185,7 @@ describe("fork provider boundaries", () => {
 		});
 		await Bun.write(modelsPath, saved);
 		writeModelCache(
-			"custom-gateway:openai-models-list-context-v6",
+			"custom-gateway:openai-models-list-context-v8",
 			Date.now(),
 			[
 				buildModel({

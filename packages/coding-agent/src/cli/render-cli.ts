@@ -25,6 +25,7 @@ import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import { isCompanyLaneActive, setCompanyOfflineEnabled } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
+import { cfgBashReapBackground } from "../exec/settings";
 import { AppFrame } from "../modes/interactive/frame";
 import { InteractiveMode } from "../modes/interactive-mode";
 import { AgentSession } from "../session/agent-session";
@@ -75,6 +76,9 @@ function formatMs(ms: number): string {
 export async function runRenderCommand(args: RenderCommandArgs): Promise<number> {
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd });
+	// Read-only: the copy keeps the live session's id, and render runs no tool calls, so its
+	// teardown has no leftovers of its own to reap.
+	cfgBashReapBackground.override(settings, false);
 	initTheme();
 
 	const sourcePath = await resolveSessionFileArg(args.session, cwd);

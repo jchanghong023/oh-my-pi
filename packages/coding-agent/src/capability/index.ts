@@ -24,8 +24,8 @@ import type {
 	SourceMeta,
 } from "./types";
 
-import { cfgDisabledExtensions } from "../extensibility/settings";
 import { cfgDisabledProviders, cfgEnabledProviders } from "../config/model-settings";
+import { cfgDisabledExtensions } from "../extensibility/settings";
 
 // =============================================================================
 // Registry State
@@ -40,14 +40,19 @@ const providerCapabilities = new Map<string, Set<string>>();
 /** Provider display metadata (shared across capabilities) */
 const providerMeta = new Map<string, { displayName: string; description: string }>();
 
+const emptyProviderSet: ReadonlySet<string> = new Set();
+
+function providerSet(ids: readonly string[]): ReadonlySet<string> {
+	return ids.length ? new Set(ids) : emptyProviderSet;
+}
+
 /** Provider switches in effect while no settings instance is bound ({@link initializeWithSettings}). */
-let unboundDisabledProviders = new Set<string>();
-let unboundEnabledProviders = new Set<string>();
+let unboundDisabledProviders = emptyProviderSet;
+let unboundEnabledProviders = emptyProviderSet;
 
-const cfgEnabledProviderSet = cfgEnabledProviders.map(ids => new Set(ids));
-
-/** `disabledProviders` as a set, memoized per settings instance. */
-const cfgDisabledProviderSet = cfgDisabledProviders.map(ids => new Set(ids));
+/** Provider setting sets memoized per settings instance. */
+const cfgDisabledProviderSet = cfgDisabledProviders.map(providerSet);
+const cfgEnabledProviderSet = cfgEnabledProviders.map(providerSet);
 
 /** Outstanding {@link initializeWithSettings} holds, oldest first; the newest one is bound. */
 const settingsHolds: { settings: Settings }[] = [];
@@ -90,8 +95,8 @@ export function onProviderSwitchesChange(listener: () => void): () => void {
  */
 export function installProviderSwitches(switches: ProviderSwitches): void {
 	inheritedBoundSettings = switches.bound ?? undefined;
-	unboundDisabledProviders = new Set(switches.unboundDisabled);
-	unboundEnabledProviders = new Set(switches.unboundEnabled);
+	unboundDisabledProviders = providerSet(switches.unboundDisabled);
+	unboundEnabledProviders = providerSet(switches.unboundEnabled);
 }
 
 function notifySwitchListeners(): void {
@@ -360,9 +365,11 @@ async function loadImpl<T>(
  */
 function filterProviders<T>(capability: Capability<T>, options: LoadOptions<T>, ctx: LoadContext): Provider<T>[] {
 	const disabled = options.includeDisabled || options.includeDisabledProviders ? null : disabledProviders(ctx);
-	let providers = disabled
-		? (capability.providers as Provider<T>[]).filter(p => !disabled.has(p.id))
-		: (capability.providers as Provider<T>[]);
+	let providers = capability.providers as Provider<T>[];
+	if (disabled) {
+		// Snapshot even when all are enabled: a provider may register another during load.
+		providers = disabled.size ? providers.filter(p => !disabled.has(p.id)) : providers.slice();
+	}
 
 	if (options.providers) {
 		const allowed = new Set(options.providers);
@@ -494,7 +501,7 @@ export function setDisabledProviders(providerIds: string[]): void {
 		cfgDisabledProviders.set(settings, [...new Set(providerIds)]);
 		return;
 	}
-	unboundDisabledProviders = new Set(providerIds);
+	unboundDisabledProviders = providerSet(providerIds);
 	notifySwitchListeners();
 }
 
@@ -514,7 +521,7 @@ export function setEnabledProviders(providerIds: string[]): void {
 		cfgEnabledProviders.set(settings, [...new Set(providerIds)]);
 		return;
 	}
-	unboundEnabledProviders = new Set(providerIds);
+	unboundEnabledProviders = providerSet(providerIds);
 	notifySwitchListeners();
 }
 
@@ -630,8 +637,8 @@ export function reset(): void {
 export function resetCapabilityForTests(): void {
 	settingsHolds.length = 0;
 	inheritedBoundSettings = undefined;
-	unboundDisabledProviders = new Set();
-	unboundEnabledProviders = new Set();
+	unboundDisabledProviders = emptyProviderSet;
+	unboundEnabledProviders = emptyProviderSet;
 	notifySwitchListeners();
 	clearFsCache();
 }

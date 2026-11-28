@@ -180,6 +180,9 @@ export function createPersistedSubagentReviverFactory(
 		// No persisted contract (pre-session_init file) or the recorded workspace
 		// is gone (isolated/merged worktree, moved dir): leave it transcript-only
 		// (history://) rather than resurrect a wrong or broken session.
+		// An isolated workspace can still exist after a failed capture or persistence; its
+		// stamped contract, not the cwd probe below, determines resumability.
+		if (peek?.init?.isolated) return { refused: "it ran isolated, and isolated runs are not resumable by design" };
 		if (!peek || !canColdReviveSubagent(peek.init) || ref.history?.executionEnded) return undefined;
 		try {
 			await fs.stat(peek.cwd);

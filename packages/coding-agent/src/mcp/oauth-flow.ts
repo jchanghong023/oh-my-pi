@@ -10,6 +10,7 @@ import type { OAuthCallbackFlowOptions } from "@oh-my-pi/pi-ai/oauth/callback-se
 import { OAuthCallbackFlow } from "@oh-my-pi/pi-ai/oauth/callback-server";
 import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { getActiveProfile } from "@oh-my-pi/pi-utils/dirs";
 import type { OAuthCredential } from "../session/auth-storage";
 import { buildWellKnownUrls } from "./oauth-discovery";
@@ -398,7 +399,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	) {
 		super(ctrl, resolveCallbackOptions(config));
 		this.#resolvedClientId = this.#resolveClientId(config);
-		this.#fetch = credentialFetch("MCP OAuth", config.fetch ?? ctrl.fetch);
+		this.#fetch = credentialFetch("MCP OAuth", config.fetch ?? ctrl.fetch ?? wrapFetchForExtraCa(fetch));
 		this.#resource = this.#filterResourceIndicator(
 			resolveResourceUri(config.resource ?? this.#resourceFromAuthorizationUrl(config.authorizationUrl)),
 		);
@@ -849,7 +850,7 @@ export async function refreshMCPOAuthToken(
 	// Only an object in the fifth position is the options; a positional
 	// `undefined` resource keeps the trailing options.
 	const optsFromTrailing = typeof resourceOrOpts === "object" ? resourceOrOpts : opts;
-	const fetchImpl = credentialFetch("MCP OAuth", optsFromTrailing?.fetch);
+	const fetchImpl = credentialFetch("MCP OAuth", optsFromTrailing?.fetch ?? wrapFetchForExtraCa(fetch));
 	const resource = typeof resourceOrOpts === "string" ? resourceOrOpts : undefined;
 	// Filter against the authorization-server origin when known (RFC 8414
 	// permits authorize/token endpoints on separate origins). Fall back to

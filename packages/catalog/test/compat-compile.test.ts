@@ -760,6 +760,8 @@ describe("committed rules.json", () => {
 	test("matches a fresh compile of rules/ (run `bun run gen:compat` after editing KDL)", async () => {
 		const fresh = await compileCompatRules(RULES_DIR);
 		expect(fresh).toEqual(committed);
+		const { hash, priceChanges: _dates, ...policy } = fresh;
+		expect(hash).toBe(Bun.hash(JSON.stringify(policy)).toString(36));
 		expect(await Bun.file(AUTH_IDS_PATH).text()).toBe(renderAuthIds(fresh.auth));
 	});
 });

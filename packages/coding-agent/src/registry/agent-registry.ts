@@ -11,6 +11,7 @@
 
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSessionHandle } from "../session/agent-session-handle";
+import type { AiuTotals } from "../session/aiu-billing";
 import { AgentAwaits, type AgentAwaitsApi } from "./agent-awaits";
 import { oneLineLabel } from "../task/task-details";
 import { type AgentMetricsSummary, type AgentStatus, MAIN_AGENT_ID } from "./agent-hub-types";
@@ -52,6 +53,8 @@ export interface AgentHistorySummary {
 	metrics?: AgentMetricsSummary;
 	/** Cumulative own-session assistant and model_usage cost, excluding nested task results. */
 	directCost?: number;
+	/** Cumulative own-session AI credits (assistant and model_usage calls), excluding nested task results. */
+	directAiu?: AiuTotals;
 	readOnly?: boolean;
 	/** Retained execution transcript only: never attach or resume this generation. */
 	executionEnded?: boolean;
@@ -309,6 +312,14 @@ export class AgentRegistry implements AgentRegistryApi {
 		) {
 			definedHistory.directCost = Math.max(previousDirectCost, incomingDirectCost);
 		}
+		const previousAiu = ref.history?.directAiu;
+		const incomingAiu = definedHistory.directAiu;
+		if (expectedSessionFile !== undefined && previousAiu && incomingAiu) {
+			definedHistory.directAiu = {
+				nano: Math.max(previousAiu.nano, incomingAiu.nano),
+				unknownCalls: Math.max(previousAiu.unknownCalls, incomingAiu.unknownCalls),
+			};
+		}
 		ref.history = { ...ref.history, ...definedHistory };
 		this.#emit({ type: "metadata_changed", ref });
 		return true;
@@ -432,8 +443,11 @@ export class AgentRegistry implements AgentRegistryApi {
 		ref.session = session;
 		if (sessionFile !== undefined) {
 			// A replacement transcript starts a new cumulative-cost identity.
-			if (ref.sessionFile !== sessionFile && ref.history?.directCost !== undefined) {
-				ref.history = { ...ref.history, directCost: undefined };
+			if (
+				ref.sessionFile !== sessionFile &&
+				(ref.history?.directCost !== undefined || ref.history?.directAiu !== undefined)
+			) {
+				ref.history = { ...ref.history, directCost: undefined, directAiu: undefined };
 			}
 			ref.sessionFile = sessionFile;
 		}

@@ -1513,6 +1513,9 @@ export class SessionAdvisors {
 					...streamOptions,
 					preferWebsockets: streamOptions?.preferWebsockets ?? this.#host.preferWebsockets(requestModel),
 				};
+				// The advisor bills its own lane, whose ledger counts delivered replies only: an attempt
+				// a retry discards stays out of it rather than landing in the primary session's journal.
+				options.onDiscardedAttempt ??= () => {};
 				if (requestModel.api === "openai-codex-responses") {
 					return baseAdvisorStreamFn(requestModel, context, {
 						...options,

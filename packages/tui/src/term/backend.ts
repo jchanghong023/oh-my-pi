@@ -24,6 +24,7 @@
  * resolve through the last frame's hit regions.
  */
 import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
+import { segmentGraphemes } from "@oh-my-pi/pi-utils/graphemes";
 import type {
 	FramePlan,
 	HistoryRowMark,
@@ -57,6 +58,7 @@ import { padTo, sliceColumns, truncate, visibleWidth } from "../text/width";
 import {
 	type Block,
 	type Cell,
+	DEFAULT_SPINNER_INTERVAL_MS,
 	type Hit,
 	type PaintCadence,
 	type PaintEnvironment,
@@ -137,8 +139,15 @@ export interface TermBackendOptions {
 	 * clock, advanced on every animation tick.
 	 */
 	readonly clock?: Accessor<number>;
-	/** Animation tick for terminal-clocked kinds, ms. Default 80. */
-	readonly tickInterval?: number;
+	/**
+	 * Milliseconds per spinner frame (may change at runtime); 0 draws spinners still. The animation
+	 * tick of terminal-clocked kinds runs at this interval when it is faster than
+	 * {@link DEFAULT_SPINNER_INTERVAL_MS}, else at the default, so a slow or still spinner never slows
+	 * other clock readers (pulses, strikes, progress slides). Default {@link DEFAULT_SPINNER_INTERVAL_MS}.
+	 */
+	readonly spinnerInterval?: Reactive<number>;
+	/** Decorative motion off (blink, fade, pulse, sweeps): such kinds draw their still frame. Default false. */
+	readonly reduceMotion?: Accessor<boolean>;
 	/**
 	 * Inline images painters draw (the process driver's `TerminalImages`).
 	 * Absent: `image` nodes show their text fallback. The frame loop settles
@@ -232,8 +241,10 @@ export function driverImages(images: Pick<PaintImages, "rows">, capabilities: ()
 const FULLSCREEN_KINDS: ReadonlySet<string> = new Set(["picker", "prefs"]);
 
 function isFullscreen(node: UiNode): boolean {
+	const props = node.props();
+	if (node.kind === "picker") return !("modal" in props && props.modal === false);
 	if (FULLSCREEN_KINDS.has(node.kind)) return true;
-	return node.kind === "overlay" && (node.props() as { size?: string }).size === "full";
+	return node.kind === "overlay" && "size" in props && props.size === "full";
 }
 
 /**
@@ -297,7 +308,7 @@ function sliceAfter(text: string, column: number): string {
 	// Re-measured by the writer; styles of the cut prefix are reset above.
 	let col = 0;
 	let index = 0;
-	for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(Bun.stripANSI(text))) {
+	for (const { segment } of segmentGraphemes(Bun.stripANSI(text))) {
 		if (col >= column) break;
 		col += Bun.stringWidth(segment);
 		index += segment.length;
@@ -396,7 +407,6 @@ export class TermBackend {
 	// A content frame can absorb a tick in the same millisecond as the last sample. Clock readers
 	// still have to run to renew their request for ticks, even if the wall time hasn't changed.
 	readonly #clock: Signal<number> = signal(Date.now(), { equals: false });
-	readonly #reduceMotion: Signal<boolean> = signal(false);
 	/** The hit under the pointer, from the last mouse report. */
 	readonly #hover: Signal<PointerHover | null> = signal<PointerHover | null>(null);
 	readonly #hyperlinks: Signal<boolean>;
@@ -482,7 +492,8 @@ export class TermBackend {
 			clockCadence: clock,
 			focus: options.surface.focused,
 			viewportHeight: this.#viewportHeight,
-			reduceMotion: this.#reduceMotion,
+			reduceMotion: options.reduceMotion ?? (() => false),
+			spinnerInterval: () => read(options.spinnerInterval ?? DEFAULT_SPINNER_INTERVAL_MS),
 			hover: this.#hover,
 			hyperlinks,
 			...(allowTextSizing ? { textSizing: () => allowTextSizing() && terminalTextSizing() } : {}),
@@ -768,7 +779,10 @@ export class TermBackend {
 
 	#animationTime(cadence: PaintCadence | undefined): number {
 		if (this.#options.clock) return this.#options.clock();
-		const interval = cadence === true ? SMOOTH_TICK_MS : (this.#options.tickInterval ?? 80);
+		const interval =
+			cadence === true
+				? SMOOTH_TICK_MS
+				: Math.min(untrack(this.#env.spinnerInterval) || DEFAULT_SPINNER_INTERVAL_MS, DEFAULT_SPINNER_INTERVAL_MS);
 		const floor = !this.#offlineLinux
 			? 0
 			: cadence === "brand"
@@ -1708,10 +1722,5 @@ export class TermBackend {
 	/** Whether a fullscreen transcript window is on screen and follows the tail (false while scrolled back). */
 	get following(): boolean {
 		return this.#window !== undefined && this.#anchor === undefined;
-	}
-
-	/** Set reduced motion (clocked kinds draw their still frame). */
-	setReduceMotion(reduce: boolean): void {
-		this.#reduceMotion.set(reduce);
 	}
 }

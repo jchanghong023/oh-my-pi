@@ -4,7 +4,7 @@ use std::{
 	hash::{BuildHasher, RandomState},
 	io::{self, IsTerminal, Write},
 	sync::Arc,
-	task::{Context, Poll},
+	task::{Context, Poll, Waker},
 	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,6 +20,7 @@ use crate::{
 	},
 	process::{pending_fs::PendingFs, signals::Signals, timer::Timers},
 	sys::{Exits, NativeSpawner, Sessions, SpawnConfig, StdFs, std_stream},
+	tools::{SpawnId, SpawnLog, ToolCalls, ToolConfig},
 };
 
 /// The real OS as the engine's host: `std::fs`, the process-group spawner,
@@ -55,16 +56,31 @@ pub struct NativeHost {
 	/// The OS's stream sockets ([`crate::bash::Host::sockets`]).
 	#[cfg(unix)]
 	sockets:   crate::sys::socket::NativeSockets,
-	/// pi's builtin utilities standing in for tools `PATH` lacks
-	/// ([`crate::bash::Host::fallback`]); `None` offers none.
+	/// pi's builtin utilities ([`Self::offer_extras`]); `None` offers none.
 	extras:    Option<Extras>,
 }
 
-/// The utilities a process shell offers where `PATH` has none (`ls`,
-/// `cat`, `head`, … on Windows) and the runtime they run on, started on
-/// first use.
+/// Where a process shell offers pi's extras ([`NativeHost::offer_extras`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtrasOrder {
+	/// Ahead of `PATH`, as in pi's own shell (`obash`): `type` reports them
+	/// as builtins, and those that run command lines (`awk`, `perl`,
+	/// `xargs`, `find`, …) run them through the driver's
+	/// [`Callouts`](crate::process::Callouts).
+	BeforePath,
+	/// Only for a command `PATH` lacks ([`crate::bash::Host::fallback`]:
+	/// `omp zsh` on Windows, for the Unix tools it lacks); `type` answers
+	/// from `PATH`. Those that run command lines are not offered.
+	AfterPath,
+}
+
+/// The utilities a process shell offers and the runtime they run on,
+/// started on first use.
 struct Extras {
-	tools:   crate::tools::ToolConfig,
+	order:   ExtrasOrder,
+	tools:   ToolConfig,
+	/// The externals of the callouts' labeled subshell trees.
+	spawns:  SpawnLog,
 	runtime: Option<tokio::runtime::Runtime>,
 }
 
@@ -72,14 +88,37 @@ impl Extras {
 	/// The runtime the utilities run on; `None` when it cannot start.
 	fn runtime(&mut self) -> Option<tokio::runtime::Handle> {
 		if self.runtime.is_none() {
-			self.runtime = tokio::runtime::Builder::new_multi_thread()
+			let mut builder = tokio::runtime::Builder::new_multi_thread();
+			builder
 				.worker_threads(2)
 				.thread_name("pi-shell-extras")
-				.enable_all()
-				.build()
-				.ok();
+				.enable_all();
+			#[cfg(unix)]
+			builder.on_thread_start(block_signals);
+			self.runtime = builder.build().ok();
 		}
 		self.runtime.as_ref().map(|r| r.handle().clone())
+	}
+}
+
+/// Block every signal on the calling thread (an extras runtime thread) but
+/// the faults a thread raises itself. A signal sent to the process then
+/// reaches the shell's own thread, whose park it ends, and an extra writing
+/// to a pipe nobody reads gets `EPIPE` (pi's emulated `SIGPIPE`) instead of
+/// killing a shell that keeps `SIGPIPE`'s default action. The programs an
+/// extra starts get an empty mask from std's `Command`.
+#[cfg(unix)]
+fn block_signals() {
+	// SAFETY: sigset_t is plain data; the calls only read and write `set`.
+	unsafe {
+		let mut set = std::mem::zeroed::<libc::sigset_t>();
+		libc::sigfillset(&raw mut set);
+		for fault in
+			[libc::SIGSEGV, libc::SIGBUS, libc::SIGFPE, libc::SIGILL, libc::SIGTRAP, libc::SIGSYS]
+		{
+			libc::sigdelset(&raw mut set, fault);
+		}
+		libc::pthread_sigmask(libc::SIG_BLOCK, &raw const set, std::ptr::null_mut());
 	}
 }
 
@@ -178,22 +217,32 @@ impl NativeHost {
 		}
 	}
 
-	/// Offer pi's builtin utilities for commands `PATH` does not have, as
-	/// `env` allows them (`PI_DISABLE_UUTILS_BUILTINS`, …): a program on
-	/// `PATH` always runs instead, so a system's own tools keep their
-	/// behaviour.
-	pub fn offer_extras(&mut self, env: &[(BString, BString)]) {
+	/// Offer pi's builtin utilities where `order` puts them, as `env` allows
+	/// them (`PI_DISABLE_UUTILS_BUILTINS`, …).
+	pub fn offer_extras(&mut self, env: &[(BString, BString)], order: ExtrasOrder) {
 		let var = |name: &str| {
 			env.iter()
 				.rev()
 				.find(|(k, _)| k == name.as_bytes())
 				.and_then(|(_, v)| v.to_str().ok())
 		};
-		let tools = crate::tools::ToolConfig {
+		let tools = ToolConfig {
 			extras: crate::extras::ExtrasGate::from_switches(|name| crate::git::flag_on(var(name))),
-			..crate::tools::ToolConfig::default()
+			..ToolConfig::default()
 		};
-		self.extras = Some(Extras { tools, runtime: None });
+		self.extras = Some(Extras { order, tools, spawns: SpawnLog::default(), runtime: None });
+	}
+
+	/// The host callouts of the extras that run command lines, whose workers
+	/// wake the driver with `waker`; `None` unless the extras come before
+	/// `PATH`, or when their runtime cannot start.
+	pub(crate) fn tool_calls(&mut self, waker: Waker) -> Option<ToolCalls> {
+		let extras = self
+			.extras
+			.as_mut()
+			.filter(|extras| extras.order == ExtrasOrder::BeforePath)?;
+		let config = ToolConfig { runtime: Some(extras.runtime()?), ..extras.tools.clone() };
+		Some(ToolCalls::new(config, extras.spawns.clone(), waker))
 	}
 
 	/// Deliver the OS signals caught before an external's exit to the root
@@ -240,10 +289,47 @@ impl crate::bash::Host for NativeHost {
 		if why.has_slash {
 			return Resolved::NotFound;
 		}
-		IntrinsicId::lookup(name, mode).map_or(Resolved::NotFound, Resolved::Intrinsic)
+		if let Some(id) = IntrinsicId::lookup(name, mode) {
+			return Resolved::Intrinsic(id);
+		}
+		let Some(extras) = self
+			.extras
+			.as_ref()
+			.filter(|extras| extras.order == ExtrasOrder::BeforePath)
+		else {
+			return Resolved::NotFound;
+		};
+		if let Some(tool) = extras.tools.extra(name) {
+			return Resolved::Tool(tool);
+		}
+		extras
+			.tools
+			.native_extra(name)
+			.map_or(Resolved::NotFound, Resolved::Native)
+	}
+
+	fn accepts_raw_args(&self, _name: &BStr, resolved: &Resolved) -> bool {
+		matches!(resolved, Resolved::Tool(tool) if crate::tools::accepts_raw_args(*tool))
+	}
+
+	/// As in pi's shell ([`crate::extras::defers_to_path`]); only an extra
+	/// resolves to the host's own here.
+	fn defers_to_path(&mut self, name: &BStr, argv: &[BString]) -> bool {
+		crate::extras::defers_to_path(name, argv)
+	}
+
+	/// As in pi's shell ([`crate::extras::prefers_background_program`]).
+	fn prefers_background_program(&mut self, name: &BStr, resolved: &Resolved) -> bool {
+		crate::extras::prefers_background_program(name, resolved)
 	}
 
 	fn start(&mut self, cmd: &NativeRef, inv: Invocation<'_>) -> io::Result<Box<dyn Task>> {
+		if inv.argv.iter().any(|arg| std::str::from_utf8(arg).is_err()) {
+			return Err(io::Error::new(
+				io::ErrorKind::InvalidInput,
+				"builtin cannot accept non-UTF-8 argument",
+			));
+		}
 		let extras = self.extras.as_mut().ok_or(io::ErrorKind::Unsupported)?;
 		let name = crate::extras::native_name(*cmd).ok_or(io::ErrorKind::NotFound)?;
 		let runtime = extras.runtime().ok_or(io::ErrorKind::Unsupported)?;
@@ -271,10 +357,32 @@ impl crate::bash::Host for NativeHost {
 	/// Launches at once (a local process, no I/O to wait for): the future is
 	/// already complete.
 	fn spawn(&mut self, spec: SpawnSpec<'_>) -> SpawnFuture {
-		let spawned = self.spawner.spawn(spec).map(|child| -> Box<dyn ExtProc> {
-			match &self.bridge {
-				Some((ctl, root)) => Box::new(SignalsOnExit { child, ctl: ctl.clone(), root: *root }),
-				None => child,
+		let lineage = spec.lineage;
+		let spawns = self.extras.as_ref().map(|extras| &extras.spawns);
+		if let Some(log) = spawns {
+			log.prepare_spawn(lineage);
+		}
+		let spawn = if spawns.is_some_and(|log| log.measured(lineage.label)) {
+			self.spawner.spawn_measured(spec)
+		} else {
+			self.spawner.spawn(spec)
+		};
+		let spawned = spawn.map(|child| -> Box<dyn ExtProc> {
+			#[cfg(unix)]
+			let mut child = child;
+			#[cfg(unix)]
+			if spawns.is_some_and(|log| log.foreground(lineage.label)) {
+				child.drain_output_at_exit();
+			}
+			// A callout's `KILL` reaches the externals its tree left running.
+			let spawn = spawns.and_then(|log| {
+				log.record(lineage, || child.process())
+					.map(|id| (log.clone(), id))
+			});
+			if spawn.is_some() || self.bridge.is_some() {
+				Box::new(ObservedChild { child, bridge: self.bridge.clone(), spawn })
+			} else {
+				child
 			}
 		});
 		Box::pin(std::future::ready(spawned))
@@ -497,20 +605,28 @@ impl crate::bash::Host for NativeHost {
 	}
 }
 
-/// An external spawned by a [`NativeHost`] bound to a shell
-/// ([`NativeHost::bind_signals`]): when its exit is observed, the OS signals
-/// caught until then reach the shell's control first, so the engine (which
-/// checks the control word before every op) handles them before the next
-/// command. A signal the child sent to the shell before exiting is pending
-/// in this process by then: the handler runs before the call that observed
-/// the exit returns.
-struct SignalsOnExit {
-	child: Box<dyn ExtProc>,
-	ctl:   ControlHandle,
-	root:  Vpid,
+/// An external observed by the signal bridge, a callout's spawn log, or
+/// both. Before the next command, the bridge forwards signals caught while
+/// the shell was waiting for the child to exit or stop. The log releases
+/// only on exit: an abandoned child still belongs to its callout's tree.
+struct ObservedChild {
+	child:  Box<dyn ExtProc>,
+	bridge: Option<(ControlHandle, Vpid)>,
+	spawn:  Option<(SpawnLog, SpawnId)>,
 }
 
-impl ExtProc for SignalsOnExit {
+impl ObservedChild {
+	fn observe(&mut self, exited: bool) {
+		if exited && let Some((log, id)) = self.spawn.take() {
+			log.exited(id);
+		}
+		if let Some((ctl, root)) = &self.bridge {
+			Signals::dispatch(ctl, *root);
+		}
+	}
+}
+
+impl ExtProc for ObservedChild {
 	fn pid(&self) -> u32 {
 		self.child.pid()
 	}
@@ -521,7 +637,7 @@ impl ExtProc for SignalsOnExit {
 
 	fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus> {
 		let status = std::task::ready!(self.child.poll_wait(cx));
-		Signals::dispatch(&self.ctl, self.root);
+		self.observe(true);
 		Poll::Ready(status)
 	}
 
@@ -529,7 +645,7 @@ impl ExtProc for SignalsOnExit {
 	/// signals caught until then go first.
 	fn poll_event(&mut self, cx: &mut Context<'_>) -> Poll<ProcEvent> {
 		let event = std::task::ready!(self.child.poll_event(cx));
-		Signals::dispatch(&self.ctl, self.root);
+		self.observe(matches!(event, ProcEvent::Exited(_)));
 		Poll::Ready(event)
 	}
 

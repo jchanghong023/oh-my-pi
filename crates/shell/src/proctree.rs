@@ -276,10 +276,14 @@ mod platform {
 			let Identity::PidFd { fd, .. } = &self.identity else {
 				return Err(std::io::ErrorKind::Unsupported.into());
 			};
-			let pidfd = tokio::io::unix::AsyncFd::with_interest(
-				fd.try_clone()?,
-				tokio::io::Interest::READABLE,
-			)?;
+			// SAFETY: the cloned `OwnedFd` keeps its descriptor open and
+			// unchanged for the `AsyncFd`'s lifetime.
+			let pidfd = unsafe {
+				tokio::io::unix::AsyncFd::register_with_interest(
+					fd.try_clone()?,
+					tokio::io::Interest::READABLE,
+				)
+			}?;
 			let _ready = pidfd.readable().await?;
 			Ok(())
 		}
@@ -522,7 +526,11 @@ mod platform {
 			if self.status() != ProcessStatus::Running {
 				return Ok(());
 			}
-			let kq = tokio::io::unix::AsyncFd::with_interest(kq, tokio::io::Interest::READABLE)?;
+			// SAFETY: the `OwnedFd` keeps the kqueue open and unchanged for the
+			// `AsyncFd`'s lifetime.
+			let kq = unsafe {
+				tokio::io::unix::AsyncFd::register_with_interest(kq, tokio::io::Interest::READABLE)
+			}?;
 			let _ready = kq.readable().await?;
 			Ok(())
 		}

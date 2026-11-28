@@ -556,7 +556,10 @@ pub mod matchers {
 		};
 
 		use super::{Matcher, MatcherIO, WalkEntry};
-		use crate::host::{ShellCommand, normalize_shell_path};
+		use crate::{
+			exec_line::ExecLine,
+			host::{ShellCommand, normalize_shell_path},
+		};
 
 		/// Only resolve the expanded executable's Windows alias, not the
 		/// operand spellings or the directory supplied by `-execdir`.
@@ -688,7 +691,7 @@ pub mod matchers {
 			args:               Vec<OsString>,
 			exec_in_parent_dir: bool,
 			/// Command to build while matching.
-			command:            Mutex<Option<argmax::Command>>,
+			command:            Mutex<Option<ExecLine>>,
 		}
 
 		impl MultiExecMatcher {
@@ -707,23 +710,19 @@ pub mod matchers {
 				})
 			}
 
-			/// Starts a batch; `argmax` only sizes it against the system's
-			/// argument limit; [`Self::run_command`] runs it through the shell.
-			fn new_command(&self) -> argmax::Command {
-				let mut command = argmax::Command::new(&self.executable);
+			/// Starts a batch, sized against the system's argument limit;
+			/// [`Self::run_command`] runs it through the shell.
+			fn new_command(&self) -> ExecLine {
+				let mut command = ExecLine::new(&self.executable);
 				command.try_args(&self.args).unwrap();
 				command
 			}
 
-			async fn run_command(&self, command: &argmax::Command, matcher_io: &mut MatcherIO<'_>) {
-				let argv = std::iter::once(command.get_program())
-					.chain(command.get_args())
-					.map(OsString::from)
-					.collect();
-				// `-exec ... +` runs in find's (the shell's) working directory;
-				// `-execdir` batches carry their directory.
-				let mut shell_command = shell_command(argv);
-				if let Some(dir) = command.get_current_dir() {
+			/// Runs `command` in `dir`: an `-execdir` batch's directory, else
+			/// (`-exec ... +`) find's (the shell's) working directory.
+			async fn run_command(&self, command: ExecLine, dir: Option<&Path>, matcher_io: &mut MatcherIO<'_>) {
+				let mut shell_command = shell_command(command.into_argv());
+				if let Some(dir) = dir {
 					shell_command = shell_command.current_dir(dir);
 				}
 				// The child writes to the shared fd directly: flush what find
@@ -760,25 +759,24 @@ pub mod matchers {
 				let full = {
 					let mut slot = self.command.lock().unwrap_or_else(PoisonError::into_inner);
 					let command = slot.get_or_insert_with(|| self.new_command());
-					if command.try_arg(&path_to_file).is_err() {
+					if command.try_arg(path_to_file.as_os_str()).is_err() {
 						Some(std::mem::replace(command, self.new_command()))
 					} else {
 						None
 					}
 				};
-				if let Some(mut full) = full {
-					if self.exec_in_parent_dir
-						&& let Some(dir) = execdir_dir(file_info.path())
-					{
-						full.current_dir(dir);
-					}
-					self.run_command(&full, matcher_io).await;
+				if let Some(full) = full {
+					let dir = self
+						.exec_in_parent_dir
+						.then(|| execdir_dir(file_info.path()))
+						.flatten();
+					self.run_command(full, dir, matcher_io).await;
 
 					// Reset command status.
 					let fitted = {
 						let mut slot = self.command.lock().unwrap_or_else(PoisonError::into_inner);
 						slot.get_or_insert_with(|| self.new_command())
-							.try_arg(&path_to_file)
+							.try_arg(path_to_file.as_os_str())
 							.map(drop)
 							.map_err(|err| err.to_string())
 					};
@@ -803,9 +801,8 @@ pub mod matchers {
 						.lock()
 						.unwrap_or_else(PoisonError::into_inner)
 						.take();
-					if let Some(mut command) = taken {
-						command.current_dir(dir);
-						self.run_command(&command, matcher_io).await;
+					if let Some(command) = taken {
+						self.run_command(command, Some(dir), matcher_io).await;
 					}
 				}
 			}
@@ -819,7 +816,7 @@ pub mod matchers {
 						.unwrap_or_else(PoisonError::into_inner)
 						.take();
 					if let Some(command) = taken {
-						self.run_command(&command, matcher_io).await;
+						self.run_command(command, None, matcher_io).await;
 					}
 				}
 			}

@@ -517,6 +517,7 @@ export async function runMagicEdit(options: {
 			}
 			perFileResults.push({
 				path: details?.path ?? section.path,
+				checkoutNotice: details?.checkoutNotice,
 				diff: details?.diff ?? "",
 				firstChangedLine: details?.firstChangedLine,
 				diagnostics: details?.diagnostics,

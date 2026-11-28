@@ -13,14 +13,14 @@ import { toError } from "@oh-my-pi/pi-utils/type-guards";
 import { EVAL_STATE_CONTEXT_TYPE } from "../eval/state";
 import { parseSessionOrigin, type SessionOrigin } from "./session-entries";
 import { visitEntriesFromFile } from "./session-loader";
-import { computeDefaultSessionDir } from "./session-paths";
+import { listSessionTitles, lookupSessionTitle, recordSessionTitle, recordSessionTitles } from "./session-index";
+import { computeDefaultSessionDirAsync } from "./session-paths";
 import {
 	FileSessionStorage,
 	sessionBackupPrimaryName,
 	type SessionStorage,
 	type SessionStorageStat,
 } from "./session-storage";
-import { listSessionTitles, lookupSessionTitle, recordSessionTitle, recordSessionTitles } from "./session-index";
 import { overlapsWindow, type TimeWindow } from "./time-window";
 
 /**
@@ -1249,7 +1249,7 @@ async function findUnlistedSessionContinuation(
 ): Promise<SessionContinuation | undefined> {
 	const prefix = idPrefix.toLowerCase();
 	if (!/^[\w-]+$/.test(prefix)) return undefined;
-	const localDir = sessionDir ?? computeDefaultSessionDir(cwd, storage);
+	const localDir = sessionDir ?? (await computeDefaultSessionDirAsync(cwd, storage));
 	const globalToo = !sessionDir || options.allowGlobalFallback === true;
 	for (const scope of globalToo ? ["local", "global"] : ["local"]) {
 		const files =
@@ -1801,7 +1801,7 @@ export async function resolveResumableSession(
 ): Promise<ResolvedSessionMatch | undefined> {
 	const storage = isSessionStorage(storageOrOptions) ? storageOrOptions : new FileSessionStorage();
 	const resolvedOptions = isSessionStorage(storageOrOptions) ? options : storageOrOptions;
-	const localSessionDir = sessionDir ?? computeDefaultSessionDir(cwd, storage);
+	const localSessionDir = sessionDir ?? (await computeDefaultSessionDirAsync(cwd, storage));
 	const localSessions = await listSessions(localSessionDir, storage);
 	const localMatch = localSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
 	if (localMatch) {

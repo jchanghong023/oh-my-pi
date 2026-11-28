@@ -12,7 +12,7 @@
 import type * as fs from "node:fs";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { type Accessor, signal, untrack } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
+import { formatDuration, logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../../config/settings";
 import { formatModelString } from "../../../config/model-resolver";
 import type { AgentHubRemote } from "../../../modes/view-model/overlays/agent-hub";
@@ -66,7 +66,17 @@ export interface AgentTranscriptViewerDeps {
 	/** Collab guest: the host serves the transcript. */
 	readonly remote?: AgentHubRemote;
 	/** Progress snapshot source for the stats row. */
-	readonly observers?: { getSession(id: string): { readonly progress?: ViewerProgress } | undefined };
+	readonly observers?: {
+		getSession(id: string):
+			| {
+					/** `"active"` while the agent runs; its elapsed time then advances from {@link progressAt}. */
+					readonly status?: string;
+					readonly progress?: ViewerProgress;
+					/** `Date.now()` when {@link progress} arrived; its `durationMs` was current then. */
+					readonly progressAt?: number;
+			  }
+			| undefined;
+	};
 	/** Revive+prompt path of messageable local agents (lazy). */
 	readonly lifecycle?: () => {
 		ensureLive(
@@ -247,14 +257,10 @@ export class AgentTranscriptViewerModel {
 
 	#metaSignature(): string {
 		const ref = this.ref();
-		return JSON.stringify([
-			ref?.status,
-			ref?.kind,
-			ref?.parentId,
-			ref?.sessionFile,
-			ref?.history?.executionEnded,
-			this.progress(),
-		]);
+		const progress = this.progress();
+		// An active timer only needs a redraw when the stats row's formatted duration changes.
+		const shown = progress && { ...progress, durationMs: formatDuration(progress.durationMs) };
+		return JSON.stringify([ref?.status, ref?.kind, ref?.parentId, ref?.sessionFile, ref?.history?.executionEnded, shown]);
 	}
 
 	touch(): void {
@@ -276,8 +282,12 @@ export class AgentTranscriptViewerModel {
 		return this.ref()?.history?.executionEnded === true;
 	}
 
+	/** The latest progress; a running agent's elapsed time advances from the snapshot's arrival. */
 	progress(): ViewerProgress | undefined {
-		return this.deps.observers?.getSession(this.deps.agentId)?.progress;
+		const session = this.deps.observers?.getSession(this.deps.agentId);
+		const progress = session?.progress;
+		if (!progress || session.status !== "active" || session.progressAt === undefined) return progress;
+		return { ...progress, durationMs: progress.durationMs + Math.max(0, Date.now() - session.progressAt) };
 	}
 
 	/** What the body says while there are no messages. */

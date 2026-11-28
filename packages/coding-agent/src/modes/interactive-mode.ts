@@ -44,6 +44,7 @@ import {
 	type ResolvedModelRoleValue,
 	resolveExactModelIdentity,
 } from "../config/model-resolver";
+import { notifyTerminal } from "@oh-my-pi/pi-tui/driver/session";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
 import type {
 	AutocompleteProviderFactory,
@@ -100,9 +101,8 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "../registry/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { isSessionTreeRef, registerPersistedSubagents } from "../registry/persisted-agents";
-import type { AgentCostSnapshot } from "./view-model/overlays/agent-hub-projection";
-import { sumSubagentTreeCost } from "./agent-hub-runtime";
+import { isSessionTreeRef } from "../registry/persisted-agents";
+import type { AgentTreeSpend } from "./view-model/overlays/agent-hub-projection";
 import {
 	type AgentSession,
 	type DroppedPrompt,
@@ -111,6 +111,7 @@ import {
 } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-events";
 import type { AgentSessionHandle, AgentViewSession } from "../session/agent-session-handle";
+import { type AiuTotals, sessionAiu } from "../session/aiu-billing";
 import type { TranscriptEntryLike } from "../session/transcript/transcript-entry";
 import type { BashExecutionMessage, PythonExecutionMessage } from "../session/transcript/messages";
 import type { CompactMode } from "../session/compact-modes";
@@ -278,6 +279,7 @@ import type {
 	CompactionQueueOptions,
 	CompactionQueuedMessage,
 	ComposerOwner,
+	CwdChangeOptions,
 	GoalCommandOptions,
 	InteractiveModeContext,
 	InteractiveModeInitOptions,
@@ -312,6 +314,7 @@ import {
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
 	cfgDisplaySubagentLivePreview,
+	cfgGitChildRepoDiscovery,
 	cfgGitEnabled,
 	cfgLoopConditionTimeoutMs,
 	cfgLoopMode,
@@ -364,6 +367,7 @@ import {
 	cfgTuiVimShowCommand,
 	cfgTuiVimStartMode,
 	cfgTuiVimYankToClipboard,
+	cfgCompletionNotify,
 	type ToolActivityMode,
 	transcriptToolActivity,
 } from "./settings";
@@ -542,6 +546,7 @@ const cfgLiveUiSettings = combine({
 	"statusLine.segmentOptions": cfgStatusLineSegmentOptions,
 	"statusLine.compactThinkingLevel": cfgStatusLineCompactThinkingLevel,
 	"statusLine.contextLine": cfgStatusLineContextLine,
+	"git.childRepoDiscovery": cfgGitChildRepoDiscovery,
 	"git.enabled": cfgGitEnabled,
 	"advisor.enabled": cfgAdvisorEnabled,
 	"advisor.maxNotesPerUpdate": cfgAdvisorMaxNotesPerUpdate,
@@ -1458,8 +1463,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	#inspectableSubagentCount = 0;
 	#agentRegistryUnsubscribe?: () => void;
 	#agentRegistrySubscriptionTarget?: AgentHubRegistry;
-	#subagentSessionCosts = new WeakMap<object, AgentCostSnapshot>();
-	#subagentCostHydratedRoot?: string;
 	#mcpStatusOrder: string[] = [];
 	#mcpPendingServers = new Set<string>();
 	#mcpConnectedServers = new Set<string>();
@@ -1756,6 +1759,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncCompactMode();
 		this.session.setPromptDropped?.(prompt => this.restoreDroppedPrompt(prompt));
 		this.#observerRegistry = new SessionObserverRegistry();
+		this.session.attachSubagentObservers(this.#observerRegistry);
 		// The composer hint follows the ask above, running agents and the conversation's start.
 		this.#effect(() => this.composer.setPlaceholder(this.#composerHint()));
 		this.#effect(() => this.composer.setNativePlaceholder(this.#nativeComposerPlaceholder()));
@@ -1829,10 +1833,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (this.focusedAgentId !== undefined) return;
 			if (untrack(() => this.viewSession.messages.length) === 0) freshContext = facts.context;
 			if (!freshContext) return;
-			// A fresh session runs at the configured tier, not this one's `/fast` toggle.
+			// A fresh session runs at the configured tier, not this one's selected tier.
 			const model = untrack(() => this.session.model);
-			const fastMode = model !== undefined && this.session.isFastModeConfiguredFor(model);
-			cache.writeStatus(project, predictStatus(facts, settings, { context: freshContext, fastMode }));
+			const fastTier = model && this.session.configuredFastTier(model);
+			cache.writeStatus(project, predictStatus(facts, settings, { context: freshContext, fastTier }));
 		});
 	}
 
@@ -1843,9 +1847,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 
-	/** Start the shell (unless a prepaint already did) on the process terminal. */
+	/** Start the shell on the process terminal (a prepaint may already have). */
 	async #startShell(clearHistory: boolean): Promise<void> {
-		this.#syncFrameSettings();
 		await this.#frame.start({
 			clearHistory,
 			resizeScrollback: cfgTuiResizeScrollback.get(this.settings),
@@ -1861,9 +1864,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 	}
 
-	/** `tui.maxFps`, `tui.hyperlinks`, `tui.textSizing` and `tui.screen` into the running renderer. */
+	/** `tui.maxFps`, `tui.motion`, `tui.hyperlinks`, `tui.textSizing` and `tui.screen` into the running renderer. */
 	#syncFrameSettings(): void {
 		this.#frame.frameInterval.set(1000 / cfgTuiMaxFps.get(this.settings));
+		const motion = cfgMotionResolved.get(this.settings);
+		this.#frame.spinnerInterval.set(motion.spinnerInterval);
+		this.#frame.reduceMotion.set(!motion.effects);
 		this.#frame.screen.set(cfgTuiScreen.get(this.settings));
 		this.#frame.copyOnSelect.set(cfgTuiCopyOnSelect.get(this.settings));
 		this.#frame.wheelLines.set(cfgTuiWheelLines.get(this.settings));
@@ -1891,6 +1897,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 		const host = this.shell.host;
 		if (!host) return;
+		host.driver.images.setBudget(cfgTuiMaxInlineImages.get(this.settings));
 		const updateFigureCell = (): void => {
 			const caps = host.driver.capabilities;
 			const next = caps.images ? (caps.cell ?? DEFAULT_FIGURE_CELL) : undefined;
@@ -2241,10 +2248,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Load initial todos
 		await logger.time("InteractiveMode.init:todos", () => this.#loadTodoList());
 
-		// Reconcile the cursor layout on frames already started by prepaint or supplied by hosts.
+		// Reconcile settings on frames already started by prepaint or supplied by hosts.
 		batch(() => {
 			this.composer.setCaret(cfgShowHardwareCursor.get(this.settings) ? "terminal" : "drawn");
 			this.#frame.setImeSafeCursor(cfgTuiImeSafeCursor.get(this.settings));
+			this.#syncFrameSettings();
 		});
 		if (!this.#ownsStartedUi) {
 			await this.#startShell(options.clearInitialTerminalHistory === true);
@@ -2703,8 +2711,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * active session's working directory changed (`/move` relocation or resuming
 	 * a session from another project). The SessionManager's cwd MUST already
 	 * reflect `newCwd` before this is called.
+	 *
+	 * `options.restore` marks a return to the directory a failed move left;
+	 * the internal rollback below is one too. A return never fails over memory.
+	 * The memory warning for the directory this call leaves the session in goes
+	 * to `options.onWarning`; at most one rescope per call completes, so the
+	 * callback runs at most once.
 	 */
-	async applyCwdChange(newCwd: string): Promise<boolean> {
+	async applyCwdChange(newCwd: string, options: CwdChangeOptions): Promise<boolean> {
 		const previousCwd = getProjectDir();
 		try {
 			setProjectDir(newCwd);
@@ -2718,8 +2732,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		// fails, undo the chdir so `false` reliably means "nothing committed";
 		// callers roll back their own session/manager state on false.
 		const scopedSettings = isSettingsInitialized() ? settings : undefined;
+		const rescope = async (cwd: string, restore: boolean): Promise<void> => {
+			const warning = await rescopeSessionToCwd(this.session, scopedSettings, cwd, { restore });
+			if (warning) options.onWarning(warning);
+		};
 		try {
-			await rescopeSessionToCwd(this.session, scopedSettings, newCwd);
+			await rescope(newCwd, options.restore === true);
 		} catch (error) {
 			// Undo the whole transition: the process cwd, Settings scope, and
 			// cwd-derived state (memory, plugin roots, agents, extensions, custom
@@ -2728,12 +2746,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.sessionManager.setCwdWithoutRelocation(previousCwd);
 			try {
 				setProjectDir(previousCwd);
-				await rescopeSessionToCwd(this.session, scopedSettings, previousCwd);
+				await rescope(previousCwd, true);
 			} catch (restoreError) {
 				const actual = this.sessionManager.getCwd();
 				try {
 					setProjectDir(actual);
-					await rescopeSessionToCwd(this.session, scopedSettings, actual);
+					await rescope(actual, true);
 				} catch {}
 				this.showError(
 					`Failed to switch to ${newCwd} (${error instanceof Error ? error.message : String(error)}), and restoring the previous workspace failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
@@ -2748,7 +2766,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return false;
 		}
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
-		this.statusLine.applyCwdChange();
+		this.statusLine.invalidateVcs();
 		return true;
 	}
 
@@ -3816,6 +3834,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (any("showHardwareCursor"))
 			this.composer.setCaret(cfgShowHardwareCursor.get(this.settings) ? "terminal" : "drawn");
 		if (any("tui.imeSafeCursor")) this.#frame.setImeSafeCursor(next["tui.imeSafeCursor"]);
+		if (any("tui.resizeScrollback")) this.#frame.setResizeScrollback(cfgTuiResizeScrollback.get(this.settings));
 		if (any("autocompleteMaxVisible"))
 			this.composer.setAutocompleteMaxVisible(cfgAutocompleteMaxVisible.get(this.settings));
 		if (any("composer.shape")) this.syncComposerShape();
@@ -3858,6 +3877,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			rebuildChat = true;
 		}
 		if (any("terminal.showImages")) resetDisplay = true;
+		// Images in scrollback were committed under the old budget; the replay redraws them under the new one.
+		if (any("tui.maxInlineImages")) {
+			this.shell.host?.driver.images.setBudget(next["tui.maxInlineImages"]);
+			resetDisplay = true;
+		}
 		const hideThinkingBlock = cfgHideThinkingBlock.get(this.settings);
 		if (any("hideThinkingBlock") && hideThinkingBlock !== this.hideThinkingBlock) {
 			this.hideThinkingBlock = hideThinkingBlock;
@@ -3926,7 +3950,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			setProgramStatusEnabled(next["terminal.programStatus"]);
 			if (next["terminal.programStatus"]) this.#probeProgramStatus();
 		}
-		if (any("motion")) setTerminalTitleSpinnerInterval(next.motion.titleSpinnerInterval);
+		if (any("motion")) {
+			setTerminalTitleSpinnerInterval(next.motion.titleSpinnerInterval);
+			this.#syncFrameSettings();
+		}
 
 		if (
 			any(
@@ -3945,6 +3972,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			this.statusLine.reloadSettings();
 		}
+		if (any("git.childRepoDiscovery")) this.statusLine.invalidateVcs();
 		if (any("statusLine.sessionAccent")) this.#handleSessionAccentInputsChanged();
 		// Advisor runtime start/stop has no session event; repaint its status segment.
 		if (any("advisor.enabled", "advisor.maxNotesPerUpdate", "tier.advisor")) this.statusLine.refresh();
@@ -4198,6 +4226,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * a collab guest's registry mirrors host transcripts outside this root).
 	 */
 	#subagentTreeCost = 0;
+	#subagentTreeAiu: AiuTotals | undefined;
 
 	syncRunningSubagentBadge(): boolean {
 		const registry = getRunningSubagentBadgeRegistry(this.collabGuest, AgentRegistry.global());
@@ -4219,39 +4248,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		const inspectableChanged = inspectable !== this.#inspectableSubagentCount;
 		this.#inspectableSubagentCount = inspectable;
 		const agentsChanged = this.statusLine.setRunningSubagents(agentIds);
-		let treeCost = 0;
+		let tree: AgentTreeSpend | undefined;
 		if (!this.collabGuest) {
-			const rootSessionFile = this.sessionManager.getSessionFile() ?? undefined;
-			this.#hydratePersistedSubagentCosts(rootSessionFile);
-			treeCost = sumSubagentTreeCost({
-				refs: AgentRegistry.global().list(),
-				observers: this.#observerRegistry,
-				rootSessionFile,
-				sessionCosts: this.#subagentSessionCosts,
-			});
+			// Registers a resumed root's persisted subagents once per stay; the registry changes it makes re-sync this.
+			void this.session.hydratePersistedSubagents();
+			tree = this.session.getSubagentTreeSpend();
 		}
+		const treeCost = tree?.cost ?? 0;
+		const treeAiu = tree ? sessionAiu(tree.aiu) : undefined;
 		const costChanged = this.#subagentTreeCost !== treeCost;
+		const aiuChanged =
+			this.#subagentTreeAiu?.nano !== treeAiu?.nano || this.#subagentTreeAiu?.unknownCalls !== treeAiu?.unknownCalls;
 		this.#subagentTreeCost = treeCost;
-		if (costChanged) this.statusLine.setModes({ subagentTreeCost: treeCost });
-		const changed = agentsChanged || costChanged || inspectableChanged;
+		this.#subagentTreeAiu = treeAiu;
+		if (costChanged || aiuChanged) this.statusLine.setModes({ subagentTreeCost: treeCost, subagentTreeAiu: treeAiu });
+		const changed = agentsChanged || costChanged || aiuChanged || inspectableChanged;
 		if (changed) this.#syncHudPills();
 		return changed;
-	}
-
-	/**
-	 * Register a resumed session's persisted subagent transcripts (with usage
-	 * history) so the status line's tree cost matches the Agent Hub without it
-	 * being opened first. Once per on-disk root; registry changes re-sync the cost.
-	 */
-	#hydratePersistedSubagentCosts(rootSessionFile: string | undefined): void {
-		if (!rootSessionFile || this.#subagentCostHydratedRoot === rootSessionFile) return;
-		if (!this.sessionManager.isSessionOnDisk()) return;
-		this.#subagentCostHydratedRoot = rootSessionFile;
-		registerPersistedSubagents(AgentRegistry.global(), rootSessionFile, {
-			shouldContinue: () => this.sessionManager.getSessionFile() === rootSessionFile,
-		}).catch(error => {
-			logger.warn("Persisted subagent cost hydration failed", { rootSessionFile, error: String(error) });
-		});
 	}
 
 	/** Placeholder for the empty composer; see `COMPOSER_HINTS` for the registered hints. */
@@ -5467,6 +5480,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			mouse: "any",
 		});
 		this.syncIdleMaintenanceView();
+		if (cfgCompletionNotify.get(settings) !== "off") {
+			notifyTerminal({
+				title: this.sessionManager.getSessionName() || "omp",
+				body: "Plan ready for approval",
+				type: "completion",
+				actions: "focus",
+			});
+		}
 		return promise;
 	}
 
@@ -8665,8 +8686,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showSettingsSelector();
 	}
 
-	showUsageDashboard(reports: UsageReport[]): void {
-		this.#selectorController.showUsageDashboard(reports);
+	showUsageDashboard(reports: UsageReport[], sessionAiu?: AiuTotals): void {
+		this.#selectorController.showUsageDashboard(reports, sessionAiu);
 	}
 
 	showAdvisorConfigure(): void {

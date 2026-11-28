@@ -150,7 +150,7 @@ impl GitRepo {
 			let id = reference
 				.peel_to_id()
 				.map_err(|err| Error::backend("git tags", err))?;
-			if id.to_string() == target
+			if id == target
 				&& let Some(name) = reference
 					.name()
 					.as_bstr()
@@ -555,22 +555,22 @@ impl GitRepo {
 		let Some(config) = load_local_config(common_dir.join("config"), common_dir)? else {
 			return Ok(common_dir.file_name().is_none_or(|n| n != ".git"));
 		};
-		let wt_has_worktree = if matches!(config.boolean("extensions.worktreeConfig"), Some(Ok(true)))
+		let wt_has_worktree = if matches!(config.boolean("extensions.worktreeConfig"), Ok(Some(true)))
 			&& let Some(wt) = load_local_config(common_dir.join("config.worktree"), common_dir)?
 		{
 			match wt.boolean("core.bare") {
-				Some(Ok(bare)) => return Ok(bare),
-				Some(Err(err)) => return Err(Error::backend("git config", err)),
-				None => {},
+				Ok(Some(bare)) => return Ok(bare),
+				Err(err) => return Err(Error::backend("git config", err)),
+				Ok(None) => {},
 			}
 			wt.string("core.worktree").is_some()
 		} else {
 			false
 		};
 		match config.boolean("core.bare") {
-			Some(Ok(bare)) => Ok(bare),
-			Some(Err(err)) => Err(Error::backend("git config", err)),
-			None => Ok(!wt_has_worktree
+			Ok(Some(bare)) => Ok(bare),
+			Err(err) => Err(Error::backend("git config", err)),
+			Ok(None) => Ok(!wt_has_worktree
 				&& config.string("core.worktree").is_none()
 				&& common_dir.file_name().is_none_or(|n| n != ".git")),
 		}
@@ -789,25 +789,10 @@ impl GitRepo {
 			.rev_parse_single(b)
 			.map_err(|err| Error::backend("git merge-base", err))?
 			.detach();
-		// The graph is an optional acceleration cache. Gitoxide reports a
-		// missing `objects/info` directory as an untyped graph-open error,
-		// unlike missing graph files within an existing directory.
-		let cache = match repo.commit_graph_if_enabled() {
-			Ok(cache) => cache,
-			Err(gix::repository::commit_graph_if_enabled::Error::OpenCommitGraph(_))
-				if std::fs::symlink_metadata(repo.objects.store_ref().path().join("info"))
-					.is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-			{
-				None
-			},
-			Err(err) => return Err(Error::backend("git merge-base", err)),
-		};
-		let mut graph = repo.revision_graph(cache.as_ref());
-		match repo.merge_base_with_graph(a_id, b_id, &mut graph) {
-			Ok(id) => Ok(Some(id.detach().to_string())),
-			Err(gix::repository::merge_base_with_graph::Error::NotFound { .. }) => Ok(None),
-			Err(err) => Err(Error::backend("git merge-base", err)),
-		}
+		repo
+			.merge_base(a_id, b_id)
+			.map(|id| id.map(|id| id.detach().to_string()))
+			.map_err(|err| Error::backend("git merge-base", err))
 	}
 
 	/// List commits touching `file`, newest first.
@@ -1492,9 +1477,7 @@ fn parse_worktree_cli(raw: &str) -> Vec<WorktreeEntry> {
 	}
 	out
 }
-fn commit_subject(
-	commit: &gix::Commit<'_>,
-) -> std::result::Result<String, gix::object::commit::Error> {
+fn commit_subject(commit: &gix::Commit<'_>) -> gix::Result<String> {
 	Ok(commit
 		.message()?
 		.title
@@ -1574,7 +1557,7 @@ fn cap_bytes(mut bytes: Vec<u8>, max: Option<usize>) -> ShowResult {
 fn load_local_config(
 	path: std::path::PathBuf,
 	common_dir: &Path,
-) -> Result<Option<gix::config::File<'static>>> {
+) -> Result<Option<gix::config::File>> {
 	match std::fs::metadata(&path) {
 		Ok(_) => {},
 		Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1934,6 +1917,13 @@ mod tests {
 		commit(root, "feature", "feature\n", "feature")?;
 		git(root, &["checkout", "main"])?;
 		commit(root, "advance", "advance\n", "advance")?;
+		git(root, &["config", "core.commitGraph", "true"])?;
+		// Git's templates usually create this directory even without a graph.
+		match fs::remove_dir_all(repo.info().common_dir.join("objects").join("info")) {
+			Ok(()) => {},
+			Err(err) if err.kind() == std::io::ErrorKind::NotFound => {},
+			Err(err) => return Err(err.into()),
+		}
 
 		// Divergent branches share the fork commit as their merge base.
 		assert_eq!(repo.merge_base("main", "feature")?, Some(fork));

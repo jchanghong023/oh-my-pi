@@ -23,7 +23,6 @@ import {
 } from "../kernel-base";
 import { type BackendProbeOptions, probeCandidates } from "../probe";
 import { stageRunnerScript } from "../runner-cache";
-import type { ShadowPlan } from "../speculation/types";
 import { PYTHON_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.py" with { type: "text" };
 import { enumeratePythonRuntimes, filterEnv, type PythonRuntime, resolveExplicitPythonRuntime } from "./runtime";
@@ -92,31 +91,9 @@ export interface PythonPreludeSource {
 	source: string;
 }
 
-export interface PythonShadowSnapshot {
-	revision: number;
-	values: Readonly<Record<string, unknown>>;
-	digest: string;
-}
-
-export interface PythonShadowPlan extends ShadowPlan {
-	snapshot: PythonShadowSnapshot;
-}
-
-interface PythonKernelExecuteOptions extends KernelExecuteOptions {
-	expectedShadowRevision?: number;
-	expectedShadowDigest?: string;
-}
-
 // Only working interpreters are cached. Installing or repairing Python can
 // make a previously failed probe succeed on the next cell in the same session.
 const availabilityCache = new Map<string, PythonKernelAvailability>();
-const availabilityListeners = new Set<(cwd: string, interpreter: string | undefined) => void>();
-
-/** Observe the first successful probe for an interpreter in a working directory. */
-export function onPythonKernelAvailable(listener: (cwd: string, interpreter: string | undefined) => void): () => void {
-	availabilityListeners.add(listener);
-	return () => availabilityListeners.delete(listener);
-}
 
 function availabilityKey(cwd: string, interpreter?: string): string {
 	return [
@@ -189,15 +166,8 @@ export async function checkPythonKernelAvailability(
 	// aborting one eval must not cancel a concurrent session's availability check.
 	const result = await probePythonKernelAvailability(resolvedCwd, interpreter, options);
 	if (!result.transient && !options?.signal?.aborted) {
-		if (result.ok) {
-			const newlyAvailable = !availabilityCache.has(key);
-			availabilityCache.set(key, result);
-			if (newlyAvailable) {
-				for (const listener of availabilityListeners) listener(resolvedCwd, interpreter);
-			}
-		} else {
-			availabilityCache.delete(key);
-		}
+		if (result.ok) availabilityCache.set(key, result);
+		else availabilityCache.delete(key);
 	}
 	return result;
 }
@@ -277,7 +247,7 @@ export interface PythonKernelStartOptions extends KernelStartOptions {
 	sessionId?: string;
 }
 
-export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
+export class PythonKernel extends BaseKernel {
 	#installedPreludes = new Map<string, PythonPreludeSource>();
 
 	/** @param pythonPath Interpreter executable this kernel runs on; reported as the runtime in eval state. */
@@ -301,8 +271,6 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
 					env: opts?.env,
 					silent: opts?.silent ?? false,
 					storeHistory: opts?.storeHistory ?? !(opts?.silent ?? false),
-					expectedShadowRevision: opts?.expectedShadowRevision,
-					expectedShadowDigest: opts?.expectedShadowDigest,
 				}),
 		});
 	}
@@ -472,59 +440,6 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
 			await kernel.shutdown({ timeoutMs: SHUTDOWN_GRACE_MS }).catch(() => {});
 			throw err;
 		}
-	}
-
-	/**
-	 * Captures the runner's JSON-safe user namespace only when no Python cell is
-	 * executing. Ineligible or malformed responses deliberately fall back.
-	 */
-	async snapshotUserNamespace(timeoutMs?: number): Promise<PythonShadowSnapshot | null> {
-		const id = Snowflake.next();
-		const frame = await this.requestControl(JSON.stringify({ type: "shadow_snapshot", id }), id, timeoutMs);
-		if (
-			frame.type !== "shadow_snapshot" ||
-			frame.eligible !== true ||
-			typeof frame.revision !== "number" ||
-			typeof frame.digest !== "string"
-		) {
-			return null;
-		}
-		return { revision: frame.revision, digest: frame.digest, values: Object.freeze(frame.values ?? {}) };
-	}
-
-	/** Projects a candidate against an already-running, idle Python kernel. */
-	async shadowPlan(code: string, timeoutMs?: number): Promise<PythonShadowPlan | null> {
-		const id = Snowflake.next();
-		const frame = await this.requestControl(JSON.stringify({ type: "shadow_plan", id, code }), id, timeoutMs);
-		if (
-			frame.type !== "shadow_plan" ||
-			frame.eligible !== true ||
-			typeof frame.revision !== "number" ||
-			typeof frame.digest !== "string" ||
-			!Array.isArray(frame.operations)
-		) {
-			return null;
-		}
-		return {
-			snapshot: { revision: frame.revision, digest: frame.digest, values: Object.freeze(frame.values ?? {}) },
-			operations: frame.operations,
-			...(frame.controls && frame.controls.length > 0 ? { controls: frame.controls } : {}),
-			...(frame.barrier ? { barrier: frame.barrier } : {}),
-		};
-	}
-
-	/** Atomically starts a cell only if its retained shadow snapshot is still current. */
-	async executeIfSnapshotMatches(
-		code: string,
-		snapshot: Pick<PythonShadowSnapshot, "revision" | "digest">,
-		options?: KernelExecuteOptions,
-	): Promise<KernelExecuteResult | null> {
-		const result = await this.execute(code, {
-			...options,
-			expectedShadowRevision: snapshot.revision,
-			expectedShadowDigest: snapshot.digest,
-		});
-		return result.admissionRejected ? null : result;
 	}
 }
 

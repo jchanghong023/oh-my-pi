@@ -1,12 +1,11 @@
 import { type } from "@oh-my-pi/omptype";
-import type {
-	AgentTool,
-	AgentToolContext,
-	AgentToolResult,
-	AgentToolUpdateCallback,
-	ToolSpeculationPolicy,
+import {
+	type AgentTool,
+	type AgentToolContext,
+	type AgentToolResult,
+	type AgentToolUpdateCallback,
+	LOCAL_TOOL_RESULT_CANCELLED,
 } from "@oh-my-pi/pi-agent-core";
-import { LOCAL_TOOL_RESULT_CANCELLED } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, ToolExample } from "@oh-my-pi/pi-ai";
 import { formatBackgroundNotice, formatExitCodeNotice, formatTimeoutClampNotice } from "./details/bash";
 import { replaceTabs, truncateToWidth } from "../utils/text-width";
@@ -27,8 +26,6 @@ import {
 import { prepareEvalSource } from "../eval/input";
 import type { BackendProbeOptions } from "../eval/probe";
 import { defaultEvalSessionId } from "../eval/session-id";
-import { EvalShadowCellSession } from "../eval/speculation/cell-session";
-import { runWithEvalShadowCell } from "../eval/speculation/runtime-context";
 import type { EvalCellResult, EvalLanguage, EvalStatusEvent, EvalToolDetails, EvalViewEntry } from "./details/eval";
 import evalDescription from "../prompts/tools/eval.md" with { type: "text" };
 import { type EvalToolDescriptionOptions, evalTemplateContext, getEvalDocTopics } from "./eval-doc-topics";
@@ -59,7 +56,7 @@ import {
 import { cfgTaskMaxRecursionDepth, perCallModelEnabled } from "../task/settings";
 import { getPerCallModelAdvertisement } from "../task/model-approval";
 import { shapeToolResult } from "../spotlight";
-import { cfgToolsMaxTimeout, cfgToolsSpeculativeExecutionEnabled } from "./settings";
+import { cfgToolsMaxTimeout } from "./settings";
 
 /** Language tokens the eval tool accepts, in stable display order. */
 export type EvalLanguageToken = "py" | "js";
@@ -372,36 +369,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		return title || `running ${language}`;
 	};
 
-	readonly speculation: ToolSpeculationPolicy = {
-		stream: {
-			open: async context => {
-				if (!this.session) return undefined;
-				// The coordinator also exists for `task.speculativeLaunch`; eval shadows
-				// belong to the read/eval speculation slice only.
-				if (!cfgToolsSpeculativeExecutionEnabled.get(this.session.settings)) return undefined;
-				if (cfgEvalAutoBackgroundEnabled.get(this.session.settings)) return undefined;
-				const parentToolCallId = context.parentToolCallId;
-				const cell = new EvalShadowCellSession({
-					coordinator: context.coordinator,
-					parentToolCallId,
-					session: this.session,
-					cwd: this.session.cwd,
-					sessionId: this.session.getEvalSessionId?.() ?? defaultEvalSessionId(this.session),
-					kernelOwnerId: this.session.getEvalKernelOwnerId?.() ?? undefined,
-					onDiscard: () => {
-						if (this.#shadowCells.get(parentToolCallId) === cell) this.#shadowCells.delete(parentToolCallId);
-					},
-				});
-				this.#shadowCells.set(parentToolCallId, cell);
-				return cell;
-			},
-		},
-	};
 	readonly #proxyExecutor?: EvalProxyExecutor;
 
 	#paramsKey?: string;
 	#cachedParams?: typeof evalSchema;
-	readonly #shadowCells = new Map<string, EvalShadowCellSession>();
 	readonly #environmentModes: Partial<Record<EvalLanguage, "managed" | "project">> = {};
 
 	/**
@@ -452,8 +423,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		}
 		params = validated;
 
-		const shadowCell = this.#shadowCells.get(_toolCallId);
-		this.#shadowCells.delete(_toolCallId);
 		if (this.#proxyExecutor) {
 			return this.#proxyExecutor(params, signal);
 		}
@@ -485,9 +454,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const resolved = await resolveBackend(session, cellLanguage, { signal, timeoutMs: cellTimeoutMs });
 		resolved.notice = [timeoutNotice, resolved.notice].filter(Boolean).join(" ") || undefined;
 		const source = await prepareEvalSource(params, session, signal);
-		if (shadowCell && (source.filename || source.packages?.length || source.environment)) {
-			await shadowCell.discard("file-backed or environment-changing eval requires authoritative execution");
-		}
 		const cells: ResolvedEvalCell[] = [
 			{
 				index: 0,
@@ -515,39 +481,19 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			emitUpdate: ((text: string, details: EvalToolDetails) => void) | undefined,
 			foreground: () => boolean,
 		): Promise<AgentToolResult<EvalToolDetails | undefined>> => {
-			// Re-check the retained namespace against the streamed planning snapshot:
-			// timers, background work, or concurrent session users may have changed
-			// it after the speculative children started. On mismatch the children
-			// were projected from stale state, so discard the session and run the
-			// cell without it (claims then miss and execution is ordinary).
-			let activeShadowCell = shadowCell;
-			const snapshotToken = shadowCell?.snapshotToken;
-			if (shadowCell && snapshotToken) {
-				const tokenIsPython = snapshotToken.language === "py";
-				let current = tokenIsPython === (cellLanguage === "python");
-				if (current) {
-					current = await shadowCell.verifySnapshotCurrent().catch(() => false);
-				}
-				if (!current) {
-					await shadowCell.discard("retained eval state changed after shadow planning").catch(() => undefined);
-					activeShadowCell = undefined;
-				}
-			}
-			const execution = runWithEvalShadowCell(activeShadowCell, () =>
-				this.#runCells({
-					session,
-					parentToolCallId: _toolCallId,
-					toolContext: ctx,
-					cells,
-					languages,
-					notice,
-					excludeWebP,
-					signal: runSignal,
-					sessionAbortController,
-					emitUpdate,
-					foreground,
-				}),
-			);
+			const execution = this.#runCells({
+				session,
+				parentToolCallId: _toolCallId,
+				toolContext: ctx,
+				cells,
+				languages,
+				notice,
+				excludeWebP,
+				signal: runSignal,
+				sessionAbortController,
+				emitUpdate,
+				foreground,
+			});
 			return session.trackEvalExecution?.(execution, sessionAbortController) ?? execution;
 		};
 

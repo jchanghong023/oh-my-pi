@@ -167,6 +167,7 @@ import {
 	pickUnrecordedResponsesToolCalls,
 	populateResponsesUsageFromResponse,
 	parseAssistantMessagePhase,
+	recordResponsesInputTransformations,
 	promoteResponsesToolUseStopReason,
 	settleReasoningSummary,
 	type SequentialCutoffSummaryState,
@@ -2671,6 +2672,9 @@ class CodexStreamProcessor {
 		const endTurn = response && "end_turn" in response ? response.end_turn : undefined;
 
 		populateResponsesUsageFromResponse(output, usage);
+		if (response && "input_transformations" in response) {
+			recordResponsesInputTransformations(output, response.input_transformations);
+		}
 		recordCodexTurnUsageDiagnostics(runtime.websocketState, usage, output.usage, this.requestContext.debug);
 		if (responseId) {
 			output.responseId = responseId;

@@ -16,9 +16,8 @@ import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { getEffectiveTokenCost, getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { type ModelKind, type ModelPricingStatus, modelKind } from "@oh-my-pi/pi-catalog/types";
-import { formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { formatNumber, getProjectDir, isRecord, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { offlineFromEnv } from "./args";
 import type { ConfigError } from "../config/config-file";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
@@ -26,6 +25,7 @@ import { discoverAndLoadExtensions, ExtensionRunner, emitSessionShutdownEvent } 
 import { discoverAuthStorage, initializeCompanyModelLane } from "../sdk";
 import { SessionManager } from "../session/session-manager";
 import { EventBus } from "../utils/event-bus";
+import { offlineFromEnv } from "./args";
 
 import { cfgDisabledExtensions, cfgExtensions } from "../extensibility/settings";
 
@@ -86,6 +86,8 @@ interface ModelJson {
 	input: ("text" | "image")[];
 	cost: Model<Api>["cost"];
 	pricingStatus: ModelPricingStatus;
+	/** Sparse compat overrides in force (catalog + models.yml/config), `extraBody` values redacted; null when none. */
+	compat: Record<string, unknown> | null;
 }
 
 interface ModelsJson {
@@ -130,7 +132,24 @@ function toModelJson(model: Model<Api>): ModelJson {
 		input: model.input,
 		cost: { ...model.cost, input, output, cacheRead, cacheWrite },
 		pricingStatus: getModelPricingStatus(model),
+		compat: compatOverridesJson(model.compatConfig),
 	};
+}
+
+/** `extraBody` may carry credentials, so only its keys are reported. */
+function compatOverridesJson(config: object | undefined): Record<string, unknown> | null {
+	if (!config || !Object.keys(config).length) return null;
+	const out = redactCompatBody(config);
+	if (isRecord(out.whenThinking)) out.whenThinking = redactCompatBody(out.whenThinking);
+	return out;
+}
+
+function redactCompatBody(config: object): Record<string, unknown> {
+	const out: Record<string, unknown> = { ...config };
+	if (isRecord(out.extraBody)) {
+		out.extraBody = Object.fromEntries(Object.keys(out.extraBody).map(key => [key, "[redacted]"]));
+	}
+	return out;
 }
 
 type ColumnAlign = "left" | "right";

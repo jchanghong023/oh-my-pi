@@ -49,6 +49,7 @@ import {
 import { commands, isResourceCommand, resolveCliArgv, runResourceCommand } from "./cli-commands";
 import { DAEMON_WORKER_ARG } from "./daemon/protocol";
 import { MNEMOPI_EMBED_WORKER_ARG } from "./mnemopi/embed-protocol";
+import { stopPendingStartupComposer } from "./modes/startup-frame";
 import type * as JsProcessEntry from "./eval/js/process-entry";
 import type {
 	ProcessWorkerOutbound as JsWorkerOutbound,
@@ -655,7 +656,7 @@ export async function runCli(argv: string[]): Promise<void> {
 		// Intentional exception to the static-import convention: this latency boundary
 		// keeps the TUI graph out of worker, subcommand, help, and version launches.
 		// Loading it statically would erase the measured cold-start improvement.
-		const { beginStartupComposer, stopPendingStartupComposer } = await import("./modes/startup-composer");
+		const { beginStartupComposer } = await import("./modes/startup-composer");
 		beginStartupComposer({ version: VERSION });
 		stopStartupComposer = stopPendingStartupComposer;
 	}
