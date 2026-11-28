@@ -1240,8 +1240,8 @@ export class MCPCommandController {
 			const found = await findMcpServerForAuth(name, getProjectDir(), this.ctx.mcpManager, {
 				enableProjectConfig: cfgMcpEnableProjectConfig.get(this.ctx.settings),
 			});
-			if (!found) {
-				// Check if this is a discovered server from a third-party config
+			if (!found || found.discovered) {
+				// Discovered sources are toggled in the user override lists, not copied into mcpServers.
 				const userConfigPath = getMCPConfigPath("user", getProjectDir());
 				const disabledServers = new Set(await readDisabledServers(userConfigPath));
 				const isDiscovered = this.ctx.mcpManager?.getSource(name) ?? dropped?.source;

@@ -2,9 +2,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bu
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import type { SourceMeta } from "@oh-my-pi/pi-coding-agent/capability/types";
-import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
 import { readMCPConfigFile } from "@oh-my-pi/pi-coding-agent/mcp/config-writer";
+import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import type { MCPDroppedServer } from "@oh-my-pi/pi-coding-agent/mcp/transforms";
 import { MCPCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/mcp-command-controller";
 import {
@@ -146,5 +148,40 @@ describe("/mcp enable and disable", () => {
 		expect(connectServers).toHaveBeenCalledTimes(1);
 		const [configs] = connectServers.mock.calls[0]!;
 		expect(configs.codex_js).toMatchObject({ type: "stdio", command: "/opt/codex/cua_node/bin/node_repl" });
+	});
+
+	test("toggles built-in knowledge without persisting the intranet endpoint outside intranet mode", async () => {
+		const previousOffline = process.env.OMP_OFFLINE;
+		vi.spyOn(os, "homedir").mockReturnValue(agentDir);
+		try {
+			process.env.OMP_OFFLINE = "1";
+			const { configs, sources } = await loadAllMCPConfigs(projectDir);
+			const knowledge = { type: "http", url: "http://10.239.93.104:9333/mcp" };
+			expect(configs.knowledge).toMatchObject(knowledge);
+
+			const { controller, mcpManager, connectServers } = createController();
+			const getConfig = vi.spyOn(mcpManager, "getServerConfig").mockReturnValue(configs.knowledge);
+			const getSource = vi.spyOn(mcpManager, "getSource").mockReturnValue(sources.knowledge);
+			await controller.handle("/mcp disable knowledge");
+			expect(mcpManager.disconnectServer).toHaveBeenCalledWith("knowledge");
+			expect((await loadAllMCPConfigs(projectDir)).configs.knowledge).toBeUndefined();
+			getConfig.mockReturnValue(undefined);
+			getSource.mockReturnValue(undefined);
+
+			await controller.handle("/mcp enable knowledge");
+			expect(connectServers.mock.calls[0]?.[0].knowledge).toMatchObject(knowledge);
+			process.env.OMP_OFFLINE = "0";
+			expect((await loadAllMCPConfigs(projectDir)).configs.knowledge).toBeUndefined();
+
+			process.env.OMP_OFFLINE = "1";
+			const override = { type: "http", url: "http://127.0.0.1:9999/mcp" } as const;
+			await writeProjectConfig(projectDir, { knowledge: override });
+			clearFsCache();
+			expect((await loadAllMCPConfigs(projectDir)).configs.knowledge).toMatchObject(override);
+		} finally {
+			if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
+			else process.env.OMP_OFFLINE = previousOffline;
+			clearFsCache();
+		}
 	});
 });
