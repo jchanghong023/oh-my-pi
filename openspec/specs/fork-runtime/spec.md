@@ -79,7 +79,7 @@ Python Eval：显式解释器不可用或不兼容即失败。Linux offline 优�
 | 项目 | 规则 |
 |---|---|
 | Windows 本地构建 | `bun run local` 只编译和替换 `omp.exe`，占用时让位、不杀，失败恢复；不跑测试、冒烟、worker 或加载探测（`--skip-load-probe`）。CNB 发布版嵌入 fork 版本及更新源，本地版只嵌入更新源。构建可报阶段进度，最终换入成功才报安装实路径及总耗时。 |
-| 更新源 | 安装和更新均只用 CNB，默认取 `jchanghong/bin` 的 `omp` 发布，不回退其他平台。认证按 CNB 规则，SHA-256 取发布资产元数据。版本先按 SemVer、再按同基线 `+fork.N` 排序（缺省 0）。 |
+| 更新源 | 安装和更新均只用 CNB，默认取 `jchanghong/bin` 的 `omp` 发布，不回退其他平台。公开源匿名读取元数据并下载，不需要或发送 `CNB_TOKEN`；自定义私有更新源可用具有 `repo-release:r` 权限的 `CNB_TOKEN` 访问 CNB API，不将凭据转发给附件下载地址。SHA-256 取发布资产元数据。版本先按 SemVer、再按同基线 `+fork.N` 排序（缺省 0）。 |
 | `omp update` | 仅非 offline 可手动执行；offline 拒绝且不联网。原位替换独立二进制并验证 PATH，成功后由已验启动器同步已安装的 Browser Relay；同步失败记警告，不撤回二进制更新。包管理安装只提示 fork 安装器；TTY 才显示进度，不支持 canary。 |
 | 安装门禁 | 仅安装 CNB 发布的 Linux glibc x64／Windows x64 二进制；联网前拒 macOS、源码安装和目录目标。同版不下载，仍查 PATH。元数据严格 TLS；仅二进制下载可放宽。Windows 支持 PowerShell 5.1 x64，优先 `curl.exe`，失败或不可用时回退 `Invoke-WebRequest`；遵守代理边界。updater 不依赖 PowerShell。 |
 | 校验和换入 | 同目录唯一临时文件，先验同名资产 SHA-256，再实跑完整版本号；任一校验失败不换入。Linux 原子换入，不[结束运行会话](#requirement-posix-安装器对运行中会话的检测)；Windows 先唯一改名让位，失败才[按身份回退](#requirement-windows-安装器强杀回退的身份校验)。 |

@@ -51,32 +51,30 @@ fixture_binary() {
   printf '%s\\n' '#!/bin/sh' "echo \\"\${TEST_BINARY_PREFIX-omp/}\${TEST_BINARY_VERSION:-18.0.9+fork.125}\\""
 }
 case "$*" in
-  *api.cnb.cool/jchanghong/bin/-/releases/*)
-    if [ "$1" != "-q" ] || [ "$2" != "--config" ] || [ "$3" != "-" ]; then
-      echo 'fixture expected the CNB bearer to be read from stdin with .curlrc disabled' >&2
-      exit 2
-    fi
-    IFS= read -r auth_header
-    if [ "$auth_header" != 'header = "Authorization: Bearer test-cnb-token"' ]; then
-      echo 'fixture expected a CNB bearer header' >&2
-      exit 2
-    fi
+  *https://cnb.cool/jchanghong/bin/-/releases/*)
     case " $* " in
-      *" Accept: application/vnd.cnb.api+json "*) ;;
-      *) echo 'fixture expected a CNB API Accept header' >&2; exit 2 ;;
-    esac
-    case " $* " in
-      *" --insecure "*|*" --ssl-no-revoke "*|*" -L "*|*" --location "*)
-        echo 'fixture expected verified TLS with no metadata redirects' >&2
+      *" --config "*|*" --user "*|*" Authorization:"*|*" --insecure "*|*" --ssl-no-revoke "*|*" -L "*|*" --location "*)
+        echo 'fixture expected anonymous CNB requests with verified TLS and no redirects' >&2
         exit 2
         ;;
     esac
+    if [ "$1" != "-q" ]; then
+      echo 'fixture expected .curlrc disabled' >&2
+      exit 2
+    fi
     for url do :; done
     case "$url" in
       */-/releases/download/*)
+        case " $* " in
+          *" --header "*|*" -H "*) echo 'fixture expected no headers on the download redirect request' >&2; exit 2 ;;
+        esac
         printf '302\\n%s' "\${TEST_ASSET_LOCATION:-https://objects.cnb.cool/signed/omp-linux-x64}"
         exit 0
         ;;
+    esac
+    case " $* " in
+      *" Accept: application/vnd.cnb.api+json "*) ;;
+      *) echo 'fixture expected the CNB release metadata Accept header' >&2; exit 2 ;;
     esac
     if [ "\${TEST_METADATA_EXIT:-0}" != 0 ]; then
       printf '%s\\n' "$TEST_METADATA_ERROR" >&2
@@ -149,7 +147,7 @@ esac
 			...process.env,
 			PATH: `${binDir}:/usr/bin:/bin`,
 			HOME: dir,
-			CNB_TOKEN: "test-cnb-token",
+			CNB_TOKEN: "",
 			OMP_CONFIG_ROOT: path.join(dir, "config"),
 			OMP_CACHE_DIR: "",
 			OMP_OFFLINE: "",
@@ -207,13 +205,18 @@ describe.skipIf(process.platform !== "linux")("fork installer routing", () => {
 		expect(log).toContain("event=install_completed");
 	});
 
-	testGlibc("defaults to the rolling CNB omp release for Linux glibc x64", async () => {
-		const result = await runInstaller([]);
+	testGlibc.each([
+		["without a token", ""],
+		["ignoring a configured token", "ignored-cnb-token\nmalformed"],
+	])("defaults to the public rolling CNB release for Linux glibc x64 %s", async (_name, token) => {
+		const fixture = await createFixture();
+		fixture.env.CNB_TOKEN = token;
+		const result = await runInstallerWithFixture([], fixture);
 		expect(result.exitCode, result.stderr).toBe(0);
-		expect(result.commands).toContain("https://api.cnb.cool/jchanghong/bin/-/releases/tags/omp");
-		expect(result.commands).toContain("https://api.cnb.cool/jchanghong/bin/-/releases/download/omp/omp-linux-x64");
+		expect(result.commands).toContain("https://cnb.cool/jchanghong/bin/-/releases/tags/omp");
+		expect(result.commands).toContain("https://cnb.cool/jchanghong/bin/-/releases/download/omp/omp-linux-x64");
 		expect(result.commands).toContain("https://objects.cnb.cool/signed/omp-linux-x64");
-		expect(result.commands).not.toContain("test-cnb-token");
+		expect(`${result.commands}${result.stdout}${result.stderr}`).not.toContain("ignored-cnb-token");
 		expect(result.commands).not.toContain("github.com");
 	});
 
@@ -245,7 +248,7 @@ describe.skipIf(process.platform !== "linux")("fork installer routing", () => {
 		["missing tag", "22", "404", "http", "curl: (22) The requested URL returned error: 404"],
 		["unauthorized", "22", "401", "http", "curl: (22) The requested URL returned error: 401"],
 		["forbidden", "22", "403", "http", "curl: (22) The requested URL returned error: 403"],
-		["DNS", "6", "000", "dns", "curl: (6) Could not resolve host: api.cnb.cool"],
+		["DNS", "6", "000", "dns", "curl: (6) Could not resolve host: cnb.cool"],
 		["timeout", "28", "000", "timeout", "curl: (28) Operation timed out"],
 		["TLS", "35", "000", "tls", "curl: (35) SSL connect error"],
 	])(
@@ -269,7 +272,7 @@ describe.skipIf(process.platform !== "linux")("fork installer routing", () => {
 				expect(result.stderr).not.toContain("Release tag not found:");
 				expect(result.stderr).toContain(`curl exit ${code}, HTTP ${status}`);
 			}
-			if (status === "401" || status === "403") expect(result.stderr).toContain("repo-release:r");
+			expect(result.stderr).not.toContain("CNB_TOKEN");
 			expect(result.commands).not.toContain("/releases/download/");
 			expect(await Bun.file(target).text()).toBe(oldBinary);
 			expect(await fs.readdir(fixture.installDir)).toEqual(["omp"]);
@@ -294,8 +297,8 @@ describe.skipIf(process.platform !== "linux")("fork installer routing", () => {
 		fixture.env.TEST_METADATA_TITLE = "custom title";
 		const result = await runInstallerWithFixture(["--ref", "v18.0.9+fork.125"], fixture);
 		expect(result.exitCode, result.stderr).toBe(0);
-		expect(result.commands).toContain("api.cnb.cool/jchanghong/bin/-/releases/tags/v18.0.9%2Bfork.125");
-		expect(result.commands).toContain("api.cnb.cool/jchanghong/bin/-/releases/download/v18.0.9%2Bfork.125/");
+		expect(result.commands).toContain("https://cnb.cool/jchanghong/bin/-/releases/tags/v18.0.9%2Bfork.125");
+		expect(result.commands).toContain("https://cnb.cool/jchanghong/bin/-/releases/download/v18.0.9%2Bfork.125/");
 	});
 
 	test("rejects every installation mode on macOS before network access", async () => {
@@ -310,8 +313,6 @@ describe.skipIf(process.platform !== "linux")("fork installer routing", () => {
 	testGlibc.each([
 		["ARM64", { TEST_ARCH: "aarch64" }],
 		["musl", { TEST_LDD_VERSION: "musl libc" }],
-		["missing CNB token", { CNB_TOKEN: "" }],
-		["invalid CNB token", { CNB_TOKEN: "bad\nbearer" }],
 	])("rejects %s before making a request", async (_name, env) => {
 		const fixture = await createFixture();
 		Object.assign(fixture.env, env);
@@ -653,7 +654,7 @@ for (const powerShell of metadataPowerShellHosts) {
 			["redirected tag", 302],
 			["missing tag", 404],
 			["unauthorized", 401],
-			["rate limited", 403],
+			["forbidden", 403],
 			["connection refused", 0],
 		] as const)(
 			"handles %s without changing PATH",
@@ -689,13 +690,7 @@ for (const powerShell of metadataPowerShellHosts) {
 								assets: [{ name: "omp-windows-x64.exe", hash_algo: "sha256", hash_value: "0".repeat(64) }],
 							});
 						}
-						return new Response(
-							JSON.stringify({ message: status === 403 ? "API rate limit exceeded" : "Not Found" }),
-							{
-								status: status || 500,
-								headers: { "Content-Type": "application/json" },
-							},
-						);
+						return new Response(null, { status: status || 500 });
 					},
 				});
 				const fixtureOrigin = `http://127.0.0.1:${server.port}`;
@@ -722,9 +717,9 @@ $script:pathChecks = 0
 # Redirect only the endpoint; use the installer's real HTTP transport.
 $script:installWebRequest = \${function:Invoke-InstallWebRequest}
 function Invoke-InstallWebRequest([Uri]$Uri, [int]$TimeoutSec, [hashtable]$Headers, [switch]$Redirect) {
-    $api = "https://api.cnb.cool/jchanghong/bin/-/releases"
+    $releases = "https://cnb.cool/jchanghong/bin/-/releases"
     $expectedPath = if ($Redirect) { "download/v18.0.9%2Bfork.125/omp-windows-x64.exe" } else { "tags/v18.0.9%2Bfork.125" }
-    if ($Uri.AbsoluteUri -cne "$api/$expectedPath") { throw "Unexpected CNB endpoint: $Uri" }
+    if ($Uri.AbsoluteUri -cne "$releases/$expectedPath") { throw "Unexpected CNB endpoint: $Uri" }
     $fixturePath = if ($Redirect) { "asset" } else { "metadata" }
     try {
         & $script:installWebRequest -Uri "$env:TEST_FIXTURE_ORIGIN/$fixturePath" -TimeoutSec $TimeoutSec -Headers $Headers -Redirect:$Redirect
@@ -768,7 +763,7 @@ Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
 								PI_INSTALL_DIR: installDir,
 								TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
 								TEST_FIXTURE_ORIGIN: fixtureOrigin,
-								CNB_TOKEN: "test-cnb-token",
+								CNB_TOKEN: "ignored-cnb-token",
 								PROCESSOR_ARCHITECTURE: "AMD64",
 							},
 							stdout: "pipe",
@@ -799,13 +794,13 @@ Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
 						expect(result.message).toBe(result.originalMessage);
 						expect(result.message).not.toContain("Release tag not found");
 					}
-					if (status === 401 || status === 403) expect(stdout).toContain("repo-release:r");
+					expect(`${stdout}\n${stderr}`).not.toContain("CNB_TOKEN");
 					const paths = status === 0 ? [] : status === 200 ? ["/metadata", "/asset"] : ["/metadata"];
 					expect(requests).toEqual(
 						paths.map(pathname => ({
 							pathname,
-							authorization: "Bearer test-cnb-token",
-							accept: "application/vnd.cnb.api+json",
+							authorization: null,
+							accept: pathname === "/metadata" ? "application/vnd.cnb.api+json" : null,
 						})),
 					);
 					expect(await Bun.file(target).text()).toBe(oldBinary);
@@ -813,7 +808,7 @@ Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
 					const logsDir = path.join(configRoot, "logs");
 					const logs = (await fs.readdir(logsDir)).filter(name => name.endsWith(`.${child.pid}.log`));
 					const raw = (await Promise.all(logs.map(name => Bun.file(path.join(logsDir, name)).text()))).join("");
-					expect(raw).not.toContain("test-cnb-token");
+					expect(raw).not.toContain("ignored-cnb-token");
 					expect(raw).not.toContain("/signed/omp-windows-x64.exe");
 					const records = raw
 						.split("\n")
@@ -913,11 +908,17 @@ function Invoke-FixtureWebRequest([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile,
         $script:downloadCount++
         Copy-Item -LiteralPath $download -Destination $OutFile
     } else {
-        if ($Headers.Authorization -cne "Bearer test-cnb-token" -or $Headers.Accept -cne "application/vnd.cnb.api+json" -or
-            $Uri.Host -cne "api.cnb.cool") {
-            throw "Expected authenticated CNB API access"
+        $releases = "https://cnb.cool/jchanghong/bin/-/releases"
+        if ($Redirect) {
+            if ($Headers.Count -or $Uri.AbsoluteUri -cne "$releases/download/omp/omp-windows-x64.exe") {
+                throw "Expected a public release download redirect"
+            }
+            return @{ status = 302; location = "https://objects.cnb.cool/signed/omp-windows-x64.exe" }
         }
-        if ($Redirect) { return @{ status = 302; location = "https://objects.cnb.cool/signed/omp-windows-x64.exe" } }
+        if ($Headers.Count -ne 1 -or $Headers.Accept -cne "application/vnd.cnb.api+json" -or
+            $Uri.AbsoluteUri -cne "$releases/tags/omp") {
+            throw "Expected public release metadata"
+        }
         $title = "Windows fixture [omp:v18.0.9+fork.125]"
         if ($env:TEST_MODE -eq "already") { return @{ tag_name = "omp"; name = $title } }
         $sha256 = [Security.Cryptography.SHA256]::Create()
@@ -1041,7 +1042,7 @@ try {
 			cwd: repoRoot,
 			env: {
 				...process.env,
-				CNB_TOKEN: "test-cnb-token",
+				CNB_TOKEN: "",
 				PI_INSTALL_DIR: path.join(dir, "install 'quoted"),
 				OMP_CONFIG_ROOT: path.join(dir, "config"),
 				OMP_CACHE_DIR: "",
@@ -1086,7 +1087,7 @@ try {
     [void]$worker.AddScript({
         param($ready, $originalProtocol)
         function Invoke-FixtureWebRequest([Uri]$Uri, [int]$TimeoutSec) {
-            if ($Uri.AbsoluteUri -cne "https://api.cnb.cool/jchanghong/bin/-/releases/tags/omp") {
+            if ($Uri.AbsoluteUri -cne "https://cnb.cool/jchanghong/bin/-/releases/tags/omp") {
                 throw "Unexpected CNB endpoint: $Uri"
             }
             if ($null -ne [Net.ServicePointManager]::ServerCertificateValidationCallback -or
@@ -1117,7 +1118,6 @@ try {
 				cwd: repoRoot,
 				env: {
 					...process.env,
-					CNB_TOKEN: "test-cnb-token",
 					OMP_CONFIG_ROOT: path.join(dir, "config"),
 					OMP_CACHE_DIR: "",
 					OMP_PROFILE: "default",
@@ -1594,7 +1594,7 @@ $script:metadataFailure = $null
 $script:installWebRequest = \${function:Invoke-InstallWebRequest}
 function Invoke-InstallWebRequest([Uri]$Uri, [int]$TimeoutSec, [string]$OutFile, [hashtable]$Headers) {
     if ($OutFile) {
-        if ($Headers.Count) { throw "The signed download must not receive the API token" }
+        if ($Headers.Count) { throw "The signed download must not receive release metadata headers" }
         & $script:installWebRequest -Uri $Uri -TimeoutSec $TimeoutSec -OutFile $OutFile
         return
     }
@@ -1630,7 +1630,6 @@ if ([Net.ServicePointManager]::SecurityProtocol -ne $originalSecurityProtocol) {
 							cwd: repoRoot,
 							env: {
 								...process.env,
-								CNB_TOKEN: "test-cnb-token",
 								OMP_CONFIG_ROOT: path.join(dir, "config"),
 								PI_INSTALL_DIR: path.join(dir, "install"),
 								OMP_CACHE_DIR: "",

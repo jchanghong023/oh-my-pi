@@ -217,8 +217,7 @@ function Invoke-InstallWebRequest {
             return
         }
 
-        # Keep both authenticated requests on the original connection, over
-        # verified TLS. In particular, never follow the signed asset redirect.
+        # Use verified TLS and do not follow metadata or signed asset redirects.
         $status = "unavailable"
         try {
             $handler = [Net.Http.HttpClientHandler]::new()
@@ -384,7 +383,7 @@ namespace Omp {
     if (-not $OutFile) { return (ConvertFrom-Json -InputObject $result.release_json) }
 }
 
-$CnbApi = "https://api.cnb.cool/jchanghong/bin"
+$CnbReleases = "https://cnb.cool/jchanghong/bin/-/releases"
 $VersionPattern = '(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
 $Package = "@oh-my-pi/pi-coding-agent"
@@ -667,31 +666,20 @@ function Install-Binary {
         Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_requested_tag" }
         throw "Invalid release tag: $ReleaseTag"
     }
-    if ([string]::IsNullOrEmpty($env:CNB_TOKEN)) {
-        throw "Set CNB_TOKEN with repo-release:r permission to install from CNB."
-    }
-    if ($env:CNB_TOKEN -cnotmatch '\A[A-Za-z0-9._~+/-]+=*\z') {
-        throw "CNB_TOKEN is not a valid bearer token."
-    }
-    # Send these headers only to fixed CNB OpenAPI routes, never to the signed URL.
-    $headers = @{ Accept = "application/vnd.cnb.api+json"; Authorization = "Bearer $env:CNB_TOKEN" }
     $refPath = [Uri]::EscapeDataString($ReleaseTag)
     Write-Host "Fetching CNB release $ReleaseTag..."
-    Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.cnb.cool"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
+    Write-InstallLog INFO http_request_started @{ method = "GET"; host = "cnb.cool"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
     try {
-        $Release = Invoke-InstallWebRequest -Uri "$CnbApi/-/releases/tags/$refPath" -TimeoutSec 60 -Headers $headers
+        $Release = Invoke-InstallWebRequest -Uri "$CnbReleases/tags/$refPath" -TimeoutSec 60 -Headers @{ Accept = "application/vnd.cnb.api+json" }
     } catch {
         $failureFields = Get-InstallFailureFields $_
         Write-InstallLog ERROR http_request_failed $failureFields
         if ($failureFields.http_status -eq 404) {
             throw "Release tag not found: $ReleaseTag`nOnly published CNB release tags are supported."
         }
-        if ($failureFields.http_status -in 401, 403) {
-            Write-Host "CNB release access was denied. Set CNB_TOKEN with repo-release:r permission."
-        }
         throw
     }
-    Write-InstallLog INFO http_request_completed @{ result = "success"; host = "api.cnb.cool"; endpoint = "release_tag"; http_status = "success" }
+    Write-InstallLog INFO http_request_completed @{ result = "success"; host = "cnb.cool"; endpoint = "release_tag"; http_status = "success" }
 
     if ($Release.tag_name -isnot [string] -or $Release.tag_name -cne $ReleaseTag) {
         Write-InstallLog ERROR release_metadata_invalid @{ result = "unexpected_tag" }
@@ -746,27 +734,21 @@ function Install-Binary {
     $expectedHash = $digest
 
     Set-InstallStage "download_url"
-    Write-InstallLog INFO http_request_started @{ method = "GET"; host = "api.cnb.cool"; endpoint = "release_asset_url"; timeout_ms = 60000; attempt = 1 }
+    Write-InstallLog INFO http_request_started @{ method = "GET"; host = "cnb.cool"; endpoint = "release_asset_url"; timeout_ms = 60000; attempt = 1 }
     try {
-        $redirect = Invoke-InstallWebRequest -Uri "$CnbApi/-/releases/download/$refPath/$BinaryName" -TimeoutSec 60 -Headers $headers -Redirect
+        $redirect = Invoke-InstallWebRequest -Uri "$CnbReleases/download/$refPath/$BinaryName" -TimeoutSec 60 -Redirect
     } catch {
         $failureFields = Get-InstallFailureFields $_
         Write-InstallLog ERROR http_request_failed $failureFields
-        if ($failureFields.http_status -in 401, 403) {
-            Write-Host "CNB release access was denied. Set CNB_TOKEN with repo-release:r permission."
-        }
         throw
     }
     $BinaryUrl = $null
     if ($redirect.status -ne 302 -or -not [Uri]::TryCreate($redirect.location, [UriKind]::Absolute, [ref]$BinaryUrl) -or
         $BinaryUrl.Scheme -ne "https" -or -not $BinaryUrl.Host -or $BinaryUrl.UserInfo) {
         Write-InstallLog ERROR http_request_failed @{ result = "invalid_redirect"; endpoint = "release_asset_url"; http_status = $redirect.status }
-        if ($redirect.status -in 401, 403) {
-            throw "CNB release access was denied. Set CNB_TOKEN with repo-release:r permission."
-        }
         throw "CNB did not return an HTTPS binary download redirect."
     }
-    Write-InstallLog INFO http_request_completed @{ result = "success"; host = "api.cnb.cool"; endpoint = "release_asset_url"; http_status = 302 }
+    Write-InstallLog INFO http_request_completed @{ result = "success"; host = "cnb.cool"; endpoint = "release_asset_url"; http_status = 302 }
 
     Set-InstallStage "prepare_candidate"
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null

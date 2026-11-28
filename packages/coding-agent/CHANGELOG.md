@@ -155,6 +155,7 @@
 
 ### Fixed
 
+- Installing or updating OMP from a public CNB release no longer requires `CNB_TOKEN`.
 - The shared Windows daemon no longer keeps RPC clients' output pipes open after the client exits.
 - A stale skill list no longer denies `skill://` reads before the current list can resolve a more specific match.
 - Collab guests queue follow-ups on the host and keep their draft when the transport refuses the message.

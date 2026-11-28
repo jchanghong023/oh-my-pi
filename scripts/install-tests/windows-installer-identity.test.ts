@@ -134,51 +134,20 @@ Write-Output ("RESULT " + (@{ stopped = @($script:stopped); waited = @($script:w
 		}
 	});
 
-	it(`requires a syntactically valid CNB bearer token before HTTP (${path.basename(host)})`, async () => {
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-installer-token-"));
-		try {
-			const result = await runHarness(
-				host,
-				root,
-				`$script:requests = 0
-function Invoke-InstallWebRequest { $script:requests++; throw "Unexpected network request" }
-function Get-TokenError([string]$Token) {
-    $env:CNB_TOKEN = $Token
-    try { Install-Binary } catch { return $_.Exception.Message }
-}
-$result = @{
-    missing = Get-TokenError ""
-    whitespace = Get-TokenError " "
-    separator = Get-TokenError "token=more"
-    newline = Get-TokenError ("token" + [char]10)
-}
-$result.requests = $script:requests
-Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
-`,
-			);
-			expect(result.missing).toContain("repo-release:r");
-			for (const key of ["whitespace", "separator", "newline"]) {
-				expect(result[key]).toBe("CNB_TOKEN is not a valid bearer token.");
-			}
-			expect(result.requests).toBe(0);
-		} finally {
-			await fs.rm(root, { recursive: true, force: true });
-		}
-	}, 30_000);
-
 	it(`requires consistent release version metadata before downloading (${path.basename(host)})`, async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-installer-title-"));
 		try {
 			const result = await runHarness(
 				host,
 				root,
-				`$env:CNB_TOKEN = "test.token_~+/abc=="
-$script:probedVersions = @()
+				`$script:probedVersions = @()
 function Invoke-InstallWebRequest([Uri]$Uri, [int]$TimeoutSec, [hashtable]$Headers, [switch]$Redirect) {
-    if ($Headers.Accept -cne "application/vnd.cnb.api+json" -or $Headers.Authorization -cne "Bearer test.token_~+/abc==") {
-        throw "Unexpected API headers"
-    }
     if ($Redirect) { throw "Signed asset requested" }
+    $tagPath = [Uri]::EscapeDataString($script:fixtureTag)
+    if ($Headers.Count -ne 1 -or $Headers.Accept -cne "application/vnd.cnb.api+json" -or
+        $Uri.AbsoluteUri -cne "https://cnb.cool/jchanghong/bin/-/releases/tags/$tagPath") {
+        throw "Expected public release metadata"
+    }
     [pscustomobject]@{
         tag_name = $script:fixtureTag
         name = $script:fixtureTitle

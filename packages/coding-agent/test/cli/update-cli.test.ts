@@ -12,7 +12,7 @@ const host = await currentBuildHost();
 const binaryName = process.platform === "win32" ? "omp-windows-x64.exe" : "omp-linux-x64";
 const unsupported = process.arch !== "x64" || (process.platform !== "win32" && host.asset !== "linux-x64");
 const posixOnly = unsupported || process.platform === "win32";
-const releaseBase = "https://api.cnb.cool/jchanghong/bin/-/releases";
+const releaseBase = "https://cnb.cool/jchanghong/bin/-/releases";
 const rollingMetadata = `${releaseBase}/tags/omp`;
 const token = "fixture-cnb-token";
 const version = "18.0.9+fork.137";
@@ -58,11 +58,11 @@ function recordFetch(
 	return requests;
 }
 
-function expectApiRequest(request: ReturnType<typeof recordFetch>[number], url: string): void {
+function expectReleaseRequest(request: ReturnType<typeof recordFetch>[number], url: string, authenticated = false): void {
 	expect(request.url).toBe(url);
 	const headers = new Headers(request.init?.headers);
 	expect(headers.get("accept")).toBe("application/vnd.cnb.api+json");
-	expect(headers.get("authorization")).toBe(`Bearer ${token}`);
+	expect(headers.get("authorization")).toBe(authenticated ? `Bearer ${token}` : null);
 	expect(request.init).toMatchObject({
 		redirect: "manual",
 		signal: expect.any(AbortSignal),
@@ -111,24 +111,25 @@ describe("runUpdateCommand CNB releases", () => {
 		expect(requests).toEqual([]);
 	});
 
-	it.skipIf(unsupported)("requires CNB_TOKEN before making a request", async () => {
+	it.skipIf(unsupported)("checks the public release without CNB_TOKEN", async () => {
 		await withStandalone(async () => {
 			process.env.GITHUB_TOKEN = "fixture-unrelated-token";
-			const requests = recordFetch();
+			const requests = recordFetch(() => release(executable(version)));
 
-			await expect(runUpdateCommand(check)).rejects.toThrow(/CNB_TOKEN.*repo-release:r/);
-			expect(requests).toEqual([]);
+			expect(await runUpdateCommand(check)).toEqual({ kind: "available", version });
+			expect(requests).toHaveLength(1);
+			expectReleaseRequest(requests[0]!, rollingMetadata);
 		});
 	});
 
-	it.skipIf(unsupported)("reports metadata HTTP 401 without downloading or falling back", async () => {
+	it.skipIf(unsupported)("reports default metadata HTTP 401 without using the configured token", async () => {
 		await withStandalone(async () => {
 			process.env.CNB_TOKEN = token;
 			const requests = recordFetch(() => new Response(null, { status: 401 }));
 
-			await expect(runUpdateCommand(check)).rejects.toThrow(/HTTP 401.*CNB_TOKEN.*repo-release:r/);
+			await expect(runUpdateCommand(check)).rejects.toThrow(/metadata.*HTTP 401/);
 			expect(requests).toHaveLength(1);
-			expectApiRequest(requests[0]!, rollingMetadata);
+			expectReleaseRequest(requests[0]!, rollingMetadata);
 		});
 	});
 
@@ -143,7 +144,7 @@ describe("runUpdateCommand CNB releases", () => {
 			expect(await runUpdateCommand(check)).toEqual({ kind: "available", version });
 			expect(await Bun.file(target).text()).toBe(executable(previousVersion));
 			expect(requests).toHaveLength(1);
-			expectApiRequest(requests[0]!, `https://api.cnb.cool/mirror/bin/-/releases/tags/v18.0.9%2Bfork.137`);
+			expectReleaseRequest(requests[0]!, `https://cnb.cool/mirror/bin/-/releases/tags/v18.0.9%2Bfork.137`);
 			expect(log.mock.calls.some(([message]) => String(message).includes("Warning"))).toBe(false);
 		});
 	});
@@ -177,9 +178,8 @@ describe("runUpdateCommand CNB releases", () => {
 		});
 	});
 
-	it.skipIf(posixOnly)("updates from the signed CNB download without forwarding the API Bearer", async () => {
+	it.skipIf(posixOnly)("updates from the public CNB release without a token", async () => {
 		await withStandalone(async (root, target) => {
-			process.env.CNB_TOKEN = token;
 			const candidate = executable(version);
 			const pathLauncher = path.join(root, "omp");
 			await fs.writeFile(pathLauncher, executable("999.0.0"), { mode: 0o755 });
@@ -197,12 +197,81 @@ describe("runUpdateCommand CNB releases", () => {
 			expect(await Bun.file(target).text()).toBe(candidate);
 			expect(await Bun.file(pathLauncher).text()).toBe(executable("999.0.0"));
 			expect(requests).toHaveLength(3);
-			expectApiRequest(requests[0]!, rollingMetadata);
-			expectApiRequest(requests[1]!, download);
+			expectReleaseRequest(requests[0]!, rollingMetadata);
+			expectReleaseRequest(requests[1]!, download);
 			expect(requests[2]!.url).toBe(signed);
 			expect(new Headers(requests[2]!.init?.headers).has("authorization")).toBe(false);
+			expect(requests[2]!.init?.redirect).toBe("error");
 			expect(log.mock.calls.some(([message]) => String(message).includes(`Updated to ${version}`))).toBe(true);
 			expect(log.mock.calls.some(([message]) => String(message).includes("Warning"))).toBe(true);
+		});
+	});
+
+	it.skipIf(posixOnly)("uses the private API after public metadata is hidden without forwarding its Bearer", async () => {
+		await withStandalone(async (_root, target) => {
+			process.env.CNB_TOKEN = ` ${token} `;
+			process.env.PI_UPDATE_REPOSITORY = "mirror/bin";
+			const candidate = executable(version);
+			const publicMetadata = "https://cnb.cool/mirror/bin/-/releases/tags/omp";
+			const privateBase = "https://api.cnb.cool/mirror/bin/-/releases";
+			const privateMetadata = `${privateBase}/tags/omp`;
+			const privateDownload = `${privateBase}/download/omp/${binaryName}`;
+			const signed = "https://objects.cnb.cool/cnb-fixture?signature=fixture";
+			const requests = recordFetch(url => {
+				if (url === publicMetadata) return new Response(null, { status: 404 });
+				if (url === privateMetadata) return release(candidate);
+				if (url === privateDownload) return new Response(null, { status: 302, headers: { location: signed } });
+				if (url === signed) return new Response(candidate);
+				throw new Error(`Unexpected updater request: ${url}`);
+			});
+
+			expect(await runUpdateCommand(install)).toEqual({ kind: "installed", version });
+			expect(await Bun.file(target).text()).toBe(candidate);
+			expect(requests).toHaveLength(4);
+			expectReleaseRequest(requests[0]!, publicMetadata);
+			expectReleaseRequest(requests[1]!, privateMetadata, true);
+			expectReleaseRequest(requests[2]!, privateDownload, true);
+			expect(requests[3]!.url).toBe(signed);
+			expect(new Headers(requests[3]!.init?.headers).has("authorization")).toBe(false);
+			expect(requests[3]!.init?.redirect).toBe("error");
+		});
+	});
+
+	it.skipIf(posixOnly)("does not fall back on server errors or invalid public metadata", async () => {
+		await withStandalone(async () => {
+			process.env.CNB_TOKEN = token;
+			process.env.PI_UPDATE_REPOSITORY = "mirror/bin";
+			const publicMetadata = "https://cnb.cool/mirror/bin/-/releases/tags/omp";
+			let response = new Response(null, { status: 500 });
+			const requests = recordFetch(() => response);
+
+			await expect(runUpdateCommand(check)).rejects.toThrow(/metadata.*HTTP 500/);
+			response = new Response("not JSON");
+			await expect(runUpdateCommand(check)).rejects.toThrow(/Failed to check for updates/);
+			expect(requests).toHaveLength(2);
+			expectReleaseRequest(requests[0]!, publicMetadata);
+			expectReleaseRequest(requests[1]!, publicMetadata);
+		});
+	});
+
+	it.skipIf(posixOnly)("does not fall back when a public release's download returns HTTP 403", async () => {
+		await withStandalone(async (_root, target) => {
+			process.env.CNB_TOKEN = token;
+			process.env.PI_UPDATE_REPOSITORY = "mirror/bin";
+			const publicBase = "https://cnb.cool/mirror/bin/-/releases";
+			const metadata = `${publicBase}/tags/omp`;
+			const download = `${publicBase}/download/omp/${binaryName}`;
+			const requests = recordFetch(url => {
+				if (url === metadata) return release(executable(version));
+				if (url === download) return new Response(null, { status: 403 });
+				throw new Error(`Unexpected updater request: ${url}`);
+			});
+
+			await expect(runUpdateCommand(install)).rejects.toThrow(/download redirect.*HTTP 403/);
+			expect(requests).toHaveLength(2);
+			expectReleaseRequest(requests[0]!, metadata);
+			expectReleaseRequest(requests[1]!, download);
+			expect(await Bun.file(target).text()).toBe(executable(previousVersion));
 		});
 	});
 });

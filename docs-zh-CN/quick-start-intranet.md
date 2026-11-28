@@ -2,7 +2,7 @@
 
 ## 安装与更新
 
-Fork 仅从 [CNB Releases](https://cnb.cool/jchanghong/bin/-/releases) 分发 Windows x64 和 Linux glibc x64 预编译二进制，不提供 npm 或源码安装。使用下列安装器前，先设置具有 `repo-release:r` 权限的 `CNB_TOKEN`，并在 [fork 源码](https://cnb.cool/jchanghong/oh-my-pi)目录中运行。
+Fork 仅从公开的 [CNB Releases](https://cnb.cool/jchanghong/bin/-/releases) 分发 Windows x64 和 Linux glibc x64 预编译二进制，不提供 npm 或源码安装。公开源安装和更新都无需设置 `CNB_TOKEN`；在 [fork 源码](https://cnb.cool/jchanghong/oh-my-pi)目录中运行下列安装器。
 
 Linux（glibc x64）：
 

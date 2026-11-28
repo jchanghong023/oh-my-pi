@@ -12,7 +12,7 @@ set -e
 #   --uninstall    Remove omp; keep state unless confirmed interactively
 #   --purge        Uninstall and delete omp's state without asking
 
-CNB_API="https://api.cnb.cool/jchanghong/bin"
+CNB_RELEASES="https://cnb.cool/jchanghong/bin/-/releases"
 VERSION_PATTERN='v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 PACKAGE="@oh-my-pi/pi-coding-agent"
@@ -598,12 +598,6 @@ release_asset_metadata() {
     '
 }
 
-# Never put the bearer token in curl's argv or attach it to a redirect.
-cnb_api_request() {
-    printf 'header = "Authorization: Bearer %s"\n' "$CNB_TOKEN" |
-        curl -q --config - --header 'Accept: application/vnd.cnb.api+json' "$@"
-}
-
 # True when $1 exists, including as a dangling symlink.
 path_exists() {
     [ -e "$1" ] || [ -L "$1" ]
@@ -841,17 +835,14 @@ install_binary() {
     case "$RELEASE_TAG" in
         .|*..*|*[!A-Za-z0-9._+/-]*) echo "Invalid release tag: $RELEASE_TAG" >&2; exit 1 ;;
     esac
-    case "${CNB_TOKEN:-}" in
-        "") echo "Set CNB_TOKEN with repo-release:r permission to install from CNB." >&2; exit 1 ;;
-        *[!A-Za-z0-9._~+/=-]*) echo "CNB_TOKEN is not a valid bearer token." >&2; exit 1 ;;
-    esac
     REF_PATH="$(printf '%s' "$RELEASE_TAG" | sed 's|/|%2F|g; s/+/%2B/g')"
-    RELEASE_URL="$CNB_API/-/releases/tags/$REF_PATH"
+    RELEASE_URL="$CNB_RELEASES/tags/$REF_PATH"
     RELEASE_ENDPOINT=release_tag
     echo "Fetching CNB release $RELEASE_TAG..."
-    install_log INFO http_request_started "method=GET host=api.cnb.cool endpoint=$RELEASE_ENDPOINT timeout_ms=60000 attempt=1"
+    install_log INFO http_request_started "method=GET host=cnb.cool endpoint=$RELEASE_ENDPOINT timeout_ms=60000 attempt=1"
     # Strict TLS; do not follow redirects or inherit settings from .curlrc.
-    if RELEASE_RESPONSE=$(cnb_api_request -fgsS --proto '=https' --connect-timeout 10 --max-time 60 --write-out '\n%{http_code}' "$RELEASE_URL"); then
+    if RELEASE_RESPONSE=$(curl -q -fgsS --proto '=https' --connect-timeout 10 --max-time 60 \
+        --header 'Accept: application/vnd.cnb.api+json' --write-out '\n%{http_code}' "$RELEASE_URL"); then
         RELEASE_HTTP_STATUS="${RELEASE_RESPONSE##*
 }"
         if [ "$RELEASE_HTTP_STATUS" != 200 ]; then
@@ -859,7 +850,7 @@ install_binary() {
             echo "Failed to fetch release metadata (expected HTTP 200, got $RELEASE_HTTP_STATUS)." >&2
             exit 1
         fi
-        install_log INFO http_request_completed "result=success host=api.cnb.cool endpoint=$RELEASE_ENDPOINT http_status=$RELEASE_HTTP_STATUS"
+        install_log INFO http_request_completed "result=success host=cnb.cool endpoint=$RELEASE_ENDPOINT http_status=$RELEASE_HTTP_STATUS"
     else
         release_exit="$?"
         RELEASE_HTTP_STATUS="${RELEASE_RESPONSE##*
@@ -868,9 +859,6 @@ install_binary() {
         if [ "$release_exit" -eq 22 ] && [ "$RELEASE_HTTP_STATUS" = 404 ]; then
             echo "Release tag not found: $RELEASE_TAG" >&2
             echo "Only published CNB release tags are supported." >&2
-        elif [ "$RELEASE_HTTP_STATUS" = 401 ] || [ "$RELEASE_HTTP_STATUS" = 403 ]; then
-            echo "CNB release access was denied. Set CNB_TOKEN with repo-release:r permission." >&2
-            echo "Failed to fetch release metadata (curl exit $release_exit, HTTP $RELEASE_HTTP_STATUS)." >&2
         else
             echo "Failed to fetch release metadata (curl exit $release_exit, HTTP $RELEASE_HTTP_STATUS)." >&2
         fi
@@ -934,16 +922,16 @@ install_binary() {
     # certificate checks for the checksum-verified binary itself.
     INSTALL_STAGE=download_url
     INSTALL_STAGE_MS="$(install_now_ms)"
-    install_log INFO http_request_started 'method=GET host=api.cnb.cool endpoint=release_asset_url timeout_ms=60000 attempt=1'
-    if ASSET_RESPONSE=$(cnb_api_request -fgsS --proto '=https' --connect-timeout 10 --max-time 60 \
-        --output /dev/null --write-out '%{http_code}\n%{redirect_url}' "$CNB_API/-/releases/download/$REF_PATH/$BINARY"); then
+    install_log INFO http_request_started 'method=GET host=cnb.cool endpoint=release_asset_url timeout_ms=60000 attempt=1'
+    if ASSET_RESPONSE=$(curl -q -fgsS --proto '=https' --connect-timeout 10 --max-time 60 \
+        --output /dev/null --write-out '%{http_code}\n%{redirect_url}' "$CNB_RELEASES/download/$REF_PATH/$BINARY"); then
         ASSET_HTTP_STATUS="${ASSET_RESPONSE%%[!0-9]*}"
         BINARY_URL="${ASSET_RESPONSE#*
 }"
     else
         asset_exit="$?"
         install_curl_failed "$asset_exit" release_asset_url "${ASSET_RESPONSE%%[!0-9]*}"
-        echo "Failed to resolve the CNB binary download. Check repository access and CNB_TOKEN." >&2
+        echo "Failed to resolve the CNB binary download (curl exit $asset_exit, HTTP ${ASSET_RESPONSE%%[!0-9]*})." >&2
         exit "$asset_exit"
     fi
     ASSET_AUTHORITY="${BINARY_URL#https://}"
@@ -957,7 +945,7 @@ install_binary() {
             exit 1
             ;;
     esac
-    install_log INFO http_request_completed 'result=success host=api.cnb.cool endpoint=release_asset_url http_status=302'
+    install_log INFO http_request_completed 'result=success host=cnb.cool endpoint=release_asset_url http_status=302'
 
     # Keep compatibility flags on the asset download only. --ssl-no-revoke
     # requires curl 7.44 or newer and only applies to Schannel.
