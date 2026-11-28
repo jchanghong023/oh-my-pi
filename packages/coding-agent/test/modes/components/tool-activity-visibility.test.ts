@@ -3,7 +3,7 @@ import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { createInteractiveModeContext, renderTranscript } from "../../helpers/interactive-mode-context";
+import { contextDisplay, createInteractiveModeContext, renderTranscript } from "../../helpers/interactive-mode-context";
 import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 
 const restoreTheme = currentTheme();
@@ -33,7 +33,7 @@ describe("tool activity visibility", () => {
 		const visible = renderTranscript(ctx).join("\n");
 		expect(visible).toContain("ts-no-tiny-functions");
 
-		ctx.toolActivity = "hidden";
+		contextDisplay(ctx).toolActivity.set("hidden");
 		expect(renderTranscript(ctx).join("\n")).not.toContain("ts-no-tiny-functions");
 		await controller.handleEvent({
 			type: "todo_reminder",
@@ -43,7 +43,7 @@ describe("tool activity visibility", () => {
 		} as AgentSessionEvent);
 		expect(renderTranscript(ctx).join("\n")).not.toContain("finish the task");
 
-		ctx.toolActivity = "detailed";
+		contextDisplay(ctx).toolActivity.set("detailed");
 		const restored = renderTranscript(ctx).join("\n");
 		expect(restored).toContain("ts-no-tiny-functions");
 		expect(restored).toContain("finish the task");

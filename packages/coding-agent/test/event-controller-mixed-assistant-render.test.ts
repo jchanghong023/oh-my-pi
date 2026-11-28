@@ -9,7 +9,7 @@ import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { LocalAgentSessionEvent as AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AssistantView, InteractiveModeContext, PendingTool } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { isSettled } from "@oh-my-pi/pi-tui";
-import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
+import { contextDisplay, createInteractiveModeContext } from "./helpers/interactive-mode-context";
 import { blockText, transcriptText } from "./helpers/transcript-text";
 
 import { cfgTerminalShowImages, type ToolActivityMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -95,7 +95,7 @@ function createFixture(
 		}),
 		lastAssistantUsage: zeroUsage(),
 	});
-	ctx.toolActivity = toolActivity;
+	contextDisplay(ctx).toolActivity.set(toolActivity);
 	return { controller: new EventController(ctx), ctx };
 }
 

@@ -409,7 +409,7 @@ describe("native workspace subagent inheritance", () => {
 			enableLsp: false,
 		});
 		const revive = await factory(coldRef);
-		if (!revive) throw new Error("Expected cold persisted reviver");
+		if (typeof revive !== "function") throw new Error("Expected cold persisted reviver");
 		const cold = localSession(await revive(coldRef));
 		start = f.model.calls.length;
 		await cold.prompt("cold user continuation");
@@ -452,7 +452,7 @@ describe("native workspace subagent inheritance", () => {
 			enableLsp: false,
 		});
 		const revive = await factory(ref);
-		if (!revive) throw new Error("Expected legacy persisted reviver");
+		if (typeof revive !== "function") throw new Error("Expected legacy persisted reviver");
 		const child = localSession(await revive(ref));
 		await child.prompt("legacy continuation");
 		expect(f.model.calls.length).toBeGreaterThan(0);

@@ -1076,7 +1076,10 @@ export class CollabGuestLink {
 		if (!this.#memorySessionResumed) {
 			await this.#ctx.settings.flush();
 			await this.#ctx.prepareSessionSwitch();
-			if (!(await this.#resumeInMemory?.(cwd => this.#ctx.applyCwdChange(cwd)))) {
+			const resumed = await this.#resumeInMemory?.(cwd =>
+				this.#ctx.applyCwdChange(cwd, { onWarning: warning => this.#ctx.showWarning(warning) }),
+			);
+			if (!resumed) {
 				throw new Error("Local session restoration was cancelled");
 			}
 			this.#memorySessionResumed = true;

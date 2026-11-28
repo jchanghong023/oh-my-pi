@@ -27,7 +27,7 @@ import { createTestTerminal, type TestTerminal } from "@oh-my-pi/pi-tui/testing/
 import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
 import { PLAIN_THEME } from "@oh-my-pi/pi-tui/theme/plain";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
-import { createInteractiveModeContext, renderTranscript } from "./helpers/interactive-mode-context";
+import { contextDisplay, createInteractiveModeContext, renderTranscript } from "./helpers/interactive-mode-context";
 
 type JobStatus = "running" | "completed" | "failed" | "cancelled";
 
@@ -398,7 +398,7 @@ describe("wait and todo displacement", () => {
 
 	it("lets replies after a todo card hidden with tool activity reach scrollback at once", async () => {
 		vi.useFakeTimers();
-		fixture.ctx.toolActivity = "hidden";
+		contextDisplay(fixture.ctx).toolActivity.set("hidden");
 		const { term } = attachTerminal(fixture);
 		try {
 			await run(fixture, "todo-1", "todo", { op: "done" }, todoResult(["plan", "read"], ["plan"]));

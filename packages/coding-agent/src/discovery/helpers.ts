@@ -885,6 +885,7 @@ export function getExtensionNameFromPath(extensionPath: string): string {
  */
 export interface ClaudePluginEntry {
 	scope?: "user" | "project" | "local";
+	projectPath?: string;
 	installPath: string;
 	version: string;
 	installedAt: string;

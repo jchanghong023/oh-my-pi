@@ -407,7 +407,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 				settings,
 				enableLsp: false,
 			})(ref);
-			if (!reviver) throw new Error("Expected a cold task reviver");
+			if (typeof reviver !== "function") throw new Error("Expected a cold task reviver");
 			const restored = await reviver(ref);
 			if (!isLocalAgentSession(restored)) throw new Error("Cold SDK fixture must revive on its owning thread");
 			revived = restored;

@@ -1070,7 +1070,7 @@ export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessag
  */
 export interface AgentState {
 	systemPrompt: string[];
-	model: Model;
+	model: Model | undefined;
 	thinkingLevel?: Effort;
 	disableReasoning?: boolean;
 	tools: AgentTool<any>[];

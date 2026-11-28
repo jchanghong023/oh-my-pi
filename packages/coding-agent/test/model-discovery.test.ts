@@ -2941,7 +2941,7 @@ describe("ModelRegistry runtime discovery", () => {
 				discovery: { type: "openai-models-list" },
 			},
 		});
-		const requests: { url: string; redirect?: RequestRedirect }[] = [];
+		const requests: { url: string; redirect?: RequestInit["redirect"] }[] = [];
 		const fetch: FetchImpl = async (input, init) => {
 			requests.push({ url: String(input), redirect: init?.redirect });
 			return Response.json({ data: [{ id: "intranet-model" }] });
