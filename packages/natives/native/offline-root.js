@@ -62,13 +62,22 @@ function normalizePersistentRoot(root) {
 		: normalized;
 }
 
+function homeFromEnv(env) {
+	const homeKey = process.platform === "win32" ? "USERPROFILE" : "HOME";
+	return env === process.env ? os.homedir() : (env[homeKey] || os.userInfo().homedir);
+}
+
+/** Resolve an explicit OMP config root without touching the filesystem. */
+export function resolveConfigRootOverride(env = process.env, { allowCurrentDriveRoot = false } = {}) {
+	const dir = expandDirectory(env.OMP_CONFIG_ROOT, env === process.env ? undefined : homeFromEnv(env));
+	const isAbsolute = allowCurrentDriveRoot ? path.isAbsolute : isFullyQualifiedDir;
+	return dir && isAbsolute(dir) ? normalizePersistentRoot(dir) : undefined;
+}
+
 /** Resolve the original data root lexically: never stat or realpath a persistent path. */
 export function resolvePersistentRoot(env = process.env) {
-	const homeKey = process.platform === "win32" ? "USERPROFILE" : "HOME";
-	const home = env === process.env ? os.homedir() : (env[homeKey] || os.userInfo().homedir);
-	const override = expandDirectory(env.OMP_CONFIG_ROOT, home);
-	if (override && isFullyQualifiedDir(override)) return normalizePersistentRoot(override);
-	return normalizePersistentRoot(path.join(home, env.PI_CONFIG_DIR || DEFAULT_CONFIG_DIR_NAME));
+	return resolveConfigRootOverride(env) ??
+		normalizePersistentRoot(path.join(homeFromEnv(env), env.PI_CONFIG_DIR || DEFAULT_CONFIG_DIR_NAME));
 }
 
 /** The per-user shm layout, even when the offline cache is not selected. */
@@ -90,13 +99,16 @@ export function getPrivateNativeCacheUid(directory, privateCacheRoot) {
 	return undefined;
 }
 
+/** Read the company intranet flag without probing the host or network. */
+export function offlineFromEnv() {
+	const raw = process.env.OMP_OFFLINE?.trim().toLowerCase();
+	return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 /** Resolve the optional cache root, keeping named profiles in their usual layout. */
 export function resolveCacheRoot(profile) {
-	let root = resolveAbsoluteDir(process.env.OMP_CACHE_DIR);
-	if (root && process.platform === "linux") root = path.join(root, String(process.getuid()));
-	else if (!root && process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")) {
-		root = resolveLinuxPrivateCacheRoot();
-	}
+	if (!offlineFromEnv()) return undefined;
+	const root = resolveLinuxPrivateCacheRoot();
 	return root && profile ? path.join(root, "profiles", profile) : root;
 }
 

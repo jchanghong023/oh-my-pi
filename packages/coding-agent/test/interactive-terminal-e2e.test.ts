@@ -469,10 +469,13 @@ describe("libkitty end-to-end", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		};
 		const TOOL_MARKER = "RETIRED_TOOL_ACTIVITY_MARKER";
+		const TOOL_INTENT = "Preparing retirement fixture";
 		const callId = "retired-tool-call";
 		const toolCall: AssistantMessage = {
 			role: "assistant",
-			content: [{ type: "toolCall", id: callId, name: "bash", arguments: { command: `printf ${TOOL_MARKER}` } }],
+			content: [
+				{ type: "toolCall", id: callId, name: "bash", arguments: { command: "printf fixture", i: TOOL_INTENT } },
+			],
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet",
@@ -498,6 +501,8 @@ describe("libkitty end-to-end", () => {
 			stopReason: "stop",
 			timestamp: 3,
 		});
+
+		cfgDisplayMode.override(session.settings, "detailed");
 
 		mode.stop();
 		term.dispose();
@@ -531,15 +536,20 @@ describe("libkitty end-to-end", () => {
 		term.type("LIVE_EDITOR_DRAFT");
 		await term.waitFor(() => viewport().some(row => row.includes("LIVE_EDITOR_DRAFT")));
 
-		// Detailed → clean → compact → detailed. Neither of the hidden tiers keeps tool rows in history.
-		for (const display of ["clean", "compact", "detailed"] as const) {
+		// The concise row omits output; clean and compact hide the row as well.
+		for (const display of ["concise", "clean", "compact", "detailed"] as const) {
 			term.press("alt+o");
-			await term.waitFor(
-				() =>
-					cfgDisplayMode.get(session.settings) === display &&
-					buffer().some(row => row.includes(TOOL_MARKER)) === (display === "detailed"),
-			);
-			expect(mode.hideToolActivity).toBe(display !== "detailed");
+			await term.waitFor(() => {
+				const rows = buffer();
+				return (
+					mode.displayMode === display &&
+					rows.some(row => row.includes(TOOL_MARKER)) === (display === "detailed") &&
+					(display === "detailed" || rows.some(row => row.includes(TOOL_INTENT)) === (display === "concise"))
+				);
+			});
+			expect(mode.hideToolActivity).toBe(display === "clean" || display === "compact");
+			expect(cfgDisplayMode.get(session.settings)).toBe("detailed");
+			expect(session.settings.getGlobalSettings().display).toMatchObject({ toolActivity: display });
 			expect(viewport().some(row => row.includes("LIVE_EDITOR_DRAFT"))).toBe(true);
 		}
 	});

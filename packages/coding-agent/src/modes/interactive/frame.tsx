@@ -61,8 +61,6 @@ import { composerShape, type StatusAttachment } from "../../ui/styles/composer/s
 import { welcomeTip } from "../../ui/welcome/tips";
 import { Welcome, WelcomeModel } from "../../ui/welcome/welcome";
 import type { DockModels, StatusLineView } from "../types";
-import type { CompactActionRow } from "../compact-thinking-preview";
-import type { ShimmerMode } from "@oh-my-pi/pi-tui/text/shimmer";
 
 /** Fullscreen transcript scroll actions and the scroll each asks for. */
 const TRANSCRIPT_SCROLL_KEYS: readonly (readonly [Keybinding, TranscriptScroll])[] = [
@@ -163,7 +161,6 @@ export class AppFrame {
 	readonly exitTranscript: Signal<boolean> = signal(true);
 	readonly fullscreenMouse: Signal<boolean> = signal(true);
 	readonly #shape: Signal<string>;
-	readonly #compactRevision = signal(0);
 	readonly #quiet: Signal<boolean>;
 	/** Tip rolls, latched when the frame is built so the tip stays put for the session. */
 	readonly #rolls: { readonly nag: number; readonly tip: number };
@@ -514,75 +511,6 @@ export class AppFrame {
 		if (!this.welcomeBlock) return;
 		this.shell.transcript.remove(this.welcomeBlock);
 		this.welcomeBlock = undefined;
-	}
-
-	invalidateCompactPresentation(): void {
-		this.#compactRevision.set(this.#compactRevision.peek() + 1);
-	}
-
-	/** Mount display-only projections in the shared dock, never in terminal history. */
-	mountCompactPresentation(
-		visible: Accessor<boolean>,
-		activity: (width: number) => readonly (CompactActionRow | undefined)[],
-		output: (width: number) => readonly string[],
-		diff: (width: number) => readonly string[],
-		waiting: Accessor<boolean>,
-		shimmer: Accessor<ShimmerMode | "disabled">,
-		interrupt: () => void,
-	): void {
-		const paint = (render: (width: number) => readonly string[]) => (width: number) => {
-			this.#compactRevision();
-			return render(width);
-		};
-		this.shell.dock.slot("compact").set(
-			() => () =>
-				visible() && (
-					<col key="compact">
-						<canvas role="omp.compact.diff" paint={paint(diff)} />
-						<canvas role="omp.compact.output" paint={paint(output)} />
-						<col
-							role="omp.compact.activity"
-							onAction={act => {
-								if (act === "interrupt") interrupt();
-							}}
-						>
-							{() => {
-								this.#compactRevision();
-								const width = this.shell.size().columns;
-								const stop = this.shell.native() && waiting();
-								const [model, agent] = activity(width);
-								const action = (entry: CompactActionRow | undefined): JSXNode => {
-									if (!entry) return <text text=" " wrap="none" />;
-									const mode = shimmer();
-									return [
-										width > 1 && <text text=" " wrap="none" />,
-										entry.running && mode !== "disabled" ? (
-											<shimmer text={entry.word} mode={mode} />
-										) : (
-											<text spans={[{ t: entry.word, s: entry.tone }]} wrap="none" />
-										),
-										entry.detail.length > 0 && (
-											<text
-												spans={[{ t: "  " }, ...entry.detail.map(part => ({ t: part.text, s: part.tone }))]}
-												wrap="none"
-											/>
-										),
-									];
-								};
-								return [
-									<row>{action(model)}</row>,
-									<row>
-										<row grow={1}>{action(agent)}</row>
-										{stop && (
-											<text role="omp.compact.wait.stop" actions={{ click: "interrupt" }} text="Stop" />
-										)}
-									</row>,
-								];
-							}}
-						</col>
-					</col>
-				),
-		);
 	}
 
 	#mountDock(): void {

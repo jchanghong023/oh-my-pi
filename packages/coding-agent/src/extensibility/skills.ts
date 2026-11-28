@@ -5,6 +5,7 @@ import {
 	getProjectDir,
 	isEnoent,
 	normalizePathForComparison,
+	offlineFromEnv,
 	parseFrontmatter,
 	prompt,
 	relativePathWithinNormalizedRoot,
@@ -413,7 +414,7 @@ export async function loadSkillCatalog(
 
 	// Start custom scans alongside providers; admission order does not depend on I/O completion.
 	let directories = customDirectories;
-	if (process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")) {
+	if (process.platform === "linux" && offlineFromEnv()) {
 		// Deduplicate within this load only; refreshes must still read current files.
 		const seen = new Set<string>();
 		directories = directories.filter(dir => {

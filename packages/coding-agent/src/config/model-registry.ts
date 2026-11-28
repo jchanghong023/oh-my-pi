@@ -181,6 +181,7 @@ import {
 	getUnknownCompatKeys,
 	ModelsConfigFile,
 	type ProviderValidationModel,
+	RESERVED_MODEL_PROVIDERS,
 	validateProviderConfiguration,
 } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
@@ -555,15 +556,17 @@ function selectProviderModels<T extends { provider: string }>(models: T[], provi
 	return providerFilter ? models.filter(model => providerFilter.has(model.provider)) : models;
 }
 
-/**
- * Opening `/models` and hovering a provider are background reconciliations.
- * `refreshCommandCredentials` also marks an explicit catalog refresh
- * (`omp models refresh`, TUI F5).
- */
+/** Omit `refreshCommandCredentials` for automatic discovery, including login and picker focus. */
 export interface ModelRegistryRefreshOptions {
+	/** Explicit user refresh (`omp models refresh`, model hub F5); also re-resolve command credentials. */
 	refreshCommandCredentials?: boolean;
 	/** Keep the cooldowns {@link ModelRegistry.suppressSelector} recorded instead of clearing them. */
 	keepSuppressedSelectors?: boolean;
+}
+
+/** Model discovery policy only; this does not describe network reachability. */
+function isCompanyCatalogMode(): boolean {
+	return offlineFromEnv() || isCompanyLaneActive();
 }
 
 /** Authentication material returned to legacy extensions for one model request. */
@@ -1158,13 +1161,13 @@ export class ModelRegistry {
 	 * Reload models from disk (built-in + custom config).
 	 */
 	async refresh(
-		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online-if-uncached",
+		strategy: ModelRefreshStrategy = "online-if-uncached",
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
 		if (this.#owner) return this.#owner.refresh(strategy, options);
 		this.#reloadStaticModelsForRefresh(options);
 		if (!options?.keepSuppressedSelectors) this.#suppressedSelectors.clear();
-		if (strategy !== "offline" && !offlineFromEnv() && !isCompanyLaneActive()) {
+		if (strategy !== "offline" && !isCompanyCatalogMode()) {
 			this.#lastOnlineRefreshAt = Date.now();
 		}
 		await this.#refreshRuntimeDiscoveries(strategy, undefined, undefined, options?.refreshCommandCredentials);
@@ -1296,9 +1299,7 @@ export class ModelRegistry {
 		}
 	}
 
-	refreshInBackground(
-		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online-if-uncached",
-	): void {
+	refreshInBackground(strategy: ModelRefreshStrategy = "online-if-uncached"): void {
 		if (this.#owner) {
 			this.#owner.refreshInBackground(strategy);
 			return;
@@ -1400,8 +1401,7 @@ export class ModelRegistry {
 			changed = true;
 		}
 		if (
-			!offlineFromEnv() &&
-			!isCompanyLaneActive() &&
+			!isCompanyCatalogMode() &&
 			this.#lastOnlineRefreshAt !== undefined &&
 			Date.now() - this.#lastOnlineRefreshAt >= BUILT_IN_DISCOVERY_CACHE_TTL_MS
 		) {
@@ -1460,7 +1460,7 @@ export class ModelRegistry {
 
 	async refreshProvider(
 		providerId: string,
-		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online",
+		strategy: ModelRefreshStrategy = "online",
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
 		if (this.#owner) return this.#owner.refreshProvider(providerId, strategy, options);
@@ -1501,7 +1501,7 @@ export class ModelRegistry {
 	 */
 	async refreshDiscoverableProviders(
 		providerIds: Iterable<string>,
-		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online-if-uncached",
+		strategy: ModelRefreshStrategy = "online-if-uncached",
 	): Promise<void> {
 		if (this.#owner) return this.#owner.refreshDiscoverableProviders([...providerIds], strategy);
 		const filter = new Set(providerIds);
@@ -1577,7 +1577,7 @@ export class ModelRegistry {
 	 * and patch its context window to what the backend actually serves.
 	 */
 	async refreshSelectedModelMetadata(model: Model<Api>): Promise<Model<Api>> {
-		if (offlineFromEnv() || isCompanyLaneActive()) return model;
+		if (isCompanyCatalogMode()) return model;
 		const discoveryConfig = this.#findLazyRuntimeDiscovery(model.provider);
 		if (!discoveryConfig) {
 			return model;
@@ -1674,9 +1674,7 @@ export class ModelRegistry {
 	 * Drives the same SQLite model cache as built-in providers, so the default
 	 * `online-if-uncached` strategy fetches at most once per cache TTL (24 h).
 	 */
-	async refreshRuntimeProviders(
-		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online-if-uncached",
-	): Promise<void> {
+	async refreshRuntimeProviders(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
 		if (this.#owner) return this.#owner.refreshRuntimeProviders(strategy);
 		if (this.#runtimeModelManagers.size === 0) {
 			return;
@@ -2077,9 +2075,7 @@ export class ModelRegistry {
 	}
 
 	#includesCodeAgent(): boolean {
-		return (
-			!this.#ignoreLocalModelConfig && process.platform === "win32" && !offlineFromEnv() && !isCompanyLaneActive()
-		);
+		return !this.#ignoreLocalModelConfig && process.platform === "win32" && !isCompanyCatalogMode();
 	}
 
 	/**
@@ -2089,35 +2085,26 @@ export class ModelRegistry {
 	 */
 	#withRuntimeSyntheticModels(models: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
 		if (this.#ignoreLocalModelConfig) return models;
-		const stripped = models.filter(
-			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== CODEAGENT_PROVIDER_ID,
-		);
-		if (isCompanyLaneActive() && (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID))) {
-			stripped.push(...getCompanyChatModels());
-		}
+		const stripped = dropProviderModels(models, RESERVED_MODEL_PROVIDERS);
+		const companyIncluded = !providerFilter || providerFilter.has(COMPANY_PROVIDER_ID);
+		const companyRows = companyIncluded ? getCompanyChatModels() : [];
+		stripped.push(...companyRows);
 		if (this.#includesCodeAgent() && (!providerFilter || providerFilter.has(CODEAGENT_PROVIDER_ID))) {
 			initializeCodeAgentProvider();
 			stripped.push(...getCodeAgentModels());
 		}
-		const companyIncluded = !providerFilter || providerFilter.has(COMPANY_PROVIDER_ID);
-		if (companyIncluded) {
-			let companyCount = 0;
-			for (const model of stripped) {
-				if (model.provider === COMPANY_PROVIDER_ID) companyCount++;
-			}
-			if (companyCount !== this.#companyLaneModelCount) {
-				this.#companyLaneModelCount = companyCount;
-				logger.info("Runtime provider model rows selected", {
-					component: "model-registry",
-					event: "runtime_lane_rows_selected",
-					stage: "catalog",
-					result: "completed",
-					operation_id: logger.getLogContext().operation_id ?? this.#diagnosticOperationId,
-					registry_id: this.#diagnosticOperationId,
-					company_included: companyIncluded,
-					company_model_count: companyCount,
-				});
-			}
+		if (companyIncluded && companyRows.length !== this.#companyLaneModelCount) {
+			this.#companyLaneModelCount = companyRows.length;
+			logger.info("Runtime provider model rows selected", {
+				component: "model-registry",
+				event: "runtime_lane_rows_selected",
+				stage: "catalog",
+				result: "completed",
+				operation_id: logger.getLogContext().operation_id ?? this.#diagnosticOperationId,
+				registry_id: this.#diagnosticOperationId,
+				company_included: companyIncluded,
+				company_model_count: companyRows.length,
+			});
 		}
 		return stripped;
 	}
@@ -3001,17 +2988,12 @@ export class ModelRegistry {
 		const providerEntries = Object.entries(value.providers ?? {});
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
 		for (const [providerName, providerConfig] of providerEntries) {
-			if (providerName === CODEAGENT_PROVIDER_ID) {
+			if (RESERVED_MODEL_PROVIDERS.has(providerName)) {
 				this.#warnReservedProviderConfig(
 					providerName,
-					"this built-in provider uses only the current-user registry token; the whole section is ignored",
-				);
-				continue;
-			}
-			if (providerName === COMPANY_PROVIDER_ID) {
-				this.#warnReservedProviderConfig(
-					providerName,
-					"this provider id belongs to the offline company lane; the whole section is ignored",
+					providerName === CODEAGENT_PROVIDER_ID
+						? "this built-in provider uses only the current-user registry token; the whole section is ignored"
+						: "this provider id belongs to the offline company lane; the whole section is ignored",
 				);
 				continue;
 			}
@@ -3127,12 +3109,10 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
 		credentialScoped?: CredentialScopedCacheDiscovery,
-		manualRefresh = false,
+		explicitRefresh = false,
 	): Promise<void> {
-		const intranet = offlineFromEnv() || isCompanyLaneActive();
-		if (intranet && !manualRefresh) strategy = "offline";
 		try {
-			await this.#runRuntimeDiscoveries(strategy, providerFilter, credentialScoped, intranet);
+			await this.#runRuntimeDiscoveries(strategy, providerFilter, credentialScoped, explicitRefresh);
 		} finally {
 			// Mirrors follow every discovery-layer change, including failure states.
 			this.#scheduleMirrorFlush();
@@ -3143,7 +3123,7 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter: ReadonlySet<string> | undefined,
 		credentialScoped: CredentialScopedCacheDiscovery | undefined,
-		intranet: boolean,
+		explicitRefresh: boolean,
 	): Promise<void> {
 		// Credential-scoped hydration composes a separate runtime layer. It may
 		// precede getAll(), but cannot replace a synchronous standard-cache input.
@@ -3154,6 +3134,9 @@ export class ModelRegistry {
 		// (and may write) its row, which would otherwise reopen the database each time.
 		using _cacheConnection = retainModelCacheConnection(this.#cacheDbPath);
 		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
+		const companyMode = isCompanyCatalogMode();
+		const builtInStrategy = companyMode ? "offline" : strategy;
+		const configuredStrategy = explicitRefresh ? strategy : builtInStrategy;
 		const selectedDiscoverableProviders = (
 			providerFilter
 				? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
@@ -3164,18 +3147,18 @@ export class ModelRegistry {
 				? Promise.resolve<Array<ConfiguredModelDiscoveryResult & { provider: DiscoveryProviderConfig }>>([])
 				: Promise.all(
 						selectedDiscoverableProviders.map(async provider => {
-							const cacheOnly =
-								intranet &&
-								strategy !== "offline" &&
-								(!hasConfiguredDiscoveryEndpoint(provider) ||
-									(this.#implicitLocalProviders.has(provider.provider) &&
-										!this.#implicitProviderEndpointEnv.has(provider.provider)));
+							const useConfiguredEndpoint =
+								configuredStrategy !== "offline" &&
+								(!companyMode ||
+									(hasConfiguredDiscoveryEndpoint(provider) &&
+										(!this.#implicitLocalProviders.has(provider.provider) ||
+											this.#implicitProviderEndpointEnv.has(provider.provider))));
 							return {
 								provider,
 								...(await this.#discoverProviderModelsCoalesced(
 									provider,
-									cacheOnly ? "offline" : strategy,
-									intranet,
+									useConfiguredEndpoint ? configuredStrategy : "offline",
+									companyMode,
 								)),
 							};
 						}),
@@ -3184,7 +3167,7 @@ export class ModelRegistry {
 		const [configuredDiscoveryResults, builtInDiscovery] = await Promise.all([
 			configuredDiscoveriesPromise,
 			// Built-in catalogs can fall back to public endpoints; extension callbacks are opaque.
-			this.#discoverBuiltInProviderModels(intranet ? "offline" : strategy, providerFilter, credentialScoped),
+			this.#discoverBuiltInProviderModels(builtInStrategy, providerFilter, credentialScoped),
 		]);
 		if (
 			startup &&
@@ -4636,7 +4619,7 @@ export class ModelRegistry {
 	#parseModels(config: ModelsConfig): CustomModelOverlay[] {
 		const models: CustomModelOverlay[] = [];
 		for (const [providerName, providerConfig] of Object.entries(config.providers ?? {})) {
-			if (providerName === COMPANY_PROVIDER_ID || providerName === CODEAGENT_PROVIDER_ID) continue;
+			if (RESERVED_MODEL_PROVIDERS.has(providerName)) continue;
 			const modelDefs = providerConfig.models ?? [];
 			if (modelDefs.length === 0) continue; // Override-only, no custom models
 			if (providerConfig.apiKey) {
@@ -5030,7 +5013,7 @@ export class ModelRegistry {
 				continue;
 			}
 			if (!isAvailable(other)) continue;
-			if (other === COMPANY_PROVIDER_ID || other === CODEAGENT_PROVIDER_ID) {
+			if (RESERVED_MODEL_PROVIDERS.has(other)) {
 				const models = other === COMPANY_PROVIDER_ID ? getCompanyChatModels() : getCodeAgentModels();
 				const collision = startupRoleRowCollision(models, selectors);
 				if (collision) return collision;
@@ -5607,9 +5590,10 @@ export class ModelRegistry {
 	 * If provider has oauth: registers OAuth provider for /login support.
 	 */
 	registerProvider(providerName: string, config: ProviderConfigInput, sourceId?: string): void {
-		if (providerName === COMPANY_PROVIDER_ID) throw new Error("The built-in company provider cannot be replaced.");
-		if (providerName === CODEAGENT_PROVIDER_ID)
-			throw new Error("The built-in CodeAgent provider cannot be replaced.");
+		if (RESERVED_MODEL_PROVIDERS.has(providerName)) {
+			const name = providerName === CODEAGENT_PROVIDER_ID ? "CodeAgent" : providerName;
+			throw new Error(`The built-in ${name} provider cannot be replaced.`);
+		}
 		if (this.#ignoreMirrorLocalChange("registerProvider")) return;
 		this.#runtimeChange({ kind: "register", name: providerName, config, sourceId }, () =>
 			this.#registerProvider(providerName, config, sourceId),

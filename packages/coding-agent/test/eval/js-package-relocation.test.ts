@@ -7,7 +7,6 @@ it("routes managed JavaScript and marketplace caches without moving their persis
 	using temp = TempDir.createSync("@omp-js-relocation-");
 	const config = temp.join("config");
 	const cache = temp.join("performance");
-	const selectedCache = process.platform === "linux" ? path.join(cache, String(process.getuid!())) : cache;
 	const project = temp.join("project");
 	await fs.mkdir(project);
 
@@ -66,15 +65,15 @@ console.log(JSON.stringify({
 	const original = await run();
 	const relocated = await run(cache);
 	expect(path.dirname(original.managed)).toBe(path.join(original.agent, "cache", "eval-js", "environments"));
-	expect(path.dirname(relocated.managed)).toBe(path.join(selectedCache, "agent", "cache", "eval-js", "environments"));
+	expect(path.dirname(relocated.managed)).toBe(path.join(original.agent, "cache", "eval-js", "environments"));
 	expect(relocated.project).toBe(await fs.realpath(project));
 	expect(relocated.project).toBe(original.project);
 	expect(relocated.installed).toBe(original.installed);
 	expect(original.installed).toBe(path.join(original.plugins, "installed_plugins.json"));
 	expect(original.marketplacesCache).toBe(path.join(original.plugins, "cache", "marketplaces"));
 	expect(original.pluginsCache).toBe(path.join(original.plugins, "cache", "plugins"));
-	expect(relocated.marketplacesCache).toBe(path.join(selectedCache, "plugins", "cache", "marketplaces"));
-	expect(relocated.pluginsCache).toBe(path.join(selectedCache, "plugins", "cache", "plugins"));
+	expect(relocated.marketplacesCache).toBe(path.join(original.plugins, "cache", "marketplaces"));
+	expect(relocated.pluginsCache).toBe(path.join(original.plugins, "cache", "plugins"));
 	await fs.mkdir(temp.join("xdg-cache", "omp"), { recursive: true });
 	const xdg = await run(undefined, true);
 	expect(path.dirname(xdg.managed)).toBe(path.join(xdg.agent, "cache", "eval-js", "environments"));

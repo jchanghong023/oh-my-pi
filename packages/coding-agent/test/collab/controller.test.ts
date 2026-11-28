@@ -29,6 +29,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import * as pluginHelpers from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { clearOmpExtensionCliRoots } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
+import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { beginStartupComposer } from "@oh-my-pi/pi-coding-agent/modes/startup-composer";
 import { stopPendingStartupComposer } from "@oh-my-pi/pi-coding-agent/modes/startup-frame";
@@ -553,17 +554,31 @@ describe("interactive collaboration startup", () => {
 		expect(local.composer.pendingImages).toEqual([image]);
 	});
 
-	it("keeps the local session when /leave overtakes a numbered-room lookup", async () => {
+	it("keeps the local session when a follow-up /leave overtakes a numbered-room lookup", async () => {
 		const { local, remote, localFile } = await prepareGuestMode();
 		const room = parseCollabLink(remote.link);
 		if ("error" in room) throw new Error(room.error);
 		const reply = Promise.withResolvers<typeof room>();
-		spyOn(NumberedRoomClient.prototype, "lookup").mockReturnValueOnce(reply.promise);
-		const joining = executeBuiltinSlashCommand("/collab2 join pending-room", { ctx: local });
+		const lookup = Promise.withResolvers<AbortSignal | undefined>();
+		spyOn(NumberedRoomClient.prototype, "lookup").mockImplementationOnce((_number, signal) => {
+			lookup.resolve(signal);
+			return reply.promise;
+		});
+		const input = new InputController(local);
+		local.composer.setText("/collab2 join pending-room");
+		const joining = input.handleFollowUp();
+		const signal = await lookup.promise;
 
-		await executeBuiltinSlashCommand("/leave", { ctx: local });
-		reply.resolve(room);
-		await joining;
+		local.composer.setText("/leave");
+		const leaving = input.handleFollowUp();
+		try {
+			// Drain admission while the lookup still holds its response.
+			await Bun.sleep(0);
+			expect(signal?.aborted).toBe(true);
+		} finally {
+			reply.resolve(room);
+			await Promise.all([joining, leaving]);
+		}
 
 		expect(local.collabGuest).toBeUndefined();
 		expect(local.sessionManager.getSessionFile()).toBe(localFile);

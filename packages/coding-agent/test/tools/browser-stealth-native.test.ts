@@ -50,7 +50,9 @@ beforeAll(async () => {
 			}
 		},
 	});
-	launched = await launchHeadlessBrowser({ headless: true });
+	// Shared and service workers can inherit the browser's language list, not the page override.
+	// Set it on this disposable launch so consistency doesn't depend on the host locale.
+	launched = await launchHeadlessBrowser({ headless: true, args: ["--accept-lang=en-US,en"] });
 	page = await launched.browser.newPage();
 	await applyStealthPatches(launched.browser, page, stealth);
 	await applyViewport(page);

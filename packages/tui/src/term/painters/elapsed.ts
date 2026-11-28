@@ -45,7 +45,7 @@ export function elapsedAt(node: UiNode, props: TspElapsedProps, now: number): nu
 }
 
 definePainter("elapsed", (node, cx) => {
-	const props = node.props() as TspElapsedProps & { tone?: TspTone; term?: { decorative?: boolean } };
-	const ms = props.stopped ?? elapsedAt(node, props, cx.now(props.term?.decorative ? "decoration" : undefined));
+	const props = node.props() as TspElapsedProps & { tone?: TspTone };
+	const ms = props.stopped ?? elapsedAt(node, props, cx.now());
 	return lineBlock(cx.theme.style(props.tone ?? "muted", formatDuration(ms, props.format)), cx);
 });

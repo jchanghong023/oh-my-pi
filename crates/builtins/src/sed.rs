@@ -5459,10 +5459,7 @@ impl<'a> LineReader<'a> {
 
 		// input file operands resolve
 		// against the shell working directory.
-		let file = host.fs().open(host.resolve(path))?;
-		if file.metadata().is_ok_and(|meta| meta.is_dir()) {
-			return Err(io::Error::new(io::ErrorKind::IsADirectory, "Is a directory"));
-		}
+		let file = super::open_read_file(host.fs(), &host.resolve(path))?;
 
 		// Regular host files are read whole, never memory-mapped: sed runs in
 		// the host process, where truncating a mapped file under it raises
@@ -5676,10 +5673,7 @@ impl OutputBuffer {
 			self.flush_slice(WriteRange::Complete)?;
 		}
 
-		let mut file = match fs.open(path) {
-			Ok(file) if file.metadata().is_ok_and(|meta| meta.is_dir()) => {
-				return Err(read_error(name, &io::Error::new(io::ErrorKind::IsADirectory, "Is a directory")));
-			},
+		let mut file = match super::open_read_file(fs, path) {
 			Ok(file) => file,
 			Err(e) if e.kind() == io::ErrorKind::IsADirectory => return Err(read_error(name, &e)),
 			Err(_) => return Ok(()),
@@ -9086,14 +9080,16 @@ impl ScriptLineProvider {
 				if p.as_os_str() == "-" {
 					Box::new(BufReader::new(self.stdin.as_ref().expect("stdin stream missing").clone()))
 				} else {
-					let file = self.paths.fs().open(self.paths.resolve(p)).map_err(|e| {
-						SedError::new(4, format!("couldn't open file {}: {}", p.display(), strip_errno(&e)))
-					})?;
-					// GNU reads a directory as an empty script.
-					if file.metadata().is_ok_and(|meta| meta.is_dir()) {
-						Box::new(io::empty())
-					} else {
-						Box::new(BufReader::new(file))
+					match super::open_read_file(self.paths.fs(), &self.paths.resolve(p)) {
+						Ok(file) => Box::new(BufReader::new(file)),
+						// GNU reads a directory as an empty script.
+						Err(e) if e.kind() == io::ErrorKind::IsADirectory => Box::new(io::empty()),
+						Err(e) => {
+							return Err(SedError::new(
+								4,
+								format!("couldn't open file {}: {}", p.display(), strip_errno(&e)),
+							));
+						},
 					}
 				}
 			},
@@ -9265,9 +9261,15 @@ mod tests {
 }
 }
 
-use std::{collections::HashMap, ffi::OsString, io::Write, path::PathBuf};
+use std::{
+	collections::HashMap,
+	ffi::OsString,
+	io::{self, Write},
+	path::{Path, PathBuf},
+};
 
 use clap::{Arg, ArgMatches, Command, arg};
+use omp_vfs::{BlockingFs, File};
 
 use crate::host::{Host, ShellPaths, Utility, format_usage, matches_parser};
 use crate::sed::error_handling::{SedError, SedResult};
@@ -9280,6 +9282,20 @@ use crate::sed::{
 
 const ABOUT: &str = "Stream editor for filtering and transforming text";
 const USAGE: &str = "sed [OPTION]... [script] [file]...";
+
+/// Open a sed input and distinguish directories from other open failures.
+fn open_read_file(fs: &BlockingFs, path: &Path) -> io::Result<File> {
+	match fs.open(path) {
+		Ok(file) if file.metadata().is_ok_and(|metadata| metadata.is_dir()) => {},
+		// Windows may reject a read-only open of a directory before we have a handle.
+		#[cfg(windows)]
+		Err(e)
+			if e.kind() == io::ErrorKind::PermissionDenied
+				&& fs.metadata(path).is_ok_and(|metadata| metadata.is_dir()) => {},
+		result => return result,
+	}
+	Err(io::Error::new(io::ErrorKind::IsADirectory, "Is a directory"))
+}
 
 // the upstream process entry point
 // (which printed help to the process stdout and called `std::process::exit`)
@@ -10129,11 +10145,15 @@ mod tests {
 
 	#[test]
 	fn builtin_executes_e_commands() {
-		// GNU `e command` prints the output as-is before the cycle's output;
-		// bare `e` runs the pattern space and replaces it, minus one newline.
+		// GNU `e command` prints the platform shell's output as-is before the
+		// cycle's output; bare `e` replaces the pattern space, minus one terminator.
+		let echo_output = if cfg!(windows) { "run\r\nx\n" } else { "run\nx\n" };
 		for (script, stdin, expected) in [
-			("1e echo run", "x\n", "run\nx\n"),
+			("1e echo run", "x\n", echo_output),
+			#[cfg(not(windows))]
 			("e printf nonl", "x\n", "nonlx\n"),
+			#[cfg(windows)]
+			("e set /p =nonl<nul", "x\n", "nonlx\n"),
 			("e", "echo hi\n", "hi\n"),
 		] {
 			let (code, capture) = crate::host::run_util::<Sed>(&[script], stdin, "/");

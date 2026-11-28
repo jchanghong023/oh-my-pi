@@ -7,7 +7,6 @@ import { __resetDirsFromEnvForTests, getAgentDir, getNativesDir } from "@oh-my-p
 const ENV_KEYS = [
 	"HOME",
 	"USERPROFILE",
-	"OMP_CACHE_DIR",
 	"OMP_CONFIG_ROOT",
 	"OMP_OFFLINE",
 	"OMP_PROFILE",

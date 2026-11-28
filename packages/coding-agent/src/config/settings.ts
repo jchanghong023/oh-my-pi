@@ -3537,24 +3537,18 @@ export class Settings {
 			raw["snapcompact.systemPrompt"] = raw["snapcompact.systemPrompt"] ? "all" : "none";
 		}
 
-		// Keep the explicit fork mode; otherwise migrate the upstream enum before the old boolean.
+		// Move the fork preset back to the upstream key; hidden is now the clean view.
 		const display = isRecord(raw.display) ? raw.display : undefined;
-		const activity = display && Object.hasOwn(display, "toolActivity")
-			? display.toolActivity : raw["display.toolActivity"];
 		const hide = display && Object.hasOwn(display, "hideToolActivity")
 			? display.hideToolActivity : raw["display.hideToolActivity"];
-		if (!display || !Object.hasOwn(display, "mode")) {
-			const mode = Object.hasOwn(raw, "display.mode") ? raw["display.mode"]
-				: activity === "hidden" ? "clean"
-				: activity === "concise" ? "compact"
-				: activity === "detailed" ? "detailed"
-				: typeof hide === "boolean" ? (hide ? "clean" : "detailed") : undefined;
-			if (mode !== undefined) raw.display = { ...display, mode };
-		}
-		const migratedDisplay = isRecord(raw.display) ? raw.display : undefined;
-		if (migratedDisplay) {
-			delete migratedDisplay.toolActivity;
-			delete migratedDisplay.hideToolActivity;
+		const activity = (display && Object.hasOwn(display, "toolActivity") ? display.toolActivity : raw["display.toolActivity"])
+			?? (display && Object.hasOwn(display, "mode") ? display.mode : raw["display.mode"])
+			?? (typeof hide === "boolean" ? (hide ? "clean" : "detailed") : undefined);
+		if (activity !== undefined) {
+			const next: Record<string, unknown> = { ...display, toolActivity: activity === "hidden" ? "clean" : activity };
+			delete next.mode;
+			delete next.hideToolActivity;
+			raw.display = next;
 		}
 		delete raw["display.toolActivity"];
 		delete raw["display.hideToolActivity"];

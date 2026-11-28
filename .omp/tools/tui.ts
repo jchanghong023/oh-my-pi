@@ -1259,6 +1259,8 @@ const factory = (omp: ToolHost) => {
 			} else {
 				screen?.dispose();
 				rmSync(dir, { recursive: true, force: true });
+				const detail = error instanceof Error ? error.message : String(error);
+				throw new Error(`Failed to start ${JSON.stringify(target)}: ${detail}`, { cause: error });
 			}
 			throw error;
 		}

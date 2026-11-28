@@ -6,7 +6,7 @@ import type { KeyId } from "@oh-my-pi/pi-coding-agent/config/keybindings/key-id"
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings/keybindings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
-import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode, type DisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { ComposerOwner, InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { imageAttachmentSource } from "@oh-my-pi/pi-coding-agent/utils/image-source";
@@ -138,6 +138,13 @@ function createContext() {
 		isPythonMode: false,
 		isBtwMode: false,
 		toolActivity: "detailed",
+		displayMode: "detailed" as DisplayMode,
+		syncDisplayMode(this: { displayMode: DisplayMode; toolOutputExpanded: boolean }, next: DisplayMode) {
+			if (this.displayMode === next) return false;
+			this.displayMode = next;
+			this.toolOutputExpanded = false;
+			return true;
+		},
 		toolOutputExpanded: false,
 		settings: Settings.isolated(),
 		handleHotkeysCommand: vi.fn(),
@@ -1506,7 +1513,8 @@ describe("InputController global editor actions", () => {
 		expect(context.press("ctrl+g")).toBe("global");
 		expect(openExternalEditor).toHaveBeenCalledTimes(1);
 		expect(context.press("ctrl+shift+o")).toBe("global");
-		expect(cfgDisplayMode.get(context.ctx.settings)).toBe("clean");
+		expect(context.ctx.displayMode).toBe("concise");
+		expect(cfgDisplayMode.get(context.ctx.settings)).toBe("concise");
 		expect(context.press("alt+l")).toBe("global");
 		expect(context.spies.resetDisplayAfterAppearanceRefresh).toHaveBeenCalledTimes(1);
 	});

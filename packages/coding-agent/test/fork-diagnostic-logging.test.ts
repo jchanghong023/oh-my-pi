@@ -17,13 +17,13 @@ type RecordLine = {
 };
 
 const cliEntry = path.resolve(import.meta.dir, "../src/cli.ts");
-const profile = "diagnostic-acceptance";
 
 async function sandbox() {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fork-diagnostic-"));
 	const root = path.join(directory, "project");
 	const home = path.join(directory, "home");
-	const cacheRoot = path.join(directory, "cache");
+	const profile = path.basename(directory).toLowerCase();
+	const configRoot = path.join(home, ".omp");
 	await Promise.all([root, home].map(dir => fs.mkdir(dir, { recursive: true, mode: 0o700 })));
 	// Keep OS executable-loading variables and the gate's Bun transpiler cache, not application state.
 	const env: Record<string, string> = {};
@@ -37,7 +37,7 @@ async function sandbox() {
 			env[key] = value;
 	}
 	Object.assign(env, {
-		OMP_CACHE_DIR: cacheRoot,
+		OMP_CONFIG_ROOT: configRoot,
 		HOME: home,
 		USERPROFILE: home,
 		TMPDIR: directory,
@@ -48,8 +48,9 @@ async function sandbox() {
 		OMP_OFFLINE: "1",
 		OMP_LOG_LEVEL: "error",
 	});
-	const selectedCache = process.platform === "linux" ? path.join(cacheRoot, String(process.getuid!())) : cacheRoot;
-	const logsDir = path.join(selectedCache, "profiles", profile, "logs");
+	const rootForLogs = process.platform === "linux" ? path.join("/dev/shm", `omp-${process.getuid!()}`) : configRoot;
+	const profileRoot = path.join(rootForLogs, "profiles", profile);
+	const logsDir = path.join(profileRoot, "logs");
 	async function logs(): Promise<{ raw: string; records: RecordLine[] }> {
 		const files = await fs.readdir(logsDir);
 		const records: RecordLine[] = [];
@@ -107,6 +108,7 @@ async function sandbox() {
 		logs,
 		cli: run,
 		async cleanup() {
+			await fs.rm(profileRoot, { recursive: true, force: true });
 			await fs.rm(directory, { recursive: true, force: true });
 		},
 	};

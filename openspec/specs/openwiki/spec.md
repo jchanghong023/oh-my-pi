@@ -34,6 +34,11 @@ MUST 使用父仓固定的 [`vendor/openwiki` 子模块](https://github.com/jcha
 
 OpenWiki 随 OMP [通过 CNB 一体交付](../fork-runtime/spec.md#requirement-cnb-精确输入缓存与四附件交付)，不单独发布。验收遵循[维护规格](../fork-maintenance/spec.md#requirement-按风险选择验证和报告证据)。
 
+#### Scenario: 按需加载随包 OpenWiki
+
+- **WHEN** 启动 OMP、发现随包技能或调用 OpenWiki
+- **THEN** OpenWiki 不走插件管理，不因启动或技能发现加载知识核心；明确调用 CLI 或查询时才在进程内加载所需运行时。
+
 ### Requirement: 使用 OMP 模型与认证
 
 规划和页面生成 MUST 复用 OMP 认证、端点、Provider 限制和请求策略，支持模型调用工具后继续生成，不设 OpenWiki 专用模型目录、登录或网关。

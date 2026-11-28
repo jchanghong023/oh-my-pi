@@ -32,7 +32,7 @@ function sessionState(session: AgentSession): SketchSessionState {
 	return state;
 }
 
-export function restoreSketchDraft(command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime): void {
+function restoreSketchDraft(command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime): void {
 	const { composer } = runtime.ctx;
 	// Enter may already have removed the command; never clear newer typing or
 	// turn the slash invocation itself back into ordinary prompt text.
@@ -68,6 +68,7 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "sketch",
 		description: "Draw in a local browser canvas and attach the PNG to your draft",
+		tuiInput: { restoreGuestDraft: restoreSketchDraft },
 		handleTui: (command, runtime) => {
 			const { ctx } = runtime;
 			const { composer, session, sessionManager } = ctx;

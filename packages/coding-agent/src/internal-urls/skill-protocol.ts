@@ -30,7 +30,7 @@ import {
 } from "../extensibility/skills";
 import { MCPManager, type MCPManagerApi } from "../mcp/manager";
 import skillDoc from "../prompts/internal-urls/skill.md" with { type: "text" };
-import { ensureSpecDrivenResources, hasBundledSpecDrivenSkill } from "../spec-driven/resources";
+import { findBundledSpecDrivenSkill } from "../spec-driven/resources";
 import {
 	checkSkillReadAccess,
 	getGrantedSpecSkill,
@@ -102,28 +102,6 @@ function findKnownUrlSkill(
 	skill ??= getGrantedSpecSkill(skillName, access) ?? skills.find(s => s.name === skillName);
 	if (!skill) return undefined;
 	return { skill, urlPath };
-}
-
-/** An unloaded pinned name remains protected even when no local skill owns the URL. */
-async function findBundledSkill(skillName: string): Promise<Skill | undefined> {
-	if (!hasBundledSpecDrivenSkill(skillName)) return undefined;
-	const resources = await ensureSpecDrivenResources();
-	const entry = resources.manifest.skills.find(entry => entry.name === skillName);
-	if (!entry) throw new Error(`Missing bundled skill in manifest: ${skillName}`);
-	const filePath = path.resolve(resources.root, entry.path);
-	return {
-		name: entry.name,
-		filePath,
-		baseDir: path.dirname(filePath),
-		description: "",
-		source: `bundled-${entry.source}`,
-		hide: true,
-		containRoot: {
-			openspec: resources.openspecRoot,
-			superpowers: resources.superpowersRoot,
-			jch: resources.jchRoot,
-		}[entry.source],
-	};
 }
 
 /**
@@ -266,7 +244,7 @@ async function findUrlSkillAnew(
 	const discovered = refreshed && findKnownUrlSkill(url, skillName, refreshed, access);
 	if (discovered) return discovered;
 
-	const bundled = await findBundledSkill(skillName);
+	const bundled = await findBundledSpecDrivenSkill(skillName);
 	if (bundled) return { skill: bundled, urlPath: url.rawPathname ?? url.pathname };
 
 	const available = (refreshed ?? host.skills).filter(s => !s.hide && !isExplicitOnlySkill(s)).map(s => s.name);

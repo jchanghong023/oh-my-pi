@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import * as ai from "@oh-my-pi/pi-ai";
-import { getCodeAgentModels } from "../src/config/codeagent-provider";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { CommitInferenceCache, computeCommitCacheKey } from "../src/commit/conventional/cache";
 import { type ConventionalGenerationConfig, conventionalGenerationConfig } from "../src/commit/conventional/config";
@@ -215,7 +215,7 @@ describe("llm-git generation routing", () => {
 	});
 
 	test("retries failed CodeAgent fast generation before falling back to analysis", async () => {
-		const target = { model: getCodeAgentModels()[0]!, apiKey: "test-key" };
+		const target = { model: getBundledModel("codeagent", "deepseek-v4.1-flash-1017"), apiKey: "test-key" };
 		let calls = 0;
 		const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
 			calls += 1;

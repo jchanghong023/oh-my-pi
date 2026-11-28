@@ -48,22 +48,22 @@ describe("ModelRegistry default custom models config", () => {
 	});
 
 	test.each(["null", "{apiKey: 7}", "{models: [{id: forbidden-model}]}"])(
-		"ignores reserved codeagent input %s without dropping unrelated models",
-		codeagent => {
+		"ignores reserved company input %s without dropping unrelated models",
+		company => {
 			writeModelsYaml("models.yml", {
 				provider: "deepseek",
 				modelId: "kept-model",
 				modelName: "Kept model",
 				baseUrl: "https://unrelated.invalid/v1",
 			});
-			fs.appendFileSync(path.join(tempDir.path(), "models.yml"), `  codeagent: ${codeagent}\n`);
+			fs.appendFileSync(path.join(tempDir.path(), "models.yml"), `  company: ${company}\n`);
 
 			const registry = new ModelRegistry(authStorage);
 
 			expect(registry.getError()).toBeUndefined();
 			expect(registry.find("deepseek", "kept-model")?.baseUrl).toBe("https://unrelated.invalid/v1");
-			expect(registry.find("codeagent", "forbidden-model")).toBeUndefined();
-			expect(registry.getReservedProviderWarnings().some(warning => warning.includes("providers.codeagent"))).toBe(
+			expect(registry.find("company", "forbidden-model")).toBeUndefined();
+			expect(registry.getReservedProviderWarnings().some(warning => warning.includes("providers.company"))).toBe(
 				true,
 			);
 		},

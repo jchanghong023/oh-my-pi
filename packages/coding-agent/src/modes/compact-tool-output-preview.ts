@@ -19,7 +19,6 @@ import { formatPathRelativeToCwd } from "../tools/path-utils";
 import { classifyGroupedLines, isGroupedHeader, isMatchRow } from "../ui/tools/grouped-output";
 import { wrapTextWithAnsi } from "../utils/text-width";
 import { compactToolPreviewInfo } from "./compact-thinking-preview";
-import { cfgDisplayMode } from "./settings";
 import type { InteractiveModeContext } from "./types";
 
 function singleLine(value: string): string {
@@ -150,7 +149,7 @@ export class CompactToolOutputPreview {
 	#numberedDiff?: { diff: string; rows: Set<string> };
 
 	constructor(
-		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "shell" | "settings">,
+		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "shell" | "displayMode">,
 		private readonly availableRows: () => number = () => 6,
 		private readonly coveredDiff?: (toolCallId: string, file: string, width: number) => string | undefined,
 		private readonly onChange: () => void = () => {},
@@ -306,8 +305,9 @@ export class CompactToolOutputPreview {
 	}
 
 	#header(width: number): PreviewHeader | undefined {
+		if (this.ctx.displayMode !== "compact" || width < 1) return undefined;
 		const selected = this.#source(width);
-		if (cfgDisplayMode.get(this.ctx.settings) !== "compact" || !selected || width < 1) return undefined;
+		if (!selected) return undefined;
 		const height = Math.max(0, Math.min(6, Math.floor(this.availableRows())));
 		if (height === 0) return undefined;
 		const inset = Math.min(1, width - 1);

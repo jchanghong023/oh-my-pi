@@ -11,7 +11,6 @@ import type { EditCard, EditTerm } from "../ui/tools/edit";
 import "../ui/styles/tools/block";
 import "../ui/styles/tools/edit";
 import { shortenPath } from "../utils/render-utils";
-import { cfgDisplayMode } from "./settings";
 import type { InteractiveModeContext } from "./types";
 
 function displayPath(cwd: string, file: string): string {
@@ -57,15 +56,13 @@ export class CompactFileDiff {
 	};
 
 	constructor(
-		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "shell" | "composer" | "settings">,
+		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "shell" | "composer" | "displayMode">,
 		private readonly availableRows: () => number,
 		private readonly onChange: () => void = () => {},
 	) {}
 
 	#source(): readonly TurnToolDiff[] | undefined {
-		return cfgDisplayMode.get(this.ctx.settings) === "compact"
-			? this.ctx.viewSession.getLatestTurnToolDiffs()
-			: undefined;
+		return this.ctx.displayMode === "compact" ? this.ctx.viewSession.getLatestTurnToolDiffs() : undefined;
 	}
 
 	close(): void {

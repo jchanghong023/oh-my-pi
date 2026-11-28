@@ -42,20 +42,24 @@ async function runModels(
 		await fs.mkdir(claudeDir);
 		await fs.writeFile(path.join(claudeDir, "settings.json"), COMPANY_SETTINGS);
 	}
+	const configRoot = path.join(home, ".omp");
+	const profile = process.platform === "linux" ? path.basename(home).toLowerCase() : undefined;
+	const agentDir = profile ? path.join(configRoot, "profiles", profile, "agent") : path.join(home, "agent");
+	const cacheProfile = profile && path.join("/dev/shm", `omp-${process.getuid!()}`, "profiles", profile);
+	if (cacheProfile) tempDirs.push(cacheProfile);
 	const env: Record<string, string> = {
 		PATH: process.env.PATH ?? "",
 		SystemRoot: process.env.SystemRoot ?? "",
 		HOME: home,
 		USERPROFILE: home,
-		OMP_CONFIG_ROOT: path.join(home, ".omp"),
-		OMP_CACHE_DIR: path.join(home, "cache"),
+		OMP_CONFIG_ROOT: configRoot,
+		...(profile ? { OMP_PROFILE: profile } : {}),
 		CLAUDE_CONFIG_DIR: claudeDir,
-		PI_CODING_AGENT_DIR: path.join(home, "agent"),
+		PI_CODING_AGENT_DIR: agentDir,
 		OMP_OFFLINE: "1",
 		PI_CONFIG_DIR: ".omp",
 		NO_COLOR: "1",
 	};
-	const agentDir = env.PI_CODING_AGENT_DIR!;
 	await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
 	if (options.modelsConfig !== undefined) {
 		await fs.writeFile(path.join(agentDir, "models.yml"), JSON.stringify(options.modelsConfig));
@@ -87,12 +91,7 @@ async function runModels(
 		);
 		extensionArgs.push("--extension", extensionFile);
 		if (options.extensionCache === "warm") {
-			// The offline CLI reads from the selected cache root, not the agent config directory.
-			const cacheRoot = env.OMP_CACHE_DIR!;
-			const modelCacheDir = path.join(
-				process.platform === "linux" ? path.join(cacheRoot, String(process.getuid!())) : cacheRoot,
-				"agent",
-			);
+			const modelCacheDir = cacheProfile ? path.join(cacheProfile, "agent") : agentDir;
 			await fs.mkdir(modelCacheDir, { recursive: true, mode: 0o700 });
 			const outcome = writeModelCache(
 				"opencode-go",

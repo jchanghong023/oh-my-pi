@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { type OpenAICompletionsOptions, streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { AssistantMessageEvent, Context } from "@oh-my-pi/pi-ai/types";
+import type { Context } from "@oh-my-pi/pi-ai/types";
 import {
 	CodeAgentTokenCache,
 	getCodeAgentModels,
@@ -53,7 +53,6 @@ async function httpProbe(
 	const cache = new CodeAgentTokenCache(readToken);
 	const model = getCodeAgentModels()[0]!;
 	const results = [];
-	const events: AssistantMessageEvent[][] = [];
 	try {
 		for (let index = 0; index < calls; index++) {
 			const stream = streamCodeAgent(
@@ -70,18 +69,15 @@ async function httpProbe(
 				},
 				cache,
 			);
-			const observed: AssistantMessageEvent[] = [];
-			for await (const event of stream) observed.push(event);
-			events.push(observed);
 			results.push(await stream.result());
 		}
-		return { headers, results, events, cache };
+		return { headers, results, cache };
 	} finally {
 		server.stop(true);
 	}
 }
 
-// 覆盖 fork.md「CodeAgent 内置模型」：真实 localhost HTTP/SSE 边界，不接触真实凭据。
+// 覆盖模型规格的 CodeAgent 认证契约：走本机 HTTP/SSE，不接触真实凭据。
 describe("CodeAgent hot credential refresh", () => {
 	test("successful requests use startup cache and x-auth-token only", async () => {
 		let reads = 0;
@@ -127,21 +123,21 @@ describe("CodeAgent hot credential refresh", () => {
 		});
 	}
 
-	for (const status of [401, 503]) {
-		test(`changed token retries once after HTTP ${status}`, async () => {
+	for (const status of [401, 403]) {
+		test(`HTTP ${status} refreshes the token for the next request without retrying`, async () => {
 			let reads = 0;
 			const probe = await httpProbe(
 				() => (++reads === 1 ? "synthetic-A" : "synthetic-B"),
 				(_request, count) => (count === 1 ? new Response("synthetic-private-error", { status }) : success()),
+				2,
 			);
 			expect(reads).toBe(2);
 			expect(probe.headers.map(headers => headers.get("x-auth-token"))).toEqual(["synthetic-A", "synthetic-B"]);
-			expect(probe.results[0]!.stopReason).toBe("stop");
-			expect(probe.events[0]!.filter(event => event.type === "start")).toHaveLength(1);
+			expect(probe.results.map(result => result.stopReason)).toEqual(["error", "stop"]);
 		});
 	}
 
-	test("unchanged token never enters generic HTTP or provider retries", async () => {
+	test("HTTP 503 neither refreshes the token nor retries the request", async () => {
 		let reads = 0;
 		const probe = await httpProbe(
 			() => {
@@ -151,25 +147,26 @@ describe("CodeAgent hot credential refresh", () => {
 			() => new Response("synthetic-A private payload", { status: 503 }),
 		);
 		expect(probe.headers).toHaveLength(1);
-		expect(reads).toBe(2);
+		expect(reads).toBe(1);
 		expect(probe.results[0]!.stopReason).toBe("error");
 		expect(probe.results[0]!.errorMessage).not.toContain("synthetic-A");
 		expect(probe.results[0]!.errorMessage).not.toContain("private payload");
 	});
 
-	test("second failure refreshes cache but cannot replay again", async () => {
+	test("each separately submitted authentication failure refreshes the cache once", async () => {
 		let reads = 0;
 		const probe = await httpProbe(
 			() => ["synthetic-A", "synthetic-B", "synthetic-C"][reads++],
 			(_request, count) => (count <= 2 ? new Response("private", { status: 401 }) : success()),
-			2,
+			3,
 		);
 		expect(probe.headers.map(headers => headers.get("x-auth-token"))).toEqual([
 			"synthetic-A",
 			"synthetic-B",
 			"synthetic-C",
 		]);
-		expect(probe.results.map(result => result.stopReason)).toEqual(["error", "stop"]);
+		expect(probe.results.map(result => result.stopReason)).toEqual(["error", "error", "stop"]);
+		expect(reads).toBe(3);
 	});
 
 	for (const delta of [
@@ -201,7 +198,7 @@ describe("CodeAgent hot credential refresh", () => {
 		});
 	}
 
-	test("pre-output SSE errors may replay only with a changed token", async () => {
+	test("pre-output SSE authentication failure refreshes without replaying", async () => {
 		let reads = 0;
 		const probe = await httpProbe(
 			() => (++reads === 1 ? "synthetic-A" : "synthetic-B"),
@@ -211,12 +208,14 @@ describe("CodeAgent hot credential refresh", () => {
 							headers: { "content-type": "text/event-stream" },
 						})
 					: success(),
+			2,
 		);
 		expect(probe.headers.map(headers => headers.get("x-auth-token"))).toEqual(["synthetic-A", "synthetic-B"]);
-		expect(probe.results[0]!.stopReason).toBe("stop");
+		expect(probe.results.map(result => result.stopReason)).toEqual(["error", "stop"]);
+		expect(reads).toBe(2);
 	});
 
-	test("transport failures are not internally retried with the old token", async () => {
+	test("transport failures neither refresh the token nor retry the request", async () => {
 		let reads = 0;
 		let requests = 0;
 		const tokens: (string | null)[] = [];
@@ -233,12 +232,12 @@ describe("CodeAgent hot credential refresh", () => {
 			},
 			cache,
 		).result();
-		expect(result.stopReason).toBe("stop");
-		expect(tokens).toEqual(["synthetic-A", "synthetic-B"]);
-		expect(reads).toBe(2);
+		expect(result.stopReason).toBe("error");
+		expect(tokens).toEqual(["synthetic-A"]);
+		expect(reads).toBe(1);
 	});
 
-	test("a connection closing after text refreshes only the next request", async () => {
+	test("a connection closing after text leaves the cached token unchanged", async () => {
 		let reads = 0;
 		const probe = await httpProbe(
 			() => (++reads === 1 ? "synthetic-A" : "synthetic-B"),
@@ -248,7 +247,7 @@ describe("CodeAgent hot credential refresh", () => {
 					: success(),
 			2,
 		);
-		expect(probe.headers.map(headers => headers.get("x-auth-token"))).toEqual(["synthetic-A", "synthetic-B"]);
+		expect(probe.headers.map(headers => headers.get("x-auth-token"))).toEqual(["synthetic-A", "synthetic-A"]);
 		expect(probe.results.map(result => result.stopReason)).toEqual(["error", "stop"]);
 	});
 
@@ -276,7 +275,7 @@ describe("CodeAgent hot credential refresh", () => {
 			expect(AIError.is(result.errorId, AIError.Flag.Abort)).toBe(false);
 			expect(result.errorMessage).not.toContain("synthetic-timeout-token");
 			expect(probe.headers).toHaveLength(1);
-			expect(reads).toBe(2);
+			expect(reads).toBe(1);
 		});
 	}
 
@@ -420,9 +419,9 @@ describe("CodeAgent hot credential refresh", () => {
 						return calls === 1 ? new Response("private", { status: 401 }) : success();
 					},
 				}).result();
-				expect(result.stopReason).toBe("stop");
+			expect(result.stopReason).toBe(turn === 0 ? "error" : "stop");
 			}
-			expect(tokens).toEqual(["synthetic-public-A", "synthetic-public-B", "synthetic-public-B"]);
+		expect(tokens).toEqual(["synthetic-public-A", "synthetic-public-B"]);
 			expect(resolvers).toBe(0);
 			expect(reads).toBe(2);
 		} finally {

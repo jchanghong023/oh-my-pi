@@ -50,7 +50,6 @@ async function isolatedEnv(
 		TEMP: home,
 		TMP: home,
 		OMP_CONFIG_ROOT: path.join(home, ".omp"),
-		OMP_CACHE_DIR: path.join(home, "cache"),
 		CLAUDE_CONFIG_DIR: claudeDir,
 		OMP_OFFLINE: "1",
 		NO_COLOR: "1",

@@ -253,16 +253,12 @@ import {
 import { SessionObserverRegistry } from "../task/session-observer-registry";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { sanitizeStatusText } from "./view-model/chrome/shared";
-import { CompactFileDiff } from "./compact-file-diff";
-import { CompactThinkingPreview } from "./compact-thinking-preview";
-import { CompactToolOutputPreview } from "./compact-tool-output-preview";
+import { CompactDock } from "./interactive/compact-dock";
 import {
 	isLiveTodoLoopCard,
 	restoreTodoLoopView,
-	setTodoLoopCardsExpanded,
 	suspendTodoLoopView,
 } from "../todoloop/presentation";
-import type { LocalAgentSessionEvent } from "../session/agent-session-events";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "./skill-command";
 import { parseCommandArgs } from "../utils/command-args";
 import type {
@@ -368,6 +364,8 @@ import {
 	cfgTuiVimStartMode,
 	cfgTuiVimYankToClipboard,
 	cfgCompletionNotify,
+	type DisplayMode,
+	isCleanTranscript,
 	type ToolActivityMode,
 	transcriptToolActivity,
 } from "./settings";
@@ -505,7 +503,7 @@ const cfgLiveUiSettings = combine({
 	"composer.predictionAlternatives": cfgComposerPredictionAlternatives,
 	"compaction.enabled": cfgCompactionEnabled,
 	"compaction.methodOrder": cfgCompactionMethodOrder,
-	"display.mode": cfgDisplayMode,
+	"display.toolActivity": cfgDisplayMode,
 	"display.shellVisualization": cfgDisplayShellVisualization,
 	"terminal.showImages": cfgTerminalShowImages,
 	"terminal.programStatus": cfgTerminalProgramStatus,
@@ -701,18 +699,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #presenter: TranscriptPresenter;
 	/** What the transcript's message faces read (the live ones, and a replica's). */
 	readonly #messageEnv: MessageFaceEnv;
-	/** The status row's working row. */
-	readonly #compactActive = signal(false);
-	readonly compactThinkingPreview: CompactThinkingPreview;
-	readonly compactToolOutputPreview: CompactToolOutputPreview;
-	readonly compactFileDiff: CompactFileDiff;
-	#compactTodoExpanded = false;
+	readonly #compactDock: CompactDock;
+	#displayMode?: DisplayMode;
 	#programStatusProbeStarted = false;
 	readonly #working: WorkingRows;
 	/** The view's display flags as signals the blocks read (the fields below write them). */
 	readonly #display: DisplayFlags = {
 		toolOutputExpanded: signal(false),
 		toolActivity: signal<ToolActivityMode>("detailed"),
+		cleanTranscript: signal(false),
 		hideThinking: signal(false),
 		proseOnlyThinking: signal(true),
 		expandThinkingBlocks: signal(false),
@@ -738,7 +733,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#display.toolOutputExpanded.set(expanded);
 	}
 	get compactTodoExpanded(): boolean {
-		return this.#compactTodoExpanded;
+		return this.#compactDock.todoExpanded;
 	}
 	get hideToolActivity(): boolean {
 		return this.toolActivity === "hidden";
@@ -748,6 +743,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	get toolActivity(): ToolActivityMode {
 		return this.#display.toolActivity();
+	}
+	get displayMode(): DisplayMode {
+		return this.#displayMode ?? cfgDisplayMode.get(this.settings);
+	}
+	get cleanTranscript(): boolean {
+		return this.#display.cleanTranscript();
 	}
 	todoExpanded = false;
 	planModeEnabled = false;
@@ -824,7 +825,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	/** Push the effective thinking visibility to the blocks. */
 	#syncHideThinking(): void {
-		this.#display.hideThinking.set(this.hideToolActivity || this.effectiveHideThinkingBlock);
+		this.#display.hideThinking.set(this.effectiveHideThinkingBlock);
 	}
 	#sessionsWithDisplayableThinkingContent = new WeakSet<AgentViewSession>();
 	/** Whether the visible session has produced thinking content the user can reveal. */
@@ -1409,10 +1410,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (options?.viewOnly) suspendTodoLoopView(this);
 		this.#hideSessionInfo();
 		this.#working.clear();
-		this.compactThinkingPreview.clear(options?.clearCompactToolHistory ? this.session : undefined);
-		this.compactToolOutputPreview.clear();
-		this.compactFileDiff.clear();
-		this.#refreshCompact();
+		this.#compactDock.clear(options?.clearCompactToolHistory ? this.session : undefined);
 		this.#presenter.clearPendingExecRuns();
 		this.hud.queue.groups.set([]);
 		this.#clearJudgmentBatchProgress();
@@ -1666,7 +1664,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.hud.subagents.onToggle = () => this.#togglePinnedHudExpanded();
 		this.hud.queue.onEdit = () => this.handleDequeue();
 
-		this.#display.toolActivity.set(transcriptToolActivity(cfgDisplayMode.get(this.settings)));
 		this.#display.proseOnlyThinking.set(cfgProseOnlyThinking.get(this.settings));
 		this.#display.expandThinkingBlocks.set(cfgExpandThinkingBlocks.get(this.settings));
 		this.#syncTranscriptDisplaySettings();
@@ -1724,32 +1721,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#extensionUiController = new ExtensionUiController(this);
 		this.#eventController = new EventController(
 			this,
-			event => this.#observeCompactPresentation(event),
-			() => this.#refreshCompact(),
+			event => this.#compactDock.observe(event),
+			() => this.#compactDock.invalidate(),
 		);
-		this.compactFileDiff = new CompactFileDiff(
-			this,
-			() => Math.min(Math.floor(this.shell.size().rows / 3), this.#compactRows()),
-			() => this.#refreshCompact(),
-		);
-		this.compactToolOutputPreview = new CompactToolOutputPreview(
-			this,
-			() => this.#compactRows() - (this.viewSession.getLatestTurnToolDiffs()?.length ? 3 : 0),
-			(id, path, width) => this.compactFileDiff.coveredDiff(id, path, width),
-			() => this.#refreshCompact(),
-		);
-		this.compactThinkingPreview = new CompactThinkingPreview(
+		this.#compactDock = new CompactDock(
 			this,
 			() => this.#eventController.asyncWaitLabel,
-			width => this.compactToolOutputPreview.compactActivity(width),
-		);
-		this.#frame.mountCompactPresentation(
-			this.#compactActive,
-			width => this.compactThinkingPreview.rows(width),
-			width => this.compactToolOutputPreview.render(width),
-			width => this.compactFileDiff.render(width),
-			() => this.#eventController.asyncWaitLabel !== undefined,
-			() => cfgMotionResolved.get(this.settings).shimmer ?? "classic",
 			() => this.interruptFromPointer(),
 		);
 		this.#commandController = new CommandController(this);
@@ -1761,7 +1738,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.hideThinkingBlock = cfgHideThinkingBlock.get(settings);
 		this.#inputController = new InputController(this);
 		this.collabController = new CollabController(this);
-		this.#syncCompactMode();
+		this.syncDisplayMode(cfgDisplayMode.get(this.settings));
 		this.session.setPromptDropped?.(prompt => this.restoreDroppedPrompt(prompt));
 		this.#observerRegistry = new SessionObserverRegistry();
 		this.session.attachSubagentObservers(this.#observerRegistry);
@@ -1891,7 +1868,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(
 			this.interceptInput(
 				event =>
-					event.type === "key" && event.key.kind !== "release" && this.compactFileDiff.handleKey(event.key.id),
+					event.type === "key" && event.key.kind !== "release" && this.#compactDock.handleKey(event.key.id),
 			),
 		);
 		this.shell.transcript.onSelect = href => this.#onTranscriptSelect(href);
@@ -3881,17 +3858,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Field comparisons skip effects the keybinding toggles already applied. The blocks read
 		// these flags reactively; rows already in scrollback change only with a replay.
-		if (any("display.mode")) {
-			const displayMode = next["display.mode"];
-			rememberStartupComposerDisplayMode(displayMode);
-			this.#display.toolActivity.set(transcriptToolActivity(displayMode));
-			this.#syncHideThinking();
-			this.#eventController.refreshWorkingIntent();
-			this.toolOutputExpanded = false;
-			this.#syncCompactMode();
-			resetDisplay = true;
+		if (any("display.toolActivity")) {
+			const mode = next["display.toolActivity"];
+			rememberStartupComposerDisplayMode(mode);
+			if (this.syncDisplayMode(mode)) resetDisplay = true;
 		}
-		if (any("hideThinkingBlock", "proseOnlyThinking", "motion")) this.#refreshCompact();
+		if (any("hideThinkingBlock", "proseOnlyThinking", "motion")) this.#compactDock.invalidate();
 		if (any("terminal.showImages", "display.shellVisualization")) this.#syncTranscriptDisplaySettings();
 		if (any("tui.autoGraph")) {
 			this.#applyAutoGraphSetting();
@@ -7280,8 +7252,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		void this.#recorder?.stop();
 		this.#recorder = undefined;
 		this.#working.clear();
-		this.compactToolOutputPreview.clear();
-		this.compactFileDiff.clear();
+		this.#compactDock.clear();
 		this.setTerminalProgress(false);
 		this.#editorAreaDialog?.close();
 		this.#micCursor?.dispose();
@@ -8017,44 +7988,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#sessionInfoOverlayHandle?.close();
 	}
 
-	#compactRows(): number {
-		const draftLines = this.composer.text().split("\n", 8).length;
-		return Math.max(0, this.shell.size().rows - 8 - draftLines);
-	}
-
-	#refreshCompact(): void {
-		this.#frame.invalidateCompactPresentation();
-	}
-
-	#observeCompactPresentation(event: LocalAgentSessionEvent): void {
-		this.compactThinkingPreview.observe(event);
-		if (!this.#compactActive.peek()) return;
-		this.compactToolOutputPreview.observe(event);
-		if (event.type === "agent_start" || (event.type === "message_start" && event.message.role === "user")) {
-			this.compactFileDiff.sync();
-		}
-		this.#refreshCompact();
-	}
-
-	#syncCompactMode(): void {
-		const compact = cfgDisplayMode.get(this.settings) === "compact";
-		this.#working.setCompact(compact);
-		this.#compactActive.set(compact);
-		if (compact) this.compactToolOutputPreview.restore();
-		else {
-			this.#compactTodoExpanded = false;
-			this.compactToolOutputPreview.clear();
-			this.compactFileDiff.close();
-		}
+	syncDisplayMode(mode: DisplayMode): boolean {
+		if (this.#displayMode === mode) return false;
+		this.#displayMode = mode;
+		const clean = isCleanTranscript(mode);
+		const compact = mode === "compact";
+		this.#display.toolActivity.set(transcriptToolActivity(mode));
+		this.#display.cleanTranscript.set(clean);
+		this.toolOutputExpanded = false;
+		this.#working.setDisplay(clean, compact);
+		this.#compactDock.setActive(compact);
+		return true;
 	}
 
 	toggleCompactDetails(): boolean {
-		if (this.compactFileDiff.toggle()) return true;
-		const expanded = !this.#compactTodoExpanded;
-		if (!setTodoLoopCardsExpanded(this, expanded)) return false;
-		this.#compactTodoExpanded = expanded;
-		this.showStatus(`TodoLoop output expansion: ${expanded ? "enabled" : "disabled"}`);
-		return true;
+		return this.#compactDock.toggleDetails();
 	}
 
 	resetTranscript(): void {
@@ -8246,8 +8194,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.noteDisplayableThinkingContent(message);
 		}
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
-		if (this.#compactTodoExpanded) setTodoLoopCardsExpanded(this, true);
-		this.#refreshCompact();
+		this.#compactDock.restore();
 	}
 
 	/** Build a session context in bounded chunks so terminal input runs between event-loop turns. */
@@ -8260,8 +8207,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.noteDisplayableThinkingContent(message);
 		}
 		await this.#uiHelpers.renderSessionContextIncrementally(sessionContext, options, renderChunk);
-		if (this.#compactTodoExpanded) setTodoLoopCardsExpanded(this, true);
-		this.#refreshCompact();
+		this.#compactDock.restore();
 	}
 
 	async renderInitialMessages(options?: RenderInitialMessagesOptions): Promise<void> {
@@ -8287,9 +8233,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	refreshCompactPresentation(): void {
-		if (this.#compactActive.peek()) this.compactToolOutputPreview.restore();
-		if (this.#compactTodoExpanded) setTodoLoopCardsExpanded(this, true);
-		this.#refreshCompact();
+		this.#compactDock.restore();
 	}
 	/**
 	 * Reconcile the idle "F5 to Retry" status row with the transcript tail: shown when the last

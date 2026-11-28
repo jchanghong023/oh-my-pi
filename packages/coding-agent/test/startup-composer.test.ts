@@ -318,7 +318,7 @@ describe("startup prepaint frame", () => {
 			columns?: number;
 			rows?: number;
 			version?: string;
-			preferences?: Partial<StartupPreferences>;
+			preferences?: Partial<StartupPreferences> | false;
 			status?: StatusPrediction;
 			/** Answer the TSP hello: the frame renders natively, as under Tern. */
 			tern?: boolean;
@@ -331,7 +331,7 @@ describe("startup prepaint frame", () => {
 			version: options.version ?? "test",
 			cache: false,
 			exit,
-			preferences: { ...config, ...options.preferences },
+			...(options.preferences === false ? {} : { preferences: { ...config, ...options.preferences } }),
 			...(options.status ? { status: options.status } : {}),
 		});
 		const lease = takeStartupComposerLease();
@@ -350,6 +350,17 @@ describe("startup prepaint frame", () => {
 	}
 
 	const screen = (): string => term.screen().join("\n");
+
+	it("draws the rounded box from the first frame without cached or loaded preferences", async () => {
+		const lease = await prepaint({ preferences: false });
+		try {
+			term.type("cold start");
+			await term.waitFor(rows => rows.some(row => row.includes("cold start")));
+			expect(screen().split("\n").find(row => row.includes("cold start"))).toMatch(/[│╰].*cold start.*[│╯]/);
+		} finally {
+			await lease.frame.shell.stop();
+		}
+	});
 
 	it("keeps one live composer and terminal across handoff, holding Enter until the mode takes over", async () => {
 		const lease = await prepaint();

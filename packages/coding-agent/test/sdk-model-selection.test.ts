@@ -82,6 +82,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	beforeEach(() => {
 		tempDir = path.join(os.tmpdir(), `pi-sdk-model-selection-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network request in model selection test"));
 	});
 
 	afterEach(async () => {
@@ -3102,6 +3103,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			expect(session.model?.contextWindow).toBe(272_000);
 		} finally {
 			await session.dispose();
+			await session.modelRegistry.awaitBackgroundRefresh();
 		}
 	});
 
@@ -3195,7 +3197,10 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			} finally {
 				// The settings listeners' catalog rebuilds can still hold models.db
 				// after session disposal. Drain them before the fixture removes tempDir.
-				await Promise.all(reapply.mock.results.map(result => result.value));
+				await Promise.all([
+					session.modelRegistry.awaitBackgroundRefresh(),
+					...reapply.mock.results.map(result => result.value),
+				]);
 			}
 		}
 	});
@@ -3240,6 +3245,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			expect(session.model?.contextWindow).toBe(123_456);
 		} finally {
 			await session.dispose();
+			await session.modelRegistry.awaitBackgroundRefresh();
 		}
 	});
 

@@ -5260,7 +5260,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				);
 			}
 			checkAbort();
-			if (!registryFromParent && !isCompanyLaneActive()) {
+			if (!registryFromParent) {
 				modelRegistry.refreshInBackground();
 			} else {
 				logger.debug("runSubagent: reusing parent modelRegistry; skipping refresh");

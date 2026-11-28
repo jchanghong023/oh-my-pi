@@ -10,7 +10,7 @@ import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 import { initTheme } from "../src/ui/theme/service";
-import { createModeTerminal } from "./helpers/mode-terminal";
+import { createModeTerminal, type ModeTerminal } from "./helpers/mode-terminal";
 
 // Issue #6462: the first submit used to spawn the local tiny-title worker
 // synchronously ahead of the first frame, and title generation started before
@@ -22,6 +22,7 @@ describe("InteractiveMode tiny-title prewarm", () => {
 	let mode: InteractiveMode;
 	let session: AgentSession;
 	let tempDir: TempDir;
+	let term: ModeTerminal;
 	// Titling (and thus the prewarm gate) is disabled when PI_NO_TITLE is set,
 	// which the test env exports globally. Clear it per-test and restore after.
 	let previousNoTitle: string | undefined;
@@ -34,21 +35,11 @@ describe("InteractiveMode tiny-title prewarm", () => {
 	});
 
 	beforeEach(async () => {
-		// Keep ProcessTerminal.start() from writing escape queries to the real
-		// terminal; the test only drives the mode API, not real terminal I/O.
-		vi.spyOn(process.stdout, "write").mockReturnValue(true);
-		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
-		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
-		vi.spyOn(process.stdin, "setEncoding").mockReturnValue(process.stdin);
-		if (typeof process.stdin.setRawMode === "function") {
-			vi.spyOn(process.stdin, "setRawMode").mockReturnValue(process.stdin);
-		}
-
 		previousNoTitle = Bun.env.PI_NO_TITLE;
 		delete Bun.env.PI_NO_TITLE;
 
 		resetSettingsForTest();
-		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		await Settings.init({ inMemory: true, cwd: tempDir.path(), overrides: { "git.enabled": false } });
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) {
 			throw new Error("Expected claude-sonnet-4-5 to exist in registry");
@@ -64,22 +55,18 @@ describe("InteractiveMode tiny-title prewarm", () => {
 				},
 			}),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated(),
+			settings: Settings.isolated({ "git.enabled": false }),
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test", () => {}, [], undefined, undefined, createModeTerminal().frame);
+		vi.spyOn(session, "prewarmModelConnection").mockImplementation(() => {});
+		term = createModeTerminal();
+		mode = new InteractiveMode(session, "test", () => {}, [], undefined, undefined, term.frame);
 	});
 
 	afterEach(async () => {
-		// init() defers the prewarm probe behind a setImmediate. Flush one
-		// immediate tick while this case's spies are still installed: an
-		// unflushed callback otherwise fires during a later case, with
-		// `getSessionName` already restored and this mode's tiny role still
-		// configured, and lands in that case's `prewarm` spy (flaky in CI).
-		const pendingImmediates = Promise.withResolvers<void>();
-		setImmediate(pendingImmediates.resolve);
-		await pendingImmediates.promise;
 		mode?.stop();
+		await mode?.shell.stop();
+		term?.dispose();
 		vi.restoreAllMocks();
 		await session?.dispose();
 		resetSettingsForTest();
@@ -92,19 +79,18 @@ describe("InteractiveMode tiny-title prewarm", () => {
 		tempDir.removeSync();
 	});
 
+	async function finishStartup(): Promise<void> {
+		const ready = Promise.withResolvers<void>();
+		await mode.init({ suppressWelcomeIntro: true, startupBackgroundWork: ready.resolve });
+		// The title probe runs synchronously in the same background callback.
+		await ready.promise;
+	}
+
 	it("prewarms the configured local tiny role on startup for an unnamed session", async () => {
 		session.settings.setModelRole("tiny", "local/lfm2.5-230m");
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 
-		await mode.init();
-		// The prewarm call is deferred behind a setImmediate queued during
-		// init() (see interactive-mode.ts); init()'s own awaits are promise
-		// microtasks that can resolve without yielding to the immediate
-		// queue, so the prewarm may not have fired yet when init() settles.
-		// Flush one immediate tick before asserting.
-		const immediateFlushed = Promise.withResolvers<void>();
-		setImmediate(immediateFlushed.resolve);
-		await immediateFlushed.promise;
+		await finishStartup();
 
 		expect(prewarm).toHaveBeenCalledWith("lfm2.5-230m");
 	});
@@ -114,7 +100,7 @@ describe("InteractiveMode tiny-title prewarm", () => {
 		vi.spyOn(mode.sessionManager, "getSessionName").mockReturnValue("resumed-session");
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 
-		await mode.init();
+		await finishStartup();
 
 		expect(prewarm).not.toHaveBeenCalled();
 	});
@@ -122,10 +108,7 @@ describe("InteractiveMode tiny-title prewarm", () => {
 	it("does not prewarm an unconfigured default row", async () => {
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 
-		await mode.init();
-		const immediateFlushed = Promise.withResolvers<void>();
-		setImmediate(immediateFlushed.resolve);
-		await immediateFlushed.promise;
+		await finishStartup();
 
 		expect(prewarm).not.toHaveBeenCalled();
 	});
@@ -134,10 +117,7 @@ describe("InteractiveMode tiny-title prewarm", () => {
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 		session.settings.setModelRole("tiny", "anthropic/claude-haiku-4-5");
 
-		await mode.init();
-		const immediateFlushed = Promise.withResolvers<void>();
-		setImmediate(immediateFlushed.resolve);
-		await immediateFlushed.promise;
+		await finishStartup();
 
 		expect(prewarm).not.toHaveBeenCalled();
 	});

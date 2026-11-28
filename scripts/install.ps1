@@ -27,11 +27,11 @@ $script:InstallTerminalLogged = $false
 $script:InstallPlatform = "windows-unknown"
 $script:InstallVersion = "unspecified"
 $script:InstallLogLevels = @{ ERROR = 0; WARN = 1; INFO = 2; DEBUG = 3 }
+# IsPathRooted alone accepts drive-relative C:foo and root-relative \foo.
+$script:InstallAbsoluteRootPattern = '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)'
 $configuredLevel = ([string]$env:OMP_LOG_LEVEL).Trim().ToUpperInvariant()
 $script:InstallLogThreshold = if ($script:InstallLogLevels.ContainsKey($configuredLevel)) {
     $script:InstallLogLevels[$configuredLevel]
-} elseif (([string]$env:OMP_OFFLINE).Trim() -match '\A(?:1|true|yes|on)\z') {
-    $script:InstallLogLevels.WARN
 } else {
     $script:InstallLogLevels.DEBUG
 }
@@ -68,14 +68,12 @@ function Get-ExplicitConfigRoot {
     if ($root) { $root = $root.Trim() }
     if ($root -eq "~") { $root = $HomeDir }
     elseif ($root -match '^~[/\\]') { $root = $HomeDir + $root.Substring(1) }
-    if ($root -match '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)') { return $root }
+    if ($root -match $script:InstallAbsoluteRootPattern) { return $root }
 }
 
 function Initialize-InstallLog {
     try {
         $homeDir = [Environment]::GetFolderPath("UserProfile")
-        # IsPathRooted alone accepts drive-relative C:foo and root-relative \foo.
-        $absoluteRoot = '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)'
         $configDir = if ($env:PI_CONFIG_DIR) { $env:PI_CONFIG_DIR } else { ".omp" }
         $root = "$homeDir\$configDir"
         $explicitRoot = Get-ExplicitConfigRoot $homeDir
@@ -86,17 +84,13 @@ function Initialize-InstallLog {
             $profile -notmatch '\.$|^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)') {
             $profileSuffix = "profiles\$profile\logs"
         } else { $profileSuffix = "logs" }
-        $fallbackRoot = if ($env:LOCALAPPDATA -match $absoluteRoot) { "$env:LOCALAPPDATA\omp" } else { "$homeDir\.omp" }
-        $cacheRoot = $env:OMP_CACHE_DIR
-        if ($cacheRoot) { $cacheRoot = $cacheRoot.Trim() }
-        if ($cacheRoot -eq "~") { $cacheRoot = $homeDir }
-        elseif ($cacheRoot -match '^~[/\\]') { $cacheRoot = $homeDir + $cacheRoot.Substring(1) }
+        $fallbackRoot = if ($env:LOCALAPPDATA -match $script:InstallAbsoluteRootPattern) { "$env:LOCALAPPDATA\omp" } else { "$homeDir\.omp" }
         $name = "omp.install.{0}.{1}.{2}.log" -f $script:InstallStarted.ToString("yyyy-MM-dd", [Globalization.CultureInfo]::InvariantCulture), $script:InstallStarted.ToUnixTimeMilliseconds(), $PID
         $fallback = $false
         # Compose candidates without consulting the PowerShell drive table.
         # An unavailable drive must fail only inside its own fallback attempt.
-        foreach ($logRoot in @($cacheRoot, $root, $fallbackRoot)) {
-            if ($logRoot -notmatch $absoluteRoot) { continue }
+        foreach ($logRoot in @($root, $fallbackRoot)) {
+            if ($logRoot -notmatch $script:InstallAbsoluteRootPattern) { continue }
             try {
                 $directory = [IO.Path]::GetFullPath("$logRoot\$profileSuffix")
                 [IO.Directory]::CreateDirectory($directory) | Out-Null
@@ -383,7 +377,15 @@ namespace Omp {
     if (-not $OutFile) { return (ConvertFrom-Json -InputObject $result.release_json) }
 }
 
-$CnbReleases = "https://cnb.cool/jchanghong/bin/-/releases"
+# BEGIN GENERATED CNB CONTRACT
+# Regenerate: bun scripts/cnb-generate-installers.ts (verify with --check)
+$CnbReleases = 'https://cnb.cool/jchanghong/bin/-/releases'
+$CnbHost = 'cnb.cool'
+$CnbDefaultTag = 'omp'
+$BinaryName = 'omp-windows-x64.exe'
+$CnbPlatform = 'windows-x64'
+$CnbTitlePattern = ' \[omp:v([^][]*)\]\z'
+# END GENERATED CNB CONTRACT
 $VersionPattern = '(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
 $InstallDir = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { "$env:LOCALAPPDATA\omp" }
 $Package = "@oh-my-pi/pi-coding-agent"
@@ -393,12 +395,10 @@ $RawArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW643
 if (-not $RawArchitecture) {
     throw "Unable to determine Windows architecture"
 }
-$NativeArchitecture = switch ($RawArchitecture.ToUpperInvariant()) {
-    "AMD64" { "x64" }
-    default { throw "Unsupported Windows architecture: $RawArchitecture. Only x64 is supported." }
+if ($RawArchitecture.ToUpperInvariant() -ne "AMD64") {
+    throw "Unsupported Windows architecture: $RawArchitecture. Only x64 is supported."
 }
-$BinaryName = "omp-windows-x64.exe"
-$script:InstallPlatform = "windows-$NativeArchitecture"
+$script:InstallPlatform = $CnbPlatform
 Set-InstallLogVersion $Ref
 Write-InstallLog INFO platform_selected @{ result = "selected" }
 
@@ -661,14 +661,14 @@ function Install-Binary {
         throw "Refusing to replace a directory at $OutPath"
     }
     Set-InstallStage "release_metadata"
-    $ReleaseTag = if ($Ref) { $Ref } else { "omp" }
+    $ReleaseTag = if ($Ref) { $Ref } else { $CnbDefaultTag }
     if ($ReleaseTag -cnotmatch '\A[A-Za-z0-9._+/-]+\z' -or $ReleaseTag -eq "." -or $ReleaseTag.Contains("..")) {
         Write-InstallLog ERROR release_metadata_invalid @{ result = "invalid_requested_tag" }
         throw "Invalid release tag: $ReleaseTag"
     }
     $refPath = [Uri]::EscapeDataString($ReleaseTag)
     Write-Host "Fetching CNB release $ReleaseTag..."
-    Write-InstallLog INFO http_request_started @{ method = "GET"; host = "cnb.cool"; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
+    Write-InstallLog INFO http_request_started @{ method = "GET"; host = $CnbHost; endpoint = "release_tag"; timeout_ms = 60000; attempt = 1 }
     try {
         $Release = Invoke-InstallWebRequest -Uri "$CnbReleases/tags/$refPath" -TimeoutSec 60 -Headers @{ Accept = "application/vnd.cnb.api+json" }
     } catch {
@@ -679,7 +679,7 @@ function Install-Binary {
         }
         throw
     }
-    Write-InstallLog INFO http_request_completed @{ result = "success"; host = "cnb.cool"; endpoint = "release_tag"; http_status = "success" }
+    Write-InstallLog INFO http_request_completed @{ result = "success"; host = $CnbHost; endpoint = "release_tag"; http_status = "success" }
 
     if ($Release.tag_name -isnot [string] -or $Release.tag_name -cne $ReleaseTag) {
         Write-InstallLog ERROR release_metadata_invalid @{ result = "unexpected_tag" }
@@ -689,7 +689,7 @@ function Install-Binary {
     $tagVersion = if ($ReleaseTag -cmatch $semver) { $ReleaseTag -creplace '\Av', '' }
     $titleVersion = if ($Release.name -is [string]) {
         if ($Release.name -cmatch $semver) { $Release.name -creplace '\Av', '' }
-        elseif ($Release.name -cmatch ' \[omp:v([^][]*)\]\z') {
+        elseif ($Release.name -cmatch $CnbTitlePattern) {
             $declared = $Matches[1]
             if ($declared -cmatch "\A$VersionPattern\z") { $declared }
             else {
@@ -734,7 +734,7 @@ function Install-Binary {
     $expectedHash = $digest
 
     Set-InstallStage "download_url"
-    Write-InstallLog INFO http_request_started @{ method = "GET"; host = "cnb.cool"; endpoint = "release_asset_url"; timeout_ms = 60000; attempt = 1 }
+    Write-InstallLog INFO http_request_started @{ method = "GET"; host = $CnbHost; endpoint = "release_asset_url"; timeout_ms = 60000; attempt = 1 }
     try {
         $redirect = Invoke-InstallWebRequest -Uri "$CnbReleases/download/$refPath/$BinaryName" -TimeoutSec 60 -Redirect
     } catch {
@@ -748,7 +748,7 @@ function Install-Binary {
         Write-InstallLog ERROR http_request_failed @{ result = "invalid_redirect"; endpoint = "release_asset_url"; http_status = $redirect.status }
         throw "CNB did not return an HTTPS binary download redirect."
     }
-    Write-InstallLog INFO http_request_completed @{ result = "success"; host = "cnb.cool"; endpoint = "release_asset_url"; http_status = 302 }
+    Write-InstallLog INFO http_request_completed @{ result = "success"; host = $CnbHost; endpoint = "release_asset_url"; http_status = 302 }
 
     Set-InstallStage "prepare_candidate"
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null

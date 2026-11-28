@@ -38,6 +38,7 @@
 		"dist/docs-index.generated.txt",
 		"dist/export-viewer.generated.js",
 		"dist/spec-driven-resources*.gz",
+		"dist/openspec-runtime*.gz",
 		"dist/developer-test-agent-resources*.gz",
 		"dist/developer-test-agent",
 		"dist/openwiki-vendor.js",

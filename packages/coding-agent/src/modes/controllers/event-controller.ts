@@ -124,6 +124,26 @@ function lastBashTodoUpdate(result: unknown): TodoPhase[] | undefined {
 	return (dispatch?.inner as { phases: TodoPhase[] } | undefined)?.phases;
 }
 
+interface AsyncResultJob {
+	jobId?: string;
+	type?: string;
+	label?: string;
+	durationMs?: number;
+}
+
+/** Native task nodes already show the result; a toast replaces the delivery rows. */
+function nativeTaskJobToast(message: { role: string; customType?: string; details?: unknown }): string | undefined {
+	if (message.role !== "custom" || message.customType !== "async-result" || !isRecord(message.details)) return;
+	const details = message.details as AsyncResultJob & { jobs?: AsyncResultJob[] };
+	const jobs = details.jobs && details.jobs.length > 0 ? details.jobs : [details];
+	if (!jobs.every(job => job.type === "task")) return;
+	if (jobs.length > 1) return `${jobs.length} background tasks completed`;
+	const job = jobs[0]!;
+	const name = sanitizeText(job.label ?? job.jobId ?? "task").trim() || "task";
+	const took = typeof job.durationMs === "number" ? ` · ${formatDuration(job.durationMs)}` : "";
+	return `Background task ${name} completed${took}`;
+}
+
 function exposesRawPartialJson(toolName: string, rawInput: boolean, tool: unknown): boolean {
 	if (rawInput) return true;
 	if (RAW_PARTIAL_JSON_RENDERERS[toolName]) return true;
@@ -418,7 +438,8 @@ export class EventController {
 	// keeps working — the WeakSet makes the coalesced path speak each delta exactly
 	// once instead of twice.
 	#vocalizedMessageUpdates = new WeakSet<object>();
-	readonly #messageUpdateCoalesceMs = offlineFromEnv() ? 100 : 50;
+	static readonly #MESSAGE_UPDATE_COALESCE_MS = 33;
+	readonly #cleanMessageUpdateCoalesceMs = offlineFromEnv() ? 100 : 50;
 
 	constructor(
 		private ctx: InteractiveModeContext,
@@ -559,7 +580,6 @@ export class EventController {
 	}
 
 	dispose(): void {
-		this.#dispatchGeneration++;
 		this.#clearAsyncWait();
 		this.#detachToolApprovalPreviewWaiter?.();
 		this.#detachToolApprovalPreviewWaiter = undefined;
@@ -1049,12 +1069,7 @@ export class EventController {
 		if (this.ctx.session.isAborting) return;
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
-		if (!this.ctx.hideToolActivity) this.ctx.setWorkingMessage(trimmed, false, "tool-intent");
-	}
-
-	refreshWorkingIntent(): void {
-		if (this.#showingAsyncWait || !this.ctx.viewSession.isStreaming) return;
-		this.ctx.setWorkingMessage(this.ctx.hideToolActivity ? undefined : this.#lastIntent, false, "intent-refresh");
+		this.ctx.setWorkingMessage(trimmed, false, "tool-intent");
 	}
 
 	subscribeToAgent(): void {
@@ -1090,17 +1105,19 @@ export class EventController {
 	 * snapshot first so ordering is preserved.
 	 */
 	async dispatchSessionEvent(event: AgentSessionEvent): Promise<void> {
-		const generation = this.#dispatchGeneration;
-		if (
-			event.type === "message_update" &&
-			event.assistantMessageEvent.type !== "thinking_start" &&
-			event.assistantMessageEvent.type !== "thinking_end"
-		) {
-			this.#enqueueMessageUpdate(event);
-			return;
+		if (event.type === "message_update") {
+			const clean = this.ctx.cleanTranscript;
+			const type = event.assistantMessageEvent.type;
+			if (!clean || (type !== "thinking_start" && type !== "thinking_end")) {
+				this.#enqueueMessageUpdate(
+					event,
+					clean ? this.#cleanMessageUpdateCoalesceMs : EventController.#MESSAGE_UPDATE_COALESCE_MS,
+				);
+				return;
+			}
 		}
 		await this.runSerialized(async () => {
-			if (generation === this.#dispatchGeneration) await this.handleEvent(event);
+			await this.handleEvent(event);
 		});
 	}
 
@@ -1111,10 +1128,8 @@ export class EventController {
 	 * the stale work itself.
 	 */
 	async runSerialized(run: () => Promise<void>): Promise<void> {
-		const pending = this.#takePendingMessageUpdate();
-		const generation = this.#dispatchGeneration;
 		await this.#runSerialized(async () => {
-			await this.#flushMessageUpdate(pending, generation);
+			await this.#flushPendingMessageUpdate();
 			await run();
 		});
 	}
@@ -1176,7 +1191,7 @@ export class EventController {
 	 * Speech is per-delta, so the delta is vocalized at arrival before the
 	 * snapshot is (possibly) superseded by a newer one.
 	 */
-	#enqueueMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
+	#enqueueMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>, delayMs: number): void {
 		// Speech is per-delta: every delta is spoken at arrival even when its
 		// cumulative snapshot is later superseded and never rebuilt.
 		this.#vocalizeDelta(event);
@@ -1185,8 +1200,7 @@ export class EventController {
 		this.#pendingMessageRestart ||= event.assistantMessageEvent.type === "start";
 		if (this.#messageUpdateTimer) return;
 		this.#messageUpdateTimer = setTimeout(() => {
-			const pending = this.#takePendingMessageUpdate();
-			const generation = this.#dispatchGeneration;
+			this.#messageUpdateTimer = undefined;
 			// Mirror AgentSession.#emit: attach a catch so a streaming rebuild
 			// failure surfaces as a logged warning instead of a process-level
 			// unhandled rejection (the timer path has no listener to attach one).
@@ -1194,13 +1208,13 @@ export class EventController {
 			// agent_end landing mid-window cannot overtake this flush (issue
 			// #7443 follow-up).
 			void this.#runSerialized(async () => {
-				await this.#flushMessageUpdate(pending, generation);
+				await this.#flushPendingMessageUpdate();
 			}).catch(err => {
 				logger.warn("Message update flush rejected", {
 					error: err instanceof Error ? err.message : String(err),
 				});
 			});
-		}, this.#messageUpdateCoalesceMs);
+		}, delayMs);
 	}
 
 	/**
@@ -1208,29 +1222,20 @@ export class EventController {
 	 * (dropping any superseded intermediates) and clear the queue. Safe to call
 	 * more than once; no-ops when nothing is pending.
 	 */
-	#takePendingMessageUpdate() {
+	async #flushPendingMessageUpdate(): Promise<void> {
 		if (this.#messageUpdateTimer) {
 			clearTimeout(this.#messageUpdateTimer);
 			this.#messageUpdateTimer = undefined;
 		}
 		const event = this.#pendingMessageUpdate;
-		if (!event) return undefined;
+		if (!event) return;
 		this.#pendingMessageUpdate = undefined;
 		const restarted = this.#pendingMessageRestart;
 		this.#pendingMessageRestart = false;
-		return { event, restarted };
-	}
-
-	async #flushMessageUpdate(
-		pending: { event: Extract<AgentSessionEvent, { type: "message_update" }>; restarted: boolean } | undefined,
-		generation: number,
-	): Promise<void> {
-		if (!pending || generation !== this.#dispatchGeneration) return;
-		const { event, restarted } = pending;
 		if (restarted && event.assistantMessageEvent.type !== "start") {
 			await this.#restartAssistantStream(event.message);
 		}
-		if (generation === this.#dispatchGeneration) await this.handleEvent(event);
+		await this.handleEvent(event);
 	}
 
 	/** Whether `#handleToolExecutionStart` has fired for this call id this turn. */
@@ -1320,15 +1325,13 @@ export class EventController {
 	}
 
 	async handleEvent(event: AgentSessionEvent): Promise<void> {
-		const generation = this.#dispatchGeneration;
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
 		}
-		if (generation !== this.#dispatchGeneration) return;
 
 		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
 		await run(event);
-		if (generation === this.#dispatchGeneration) this.observeCompact?.(event);
+		this.observeCompact?.(event);
 	}
 
 	#setTerminalProgress(active: boolean): void {
@@ -1477,6 +1480,8 @@ export class EventController {
 				this.#turnStartedAt = event.message.timestamp;
 				this.#turnUsage.reset();
 			}
+			const taskJobToast =
+				!this.ctx.cleanTranscript && this.ctx.shell.native() ? nativeTaskJobToast(event.message) : undefined;
 			if (
 				event.message.role === "custom" &&
 				this.ctx.optimisticSkillMessagePending &&
@@ -1485,6 +1490,8 @@ export class EventController {
 				// The optimistic `/skill:` row painted at submit time (issue #8895):
 				// swap it for the canonical message instead of appending a duplicate.
 				this.ctx.reconcileOptimisticSkillMessage(event.message);
+			} else if (taskJobToast) {
+				this.ctx.showStatus(taskJobToast);
 			} else {
 				this.ctx.addMessageToChat(event.message);
 			}
@@ -2481,14 +2488,14 @@ export class EventController {
 			const details = event.result.details as { op?: string; phases?: TodoPhase[] } | undefined;
 			if (details?.op !== "view" && details?.phases) this.ctx.setTodos(details.phases);
 		}
-		if (event.toolName === "bash") {
+		if (event.toolName === "bash" && this.ctx.cleanTranscript) {
 			const phases = lastBashTodoUpdate(event.result);
 			if (phases) this.ctx.setTodos(phases);
 		}
 		if (event.toolName === "eval" && hasNestedTodo(event.result.details)) {
 			this.ctx.setTodos(this.ctx.viewSession.getTodoPhases());
 		}
-		if (event.toolName === "todo" && event.isError && !event.cancelled) {
+		if (event.toolName === "todo" && event.isError) {
 			const textContent = event.result.content.find(
 				(content: { type: string; text?: string }) => content.type === "text",
 			)?.text;

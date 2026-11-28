@@ -89,7 +89,7 @@ describe("InteractiveMode live working label", () => {
 			}),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
 			settings: Settings.isolated({
-				"display.mode": "detailed",
+				"display.toolActivity": "detailed",
 				"compaction.enabled": false,
 				"retry.enabled": false,
 			}),
@@ -253,13 +253,20 @@ describe("InteractiveMode live working label", () => {
 			live.setWorkingMessage("custom activity");
 			await term.waitFor(rows => rows.some(line => line.includes("custom activity")));
 			expect(roles()).toContain('"omp.working"');
-			const presentations = ["clean", "detailed", "compact"] as const;
+			const presentations = ["clean", "detailed", "concise", "compact"] as const;
 			for (const presentation of presentations) {
 				cfgDisplayMode.set(settings, presentation);
 				await Promise.resolve();
 				const dock = roles();
 				expect(dock).toContain('"omp.working"');
 				expect(dock).toContain("custom activity");
+			}
+
+			live.setWorkingMessage("Preparing report", false, "tool-intent");
+			for (const presentation of presentations) {
+				cfgDisplayMode.set(settings, presentation);
+				await Promise.resolve();
+				expect(roles().includes("Preparing report")).toBe(presentation === "detailed" || presentation === "concise");
 			}
 
 			live.setWorkingMessage();

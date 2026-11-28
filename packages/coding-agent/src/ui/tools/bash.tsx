@@ -11,8 +11,13 @@ import { sanitizeText, spillUrl } from "@oh-my-pi/pi-utils";
 import type { JSXNode, UiEvent } from "@oh-my-pi/pi-tui";
 import { replaceTabs } from "@oh-my-pi/pi-tui/text/width";
 import type { ShellVizPresentation } from "@oh-my-pi/pi-wire";
-import type { OutputMeta } from "../../tools/output-meta-format";
-import { shellToolCommands, stripBashNotices } from "../../tools/details/bash";
+import { formatExitCodeNotice, formatWallTimeNotice } from "../../tools/details/bash";
+import {
+	type OutputMeta,
+	stripOutputNotice,
+	stripRawOutputNotice,
+	stripTrailingNotice,
+} from "../../tools/output-meta-format";
 import { resultText } from "./default";
 import type { ToolHead, ToolPresenter, ToolResult, ToolView, ToolViewState } from "./contract";
 import { registerToolPresenter } from "./registry";
@@ -64,6 +69,35 @@ export interface BashRenderContext {
 	readonly timeout?: number;
 	/** Host lookup of mounted tools behind the run's tool commands. */
 	readonly resolveToolCommandMounted?: ToolCommandResolver;
+}
+
+/** Shell composition or expansion outside single quotes. */
+const COMPOUND_CHARS = new Set(["|", "&", ";", "<", ">", "(", ")", "$", "`", "\n"]);
+
+/** Whether a visible nested card stands for this simple command's whole output. */
+function isSoleInvocation(command: string | undefined, tool: string): boolean {
+	const line = command?.trim();
+	if (!line || (line !== tool && !line.startsWith(`${tool} `) && !line.startsWith(`${tool}\t`))) return false;
+	let quote: "'" | '"' | undefined;
+	for (let i = 0; i < line.length; i++) {
+		const ch = line[i]!;
+		if (quote === "'") {
+			if (ch === "'") quote = undefined;
+			continue;
+		}
+		if (ch === "\\") {
+			i++;
+			continue;
+		}
+		if (quote === '"') {
+			if (ch === '"') quote = undefined;
+			else if (ch === "$" || ch === "`") return false;
+			continue;
+		}
+		if (ch === "'" || ch === '"') quote = ch;
+		else if (COMPOUND_CHARS.has(ch)) return false;
+	}
+	return true;
 }
 
 /** A footer fact of the terminal look: an icon (symbol key) and text, dim unless `color`. */
@@ -203,6 +237,23 @@ function callIntent(args: unknown): string | undefined {
 	const value = argsRecord(args)?.[INTENT_FIELD];
 	// The brief label (`Listing files` of `Listing files: Which files changed?`).
 	return typeof value === "string" ? toolIntentLabel(value).replace(/\s+/g, " ").trim() || undefined : undefined;
+}
+
+/** Fold model-facing receipts into the visible run footer; pagination metadata does not alter this display. */
+function stripNotices(raw: string, details: BashDetails | undefined): { text: string; artifactId?: string } {
+	const job = details?.async;
+	let text =
+		job?.state === "running"
+			? stripTrailingNotice(raw, line => {
+					const prefix = `[backgrounded as ${job.jobId}`;
+					return line.startsWith(prefix) && (line[prefix.length] === "," || line[prefix.length] === " ");
+				})
+			: raw;
+	text = stripOutputNotice(text, details?.meta);
+	if (details?.exitCode !== undefined) text = stripTrailingNotice(text, formatExitCodeNotice(details.exitCode));
+	if (details?.wallTimeMs !== undefined && details.wallTimeNoticeEmitted !== false)
+		text = stripTrailingNotice(text, formatWallTimeNotice(details.wallTimeMs));
+	return stripRawOutputNotice(text);
 }
 
 function runState(
@@ -427,7 +478,7 @@ export function shellPresenter<TArgs>(config: ShellConfig<TArgs>): ToolPresenter
 			const isError = result.isError === true;
 			const isPartial = state.isPartial;
 			const raw = context?.output ?? resultText(result);
-			const stripped = stripBashNotices(raw, details);
+			const stripped = stripNotices(raw, details);
 			const output = stripped.text.trimEnd();
 			const expanded = context?.expanded ?? state.expanded;
 			const showingFull = expanded && context?.isFullOutput === true;
@@ -442,7 +493,9 @@ export function shellPresenter<TArgs>(config: ShellConfig<TArgs>): ToolPresenter
 					? undefined
 					: (details?.wallTimeMs ?? state.elapsedMs);
 			const meta = details?.meta;
-			const { dispatches, sole } = shellToolCommands(details, config.command(args));
+			const dispatches = details?.toolCommands ?? [];
+			const only = dispatches.length === 1 ? dispatches[0] : undefined;
+			const sole = only?.mode === "execute" && isSoleInvocation(config.command(args), only.tool);
 			const commandNodes = dispatches.map((dispatch, index) => {
 				const running = isPartial && index === dispatches.length - 1;
 				const nested: ToolViewState = {

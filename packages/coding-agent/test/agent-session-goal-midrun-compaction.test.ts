@@ -497,6 +497,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		if (initial?.role !== "custom") throw new Error("Expected the persisted initial auto Goal notice");
 		expect(contentText(initial.content)).toContain(objective);
 		expect(contentText(initial.content)).toContain(rules);
+		expect(initial.details).toEqual({ source: "goal-auto-orchestrate", goalId: state.goal.id });
 		expect(sessionManager.getBranch()).toContainEqual(
 			expect.objectContaining({
 				type: "message",
@@ -565,6 +566,9 @@ describe("AgentSession mid-run threshold compaction", () => {
 			.trim()
 			.split("\n")
 			.map(line => JSON.parse(line));
+		expect(journal.filter(entry => entry.type === "custom" && entry.customType === "goal-autopilot-admission")).toEqual([
+			expect.objectContaining({ data: state.goal.id }),
+		]);
 		expect(
 			journal.filter(
 				entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",

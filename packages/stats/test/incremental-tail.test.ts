@@ -399,7 +399,7 @@ describe("incremental stats ingestion", () => {
 
 	it("stops pooled ingestion after a committed-batch callback interrupts sync, then resumes without duplicates", async () => {
 		const folder = path.join(getSessionsDir(), "--tmp--tail");
-		const count = 1025;
+		const count = 513; // One full 512-file batch, plus a file that must survive for the next sync.
 		for (let index = 0; index < count; index++) {
 			await Bun.write(path.join(folder, `${index}.jsonl`), assistant(`entry-${index}`));
 		}

@@ -6,17 +6,18 @@ import {
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
-import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
+import { buildSpecDrivenArchives, createSpecDrivenArchivePlugin, writeSpecDrivenArchives } from "./spec-driven-resources";
 
-/** Assemble the CLI's common plugins and expose the same archive bytes for the npm SDK sidecar. */
-export async function createBundlePlugins(): Promise<{ plugins: BunPlugin[]; specDrivenArchive: Uint8Array }> {
+/** Assemble the CLI's common plugins and write the same resource bytes for the npm SDK sidecars. */
+export async function createBundlePlugins(sdkOutputDir?: string): Promise<BunPlugin[]> {
 	const plugins = [
 		createJsonParsePlugin(),
 		createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),
 		createOpenWikiVendorLoaderPlugin(),
 		await createLegacyPiVirtualModulePlugin(),
 	];
-	const archive = await buildSpecDrivenArchive();
-	plugins.push(createSpecDrivenArchivePlugin(archive));
-	return { plugins, specDrivenArchive: archive.bytes };
+	const archives = await buildSpecDrivenArchives();
+	if (sdkOutputDir) await writeSpecDrivenArchives(sdkOutputDir, archives);
+	plugins.push(createSpecDrivenArchivePlugin(archives));
+	return plugins;
 }

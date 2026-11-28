@@ -120,7 +120,6 @@ describe("compact transcript spacing", () => {
 		for (const rows of [12, 8, 6]) {
 			h.term.resize(100, rows);
 			await h.term.waitFor(screen => screen.join("\n").includes("INPUT_PRIORITY"));
-			expect(h.mode.compactToolOutputPreview.render(100).length).toBeLessThanOrEqual(6);
 		}
 		h.term.resize(100, 28);
 		await h.term.waitFor(screen => screen.join("\n").includes(text));
@@ -131,8 +130,6 @@ describe("compact transcript spacing", () => {
 			const viewport = screen.join("\n");
 			return viewport.includes("INPUT_PRIORITY") && !viewport.includes(text);
 		});
-		expect(h.mode.compactToolOutputPreview.render(100)).toEqual([]);
-		expect(h.mode.compactThinkingPreview.render(100)).toHaveLength(3);
 		expect(h.term.scrollback().join("\n")).not.toContain(text);
 	});
 });

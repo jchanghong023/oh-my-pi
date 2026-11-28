@@ -135,12 +135,6 @@ function paintWrite(node: UiNode, cx: PaintContext): Block {
 		const code = source ? sourceRows(cx, source, term, expanded, inner) : [];
 		if (progress) lines.push(theme.fg("muted", replaceTabs(truncate(nodePlain(progress), LINE_MAX))), "", "");
 		lines.push(...code);
-		for (const child of children) {
-			if (child.kind !== "diff") continue;
-			const rows = cx.paint(child, inner).rows;
-			lines.push(...(expanded ? rows : rows.slice(0, PREVIEW_ROWS)));
-			if (!expanded && rows.length > PREVIEW_ROWS) lines.push(expandHint(theme));
-		}
 		const section = children.find(child => child.kind === "section");
 		const diagnostics = section ? sectionDiagnostics(section) : undefined;
 		if (diagnostics)

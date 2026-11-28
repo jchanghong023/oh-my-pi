@@ -59,6 +59,12 @@ MUST 沿用上游，保留已批准差异；不恢复下列本地特例。
 - **THEN** 仅保留 fork 差异；RPC／RPC UI 及公开协议沿用上游。
   - `ask` 沿用上游 HTML 表单与宿主协议；仅活跃且绑定主代理请求的 [`/goal-autopilot`](../spec-driven-orchestration/spec.md#requirement-6-无人值守与权限边界) 可静默超时。普通默认值/取消、Plan 无超时均不变。
 
+#### Scenario: 集中 fork 配置差异
+
+- **WHEN** fork 改变已有能力的默认值或启动策略
+- **THEN** 优先通过已有设置、预设或启动选项表达差异。按配置域集中维护 fork 的差异，不复制上游实现或新增公开配置层。
+- **AND** 保持当前显式设置优先级；启动覆盖和硬限制独立于默认值，不写回配置或扩大到其他入口。
+
 ### Requirement: 按风险选择验证和报告证据
 
 MUST 最小充分验证、实报。

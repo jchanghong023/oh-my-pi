@@ -3,7 +3,6 @@ import type { Api, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { type GeneratedProvider, getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { getCodeAgentModels } from "@oh-my-pi/pi-coding-agent/config/codeagent-provider";
 import { formatModelStringWithRouting, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { DEFAULT_TITLE_SPINNER_INTERVAL_MS } from "@oh-my-pi/pi-coding-agent/config/spinner-interval";
@@ -968,7 +967,7 @@ describe("title generator", () => {
 	it.each(["missing-auth", "exception", "response-error", "invalid-title"] as const)(
 		"continues from a CodeAgent candidate after %s",
 		async failure => {
-			const primary = getCodeAgentModels()[0]!;
+			const primary = getBundledModel("codeagent", "deepseek-v4.1-flash-1017");
 			const fallback = getModelOrThrow("qwen3.8-flash-next");
 			const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async model => {
 				if (model.provider !== "codeagent") {

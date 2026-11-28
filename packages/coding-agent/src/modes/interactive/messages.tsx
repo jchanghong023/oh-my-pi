@@ -63,7 +63,6 @@ export interface MessageFaceEnv {
 	readonly expanded: Accessor<boolean>;
 	/** Whether this display mode shows tool activity in the transcript. */
 	readonly activityVisible: Accessor<boolean>;
-	readonly representedJobReceipts?: () => ReadonlySet<string>;
 	/** Most note rows a collapsed advisor card shows (`display.advisorCollapsedLines`; 0: no cap). */
 	readonly advisorCollapsedLines: Accessor<number>;
 	/** The extension renderer of a custom message type. */
@@ -92,6 +91,8 @@ export interface MessageFace {
 	readonly face: (fold?: { expanded: Accessor<boolean>; onToggle: (expanded: boolean) => void }) => JSXNode;
 	/** The message the extension transcript presenters see: the face is drawn as they ask (in full, a compact row, or hidden). */
 	readonly presented?: CustomOrHookMessage;
+	/** Suppress the entire projection in clean/compact, including extension output. */
+	readonly suppressInCleanTranscript?: true;
 	/** Packs against compact neighbours (an extension renderer's one-row output). */
 	readonly compact?: Accessor<boolean>;
 	/** A prompt bubble's reaction: the next reply's opening emoji lands here. */
@@ -145,11 +146,11 @@ function customFace(message: CustomOrHookMessage, env: MessageFaceEnv): MessageF
 					message={message}
 					{...(fold ?? { expanded: env.expanded })}
 					visible={env.activityVisible}
-					represented={env.representedJobReceipts}
 					{...(frameRenderer ? { renderer: frameRenderer } : {})}
 				/>
 			),
 			presented: message,
+			suppressInCleanTranscript: true,
 			...(renderer ? { compact: () => isCompactOutput(output()) } : {}),
 		};
 	}
@@ -170,6 +171,7 @@ function customFace(message: CustomOrHookMessage, env: MessageFaceEnv): MessageF
 		return {
 			face: () => <LaunchCompletion details={details} content={message.content} visible={env.activityVisible} />,
 			presented: message,
+			suppressInCleanTranscript: true,
 		};
 	}
 	if (customType === ASYNC_NOTIFY_MESSAGE_TYPE) {

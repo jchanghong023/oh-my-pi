@@ -45,6 +45,9 @@ export interface ProviderValidationConfig {
 
 const KIND_LIST = new Intl.ListFormat("en", { type: "disjunction" });
 
+/** Runtime-owned providers cannot be replaced by local model configuration or extensions. */
+export const RESERVED_MODEL_PROVIDERS: ReadonlySet<string> = new Set(["company", "codeagent"]);
+
 /**
  * Drop the input modalities the catalog cannot honour and report each one.
  * A modality the catalog does not know (a `video` entry written against a
@@ -87,7 +90,7 @@ export function normalizeModelsConfig(value: unknown, report: (message: string) 
 	const supportedModalities = new Set(modalities);
 	const allowedLabel = modalities.join(", ");
 	for (const [providerName, providerConfig] of Object.entries(providers)) {
-		if (providerName === "company" || providerName === "codeagent") continue;
+		if (RESERVED_MODEL_PROVIDERS.has(providerName)) continue;
 		if (!isRecord(providerConfig)) continue;
 		const models = providerConfig.models;
 		if (Array.isArray(models)) {
@@ -217,13 +220,13 @@ const getReservedModelsConfigSchema = once(() => {
 	return type("unknown").pipe(input => {
 		if (!isRecord(input) || !isRecord(input.providers)) return schema(input);
 		const originalProviders = input.providers;
-		const hasCompany = Object.hasOwn(originalProviders, "company");
-		const hasCodeAgent = Object.hasOwn(originalProviders, "codeagent");
-		if (!hasCompany && !hasCodeAgent) return schema(input);
+		const reservedOverrides = [...RESERVED_MODEL_PROVIDERS].filter(provider =>
+			Object.hasOwn(originalProviders, provider),
+		);
+		if (reservedOverrides.length === 0) return schema(input);
 
 		const providers = { ...originalProviders };
-		if (hasCompany) providers.company = {};
-		if (hasCodeAgent) providers.codeagent = {};
+		for (const provider of reservedOverrides) providers[provider] = {};
 		return schema({ ...input, providers });
 	});
 });
@@ -297,7 +300,7 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", {
 	.withValidation("models", config => {
 		const providers = config.providers ?? {};
 		for (const providerName in providers) {
-			if (providerName === "company" || providerName === "codeagent") continue;
+			if (RESERVED_MODEL_PROVIDERS.has(providerName)) continue;
 			const providerConfig = providers[providerName];
 			validateProviderConfiguration(
 				providerName,

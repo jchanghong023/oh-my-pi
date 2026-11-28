@@ -52,7 +52,7 @@ export interface StartupPreferences {
 	/** `startup.quiet`: no welcome card. */
 	readonly quiet: boolean;
 	readonly composerShape: string;
-	readonly displayMode?: "clean" | "compact" | "detailed";
+	readonly displayMode?: "clean" | "compact" | "concise" | "detailed";
 	readonly resizeScrollback: ResizeScrollback;
 	readonly autocompleteMaxVisible: number;
 	readonly vim: boolean;
@@ -127,7 +127,9 @@ function parseUi(
 		preferences: {
 			quiet,
 			composerShape,
-			...(displayMode === "clean" || displayMode === "compact" || displayMode === "detailed" ? { displayMode } : {}),
+			...(displayMode === "clean" || displayMode === "compact" || displayMode === "concise" || displayMode === "detailed"
+				? { displayMode }
+				: {}),
 			resizeScrollback: scrollback,
 			autocompleteMaxVisible,
 			vim,

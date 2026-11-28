@@ -2458,7 +2458,7 @@ describe("Settings", () => {
 		it.each([
 			[true, "clean"],
 			[false, "detailed"],
-		] as const)("migrates legacy display.hideToolActivity=%p to display.mode %p", async (hide, mode) => {
+		] as const)("migrates legacy display.hideToolActivity=%p to display.toolActivity %p", async (hide, mode) => {
 			await writeSettings({ display: { hideToolActivity: hide } });
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
@@ -2469,8 +2469,7 @@ describe("Settings", () => {
 			await settings.flush();
 			const display = (await readSettings()).display as Record<string, unknown>;
 			expect("hideToolActivity" in display).toBe(false);
-			expect("toolActivity" in display).toBe(false);
-			expect(display.mode).toBe(mode);
+			expect(display.toolActivity).toBe(mode);
 		});
 
 		it("keeps an explicit display.toolActivity over a quoted-dotted legacy hideToolActivity", async () => {
@@ -2478,14 +2477,14 @@ describe("Settings", () => {
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			expect(cfgDisplayMode.get(settings)).toBe("compact");
+			expect(cfgDisplayMode.get(settings)).toBe("concise");
 		});
 
 		it.each([
 			["hidden", "clean"],
-			["concise", "compact"],
+			["concise", "concise"],
 			["detailed", "detailed"],
-		] as const)("migrates quoted-dotted display.toolActivity=%p to display.mode %p", async (activity, mode) => {
+		] as const)("normalizes quoted-dotted display.toolActivity=%p to %p", async (activity, mode) => {
 			await Bun.write(getConfigPath(), `"display.toolActivity": ${activity}\n`);
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 			expect(cfgDisplayMode.get(settings)).toBe(mode);
@@ -2493,13 +2492,22 @@ describe("Settings", () => {
 			await settings.flush();
 			const raw = await readSettings();
 			expect(raw["display.toolActivity"]).toBeUndefined();
-			expect(raw.display).toEqual({ mode, showTokenUsage: true });
+			expect(raw.display).toEqual({ toolActivity: mode, showTokenUsage: true });
 		});
 
-		it("keeps explicit display.mode above both legacy keys", async () => {
+		it("keeps explicit display.toolActivity above both old keys", async () => {
 			await Bun.write(getConfigPath(), '"display.mode": detailed\ndisplay:\n  toolActivity: concise\n  hideToolActivity: true\n');
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgDisplayMode.get(settings)).toBe("detailed");
+			expect(cfgDisplayMode.get(settings)).toBe("concise");
+		});
+
+		it("preserves the fork's saved display.mode when the upstream key is absent", async () => {
+			await writeSettings({ display: { mode: "compact" } });
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(cfgDisplayMode.get(settings)).toBe("compact");
+			cfgDisplayShowTokenUsage.set(settings, true);
+			await settings.flush();
+			expect((await readSettings()).display).toEqual({ toolActivity: "compact", showTokenUsage: true });
 		});
 
 		it("moves legacy lastChangelogVersion out of config.yml into the marker file", async () => {

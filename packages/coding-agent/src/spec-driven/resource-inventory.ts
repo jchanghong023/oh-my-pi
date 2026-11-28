@@ -1,13 +1,18 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { SpecDrivenResourceManifest, SpecDrivenSkillEntry } from "./resources";
-import baseline from "./vendor/inventory.json";
+import {
+	bundledSpecDrivenSkills,
+	resourceManifest,
+	type SpecDrivenArchiveKind,
+	type SpecDrivenResourceManifest,
+} from "./resource-manifest";
 
 /** Snapshot actual vendored files, not the historical inventory's file hashes. */
 export async function collectSpecDrivenResources(
 	root: string,
-	sourceFingerprint?: string,
+	kind: SpecDrivenArchiveKind,
+	sourceFingerprint: string,
 ): Promise<{
 	manifest: SpecDrivenResourceManifest;
 	entries: Record<string, Uint8Array>;
@@ -15,7 +20,6 @@ export async function collectSpecDrivenResources(
 	const canonicalRoot = await fs.realpath(root);
 	const entries: Record<string, Uint8Array> = {};
 	const files: { path: string; sha256: string; executable: boolean }[] = [];
-	const skills: SpecDrivenSkillEntry[] = [];
 	async function visit(relative: string, ancestors: Set<string>): Promise<void> {
 		const target = await fs.realpath(path.join(root, ...relative.split("/")));
 		const contained = path.relative(canonicalRoot, target);
@@ -36,27 +40,22 @@ export async function collectSpecDrivenResources(
 			sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
 			executable: Boolean(stat.mode & 0o111) || (bytes[0] === 0x23 && bytes[1] === 0x21),
 		});
-		const match = /^(openspec|superpowers|jch)\/skills\/([^/]+)\/SKILL\.md$/.exec(relative);
-		if (match) skills.push({ source: match[1] as SpecDrivenSkillEntry["source"], name: match[2]!, path: relative });
+		if (kind === "skills") {
+			const match = /^(?:openspec|superpowers|jch)\/skills\/([^/]+)\/SKILL\.md$/.exec(relative);
+			if (match && bundledSpecDrivenSkills.get(match[1]!)?.path !== relative)
+				throw new Error(`Unindexed bundled skill: ${relative}`);
+		}
 	}
-	for (const directory of ["openspec", "superpowers", "jch", "omp-runtime"]) await visit(directory, new Set());
-	const comparePath = (a: { path: string }, b: { path: string }) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-	files.sort(comparePath);
-	skills.sort(comparePath);
-	const runtimeSha256 = crypto
-		.createHash("sha256")
-		.update(JSON.stringify(files.filter(file => file.path.startsWith("openspec/"))))
-		.digest("hex");
+	const directories = kind === "runtime" ? ["openspec"] : ["openspec", "superpowers", "jch", "omp-runtime"];
+	for (const directory of directories) await visit(directory, new Set());
+	if (kind === "skills") {
+		for (const skill of bundledSpecDrivenSkills.values()) {
+			if (!entries[skill.path]) throw new Error(`Missing bundled skill: ${skill.path}`);
+		}
+	}
+	files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 	return {
-		manifest: {
-			runtimeFormat: 2,
-			sourceFingerprint,
-			openspec: { ...baseline.openspec, runtimeSha256 },
-			superpowers: baseline.superpowers,
-			jch: baseline.jch,
-			skills,
-			files,
-		},
+		manifest: resourceManifest(kind, sourceFingerprint, files),
 		entries,
 	};
 }

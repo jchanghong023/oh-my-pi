@@ -253,11 +253,7 @@ function consumeBuiltInStringValue(flag: string, args: string[], valueIndex: num
 	return { value, index: valueIndex };
 }
 
-export function parseArgs(
-	inputArgs: string[],
-	extensionFlags?: Map<string, { type: "boolean" | "string" }>,
-	forcedMode?: Args["mode"],
-): Args {
+export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
 	// Work on a copy: the `--option=value` handling below splices the value
 	// into the array, and callers reuse the same argv (the post-extension
 	// reparse in `runRootCommand` parses it a second time). Mutating the input
@@ -499,8 +495,6 @@ export function parseArgs(
 	if (result.systemPrompt !== undefined && result.systemPromptTemplate !== undefined) {
 		throw new CliUsageError("--system-prompt and --system-prompt-template cannot be combined");
 	}
-	if (forcedMode !== undefined) result.mode = forcedMode;
-	if (result.mode !== "acp") result.noExtensions = true;
 	return result;
 }
 

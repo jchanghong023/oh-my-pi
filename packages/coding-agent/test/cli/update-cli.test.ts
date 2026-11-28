@@ -63,11 +63,11 @@ function recordFetch(
 	return requests;
 }
 
-function expectReleaseRequest(request: RecordedRequest, url: string, authenticated = false): void {
+function expectReleaseRequest(request: RecordedRequest, url: string): void {
 	expect(request.url).toBe(url);
 	const headers = new Headers(request.init?.headers);
 	expect(headers.get("accept")).toBe("application/vnd.cnb.api+json");
-	expect(headers.get("authorization")).toBe(authenticated ? `Bearer ${token}` : null);
+	expect(headers.has("authorization")).toBe(false);
 	expect(request.init).toMatchObject({
 		redirect: "manual",
 		signal: expect.any(AbortSignal),
@@ -212,33 +212,16 @@ describe("runUpdateCommand CNB releases", () => {
 		});
 	});
 
-	it.skipIf(posixOnly)("uses the private API after public metadata is hidden without forwarding its Bearer", async () => {
-		await withStandalone(async (_root, target) => {
+	it.skipIf(unsupported)("reports a hidden custom release without retrying with a configured token", async () => {
+		await withStandalone(async () => {
 			process.env.CNB_TOKEN = ` ${token} `;
 			process.env.PI_UPDATE_REPOSITORY = "mirror/bin";
-			const candidate = executable(version);
 			const publicMetadata = "https://cnb.cool/mirror/bin/-/releases/tags/omp";
-			const privateBase = "https://api.cnb.cool/mirror/bin/-/releases";
-			const privateMetadata = `${privateBase}/tags/omp`;
-			const privateDownload = `${privateBase}/download/omp/${binaryName}`;
-			const signed = "https://objects.cnb.cool/cnb-fixture?signature=fixture";
-			const requests = recordFetch(url => {
-				if (url === publicMetadata) return new Response(null, { status: 404 });
-				if (url === privateMetadata) return release(candidate);
-				if (url === privateDownload) return new Response(null, { status: 302, headers: { location: signed } });
-				if (url === signed) return new Response(candidate);
-				throw new Error(`Unexpected updater request: ${url}`);
-			});
+			const requests = recordFetch(() => new Response(null, { status: 404 }));
 
-			expect(await runUpdateCommand(install)).toEqual({ kind: "installed", version });
-			expect(await Bun.file(target).text()).toBe(candidate);
-			expect(requests).toHaveLength(4);
+			await expect(runUpdateCommand(check)).rejects.toThrow(/metadata.*HTTP 404/);
+			expect(requests).toHaveLength(1);
 			expectReleaseRequest(requests[0]!, publicMetadata);
-			expectReleaseRequest(requests[1]!, privateMetadata, true);
-			expectReleaseRequest(requests[2]!, privateDownload, true);
-			expect(requests[3]!.url).toBe(signed);
-			expect(new Headers(requests[3]!.init?.headers).has("authorization")).toBe(false);
-			expect(requests[3]!.init?.redirect).toBe("error");
 		});
 	});
 

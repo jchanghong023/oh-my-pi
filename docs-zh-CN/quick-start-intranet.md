@@ -2,7 +2,7 @@
 
 ## 安装与更新
 
-Fork 仅从公开的 [CNB Releases](https://cnb.cool/jchanghong/bin/-/releases) 分发 Windows x64 和 Linux glibc x64 预编译二进制，不提供 npm 或源码安装。公开源安装和更新都无需设置 `CNB_TOKEN`；在 [fork 源码](https://cnb.cool/jchanghong/oh-my-pi)目录中运行下列安装器。
+Fork 仅从公开的 [CNB Releases](https://cnb.cool/jchanghong/bin/-/releases) 分发 Windows x64 和 Linux glibc x64 预编译二进制，不提供 npm 或源码安装。安装和更新均匿名访问 CNB，自定义更新源也须公开。在 [fork 源码](https://cnb.cool/jchanghong/oh-my-pi)目录中运行下列安装器。
 
 Linux（glibc x64）：
 
@@ -40,7 +40,7 @@ omp
 ### 环境变量与数据
 
 - `OMP_CONFIG_ROOT`：持久数据目录，存放配置、凭据和会话。
-- `OMP_CACHE_DIR`：可选性能目录，使用当前用户可访问的绝对路径；红区 Linux 默认使用 `/dev/shm/omp-<UID>`。模型目录缓存 `agent/models.db` 随性能目录切换，不迁移旧缓存；统计和日志也可避开网络磁盘。JS eval 的 `bun` 占位脚本和 WebKit 主程序不使用默认的 `/dev/shm`；显式指定性能目录时，请确保该目录允许执行。
+- 红区 Linux 的性能数据使用 `/dev/shm/omp-<UID>`，包括模型目录缓存 `agent/models.db`、统计和日志。JS eval 的 `bun` 占位脚本和 WebKit 主程序仍使用原有的可执行路径。其他环境沿用原有目录规则。
 
 红区模式会暂时关闭 Web Search 和 Browser（含 `/crawl`）。可以让 Agent 用 `read` 读取可达的内网 HTTP(S) 地址，`fetch.enabled` 默认开启，并遵循你的显式设置。
 
@@ -50,11 +50,15 @@ omp
 
 - `OMP_CONFIG_ROOT`：可选，指定持久数据目录。
 - `ASCEND_API_KEY`：仅使用 Ascend 时设置。
+- Windows 上使用 CodeAgent 时，令牌从当前用户注册表读取。认证失败后 OMP 会重新读取一次，供后续请求使用，不会自动重试当前请求。见 [CodeAgent 认证规格](../openspec/specs/model-providers/spec.md#requirement-codeagent-认证失败后刷新令牌)。
 
 ## 常用 fork 入口
 
-- **界面**：`/display clean` 专注聊天，`/display compact`（默认）显示当前活动、工具只读输出和本轮 Diff，`/display detailed` 查看完整工具记录。`Shift+Tab` 切换计划模式，`Ctrl+O` 优先查看本轮 Diff。
-- **内网协作**：`/collab2 1234` 开房，`/collab2 join 1234` 加入。仅在可信隔离内网使用；启用 `OMP_OFFLINE` 时默认 `10.239.93.104:9333`，否则默认 `127.0.0.1:9333`。双方使用同一服务器；`OMP_COLLAB2_IP` 只填 IP，不带端口或前缀。
+- **界面**：按 `Ctrl+Shift+O` 或输入 `/display`，按「详细 → 精简 → 纯聊天 → 紧凑」循环；也可用 `/display detailed` 或 `/display concise` 直达。
+  - `/display clean`：专注对话，不显示工具和思考。
+  - `/display compact`（默认）：对话区与纯聊天相同，输入框上方显示当前状态和目标、最近工具输出及本轮 Diff。`Ctrl+O` 优先展开本轮 Diff。
+  - `Shift+Tab` 切换计划模式。
+- **内网协作**：`/collab2 1234` 开房，`/collab2 join 1234` 加入。仅在可信隔离内网使用。`OMP_OFFLINE` 为 `1`、`true`、`yes` 或 `on` 时连接 `10.239.93.104:9333`（忽略首尾空白及大小写），否则连接 `127.0.0.1:9333`。双方须连接同一服务器。
 - **画布**：`/sketch` 手绘或贴图标注。红区按提示手动打开本机地址；结果作为 PNG 加入草稿，手动发送，附加前可按 `Esc` 取消。
 - **隔离与确认**：`omp -P work` 隔离配置与会话；`omp --approval-mode guarded` 要求确认工具标记的危险操作；`/workspace` 仅提醒写入范围，不是沙箱。
 - **需求与知识**：获授权后用 `omp openspec init` 初始化，再用 `/skill:openspec-propose` 起草变更。内置 OpenSpec 工作流遵循上游 schema，并按普通技能发现规则列出。`omp openwiki code --init` 生成仓库 Wiki；要让 Agent 查询已有 Wiki，先运行 `omp config set openwiki.tools.enabled true`。

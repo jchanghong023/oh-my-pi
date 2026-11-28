@@ -319,7 +319,7 @@ Fork releases require explicit user authorization and use only [`bun run cnb`](o
 - [已批准需求](openspec/specs/)是 fork 权威；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-runtime/spec.md#requirement-项目定位与使用场景)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证要求](openspec/specs/fork-maintenance/spec.md#requirement-按风险选择验证和报告证据)、[上游基线](openspec/specs/fork-upstream-baseline/spec.md)；适用的 fork 约束优先于上游通用约定。
 - `docs/` MUST 与上游保持一致；只通过上游同步更新，NEVER 在该目录内新增、修改、移动或删除 fork 内容。Fork 专用指南放在 `docs-zh-CN/`，仍须遵守文档授权规则。
 - **文档变更须先确认。** 不得自行向需求文档或 `AGENTS.md` 添加需求、规则或其他内容。新增、修改、移动或删除任何文档（含需求文档、`AGENTS.md`、README、指南和 changelog）前，MUST 先取得用户对目标文档及变更范围的明确确认。代码改动授权或文档同步要求不等于文档写入授权；未经确认只读核对并报告，不改文件。获准后只改确认范围内的必要内容。功能改动仍须核对[内网快启](docs-zh-CN/quick-start-intranet.md)，确认后只同步受影响的用法和限制，不复写规格。
-- `OMP_OFFLINE` 是公司内网标记，不是宿主探测。不得据此扩大工具、URL 或审批限制，也不得推断内网 Git API 不可用或已获写入授权；见[运行规格](openspec/specs/fork-runtime/spec.md)。
+- `OMP_OFFLINE` 仅标记 OMP 运行在公司内部网络环境。该环境的网络访问受管控，不等于断网；变量名也不代表探测到了宿主网络或目标的可达性。不得仅凭该变量断言任何目标（含 Git API）不可达、扩大工具、URL 或审批限制，或推定已获写入授权。产品的具体行为以[运行规格](openspec/specs/fork-runtime/spec.md)为准。
 - OpenSpec 使用 `omp openspec ...`，无需独立 OpenSpec／Node；未初始化项目 MUST 先取得显式初始化授权。内置 OpenSpec 与 Superpowers 的交付和使用边界见[编排规格](openspec/specs/spec-driven-orchestration/spec.md)。
 - `ask` 沿用上游 HTML 表单及宿主协议，不保留 `questions[]`；活跃 `/goal-autopilot` 的例外见[上游继承边界](openspec/specs/fork-maintenance/spec.md#requirement-上游继承行为与本地差异边界)。
 - [个人命令规格](openspec/specs/personal-commands/spec.md)维护 `/workspace`、`/sketch`、Developer Test Agent、`/todoloop`、`/collab2` 等行为。`/workspace` 不是沙箱或审批模式；`/collab2` 只用于可信隔离内网。

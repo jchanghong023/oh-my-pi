@@ -33,6 +33,7 @@ import {
 import {
 	assistantHasVisibleContent,
 	assistantUsageIsBilled,
+	normalizeToolArgs,
 	resolveAssistantErrorPresentation,
 	splitAssistantMessageToolTimeline,
 } from "../../session/transcript/transcript-render-helpers";
@@ -271,13 +272,6 @@ export class UiHelpers {
 		if (!session.isCompacting) await this.flushCompactionQueue();
 	}
 
-	buildTranscriptSessionContext(keepInFlightToolCalls = false): SessionContext {
-		return this.ctx.viewSession.buildTranscriptSessionContext({
-			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(this.ctx.settings),
-			keepInFlightToolCalls,
-		});
-	}
-
 	/**
 	 * Show a status message in the chat.
 	 *
@@ -484,6 +478,7 @@ export class UiHelpers {
 			readGroup ??= ctx.presentReadGroup();
 			return readGroup;
 		};
+		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistants = new Map<string, AssistantView>();
 		// Defer per-turn metrics until the turn's tool results have materialized.
 		// Read-only invisible turns attach the metrics to their shared compact
@@ -610,7 +605,6 @@ export class UiHelpers {
 				const appendAssistantSegment = (toolCallId: string) => {
 					const segment = timeline.afterToolCalls.get(toolCallId);
 					if (!segment || !assistantHasVisibleContent(segment)) return;
-					sealReadGroup();
 					const offset = timeline.contentOffsets.get(toolCallId);
 					lastSegment = ctx.presentAssistant(segment, {
 						linkTargets: assistantMessageLinkTargets(segment, linkTargets),
@@ -620,6 +614,7 @@ export class UiHelpers {
 
 				for (const content of message.content) {
 					if (content.type !== "toolCall") continue;
+					const afterToolSegment = timeline.afterToolCalls.get(content.id);
 					if (options.preservedLiveToolCallIds?.has(content.id)) {
 						appendAssistantSegment(content.id);
 						continue;
@@ -629,19 +624,24 @@ export class UiHelpers {
 					resolveWaitingPoll(renderToolName);
 
 					if (renderToolName === "read" && readArgsCollapseIntoGroup(content.arguments)) {
-						const group = ensureReadGroup();
-						group.updateArgs(content.arguments, content.id, message.timestamp);
 						if (errorMessage) {
+							const group = ensureReadGroup();
+							group.updateArgs(content.arguments, content.id, message.timestamp);
 							group.updateResult(
 								{ content: [{ type: "text", text: errorMessage }], isError: true },
 								false,
 								content.id,
 							);
-						} else {
+						} else if (afterToolSegment) {
+							const group = ensureReadGroup();
+							group.updateArgs(content.arguments, content.id, message.timestamp);
 							ctx.pendingTools.set(content.id, group);
 							readToolCallAssistants.set(content.id, assistant);
 							if (ctx.viewSession.isStreaming)
 								ctx.eventController?.inheritReadToolAssistant(content.id, assistant);
+						} else {
+							readToolCallArgs.set(content.id, normalizeToolArgs(content.arguments));
+							readToolCallAssistants.set(content.id, assistant);
 						}
 						appendAssistantSegment(content.id);
 						continue;
@@ -728,21 +728,27 @@ export class UiHelpers {
 						assistant?.setToolResultMedia(message.toolCallId, { images, mediaPath });
 					if (assistant && images.length > 0) {
 						const hasText = message.content.some(content => content.type === "text");
-						if (!hasText && cfgTerminalShowImages.get(ctx.settings)) {
+						if (!hasText && cfgTerminalShowImages.get(settings)) {
 							if (pendingRead) {
-								if (pendingRead.group?.removeEntry(message.toolCallId)) {
-									transcript.remove(pendingRead.block);
-									if (readGroup === pendingRead) readGroup = null;
-								}
+								pendingRead.updateResult(message, false, message.toolCallId);
 								ctx.pendingTools.delete(message.toolCallId);
 							}
+							readToolCallArgs.delete(message.toolCallId);
 							readToolCallAssistants.delete(message.toolCallId);
 							continue;
 						}
 					}
-					const pending = pendingRead ?? ensureReadGroup();
+					let pending = pendingRead;
+					if (!pending) {
+						const group = ensureReadGroup();
+						const args = readToolCallArgs.get(message.toolCallId);
+						// The read joins the group with its result: dated by the result.
+						if (args) group.updateArgs(args, message.toolCallId, message.timestamp);
+						pending = group;
+					}
 					pending.updateResult(message, false, message.toolCallId);
 					ctx.pendingTools.delete(message.toolCallId);
+					readToolCallArgs.delete(message.toolCallId);
 					readToolCallAssistants.delete(message.toolCallId);
 					continue;
 				}
@@ -908,7 +914,9 @@ export class UiHelpers {
 		const cut = ctx.transcriptBlocks.get(message);
 		if (!cut || !ctx.shell.transcript.blocks().includes(cut)) return false;
 		// The cut message still present means the session was not actually rewound past it.
-		const context = this.buildTranscriptSessionContext();
+		const context = ctx.viewSession.buildTranscriptSessionContext({
+			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
+		});
 		if (context.messages.includes(message)) return false;
 		if (!ctx.shell.transcript.truncate(cut, { replay: false })) return false;
 		// Reseed the cache-invalidation baseline from the surviving transcript
@@ -973,7 +981,11 @@ export class UiHelpers {
 		const ctx = this.ctx;
 		const transcript = ctx.shell.transcript;
 		// Collapsed replay keeps in-flight calls so pending tools remain routable during mid-turn rebuilds.
-		const buildContext = () => this.buildTranscriptSessionContext(ctx.viewSession.isStreaming);
+		const buildContext = (): SessionContext =>
+			ctx.viewSession.buildTranscriptSessionContext({
+				collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
+				keepInFlightToolCalls: ctx.viewSession.isStreaming,
+			});
 		let context = buildContext();
 		let replayEntryCount = ctx.viewSession.sessionManager.getEntries().length;
 

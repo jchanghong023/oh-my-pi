@@ -1,5 +1,5 @@
 import * as AIError from "@oh-my-pi/pi-ai/error";
-import type { AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/auth-retry";
 import {
 	setCodeAgentStreamHandler,
@@ -73,25 +73,7 @@ export function initializeCodeAgentProvider(initialCache?: CodeAgentTokenCache):
 	setCodeAgentStreamHandler((model, context, options) => streamCodeAgent(model, context, options, cache!));
 }
 
-function commitsAttempt(event: AssistantMessageEvent): boolean {
-	switch (event.type) {
-		case "text_delta":
-		case "thinking_delta":
-		case "toolcall_delta":
-			return event.delta.length > 0;
-		case "text_end":
-		case "thinking_end":
-			return event.content.length > 0;
-		case "toolcall_start":
-		case "toolcall_end":
-		case "image_end":
-			return true;
-		default:
-			return false;
-	}
-}
-
-/** 仅 Token 发生变化时重试一次；任何已输出的正文、思考或工具事件都禁止重放。 */
+/** 认证失败时仅刷新后续请求使用的凭据，不重发当前请求。 */
 export function streamCodeAgent(
 	model: Model<"openai-completions">,
 	context: Context,
@@ -100,71 +82,41 @@ export function streamCodeAgent(
 ): AssistantMessageEventStream {
 	const outer = new AssistantMessageEventStream();
 	void (async () => {
-		for (let attempt = 0; attempt < 2; attempt++) {
-			const token = tokenCache.token;
-			let committed = false;
-			const buffered: AssistantMessageEvent[] = [];
-			const flush = () => {
-				for (const event of buffered) outer.push(event);
-				buffered.length = 0;
-			};
-			const baseFetch = options?.fetch ?? fetch;
-			const inner = streamOpenAICompletionsOnce(model, context, {
-				...options,
-				apiKey: NO_AUTH_SENTINEL,
-				// 错误 SSE 不进入原始诊断日志；终端错误由底层安全归一化。
-				onSseEvent: undefined,
-				fetch: async (input, init) => {
-					const headers = new Headers(init?.headers);
-					headers.delete("authorization");
-					headers.delete("x-api-key");
-					headers.delete("api-key");
-					headers.delete("x-auth-token");
-					if (token && input === gatewayChatUrl) headers.set("x-auth-token", token);
-					return baseFetch(input, { ...init, headers, redirect: "error" });
-				},
-			});
-			let replay = false;
-			for await (const event of inner) {
-				if (event.type === "error") {
-					const failed =
-						!options?.signal?.aborted &&
-						event.reason !== "aborted" &&
-						!AIError.is(event.error.errorId, AIError.Flag.ContentBlocked);
-					const next = failed ? tokenCache.refresh() : token;
-					replay = attempt === 0 && !committed && failed && next !== token;
-					logger.info("CodeAgent request failed", {
-						provider: CODEAGENT_PROVIDER_ID,
-						token_changed: next !== token,
-						retry: replay,
-						output_committed: committed,
-					});
-					if (replay) break;
-					flush();
-					outer.push(event);
-					return;
-				}
-				if (event.type === "done") {
-					flush();
-					outer.push(event);
-					return;
-				}
-				if (!committed && !commitsAttempt(event)) buffered.push(event);
-				else {
-					committed = true;
-					flush();
-					outer.push(event);
-				}
+		const token = tokenCache.token;
+		const baseFetch = options?.fetch ?? fetch;
+		const inner = streamOpenAICompletionsOnce(model, context, {
+			...options,
+			apiKey: NO_AUTH_SENTINEL,
+			// 错误 SSE 不进入原始诊断日志；终端错误由底层安全归一化。
+			onSseEvent: undefined,
+			fetch: async (input, init) => {
+				const headers = new Headers(init?.headers);
+				headers.delete("authorization");
+				headers.delete("x-api-key");
+				headers.delete("api-key");
+				headers.delete("x-auth-token");
+				if (token && input === gatewayChatUrl) headers.set("x-auth-token", token);
+				return baseFetch(input, { ...init, headers, redirect: "error" });
+			},
+		});
+		for await (const event of inner) {
+			if (
+				event.type === "error" &&
+				event.reason !== "aborted" &&
+				!options?.signal?.aborted &&
+				AIError.is(event.error.errorId, AIError.Flag.AuthFailed)
+			) {
+				const next = tokenCache.refresh();
+				logger.info("CodeAgent credentials reloaded after authentication failure", {
+					provider: CODEAGENT_PROVIDER_ID,
+					token_changed: next !== token,
+				});
 			}
-			if (!replay) {
-				flush();
-				outer.end(await inner.result());
-				return;
-			}
+			outer.push(event);
 		}
+		outer.end(await inner.result());
 	})().catch(() => {
 		// 不向调用者或日志透传可能包含 Token 的底层异常。
-		if (!options?.signal?.aborted) tokenCache.refresh();
 		outer.fail(new Error("CodeAgent request failed"));
 	});
 	return outer;

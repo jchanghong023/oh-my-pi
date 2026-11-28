@@ -42,7 +42,7 @@ beforeEach(async () => {
 	session = new AgentSession({
 		agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 		sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "git.enabled": false }),
 		modelRegistry,
 	});
 	term = createModeTerminal({ columns: 120, rows: 32 });
@@ -88,9 +88,12 @@ const LONG = 200;
 
 async function start(exchanges: number): Promise<void> {
 	appendExchanges(exchanges);
-	await mode.init({ suppressWelcomeIntro: true });
+	const ready = Promise.withResolvers<void>();
+	await mode.init({ suppressWelcomeIntro: true, startupBackgroundWork: ready.resolve });
 	await mode.renderInitialMessages();
 	void mode.getUserInput();
+	// Startup independently updates the status row; sample the loader after that redraw.
+	await ready.promise;
 	await term.settle();
 }
 

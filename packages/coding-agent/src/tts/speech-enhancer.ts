@@ -124,13 +124,8 @@ export class SpeechEnhancer {
 					if (model.api !== "local-inference" || attempt.stopReason === "stop") journal?.(attempt, bounded);
 					return attempt;
 				},
-				{
-					signal,
-					provider: model.provider,
-					maxAttempts: model.provider === "codeagent" ? 1 : undefined,
-				},
+				{ signal, provider: model.provider },
 			);
-			if (response.stopReason === "aborted" && model.provider === "codeagent") return null;
 			if (response.stopReason === "error") {
 				logger.debug("speech-enhancer: rewrite errored", { error: response.errorMessage });
 				return null;

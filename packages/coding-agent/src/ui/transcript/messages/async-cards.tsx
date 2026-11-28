@@ -3,12 +3,12 @@
  * Background activity the session reports into the transcript, each a status
  * block hidden with tool activity, plus the IRC coordination cards:
  *
- * - `AsyncResult` (`async-result`): diagnostic status rows for non-task jobs
- *   not already shown by a tool card; successful completions stay in history.
- *   Artifact-error, schema and minimizer rows remain independent. A registered
- *   extension renderer owns the card (#14131), with built-in rows as fallback.
- * - `LaunchCompletion` (`launch-completion`): failure or unknown exit
- *   diagnostics for supervised processes.
+ * - `AsyncResult` (`async-result`): one `✔ Background job completed [type] id
+ *   (duration)` row per finished job, its artifact-error and minimizer rows
+ *   beneath. A registered extension renderer owns the card (#14131); the
+ *   built-in rows stand in while it declines or when it throws.
+ * - `LaunchCompletion` (`launch-completion`): one `Supervised process
+ *   completed|failed name (exit N) (duration)` row per exited service.
  * - `AsyncNotify` (`async-notify`): one `Background job output` /
  *   `Supervised process output` row per reporting source with its first
  *   matching lines under it (natively the notice's body).
@@ -21,13 +21,11 @@
  */
 import { type JSXNode, type Reactive, read } from "@oh-my-pi/pi-tui";
 import { replaceTabs, truncate } from "@oh-my-pi/pi-tui/text/width";
-import { stripEscapes } from "@oh-my-pi/pi-tui/text/ansi";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
-import { formatCount, formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatCount, formatDuration } from "@oh-my-pi/pi-utils";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import type { PersistedSnapshot } from "../../../daemon/daemon-types";
 import type { AsyncNotifyDetails } from "../../../session/transcript/messages";
-import type { StructuredSubagentOutput } from "../../../task/task-details";
 import { formatArtifactErrorNotice, type OutputMeta } from "../../../tools/output-meta-format";
 import { PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "../../../utils/render-utils";
 import { type IrcMessage, IrcMessageCard } from "../../tools/irc";
@@ -65,8 +63,6 @@ export interface AsyncResultJob {
 	readonly type?: string;
 	readonly label?: string;
 	readonly durationMs?: number;
-	readonly status?: string;
-	readonly schema?: Pick<StructuredSubagentOutput, "status" | "error">;
 	readonly meta?: Pick<OutputMeta, "artifactError" | "minimized">;
 }
 
@@ -78,13 +74,18 @@ export interface AsyncResultDetails extends Omit<AsyncResultJob, "meta"> {
 }
 
 /** Rows of an `async-result` message; `indent` pads them (default 1). */
-export function asyncResultRows(
-	details: AsyncResultDetails | undefined,
-	indent?: number,
-	represented?: ReadonlySet<string>,
-): StatusRow[] {
-	const jobs: readonly AsyncResultJob[] = details?.jobs?.length ? details.jobs : details ? [details] : [];
-	const symbols = currentTheme().symbols;
+export function asyncResultRows(details: AsyncResultDetails | undefined, indent?: number): StatusRow[] {
+	const jobs: readonly AsyncResultJob[] = details?.jobs?.length
+		? details.jobs
+		: [
+				{
+					jobId: details?.jobId,
+					type: details?.type,
+					label: details?.label,
+					durationMs: details?.durationMs,
+				},
+			];
+	const success = currentTheme().symbols.symbol("status.success");
 	const rows: StatusRow[] = [];
 	const note = (text: string, tone: "warning" | "info"): StatusRow => ({
 		parts: [{ text, color: tone === "warning" ? "warning" : "dim" }],
@@ -95,50 +96,26 @@ export function asyncResultRows(
 		},
 	});
 	for (const job of jobs) {
-		const jobId = sanitizeText(stripEscapes(job.jobId ?? "unknown")).replace(/[\r\n]+/g, " ");
-		const status = job.status ?? (job.jobId ? "finished" : undefined);
-		const label = sanitizeText(stripEscapes(job.label ?? ""))
-			.replace(/[\r\n]+/g, " ")
-			.trim();
-		const command = label && label !== jobId ? label : undefined;
+		const jobId = job.jobId ?? "unknown";
+		const type = job.type ?? "job";
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
-		if (
-			(job.type !== "task" || label.startsWith("/tan ")) &&
-			(status === "failed" || status === "cancelled" || status === "finished") &&
-			(!job.jobId || !represented?.has(`${job.type}:${job.jobId}:${status}`))
-		) {
-			const title = `Background job ${status}`;
-			const tone = status === "failed" ? "error" : status === "cancelled" ? "warning" : "info";
-			rows.push({
-				parts: [
-					{ text: `${symbols.symbol(`status.${tone}`)} ${title}`, color: tone === "info" ? "dim" : tone },
-					{ text: jobId, color: "accent" },
-					command ? { text: command, color: "dim" } : undefined,
-					duration ? { text: `(${duration})`, color: "dim" } : undefined,
-				],
-				indent,
-				native: {
-					tone,
-					message: [{ t: `${title} ` }, { t: jobId, s: "mono" }, ...statusFacts([command, duration])],
-				},
-			});
-		}
-		if (job.meta?.artifactError) {
-			const warning = formatArtifactErrorNotice(job.meta.artifactError);
-			rows.push(note(jobs.length > 1 && job.jobId ? `${jobId}: ${warning}` : warning, "warning"));
-		}
-		if (job.schema && (job.schema.status !== "valid" || job.schema.error)) {
-			rows.push(
-				note(
-					`${jobId}: Structured output ${job.schema.status}${job.schema.error ? `: ${job.schema.error}` : ""}`,
-					"warning",
-				),
-			);
-		}
+		rows.push({
+			parts: [
+				{ text: `${success} Background job completed`, color: "success" },
+				{ text: `[${type}]`, color: "dim" },
+				{ text: jobId, color: "accent" },
+				duration ? { text: `(${duration})`, color: "dim" } : undefined,
+			],
+			indent,
+			native: {
+				tone: "success",
+				message: [{ t: "Background job completed" }, ...statusFacts([type, jobId, duration])],
+			},
+		});
+		if (job.meta?.artifactError) rows.push(note(formatArtifactErrorNotice(job.meta.artifactError), "warning"));
 		if (job.meta?.minimized) rows.push(note(`Minimized: ${formatMinimized(job.meta.minimized)}`, "info"));
 	}
-	if (details?.jobs?.length && details.meta?.artifactError)
-		rows.push(note(formatArtifactErrorNotice(details.meta.artifactError), "warning"));
+	if (details?.meta?.artifactError) rows.push(note(formatArtifactErrorNotice(details.meta.artifactError), "warning"));
 	return rows;
 }
 
@@ -149,7 +126,6 @@ export interface AsyncResultProps {
 	readonly expanded: Reactive<boolean>;
 	/** Tool activity shown; hides the built-in rows (not a renderer's output). */
 	readonly visible: Reactive<boolean>;
-	readonly represented?: () => ReadonlySet<string>;
 	/** The extension renderer registered for `async-result`: it owns the card. */
 	readonly renderer?: FrameRenderer;
 	readonly onToggle?: (expanded: boolean) => void;
@@ -163,13 +139,9 @@ export interface AsyncResultProps {
 export function AsyncResult(props: AsyncResultProps): JSXNode {
 	const details = props.message.details as AsyncResultDetails | undefined;
 	const custom = props.renderer;
-	if (!custom)
-		return () => (
-			<ActivityRows rows={asyncResultRows(details, undefined, props.represented?.())} visible={props.visible} />
-		);
-	const fallback = (): JSXNode => (
-		<ActivityRows rows={asyncResultRows(details, 0, props.represented?.())} visible={props.visible} />
-	);
+	if (!custom) return <ActivityRows rows={asyncResultRows(details)} visible={props.visible} />;
+	const rows = asyncResultRows(details, 0);
+	const fallback = (): JSXNode => <ActivityRows rows={rows} visible={props.visible} />;
 	const renderer: FrameRenderer = expanded => {
 		try {
 			return custom(expanded) ?? fallback();
@@ -202,16 +174,20 @@ export function launchCompletionRows(details: LaunchCompletionDetails | undefine
 	const daemons = details?.daemons ?? [];
 	if (daemons.length === 0 && typeof content === "string") {
 		rows.push({
-			parts: [{ text: content, color: "dim" }],
-			native: { tone: "info", message: [{ t: content }] },
+			parts: [
+				{
+					text: `${symbols.symbol("status.success")} ${content}`,
+					color: "dim",
+				},
+			],
+			native: { tone: "success", message: [{ t: content }] },
 		});
 	}
 	for (const daemon of daemons) {
 		const name = "key" in daemon ? daemon.key : daemon.name;
 		const { exitCode, startedAt, exitedAt } = daemon;
 		const failed = daemon.state === "failed" || (exitCode !== undefined && exitCode !== 0);
-		if (!failed && exitCode === 0) continue;
-		const label = failed ? "Supervised process failed" : "Supervised process exited";
+		const label = failed ? "Supervised process failed" : "Supervised process completed";
 		const exit = exitCode !== undefined ? `exit ${exitCode}` : undefined;
 		const duration =
 			exitedAt !== undefined && startedAt !== undefined ? formatDuration(exitedAt - startedAt) : undefined;
@@ -222,13 +198,16 @@ export function launchCompletionRows(details: LaunchCompletionDetails | undefine
 							text: `${symbols.symbol("status.error")} ${label}`,
 							color: "error",
 						}
-					: { text: label, color: "dim" },
+					: {
+							text: `${symbols.symbol("status.success")} ${label}`,
+							color: "success",
+						},
 				{ text: name, color: "accent" },
 				exit ? { text: `(${exit})`, color: "dim" } : undefined,
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
 			],
 			native: {
-				tone: failed ? "error" : "info",
+				tone: failed ? "error" : "success",
 				message: [{ t: label }, { t: " " }, { t: name, s: "mono" }, ...statusFacts([exit, duration])],
 			},
 		});

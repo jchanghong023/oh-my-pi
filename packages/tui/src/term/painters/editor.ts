@@ -286,38 +286,6 @@ export function lastLayout(node: UiNode): readonly EditorRow[] {
 	return layoutField(node, text, lastWrapWidth(node) ?? Number.MAX_SAFE_INTEGER);
 }
 
-const kCompletionLayout = Symbol("pi-tui.editor.completion-layout");
-
-interface CompletionLayoutHolder {
-	[kCompletionLayout]?: { cx: Pick<PaintContext, "focused" | "viewportHeight">; rowsFromCaret: number };
-}
-
-/** Record the rows from the caret through the composer chrome, before its completion popup. */
-export function setTerminalCompletionLayout(
-	node: UiNode,
-	cx: Pick<PaintContext, "focused" | "viewportHeight">,
-	rowsFromCaret: number,
-): void {
-	const holder = node as CompletionLayoutHolder;
-	const layout = holder[kCompletionLayout];
-	if (layout) {
-		layout.cx = cx;
-		layout.rowsFromCaret = rowsFromCaret;
-	} else holder[kCompletionLayout] = { cx, rowsFromCaret };
-}
-
-/** Completion rows the terminal can show without hiding the caret. */
-export function terminalCompletionRows(node: UiNode): number {
-	const layout = (node as CompletionLayoutHolder)[kCompletionLayout];
-	if (!layout || !layout.cx.focused(node)) return Infinity;
-	const height = layout.cx.viewportHeight;
-	return height === undefined ? Infinity : Math.max(0, height - layout.rowsFromCaret);
-}
-
-export function hasTerminalCompletionRoom(node: UiNode): boolean {
-	return terminalCompletionRows(node) > 0;
-}
-
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 /** A terminal-only styled range of an editor's text. */

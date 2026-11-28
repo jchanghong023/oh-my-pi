@@ -46,8 +46,6 @@ export interface HandoffGenerationOptions {
 	signal: AbortSignal;
 	messages?: readonly AgentMessage[];
 	autoTriggered?: boolean;
-	/** Runs when the prepared request reaches the transport, before any response. */
-	onDispatch?: () => void;
 	/** Sees every provider attempt's response, billed or failed, beside the spend journal. */
 	onAttempt?: (message: AssistantMessage) => void;
 }
@@ -90,7 +88,7 @@ export class SessionHandoff {
 	 */
 	async generateDocument(
 		customInstructions: string | undefined,
-		{ model, signal: cancelSignal, messages, autoTriggered, onDispatch, onAttempt }: HandoffGenerationOptions,
+		{ model, signal: cancelSignal, messages, autoTriggered, onAttempt }: HandoffGenerationOptions,
 	): Promise<string | undefined> {
 		const timeoutSeconds = cfgCompactionHandoffTimeoutSeconds.get(this.#host.settings);
 		const deadline = timeoutSeconds > 0 ? AbortSignal.timeout(timeoutSeconds * 1000) : undefined;
@@ -160,7 +158,6 @@ export class SessionHandoff {
 				{
 					streamOptions: handoffStreamOptions,
 					completeImpl: async (requestModel, requestContext, requestOptions) => {
-						onDispatch?.();
 						const stream = await this.#host.sideStreamFn(requestModel, requestContext, requestOptions);
 						const message = await stream.result();
 						// One call per provider attempt, so a retried or failed one is billed too.
@@ -174,7 +171,6 @@ export class SessionHandoff {
 					// resolveCompactionEffort so unsupported-effort models don't trip
 					// requireSupportedEffort.
 					thinkingLevel: this.#host.thinkingLevel(),
-					oneshotRetry: model.provider === "codeagent" ? false : undefined,
 				},
 			);
 			const handoffText = this.#host.deobfuscateFromProvider(rawHandoffText);

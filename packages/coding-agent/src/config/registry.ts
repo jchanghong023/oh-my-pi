@@ -24,7 +24,7 @@
  * (sections follow `TAB_GROUPS`), and `config/all-settings.ts` imports every domain in that order.
  */
 import { logger, offlineFromEnv, parseFlag } from "@oh-my-pi/pi-utils";
-import { FORK_SETTING_DEFAULTS } from "./fork-setting-defaults";
+import { FORK_OFFLINE_SETTING_DEFAULTS, FORK_SETTING_DEFAULTS } from "./fork-setting-defaults";
 import type { AnyUiMetadata, SubmenuOption, UiBase } from "./settings-defs";
 import type { SettingProvenance, Settings } from "./settings";
 
@@ -876,7 +876,9 @@ const ordered: AnySetting[] = [];
  */
 export function register<const D extends SettingDefinition>(definition: D): Setting<DefinitionValue<D>, D["id"]> {
 	if (byId.has(definition.id)) throw new Error(`Setting "${definition.id}" is registered twice`);
-	const forkDefault = FORK_SETTING_DEFAULTS.get(definition.id);
+	const offlineDefault = FORK_OFFLINE_SETTING_DEFAULTS.get(definition.id);
+	const forkDefault =
+		offlineDefault !== undefined && offlineFromEnv() ? offlineDefault : FORK_SETTING_DEFAULTS.get(definition.id);
 	const effectiveDefinition = forkDefault === undefined ? definition : { ...definition };
 	const handle = new Setting<DefinitionValue<D>, D["id"]>(effectiveDefinition);
 	if (forkDefault !== undefined) {

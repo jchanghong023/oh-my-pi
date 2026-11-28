@@ -4,14 +4,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	assetNames,
-	type AssetName,
-	linuxBinary,
-	linuxSdk,
-	type Source,
-	windowsBinary,
-	windowsSdk,
-} from "./cnb-build";
+	CNB_ASSET_NAMES,
+	CNB_BINARY_NAMES,
+	CNB_DEFAULT_RELEASE,
+	CNB_RELEASE_ARCH,
+	CNB_RELEASE_PLATFORMS,
+	type CnbAssetName,
+} from "../packages/coding-agent/src/cli/cnb-release-contract";
+import type { Source } from "./cnb-build";
 import { publicationTitle, releaseVersionFrom } from "./cnb-version";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -90,17 +90,17 @@ async function timed<T>(label: string, action: () => Promise<T>): Promise<T> {
 	}
 }
 
-function target(): { repo: string; tag: string; assets: AssetName[] } {
+function target(): { repo: string; tag: string; assets: CnbAssetName[] } {
 	let repo: string | undefined;
 	let tag: string | undefined;
-	const assets = new Set<AssetName>();
+	const assets = new Set<CnbAssetName>();
 	const args = process.argv.slice(2);
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--help") {
 			console.log(
 				`Usage: bun run cnb [--repo owner/repository] [--tag tag] [--asset exact-name]...\n` +
-				`Defaults: jchanghong/bin, existing tag omp, and these four assets:\n  ${assetNames.join("\n  ")}\n` +
+				`Defaults: ${CNB_DEFAULT_RELEASE.repo}, existing tag ${CNB_DEFAULT_RELEASE.tag}, and these four assets:\n  ${CNB_ASSET_NAMES.join("\n  ")}\n` +
 				"Only selected hosts are synchronized and built. Linux builds in Ubuntu-24.04 WSL (/root/oh-my-pi). " +
 				"Selecting both hosts requires identical Git and Bun identities. Only selected attachments are overwritten. " +
 				"Changing a shared rolling version requires both existing platform binaries to remain compatible.",
@@ -119,7 +119,7 @@ function target(): { repo: string; tag: string; assets: AssetName[] } {
 				tag = value;
 				break;
 			case "--asset": {
-				const asset = assetNames.find(name => name === value);
+				const asset = CNB_ASSET_NAMES.find(name => name === value);
 				if (!asset) throw new Error(`Unsupported CNB asset: ${value}`);
 				assets.add(asset);
 				break;
@@ -128,8 +128,8 @@ function target(): { repo: string; tag: string; assets: AssetName[] } {
 				throw new Error(`Invalid argument: ${arg}`);
 		}
 	}
-	repo ??= "jchanghong/bin";
-	tag ??= "omp";
+	repo ??= CNB_DEFAULT_RELEASE.repo;
+	tag ??= CNB_DEFAULT_RELEASE.tag;
 	if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$/.test(repo) || repo.endsWith(".git"))
 		throw new Error("Invalid CNB repository path.");
 	if (
@@ -139,7 +139,7 @@ function target(): { repo: string; tag: string; assets: AssetName[] } {
 		tag.includes("//")
 	)
 		throw new Error("Invalid release tag.");
-	return { repo, tag, assets: assets.size ? [...assets] : [...assetNames] };
+	return { repo, tag, assets: assets.size ? [...assets] : [...CNB_ASSET_NAMES] };
 }
 
 // Invoke the official npm CLI through Node, supplying arguments over stdin. This
@@ -200,7 +200,7 @@ async function getRelease(repo: string, tag: string): Promise<Release> {
 	return release;
 }
 
-async function upload(repo: string, release: Release, file: string, name: string, size: number): Promise<void> {
+async function upload(repo: string, release: Release, file: string, name: CnbAssetName, size: number): Promise<void> {
 	const started = performance.now();
 	const result = await cnb([
 		"releases",
@@ -274,10 +274,11 @@ async function upload(repo: string, release: Release, file: string, name: string
 async function main(): Promise<void> {
 	const started = performance.now();
 	const { repo, tag, assets } = target();
-	if (process.platform !== "win32" || process.arch !== "x64")
+	if (process.platform !== "win32" || process.arch !== CNB_RELEASE_ARCH)
 		throw new Error("CNB distribution requires a Windows x64 coordinator.");
-	const windowsAssets = assets.filter(name => name === windowsBinary || name === windowsSdk);
-	const linuxAssets = assets.filter(name => name === linuxBinary || name === linuxSdk);
+	const { win32, linux: linuxPlatform } = CNB_RELEASE_PLATFORMS;
+	const windowsAssets = assets.filter(name => name === win32.binary || name === win32.sdk);
+	const linuxAssets = assets.filter(name => name === linuxPlatform.binary || name === linuxPlatform.sdk);
 	const wsl = linuxAssets.length ? Bun.which("wsl.exe") : undefined;
 	if (linuxAssets.length && !wsl) throw new Error("WSL is required for the Linux assets.");
 	const cache = path.join(
@@ -347,7 +348,7 @@ async function main(): Promise<void> {
 		const unconfirmed = assets.filter((_, index) => uploads[index]!.status === "rejected");
 		console.log(`Confirmed CNB assets: ${confirmed.join(", ") || "none"}.`);
 		if (unconfirmed.length) console.error(`Unconfirmed CNB assets: ${unconfirmed.join(", ")}.`);
-		if (nextTitle && [windowsBinary, linuxBinary].every(name => !assets.includes(name) || confirmed.includes(name))) {
+		if (nextTitle && CNB_BINARY_NAMES.every(name => !assets.includes(name) || confirmed.includes(name))) {
 			await cnb([
 				"releases", "patch-release", "--repo", repo, "--release-id", release.id, "--name", nextTitle, "--verbose",
 			]);

@@ -1,3 +1,4 @@
+import { FORK_KEYBINDING_DEFAULTS } from "../fork-ui-defaults";
 import { type KeybindingDefinitions, TUI_KEYBINDINGS } from "./tui-keybindings";
 import { type KeyId } from "./key-id";
 
@@ -112,11 +113,11 @@ export const KEYBINDINGS = {
 		description: "Reset terminal display",
 	},
 	"app.thinking.cycle": {
-		defaultKeys: process.platform === "darwin" ? ["alt+e", "f6"] : "alt+e",
+		defaultKeys: FORK_KEYBINDING_DEFAULTS["app.thinking.cycle"],
 		description: "Cycle thinking level",
 	},
 	"app.thinking.toggle": {
-		defaultKeys: "alt+p",
+		defaultKeys: FORK_KEYBINDING_DEFAULTS["app.thinking.toggle"],
 		description: "Toggle thinking mode",
 	},
 	"app.model.cycleForward": {
@@ -132,7 +133,7 @@ export const KEYBINDINGS = {
 		description: "Select model",
 	},
 	"app.model.selectTemporary": {
-		defaultKeys: "ctrl+t",
+		defaultKeys: FORK_KEYBINDING_DEFAULTS["app.model.selectTemporary"],
 		description: "Select temporary model for current session",
 	},
 	"app.tools.expand": {
@@ -141,7 +142,7 @@ export const KEYBINDINGS = {
 	},
 	"app.tools.toggleVisibility": {
 		defaultKeys: "ctrl+shift+o",
-		description: "Cycle display mode: clean, compact, detailed",
+		description: "Cycle display mode: detailed, concise, clean, compact",
 	},
 	"app.ask.hide": {
 		defaultKeys: "alt+h",
@@ -344,7 +345,7 @@ export const KEYBINDINGS = {
 		description: "Jump to the next branch in /tree",
 	},
 	"app.plan.toggle": {
-		defaultKeys: "shift+tab",
+		defaultKeys: FORK_KEYBINDING_DEFAULTS["app.plan.toggle"],
 		description: "Toggle plan mode",
 	},
 	"app.history.search": {

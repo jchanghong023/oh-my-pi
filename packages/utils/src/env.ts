@@ -5,6 +5,7 @@ import { parseEnv } from "node:util";
 import { getAgentDir, getConfigRootDir, getProjectCwd, getProjectDir, refreshDirsFromEnv } from "./dirs";
 import { isBunTestRuntime } from "./test-runtime";
 
+export { offlineFromEnv } from "@oh-my-pi/pi-natives/offline-root";
 export * from "./test-runtime";
 export * from "./worker-host";
 
@@ -547,17 +548,6 @@ export function isCompiledBinary(): boolean {
 	if (process.env.PI_COMPILED || Bun.env.PI_COMPILED) return true;
 	const url = import.meta.url;
 	return url.includes("$bunfs") || url.includes("~BUN") || url.includes("%7EBUN");
-}
-
-/**
- * Whether `OMP_OFFLINE` selects the company intranet profile: CentOS 7, NFS,
- * `/dev/shm`, and no internet access. This flag does not probe the host.
- * The environment variable is inherited by child processes and is the only
- * trigger. Only `1`, `true`, `yes`, and `on` enable it (trimmed, case-insensitive).
- */
-export function offlineFromEnv(): boolean {
-	const raw = process.env.OMP_OFFLINE?.trim().toLowerCase();
-	return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
 const TRUTHY: Dict<boolean> = {

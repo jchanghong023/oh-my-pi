@@ -118,7 +118,7 @@ export function statusSegs(settings: StatusLineSettings, facts: StatusFacts): St
 export function SegMotionNode(props: { readonly motion: SegMotion }): JSXNode {
 	const { motion } = props;
 	if (motion.kind === "rate") return <rate key="rate" value={motion.value} unit={motion.unit} />;
-	return <elapsed key="timer" age={motion.age} stopped={motion.stopped} format="short" term={{ decorative: true }} />;
+	return <elapsed key="timer" age={motion.age} stopped={motion.stopped} format="short" />;
 }
 
 export interface StatusLineProps {

@@ -144,12 +144,12 @@ describe("EventController + Cursor todo bridge", () => {
 		expect(f.showWarning.mock.calls[0]![1]).toEqual({ hideWithToolActivity: true });
 	});
 
-	it("keeps the standalone hint when the failure carries no text", async () => {
+	it("keeps the standalone hint when a cancelled Todo fails without a detail", async () => {
 		// Without a detail the warning must still say the panel may be stale —
 		// dropping to a bare "Todo update failed" hides that local state diverged.
 		const f = createFixture();
 
-		await f.controller.handleEvent(todoFailure(""));
+		await f.controller.handleEvent({ ...todoFailure(""), cancelled: true });
 
 		expect(f.showWarning).toHaveBeenCalledWith("Todo update failed. Progress may be stale until todo succeeds.", {
 			hideWithToolActivity: true,

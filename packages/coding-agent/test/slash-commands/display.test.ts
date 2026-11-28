@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
-import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode, type DisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { cfgHideThinkingBlock } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -17,17 +17,14 @@ function displayPreferences(settings: Settings) {
 	return { mode: cfgDisplayMode.get(settings), hideThinkingBlock: cfgHideThinkingBlock.get(settings) };
 }
 
-const presets = {
-	clean: { mode: "clean", hideThinkingBlock: true },
-	compact: { mode: "compact", hideThinkingBlock: false },
-	detailed: { mode: "detailed", hideThinkingBlock: false },
-} as const;
+const modes = ["detailed", "concise", "clean", "compact"] as const;
 
 function createRuntime(settings = Settings.isolated()) {
 	const showStatus = vi.fn();
 	const showWarning = vi.fn();
 	const prompt = vi.fn();
 	const setText = vi.fn();
+	let displayMode: DisplayMode | undefined;
 	return {
 		settings,
 		showStatus,
@@ -37,6 +34,15 @@ function createRuntime(settings = Settings.isolated()) {
 			ctx: {
 				settings,
 				composer: { setText },
+				get displayMode() {
+					return displayMode ?? cfgDisplayMode.get(settings);
+				},
+				syncDisplayMode(next: DisplayMode) {
+					if ((displayMode ?? cfgDisplayMode.get(settings)) === next) return false;
+					displayMode = next;
+					return true;
+				},
+				shell: {},
 				showStatus,
 				showWarning,
 				session: { prompt },
@@ -64,22 +70,23 @@ describe("/display slash command", () => {
 
 	it("consumes explicit presets without invoking the model", async () => {
 		const h = createRuntime();
-		for (const mode of ["clean", "detailed", "compact"] as const) {
-			cfgHideThinkingBlock.set(h.settings, false);
+		cfgHideThinkingBlock.set(h.settings, true);
+		for (const mode of modes) {
 			cfgDisplayMode.set(h.settings, "detailed");
 			expect(await executeBuiltinSlashCommand(`/display ${mode}`, h.runtime)).toBe(true);
-			expect(displayPreferences(h.settings)).toEqual(presets[mode]);
+			expect(displayPreferences(h.settings)).toEqual({ mode, hideThinkingBlock: true });
 		}
 		expect(h.prompt).not.toHaveBeenCalled();
 		expect(h.showWarning).not.toHaveBeenCalled();
-		expect(h.showStatus).toHaveBeenCalledTimes(3);
+		expect(h.showStatus).toHaveBeenCalledTimes(4);
 	});
 
-	it("cycles a fresh compact profile through detailed, clean and compact", async () => {
+	it("cycles a fresh compact profile through detailed, concise, clean and compact", async () => {
 		const h = createRuntime();
-		for (const mode of ["detailed", "clean", "compact"] as const) {
+		const hideThinkingBlock = cfgHideThinkingBlock.get(h.settings);
+		for (const mode of modes) {
 			expect(await executeBuiltinSlashCommand("/display", h.runtime)).toBe(true);
-			expect(displayPreferences(h.settings)).toEqual(presets[mode]);
+			expect(displayPreferences(h.settings)).toEqual({ mode, hideThinkingBlock });
 		}
 	});
 
@@ -91,7 +98,7 @@ describe("/display slash command", () => {
 		});
 		const h = createRuntime(settings);
 		expect(lookup("display.compactToolActivity")).toBeUndefined();
-		for (const mode of ["clean", "compact", "detailed"] as const) {
+		for (const mode of modes) {
 			await executeBuiltinSlashCommand(`/display ${mode}`, h.runtime);
 			expect(lookup("terminal.showImages")?.get(settings)).toBe(false);
 			expect(lookup("images.autoResize")?.get(settings)).toBe(false);
@@ -104,10 +111,10 @@ describe("/display slash command", () => {
 		cfgHideThinkingBlock.set(h.settings, false);
 		cfgDisplayMode.set(h.settings, "clean");
 		await executeBuiltinSlashCommand("/display", h.runtime);
-		expect(displayPreferences(h.settings)).toEqual(presets.compact);
+		expect(displayPreferences(h.settings)).toEqual({ mode: "compact", hideThinkingBlock: false });
 		cfgHideThinkingBlock.set(h.settings, true);
 		await executeBuiltinSlashCommand("/display", h.runtime);
-		expect(displayPreferences(h.settings)).toEqual(presets.detailed);
+		expect(displayPreferences(h.settings)).toEqual({ mode: "detailed", hideThinkingBlock: true });
 	});
 
 	it("rejects unknown or extra arguments without mutating preferences", async () => {
@@ -124,7 +131,7 @@ describe("/display slash command", () => {
 		expect(h.prompt).not.toHaveBeenCalled();
 	});
 
-	it("reports runtime overrides instead of claiming a blocked preset is active", async () => {
+	it("selects the requested view even when a runtime value masks the saved mode", async () => {
 		const h = createRuntime();
 		cfgHideThinkingBlock.override(h.settings, true);
 		cfgDisplayMode.override(h.settings, "clean");
@@ -134,21 +141,15 @@ describe("/display slash command", () => {
 				mode: "clean",
 				hideThinkingBlock: true,
 			});
-			expect(h.settings.getGlobalSettings()).toMatchObject({
-				hideThinkingBlock: false,
-				display: { mode },
-			});
-			expect(h.showStatus).not.toHaveBeenCalled();
-			const warning = h.showWarning.mock.calls.at(-1)?.[0];
-			// Both visible presets must report a blocked thinking preference.
-			expect(warning).toContain("display.mode");
-			expect(warning).toContain("runtime");
-			expect(warning).toContain("hideThinkingBlock");
-			expect(warning).toMatch(/live thinking window hidden.*tool activity hidden/);
+			expect(h.settings.getGlobalSettings().hideThinkingBlock).toBeUndefined();
+			expect(h.settings.getGlobalSettings().display).toMatchObject({ toolActivity: mode });
+			expect(h.runtime.ctx.displayMode).toBe(mode);
+			expect(h.showStatus).toHaveBeenLastCalledWith(expect.stringContaining(mode));
+			expect(h.showWarning).not.toHaveBeenCalled();
 		}
 	});
 
-	it("reports a partially applied preset when project settings keep thinking hidden", async () => {
+	it("leaves the project thinking preference independent of display changes", async () => {
 		tempDir = TempDir.createSync("@pi-display-shadow-");
 		const agentDir = tempDir.join("agent");
 		const cwd = tempDir.join("project");
@@ -162,15 +163,10 @@ describe("/display slash command", () => {
 			mode: "compact",
 			hideThinkingBlock: true,
 		});
-		expect(settings.getGlobalSettings()).toMatchObject({
-			hideThinkingBlock: false,
-			display: { mode: "compact" },
-		});
-		expect(h.showStatus).not.toHaveBeenCalled();
-		expect(h.showWarning).toHaveBeenCalledTimes(1);
-		const warning = h.showWarning.mock.calls[0]?.[0];
-		expect(warning).toContain("hideThinkingBlock");
-		expect(warning).toContain("project settings");
+		expect(settings.getGlobalSettings().hideThinkingBlock).toBeUndefined();
+		expect(settings.getGlobalSettings().display).toMatchObject({ toolActivity: "compact" });
+		expect(h.showStatus).toHaveBeenCalledWith(expect.stringContaining("Display mode: compact"));
+		expect(h.showWarning).not.toHaveBeenCalled();
 		await settings.flush();
 	});
 
@@ -180,17 +176,19 @@ describe("/display slash command", () => {
 		const cwd = tempDir.join("project");
 		for (const dir of [agentDir, cwd]) fs.mkdirSync(dir, { recursive: true });
 		let settings = await Settings.loadIsolated({ agentDir, cwd });
+		const hideThinkingBlock = cfgHideThinkingBlock.get(settings);
 		for (const [mode, next] of [
 			["clean", "compact"],
 			["compact", "detailed"],
-			["detailed", "clean"],
+			["detailed", "concise"],
+			["concise", "clean"],
 		] as const) {
 			await executeBuiltinSlashCommand(`/display ${mode}`, createRuntime(settings).runtime);
 			await settings.flush();
 			settings = await Settings.loadIsolated({ agentDir, cwd });
-			expect(displayPreferences(settings)).toEqual(presets[mode]);
+			expect(displayPreferences(settings)).toEqual({ mode, hideThinkingBlock });
 			await executeBuiltinSlashCommand("/display", createRuntime(settings).runtime);
-			expect(displayPreferences(settings)).toEqual(presets[next]);
+			expect(displayPreferences(settings)).toEqual({ mode: next, hideThinkingBlock });
 			await settings.flush();
 		}
 	});
@@ -198,7 +196,7 @@ describe("/display slash command", () => {
 	it("keeps bare invocation available while completing explicit presets", async () => {
 		const command = BUILTIN_SLASH_COMMANDS.find(entry => entry.name === "display");
 		expect(await command?.getArgumentCompletions?.("")).toBeNull();
-		for (const mode of ["clean", "compact", "detailed"]) {
+		for (const mode of modes) {
 			const matches = await command?.getArgumentCompletions?.(mode);
 			expect(matches?.map(match => match.value)).toEqual([`${mode} `]);
 		}

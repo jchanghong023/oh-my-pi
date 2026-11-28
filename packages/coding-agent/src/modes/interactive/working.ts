@@ -31,8 +31,8 @@ export interface WorkingHost {
 	retryKey(): string;
 }
 
-/** Whether a label came from fresh tool output or a display-mode refresh. */
-export type WorkingMessageSource = "tool-intent" | "intent-refresh";
+/** Tool intent labels are kept while hidden so a mode change can reveal the current intent. */
+export type WorkingMessageSource = "tool-intent";
 
 interface WorkingLabel {
 	message: string | (() => string);
@@ -47,6 +47,7 @@ export class WorkingRows {
 	#label?: WorkingLabel;
 	#spec?: WorkingSpec;
 	#compact = false;
+	#clean = false;
 	/** A message set before the turn row exists; applied when it shows. */
 	#pending?: WorkingLabel;
 
@@ -59,8 +60,9 @@ export class WorkingRows {
 		return this.#kind;
 	}
 
-	setCompact(compact: boolean): void {
-		if (this.#compact === compact) return;
+	setDisplay(clean: boolean, compact: boolean): void {
+		if (this.#clean === clean && this.#compact === compact) return;
+		this.#clean = clean;
 		this.#compact = compact;
 		this.#syncRow();
 	}
@@ -103,7 +105,8 @@ export class WorkingRows {
 		if (this.#kind === undefined) {
 			this.show("turn", {
 				label: () => {
-					const message = this.#label?.message ?? DEFAULT_WORKING_MESSAGE;
+					const label = this.#label;
+					const message = (this.#clean && label?.fromIntent ? undefined : label?.message) ?? DEFAULT_WORKING_MESSAGE;
 					return typeof message === "function" ? message() : message;
 				},
 				startedAt: this.#host.runStartedAt() ?? Date.now(),
@@ -115,8 +118,6 @@ export class WorkingRows {
 
 	/** The turn row's label (no argument: the default); kept until the row shows when none does. */
 	setMessage(message?: string | (() => string), showInCompact = true, source?: WorkingMessageSource): void {
-		const previous = this.#pending ?? this.#label;
-		if (source === "intent-refresh" && previous && !previous.fromIntent) return;
 		if (message === undefined) {
 			this.#pending = undefined;
 			this.#label = undefined;

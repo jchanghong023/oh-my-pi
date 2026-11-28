@@ -13,8 +13,8 @@ import {
 	normalizeProfileName,
 	prepareLinuxPrivateCacheDirectory,
 	preparePrivateCacheDirectory,
-	resolveAbsoluteDir,
 	resolveCacheRoot,
+	resolveConfigRootOverride,
 	resolveLinuxPrivateCacheRoot,
 	resolveNativesDirOverride,
 	resolvePersistentRoot,
@@ -85,9 +85,6 @@ function getNativeDirs() {
 	const profile = safeProfile(process.env.OMP_PROFILE ?? process.env.PI_PROFILE);
 	const cacheRoot = resolveCacheRoot(profile);
 	const cachedNativesDir = cacheRoot && path.join(cacheRoot, "natives");
-	if (cachedNativesDir && resolveAbsoluteDir(process.env.OMP_CACHE_DIR)) {
-		return { nativesDir: cachedNativesDir, addonCacheDir: cachedNativesDir };
-	}
 	const baseRoot = resolvePersistentRoot();
 	const configRoot = profile ? path.join(baseRoot, "profiles", profile) : baseRoot;
 	// A propagated profile agent directory is not a default-profile override.
@@ -99,7 +96,7 @@ function getNativeDirs() {
 	let addonCacheDir = path.join(configRoot, "natives");
 	if (
 		(process.platform === "linux" || process.platform === "darwin") &&
-		!resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT) &&
+		!resolveConfigRootOverride() &&
 		isDefaultAgent
 	) {
 		const xdgRoot = resolveXdgRoot(process.env.XDG_CACHE_HOME, profile);

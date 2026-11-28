@@ -504,6 +504,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		name: "leave",
 		icon: "signOut",
 		description: "Leave the collab session",
+		tuiInput: { followUpDuringCompaction: "direct", followUpAfterGuestJoin: true },
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.collabController.host) return "Leave collab: hosting";
 			if (runtime.ctx.collabGuest) return "Leave collab: guest";

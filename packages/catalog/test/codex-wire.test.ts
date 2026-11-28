@@ -112,7 +112,6 @@ describe("Codex client version refresh", () => {
 							PI_AI_CODEX_CLIENT_VERSION: "",
 							PI_CODING_AGENT_DIR: path.join(home, "agent"),
 							OMP_CONFIG_ROOT: path.join(home, ".omp"),
-							OMP_CACHE_DIR: path.join(home, "cache"),
 							OMP_PROFILE: "",
 							PI_PROFILE: "",
 							OMP_OFFLINE: offline,

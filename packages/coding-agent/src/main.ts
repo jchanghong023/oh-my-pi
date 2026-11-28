@@ -51,16 +51,12 @@ import { applyStartupCwd } from "./cli/startup-cwd";
 import { findConfigFile } from "./config";
 import { getOfflineSystemNotice } from "./utils/offline-notice";
 import {
-	COMPANY_OFFLINE_CONTEXT_WINDOW,
+	canUseCompanyModels,
 	COMPANY_OFFLINE_ROLE_DEFAULTS,
-	setCompanyChatContextWindow,
+	initializeCompanyModelLane,
 } from "./config/company-models";
-import {
-	COMPANY_PROVIDER_ID,
-	getCompanyConfig,
-	getCompanyConfigError,
-	setCompanyOfflineEnabled,
-} from "./config/company-provider";
+import { COMPANY_PROVIDER_ID } from "./config/company-provider";
+import { applyOfflineCliEnvironment, applyOfflineCliSettings } from "./config/fork-launch-policy";
 import { cfgNoJudge, cfgNoSpotlight, cfgOffline } from "./config/auxiliary-model-policy";
 import { type HydrateStartupModelCaches, ModelRegistry } from "./config/model-registry";
 import { applyModelPresetOverrides, applyPresetLaunchThinkingLevel } from "./config/model-presets";
@@ -192,11 +188,9 @@ import {
 	cfgSymbolPreset,
 	cfgThemeDark,
 	cfgThemeLight,
-	cfgTuiAutoGraph,
 	cfgTuiImeSafeCursor,
 	cfgTuiResizeScrollback,
 	cfgTuiScreen,
-	cfgTuiTitleState,
 	cfgTuiSpinnerInterval,
 	cfgTuiVimMode,
 	cfgTuiMaxFps,
@@ -218,7 +212,6 @@ import { cfgTaskAgentIdleTtlMs, cfgTaskMaxRecursionDepth } from "./task/settings
 import { canSpawnAtDepth } from "./task/types";
 import { cfgSkillsIncludeSkills } from "./extensibility/settings";
 import { cfgWorkspaceAdditionalDirectories } from "./session/context-settings";
-import { cfgTitleRefreshOnReplan } from "./utils/title-settings";
 import { ensureTheme, getTerminalAppearance, initTheme, stopThemeWatcher } from "./ui/theme/service";
 
 type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
@@ -755,7 +748,6 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 					}
 				: undefined,
 			args.rawArgs,
-			"acp",
 		);
 		const effectiveArgs = reparsedArgs ?? args.parsedArgs;
 		if (effectiveArgs.invalidFlagValues.length > 0) {
@@ -1249,7 +1241,7 @@ function notifyResumeCwdFallback(
  * destination project's settings-derived scope wins over the launch directory's.
  */
 export async function resolveScopedModels(
-	parsed: Pick<Args, "intranetOffline" | "models">,
+	parsed: Pick<Args, "models">,
 	modelRegistry: Pick<ModelRegistry, "getAvailable" | "getDiscoverableProviders" | "refresh">,
 	activeSettings: Settings,
 	hydrateModelCaches?: HydrateStartupModelCaches,
@@ -1264,9 +1256,7 @@ export async function resolveScopedModels(
 	if (scopedModels.length > 0 || modelRegistry.getDiscoverableProviders().length === 0) {
 		return scopedModels;
 	}
-	// Offline processes keep this cache-aware pass cache-only; a collapsed scope
-	// surfaces its models from SQLite instead of fetching discovery endpoints.
-	await modelRegistry.refresh(parsed.intranetOffline ? "offline" : "online-if-uncached");
+	await modelRegistry.refresh("online-if-uncached");
 	return await resolveModelScope(modelPatterns, modelRegistry, preferences, activeSettings);
 }
 
@@ -1731,7 +1721,6 @@ export async function buildSessionOptions(
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
 		autoApprove: parsed.autoApprove ?? false,
-		offline: parsed.intranetOffline === true,
 		scopedModelsFromSettings: parsed.models === undefined,
 	};
 	const restoringSession = Boolean(parsed.continue || parsed.resume || isForeignSessionImport(parsed));
@@ -1918,7 +1907,7 @@ export async function buildSessionOptions(
 			modelRegistry,
 			modelMatchPreferences,
 			disabledProviders,
-			{ deferUnregistered: true, offline: parsed.intranetOffline === true, settings: activeSettings, roleLookup },
+			{ deferUnregistered: true, settings: activeSettings, roleLookup },
 		);
 		if (selection.deferred) {
 			// Preserve role fallback order until extensions have registered their providers.
@@ -2043,20 +2032,13 @@ export async function disposeSessionQuietly(session: AgentSession): Promise<void
 	await session.dispose().catch(() => undefined);
 }
 
-/** Scan-cache TTL injected into OMP_OFFLINE processes; only affects the rescan interval behind `@` completion. */
-const OFFLINE_SCAN_CACHE_TTL_MS = "30000";
-
 export async function runRootCommand(
 	parsed: Args,
 	rawArgs: string[],
 	deps: RunRootCommandDependencies = DEFAULT_RUN_ROOT_DEPENDENCIES,
 ): Promise<void> {
 	logger.startTiming();
-	// Set the offline scan-cache TTL before constructing @ file autocomplete providers.
-	// Explicitly configured values, including "0", take precedence.
-	if (parsed.intranetOffline === true && (process.env.FS_SCAN_CACHE_TTL_MS ?? "") === "") {
-		process.env.FS_SCAN_CACHE_TTL_MS = OFFLINE_SCAN_CACHE_TTL_MS;
-	}
+	if (parsed.intranetOffline === true) applyOfflineCliEnvironment();
 	startStartupWatchdog();
 	try {
 		// Non-prepaint commands still need a default theme; an existing Composer
@@ -2116,7 +2098,7 @@ export async function runRootCommand(
 		// Start credential I/O before independent preload, stdin and settings work.
 		const companyLaneOperationId = logger.getLogContext().operation_id ?? `startup-lanes-${randomUUID()}`;
 		const companySnapshotPromise = logger.withLogContext({ operation_id: companyLaneOperationId }, () =>
-			setCompanyOfflineEnabled(parsedArgs.intranetOffline === true),
+			initializeCompanyModelLane(parsedArgs.intranetOffline === true),
 		);
 		companySnapshotPromise.catch(() => {});
 
@@ -2214,8 +2196,7 @@ export async function runRootCommand(
 			? Promise.resolve(deps.settings)
 			: logger.time("settings:init", Settings.init, { cwd, configFiles: parsedArgs.config });
 		settingsPromise.catch(() => {});
-		await companySnapshotPromise;
-		const companyProviderError = getCompanyConfigError();
+		const companyProviderError = await companySnapshotPromise;
 		if (companyProviderError) {
 			if (companyExplicitlyRequested) {
 				logger.warn("Explicit company model selection unavailable", {
@@ -2290,13 +2271,8 @@ export async function runRootCommand(
 
 		// Intranet-only overrides; apply before the registry captures company models.
 		if (parsedArgs.intranetOffline) {
-			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
-			cfgStartupSetupWizard.override(settingsInstance, false);
-			cfgTuiAutoGraph.override(settingsInstance, "off");
-			cfgTuiTitleState.override(settingsInstance, false);
-			cfgTitleRefreshOnReplan.override(settingsInstance, false);
-			setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
-			if (getCompanyConfig() && !disabledProviderIds(settingsInstance).has(COMPANY_PROVIDER_ID)) {
+			applyOfflineCliSettings(settingsInstance);
+			if (canUseCompanyModels(settingsInstance)) {
 				settingsInstance.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
 				logger.info("Offline company role defaults installed", {
 					component: "main",
@@ -2893,7 +2869,7 @@ export async function runRootCommand(
 			// discovery arms; running these concurrently contends for the event loop and stretches
 			// every parallel arm by ~30ms. Interactive startup defers it further, behind the first
 			// frame (see `startDeferredStartupWork`), for the same reason.
-			if (!isInteractive) modelRegistry.refreshInBackground(parsedArgs.intranetOffline ? "offline" : undefined);
+			if (!isInteractive) modelRegistry.refreshInBackground();
 			return result;
 		};
 
@@ -3226,7 +3202,7 @@ export async function runRootCommand(
 						}
 					});
 				} else {
-					modelRegistry.refreshInBackground(parsedArgs.intranetOffline ? "offline" : undefined);
+					modelRegistry.refreshInBackground();
 					startCatalogDependentWork();
 				}
 				if (cfgGcAutoCompress.get(settingsInstance)) {

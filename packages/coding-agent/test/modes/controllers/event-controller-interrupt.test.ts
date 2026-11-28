@@ -1,7 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { LocalAgentSessionEvent as AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { vocalizer } from "@oh-my-pi/pi-coding-agent/tts/vocalizer";
 import { createInteractiveModeContext, renderTranscript } from "../../helpers/interactive-mode-context";
@@ -11,7 +10,7 @@ function createContext() {
 	const setWorkingMessage = vi.fn();
 	const sessionState = { isAborting: false };
 	const ctx = createInteractiveModeContext({
-		settings: Settings.isolated({ "display.mode": "detailed" }),
+		settings: Settings.isolated({ "display.toolActivity": "detailed" }),
 		setWorkingMessage,
 		session: {
 			get isAborting() {
@@ -100,7 +99,6 @@ describe("EventController aborted-turn working messages", () => {
 
 	it("keeps a pending ask off the transcript and shows its completed result", async () => {
 		const { ctx } = createContext();
-		cfgDisplayMode.override(ctx.settings, "detailed");
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
 		await controller.handleEvent({
@@ -120,17 +118,5 @@ describe("EventController aborted-turn working messages", () => {
 		});
 		ask?.call?.setExpanded(true);
 		expect(renderTranscript(ctx).join("\n")).toContain("confirmed");
-	});
-
-	it("keeps tool intent out of the clean working line", async () => {
-		const { ctx, setWorkingMessage } = createContext();
-		cfgDisplayMode.override(ctx.settings, "clean");
-		ctx.hideToolActivity = true;
-		const controller = new EventController(ctx);
-		await controller.handleEvent(AGENT_START);
-		setWorkingMessage.mockClear();
-		await controller.handleEvent(toolStartWithIntent("clean-call", "Inspect a private path"));
-		expect(setWorkingMessage).not.toHaveBeenCalled();
-		expect(renderTranscript(ctx).join("\n")).not.toContain("Inspect a private path");
 	});
 });

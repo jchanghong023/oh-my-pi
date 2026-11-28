@@ -8,9 +8,10 @@
  * - wider than 40 cells, a description column (muted) after a primary
  *   column sized to the widest label (`term.columns` bounds it), wrapped to
  *   `term.descriptionRows` rows when set, else cut to one;
- * - bounded by `max.lines` and the available terminal height, a row window
- *   centred on the selection (its label always visible), with a scrollbar
- *   while rows are hidden.
+ * - at most `max.lines` rows, a window over the items' rows centred on the
+ *   selection (whole items from the top, the selected one always painted),
+ *   with a scrollbar in the last column while rows are hidden (accent thumb,
+ *   muted track).
  */
 import type {
 	TspPickerGroup,
@@ -125,8 +126,6 @@ function paintPopup(node: UiNode, cx: PaintContext): Block {
 		.find(child => child.kind === "list");
 	if (!list) return EMPTY_BLOCK;
 	const listProps = list.props() as { selected?: string; max?: { lines?: number } };
-	const visible = Math.min(Math.max(1, listProps.max?.lines ?? 10), cx.height ?? Number.POSITIVE_INFINITY);
-	if (visible <= 0) return EMPTY_BLOCK;
 	const symbols = cx.theme.symbols;
 	const entries: Entry[] = list.children().map(item => {
 		const p = item.props() as { label?: TspText; detail?: TspText; icon?: string; term?: PopupItemTerm };
@@ -150,6 +149,7 @@ function paintPopup(node: UiNode, cx: PaintContext): Block {
 		0,
 		entries.findIndex(entry => entry.key === listProps.selected),
 	);
+	const visible = Math.max(1, listProps.max?.lines ?? 10);
 	const [min, max] = term.columns ?? [DEFAULT_COLUMN, DEFAULT_COLUMN];
 	let widest = 0;
 	let widestGlyph = 0;
@@ -281,10 +281,7 @@ function paintMentionTiles(
 	const short = shortOf(lit);
 	const about = `${short ? `${cx.theme.style("accent strong", short)}  ` : ""}${cx.theme.fg("muted", plain(lit.detail))}`;
 	return {
-		rows:
-			cx.height === 1
-				? [truncate(`${indent}${strip}`, cx.width, "")]
-				: [truncate(`${indent}${strip}`, cx.width, ""), truncate(`${indent}${about}`, cx.width, "…")],
+		rows: [truncate(`${indent}${strip}`, cx.width, ""), truncate(`${indent}${about}`, cx.width, "…")],
 	};
 }
 
@@ -302,22 +299,20 @@ function paintMentionPopup(node: UiNode, cx: PaintContext): Block {
 	// Role painter is registered solely on `picker` nodes.
 	const props = node.props() as TspPickerProps & { term?: MentionPopupTerm };
 	const items = props.items ?? [];
-	if (items.length === 0 || cx.height === 0) return EMPTY_BLOCK;
+	if (items.length === 0) return EMPTY_BLOCK;
 	const marker = `${cx.theme.symbols.symbol("nav.cursor")} `;
 	const blank = " ".repeat(visibleWidth(marker));
 	if (props.layout === "tiles") return paintMentionTiles(props, items, cx, blank);
 	const order = props.order ?? items.map(item => item.id);
 	const selectedId = props.selected ?? undefined;
-	const height = cx.height ?? Infinity;
-	const level = height > 1 ? (props.level ?? undefined) : undefined;
+	const level = props.level ?? undefined;
 	const term = props.term ?? { maxLines: 10 };
 
 	const byId = new Map<string, TspPickerItem>();
 	for (const item of items) byId.set(item.id, item);
 
 	const rows: string[] = [];
-	const footerRows = level ? 1 : 0;
-	const listBudget = Math.min(Math.max(3, term.maxLines - footerRows), height - footerRows);
+	const listBudget = Math.max(3, term.maxLines - (level ? 1 : 0));
 
 	const colGap = 2;
 	const colIds = (props.columns ?? []).map(col => col.id);
@@ -416,7 +411,7 @@ function paintMentionPopup(node: UiNode, cx: PaintContext): Block {
 	let start = 0;
 	if (total > listBudget) {
 		start = Math.max(0, Math.min(selectedIdx - Math.floor(listBudget / 2), total - listBudget));
-		if (listBudget > 1 && start > 0 && painted[start - 1]?.isHeader && selectedIdx === start) start--;
+		if (start > 0 && painted[start - 1]?.isHeader && selectedIdx === start) start--;
 	}
 	const slice = painted.slice(start, start + listBudget);
 	const needsBar = total > listBudget;

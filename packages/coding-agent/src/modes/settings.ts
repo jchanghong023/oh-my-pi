@@ -1,4 +1,3 @@
-import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
 import { DEFAULT_MAX_FPS, parseMaxFps } from "../config/frame-rate";
 import { MOTION_MODES, MOTION_PRESETS } from "../config/motion-presets";
 import { combine, effect, register, type Setting } from "../config/registry";
@@ -11,7 +10,6 @@ import {
 	STATUS_LINE_SEGMENT_IDS,
 	STATUS_LINE_SEPARATOR_VALUES,
 } from "../config/status-line-schema";
-import { cfgHideThinkingBlock } from "../session/settings";
 import { cfgReadToolResultPreview } from "../tools/settings";
 import { formatKeyHint, formatKeyHints } from "../ui/keys/hints";
 import { setTightLayout } from "../ui/styles/terminal-padding";
@@ -24,6 +22,7 @@ import {
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
 import { TREE_FILTER_MODES } from "./view-model/overlays/tree-selector";
 import { WORD_COMPLETION_METHODS } from "./view-model/prompt/word-completion";
+import type { InteractiveModeContext } from "./types";
 
 const EMPTY_UNKNOWN_RECORD: Record<string, unknown> = {};
 
@@ -524,7 +523,7 @@ export const cfgTerminalShowProgress = register({
 export const cfgTerminalProgramStatus = register({
 	id: "terminal.programStatus",
 	type: "boolean",
-	default: !offlineFromEnv(),
+	default: true,
 	ui: {
 		tab: "appearance",
 		group: "Display",
@@ -898,62 +897,66 @@ export const cfgDisplaySmoothStreaming = register({
 	},
 });
 
-export const cfgDisplayMode = register({
-	id: "display.mode",
-	type: "enum",
-	values: ["clean", "compact", "detailed"] as const,
-	default: "compact",
-});
+export const DISPLAY_MODES = ["detailed", "concise", "clean", "compact"] as const;
+export type DisplayMode = (typeof DISPLAY_MODES)[number];
 
-export function nextDisplayMode(settings: Settings): "clean" | "compact" | "detailed" {
-	return ({ clean: "compact", compact: "detailed", detailed: "clean" } as const)[cfgDisplayMode.get(settings)];
+export function isDisplayMode(value: unknown): value is DisplayMode {
+	return value === "detailed" || value === "concise" || value === "clean" || value === "compact";
 }
 
-/** Apply the saved preset, reporting the actual values when a higher layer overrides it. */
-export async function applyDisplayPreset(
-	settings: Settings,
-	mode: "clean" | "compact" | "detailed",
-	output: { showStatus(message: string): void; showWarning(message: string): void },
-): Promise<void> {
-	const hideThinking = mode === "clean";
-	cfgHideThinkingBlock.set(settings, hideThinking);
-	cfgDisplayMode.set(settings, mode);
-	// The settings effect rebuilds the transcript in a microtask, before the status notice is inserted.
-	await Promise.resolve();
-	const actualMode = cfgDisplayMode.get(settings);
-	const actualHideThinking = cfgHideThinkingBlock.get(settings);
-	if (mode === actualMode && hideThinking === actualHideThinking) {
-		output.showStatus(`Display mode: ${mode}${mode === "compact" ? "; tool details: /display detailed" : ""}`);
-		return;
-	}
-	const sources = {
-		env: "environment variable",
-		runtime: "runtime",
-		overlay: "startup configuration",
-		project: "project settings",
-		global: "global settings",
-		default: "default",
-	};
-	const overrides: string[] = [];
-	if (hideThinking !== actualHideThinking)
-		overrides.push(`${cfgHideThinkingBlock.id} (${sources[cfgHideThinkingBlock.provenance(settings)]})`);
-	if (mode !== actualMode) overrides.push(`${cfgDisplayMode.id} (${sources[cfgDisplayMode.provenance(settings)]})`);
-	const thinking = actualHideThinking || actualMode !== "detailed" ? "hidden" : "shown";
-	const tools = {
-		clean: "hidden",
-		compact: "limited to two activity lines, temporary output, and this turn's file diffs",
-		detailed: "shown in full",
-	}[actualMode];
-	output.showWarning(
-		`Display preference: ${mode}; current: live thinking window ${thinking}, tool activity ${tools}; overrides: ${overrides.join(", ")}`,
+export const cfgDisplayMode = register({
+	id: "display.toolActivity",
+	type: "enum",
+	values: DISPLAY_MODES,
+	default: "detailed",
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Tool Activity",
+		description:
+			"How model-initiated tool calls show in the transcript (concise draws one status row per call; the tool-output toggle opens the full card)",
+		options: [
+			{ value: "detailed", label: "Detailed", description: "Full tool cards with arguments and output previews" },
+			{
+				value: "concise",
+				label: "Concise",
+				description: "One row per call: time, status, tool and intent; no arguments or output",
+			},
+			{ value: "clean", label: "Clean", description: "Hide tool activity and thinking" },
+			{ value: "compact", label: "Compact", description: "Clean transcript with live activity, output and diff" },
+		],
+	},
+});
+
+export function nextDisplayMode(mode: DisplayMode): DisplayMode {
+	return DISPLAY_MODES[(DISPLAY_MODES.indexOf(mode) + 1) % DISPLAY_MODES.length]!;
+}
+
+/** Explicit gestures change the live view first, then save the preference and replay history. */
+export function applyDisplayPreset(
+	mode: DisplayMode,
+	output: Pick<InteractiveModeContext, "settings" | "syncDisplayMode" | "shell" | "showStatus">,
+): void {
+	const changed = output.syncDisplayMode(mode);
+	cfgDisplayMode.set(output.settings, mode);
+	if (changed) output.shell.host?.replayHistory();
+	output.showStatus(
+		isCleanTranscript(mode)
+			? `Display mode: ${mode}${mode === "compact" ? "; tool details: /display detailed" : ""}`
+			: `Tool activity: ${mode}`,
 	);
 }
 
-/** Internal tool-card presentation; compact display itself uses a separate live dock. */
+/** The two fork modes share the same transcript; only compact mounts the live dock. */
+export function isCleanTranscript(mode: DisplayMode): mode is "clean" | "compact" {
+	return mode === "clean" || mode === "compact";
+}
+
+/** The upstream transcript's tool-card presentation. */
 export type ToolActivityMode = "detailed" | "concise" | "hidden";
 
-export function transcriptToolActivity(mode: "clean" | "compact" | "detailed"): ToolActivityMode {
-	return mode === "detailed" ? "detailed" : "hidden";
+export function transcriptToolActivity(mode: DisplayMode): ToolActivityMode {
+	return isCleanTranscript(mode) ? "hidden" : mode;
 }
 
 export const cfgDisplayShowTokenUsage = register({

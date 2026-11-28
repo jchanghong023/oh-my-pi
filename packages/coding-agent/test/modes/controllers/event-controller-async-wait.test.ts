@@ -282,7 +282,7 @@ describe("EventController — ending the wait on a real session", () => {
 				settings: Settings.isolated({
 					"compaction.enabled": false,
 					"retry.enabled": false,
-					"display.mode": "compact",
+					"display.toolActivity": "compact",
 				}),
 				modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
 				agentId: "Main",

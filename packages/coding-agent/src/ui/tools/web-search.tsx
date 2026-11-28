@@ -2,8 +2,8 @@
 /**
  * Web search: the query as the head target, the provider and source count as
  * meta, the model as a badge; the answer as markdown, then the sources (site
- * letter, linked title, domain and age). Sources also carry their excerpts
- * when expanded or when there is no answer.
+ * letter, linked title, domain and age). When there is no answer, the
+ * sources carry their own excerpts instead.
  *
  * Terminal look: `web_search` (`src/ui/styles/tools/web-search.ts`): a card
  * with Query / Answer / Sources / Metadata sections; plain-text results as a
@@ -63,8 +63,8 @@ export interface WebSearchTermSource {
 	readonly age?: string;
 	/** Publication date when a relative age is unavailable. */
 	readonly publishedDate?: string;
-	/** Sanitized snippet, abbreviated while folded. */
-	readonly excerpt?: string;
+	/** Sanitized page excerpts when no synthesized answer is available. */
+	readonly excerpt?: readonly string[];
 	/** The page the title links to. */
 	readonly url?: string;
 }
@@ -78,16 +78,16 @@ export type WebSearchTerm = {
 	readonly sourceCount?: number;
 	/** Markdown answer. */
 	readonly answer?: string;
-	/** Plain answer text when neither an answer nor any sources were returned. */
-	readonly fallback?: string;
+	/** Plain answer lines when neither an answer nor any sources were returned. */
+	readonly fallback?: readonly string[];
 	readonly sources?: readonly WebSearchTermSource[];
 	readonly maxAnswerLines?: number;
 	/** `m @ Anthropic`. */
 	readonly providerLine?: string;
 	readonly usage?: string;
 	readonly error?: string;
-	/** Plain-text result (no response details). */
-	readonly responseText?: string;
+	/** Plain-text result lines (no response details). */
+	readonly lines?: readonly string[];
 };
 
 const PROVIDER_NAMES: Readonly<Record<string, string>> = {
@@ -107,20 +107,16 @@ const AUTH_MODES: Readonly<Record<string, string>> = { api_key: "API", oauth: "O
 
 const EXCERPT_LINES = PREVIEW_LIMITS.COLLAPSED_LINES;
 
-function excerptText(snippet: string | undefined, expanded: boolean): string | undefined {
+function excerptLines(snippet: string | undefined): string[] | undefined {
 	if (!snippet) return undefined;
-	if (expanded) {
-		const text = sanitizeDisplayLines(snippet).join("\n");
-		return /\S/.test(text) ? text : undefined;
-	}
-	const preview: string[] = [];
-	for (const [, raw] of snippet.matchAll(/([^\n]*?)(?:\r?\n|$)/g)) {
-		const line = sanitizeDisplayLines(raw!)[0]!.replace(/\s+/g, " ").trim();
+	const lines: string[] = [];
+	for (const raw of sanitizeDisplayLines(snippet)) {
+		const line = raw.replace(/\s+/g, " ").trim();
 		if (!/[\p{L}\p{N}]/u.test(line)) continue;
-		preview.push(line);
-		if (preview.length === EXCERPT_LINES) break;
+		lines.push(line);
+		if (lines.length === EXCERPT_LINES) break;
 	}
-	return preview.length > 0 ? preview.join("\n") : undefined;
+	return lines.length > 0 ? lines : undefined;
 }
 
 /** A provider id as people read it. */
@@ -173,45 +169,41 @@ function usageText(usage: WebSearchResponse["usage"]): string | undefined {
 /** Present search answers and linked sources in the transcript. */
 export const webSearchPresenter: ToolPresenter<WebSearchArgs, WebSearchDetails> = {
 	merge: true,
-	call: args => {
-		const query = args?.query ? flatText(sanitizeText(args.query)) : undefined;
-		return {
-			head: searchHead(query),
-			inline: true,
-			term: { look: "web_search", query } satisfies WebSearchTerm,
-		};
-	},
-	result(result, { expanded }, args): ToolView {
+	call: args => ({
+		head: searchHead(args?.query),
+		inline: true,
+		term: { look: "web_search", query: args?.query } satisfies WebSearchTerm,
+	}),
+	result(result, _state, args): ToolView {
 		const response = result.details?.response;
 		const rawQuery = args?.query || response?.searchQueries?.[0];
 		const query = rawQuery ? flatText(sanitizeText(rawQuery)) : undefined;
 		if (!response) {
-			const raw = resultText(result);
-			const display = sanitizeDisplayLines(expanded ? raw : raw.trim()).join("\n");
-			const text = /\S/.test(display) ? display : "";
+			const text = resultText(result).trim();
+			const message = text || "No response data";
 			return {
 				head: searchHead(query),
 				tone: "warning",
-				body: <text spans={[{ s: "muted", t: text || "No response data" }]} wrap="word" />,
+				body: <text spans={[{ s: "muted", t: message }]} wrap="word" />,
 				term: {
 					look: "web_search",
 					result: true,
-					responseText: text,
+					lines: text ? text.split("\n") : [],
 				} satisfies WebSearchTerm,
 			};
 		}
-		const provider = providerName(response.provider && flatText(sanitizeText(response.provider)));
+		const provider = providerName(response.provider);
 		const error = result.details?.error;
 		if (error) {
-			const message = flatText(sanitizeText(error));
+			const message = flatText(error);
 			return {
-				head: searchHead(query, { meta: [provider] }),
+				head: searchHead(args?.query, { meta: [provider] }),
 				tone: "error",
 				body: <text role="omp.tool.error" spans={[{ s: "error", t: message }]} wrap="word" />,
 				term: {
 					look: "web_search",
 					result: true,
-					query,
+					query: args?.query,
 					provider,
 					error: message,
 				} satisfies WebSearchTerm,
@@ -221,17 +213,14 @@ export const webSearchPresenter: ToolPresenter<WebSearchArgs, WebSearchDetails> 
 		const usage = usageText(response.usage);
 		const auth = response.authMode ? AUTH_MODES[response.authMode] : undefined;
 		const reached = auth ? `${provider} (${auth})` : provider;
-		const model = response.model && flatText(sanitizeText(response.model));
-		const providerLine = model ? `${model} @ ${reached}` : reached;
+		const providerLine = response.model ? `${response.model} @ ${reached}` : reached;
 		const detail = usage ? `${providerLine}\n${usage}` : providerLine;
-		const answer = response.answer && sanitizeText(response.answer).trimEnd();
+		const answer = response.answer?.trimEnd();
 		// Without a synthesized answer the raw text repeats the source listing.
-		let fallback: string | undefined;
+		let fallback: string[] | undefined;
 		if (!answer && sources.length === 0) {
-			const raw = resultText(result);
-			const lines = sanitizeDisplayLines(expanded ? raw : raw.trim());
-			const text = (expanded ? lines : lines.filter(line => line.trim())).join("\n");
-			fallback = /\S/.test(text) ? text : "No answer text returned";
+			fallback = sanitizeDisplayLines(resultText(result).trim()).filter(line => line.trim());
+			if (fallback.length === 0) fallback.push("No answer text returned");
 		}
 		const termSources = sources.map((source): WebSearchTermSource => {
 			const url = source.url?.trim() || undefined;
@@ -241,21 +230,21 @@ export const webSearchPresenter: ToolPresenter<WebSearchArgs, WebSearchDetails> 
 				domain: url ? flatText(sanitizeText(domainOf(url))) : "",
 				age,
 				publishedDate: !age && source.publishedDate ? flatText(sanitizeText(source.publishedDate)) : undefined,
-				excerpt: !answer || expanded ? excerptText(source.snippet, expanded) : undefined,
+				excerpt: answer ? undefined : excerptLines(source.snippet),
 				url,
 			};
 		});
 		return {
 			head: searchHead(query, {
 				meta: [`${provider} · ${sources.length} ${sources.length === 1 ? "source" : "sources"}`],
-				...(model ? { badges: [{ text: model, title: detail }] } : {}),
+				...(response.model ? { badges: [{ text: response.model, title: detail }] } : {}),
 			}),
 			tone: sources.length === 0 ? "warning" : undefined,
 			body: [
 				answer ? (
 					<md key="answer" text={answer} title={detail} />
 				) : fallback ? (
-					<text spans={[{ s: "muted", t: fallback }]} wrap="word" />
+					<text spans={[{ s: "muted", t: fallback.join("\n") }]} wrap="word" />
 				) : undefined,
 				sources.length > 0 ? (
 					<col key="sources" role="omp.tool.sources">
@@ -270,9 +259,9 @@ export const webSearchPresenter: ToolPresenter<WebSearchArgs, WebSearchDetails> 
 									{excerpt ? (
 										<text
 											role="omp.tool.excerpt"
-											spans={[{ s: "muted", t: excerpt }]}
+											spans={[{ s: "muted", t: excerpt.join("\n") }]}
 											wrap="word"
-											lines={expanded ? undefined : EXCERPT_LINES}
+											lines={EXCERPT_LINES}
 										/>
 									) : undefined}
 								</row>

@@ -325,19 +325,15 @@ describe("resolveScopedModels", () => {
 		expect(scoped.map(entry => entry.model.id)).toEqual(["b"]);
 	});
 
-	it("keeps the collapsed-scope refresh cache-only in an offline process", async () => {
+	it("still resolves a collapsed all-discovery scope with upstream --offline", async () => {
 		const settings = Settings.isolated();
 		const registry = new FakeRegistry([], () => {
 			registry.available = [model("b")];
 		});
 
-		const scoped = await resolveScopedModels(
-			{ ...parseArgs(["--models", "prov/b"]), intranetOffline: true },
-			registry,
-			settings,
-		);
+		const scoped = await resolveScopedModels(parseArgs(["--offline", "--models", "prov/b"]), registry, settings);
 
-		expect(registry.refreshStrategies).toEqual(["offline"]);
+		expect(registry.refreshStrategies).toEqual(["online-if-uncached"]);
 		expect(scoped.map(entry => entry.model.id)).toEqual(["b"]);
 	});
 });
@@ -476,7 +472,7 @@ describe("buildSessionOptions --models scope selection", () => {
 		expect(options.scopedModels?.map(entry => entry.model.id)).toEqual(["a"]);
 	});
 
-	it("forwards intranet mode to the session options and keeps upstream --offline separate", async () => {
+	it("leaves company discovery policy to the registry and keeps --offline separate", async () => {
 		const offline = await buildSessionOptions(
 			{ ...parseArgs([]), intranetOffline: true },
 			[],
@@ -484,7 +480,7 @@ describe("buildSessionOptions --models scope selection", () => {
 			registry(),
 			Settings.isolated(),
 		);
-		expect(offline.offline).toBe(true);
+		expect(offline.offline).toBeUndefined();
 
 		const online = await buildSessionOptions(
 			{ ...parseArgs(["--offline"]), intranetOffline: undefined },
@@ -493,56 +489,37 @@ describe("buildSessionOptions --models scope selection", () => {
 			registry(),
 			Settings.isolated(),
 		);
-		expect(online.offline).toBe(false);
+		expect(online.offline).toBeUndefined();
 	});
 });
 
 describe("buildSessionOptions prewalk target discovery", () => {
-	/** FakeRegistry with the discovery surface the prewalk target loop uses. */
 	class PrewalkRegistry extends FakeRegistry {
-		discoveryStrategies: (string | undefined)[] = [];
+		createStartupModelCacheHydrator(): () => Promise<void> {
+			return () => Promise.resolve();
+		}
 		getAll(): Model<Api>[] {
-			return [];
+			return this.getAvailable();
 		}
 		getDiscoveryProviderId(requestedId: string): string | undefined {
 			return requestedId.toLowerCase() === "prov" ? "prov" : undefined;
 		}
 		hasConfiguredAuth(): boolean {
-			return false;
+			return true;
 		}
-		async refreshDiscoverableProviders(_providers: string[], strategy?: string): Promise<void> {
-			this.discoveryStrategies.push(strategy);
+		async refreshDiscoverableProviders(providers: string[]): Promise<void> {
+			if (providers.includes("prov")) this.available = [model("b")];
 		}
 	}
 
-	function prewalkRegistry(): PrewalkRegistry {
-		return new PrewalkRegistry([]);
-	}
-
-	// Fork contract (openspec/specs/fork-runtime/spec.md「安装与运行」): an OMP_OFFLINE process must
-	// keep every automatic discovery fallback cache-only, including prewalk
-	// target resolution.
-	it("resolves the prewalk target cache-only in an offline process", async () => {
-		const registry = prewalkRegistry();
-		await buildSessionOptions(
-			{ ...parseArgs(["--prewalk-into", "prov/b"]), intranetOffline: true },
+	it.each([false, true])("resolves a prewalk target from refreshed catalog data (company marker: %s)", async company => {
+		const options = await buildSessionOptions(
+			{ ...parseArgs(["--prewalk-into", "prov/b"]), intranetOffline: company },
 			[],
 			SessionManager.inMemory(),
-			registry as unknown as ModelRegistry,
+			new PrewalkRegistry([]) as unknown as ModelRegistry,
 			Settings.isolated(),
 		);
-		expect(registry.discoveryStrategies).toEqual(["offline"]);
-	});
-
-	it("keeps the online prewalk target resolution on online-if-uncached", async () => {
-		const registry = prewalkRegistry();
-		await buildSessionOptions(
-			parseArgs(["--prewalk-into", "prov/b"]),
-			[],
-			SessionManager.inMemory(),
-			registry as unknown as ModelRegistry,
-			Settings.isolated(),
-		);
-		expect(registry.discoveryStrategies).toEqual(["online-if-uncached"]);
+		expect(options.prewalk?.target.id).toBe("b");
 	});
 });

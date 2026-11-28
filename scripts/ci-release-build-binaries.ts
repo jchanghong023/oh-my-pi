@@ -3,6 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { COMPILED_EXTERNAL_DEPENDENCIES, compileCodingAgent } from "../packages/coding-agent/scripts/compile-binary";
+import { CNB_RELEASE_PLATFORMS } from "../packages/coding-agent/src/cli/cnb-release-contract";
 
 interface BinaryTarget {
 	id: string;
@@ -44,7 +45,7 @@ const targets: BinaryTarget[] = [
 		arch: "x64",
 		x64Variant: "baseline",
 		target: "bun-linux-x64-baseline",
-		outfile: "packages/coding-agent/binaries/omp-linux-x64",
+		outfile: `packages/coding-agent/binaries/${CNB_RELEASE_PLATFORMS.linux.binary}`,
 	},
 	{
 		id: "linux-arm64",
@@ -73,7 +74,7 @@ const targets: BinaryTarget[] = [
 		arch: "x64",
 		x64Variant: "modern",
 		target: "bun-windows-x64",
-		outfile: "packages/coding-agent/binaries/omp-windows-x64.exe",
+		outfile: `packages/coding-agent/binaries/${CNB_RELEASE_PLATFORMS.win32.binary}`,
 	},
 	{
 		id: "win32-arm64",

@@ -15,23 +15,27 @@ MUST 沿用上游 Provider 目录，不另设 fork 聊天 allowlist。
 - **WHEN** 合并目录、注册模型或列出登录入口
 - **THEN** 沿用上游准入，不增加选择器语法或 SDK 拦截，不迁移或删除用户数据。
 
-CodeAgent、Ascend、`company` 的凭据不写配置或日志；Ascend 和 `company` 不自动发现或回退到厂商公网 API。CodeAgent 和 Ascend 支持推理与工具，`maxTokens=32768`。
+Ascend 和 `company` 的凭据不写配置或日志，也不自动发现或回退到厂商公网 API。CodeAgent 和 Ascend 支持推理与工具，`maxTokens=32768`。
 
 ### Requirement: CodeAgent 内置模型
 
-MUST 仅在 Windows 非 offline 注册 `codeagent/deepseek-v4.1-flash-1017`，末段同时为 ID 和名称，无须登录或手动配置。
+OMP MUST 仅在 Windows 非 `OMP_OFFLINE` 环境注册内置模型 `codeagent/deepseek-v4.1-flash-1017`，且不参与自动默认选模。
 
 #### Scenario: 内置请求
 
 - **WHEN** 使用 CodeAgent
-- **THEN** 走 `https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2` 的 `openai-completions`；`auth: none`、`supports-strict-mode #false`、`contextWindow=409600`，不强制或禁用工具选择。
-- **AND** `low`／`high`／`max` 发送 `thinking: {type: "enabled"}` 和对应 `reasoning_effort`；关闭或未指定时发送 `thinking: {type: "disabled"}`。延续 DeepSeek V4 的思考规则，以 `reasoning_content` 回传历史 assistant 思考。
-- **AND** 启动从 Windows 用户注册表 `HKCU\Environment\JCH_CODEAGENT3_X_AUTH_TOKEN` 读取并缓存 `x-auth-token`，不用进程环境变量。认证或 API 请求失败时重读，读失败保留缓存；取消或内容拦截不重读。不换会话，凭据已变且尚无正文、思考或工具输出时重试一次。对话、压缩摘要及 handoff 无外层重发。
+- **THEN** 模型使用 `https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2` 的 `openai-completions`，上下文 409600 tokens，不发送网关不支持的工具 `strict` 字段。
+- **AND** 思考参数由目录中的兼容声明处理。
 
-#### Scenario: 提交消息和标题的生成回退
+### Requirement: CodeAgent 认证失败后刷新令牌
 
-- **WHEN** 快速生成提交消息失败，或标题候选认证、请求或解析失败
-- **THEN** 不因 CodeAgent 提前终止上游分析、重试或回退。
+内置 CodeAgent MUST 在初始化时从 Windows 当前用户注册表 `HKCU\Environment` 读取并缓存 `JCH_CODEAGENT3_X_AUTH_TOKEN`，通过 `x-auth-token` 请求头发送。不从进程环境变量或 `models.yml` 取值，不写入配置或日志。
+
+#### Scenario: 网关拒绝当前令牌
+
+- **WHEN** 内置 CodeAgent 的请求收到认证失败（例如 HTTP `401`）
+- **THEN** 对这次失败从同一个注册表项重新读取一次令牌；读取失败或值为空时保留原缓存。
+- **AND** 有效令牌只更新后续请求使用的缓存。当前请求仍返回认证错误，不自动重试。非认证失败不触发令牌刷新。
 
 ### Requirement: Ascend 内置模型
 
@@ -53,19 +57,19 @@ MUST 内置下列模型，不改默认模型或角色，无须 `models.yml` 或�
 
 ### Requirement: 公司内网模型（仅 `OMP_OFFLINE`）
 
-MUST 仅在 offline 读取公司认证；有效才注册 `company` 和允许向量回退。发现策略和角色默认仅在本进程生效。
+MUST 仅在 `OMP_OFFLINE` 标记的公司内部网络环境读取公司认证；有效才注册 `company` 和允许向量回退。网络受管控不等于断网。发现策略和角色默认仅在本进程生效；`--offline` 仅覆盖本次 `models.offline`，不启用公司认证。
 
 #### Scenario: 准入与发现
 
-- **WHEN** 在非 offline 环境初始化目录，或在该环境显式选择 `company`
+- **WHEN** 未启用 `OMP_OFFLINE` 时初始化目录或显式选择 `company`
 - **THEN** 不注册、不发启动告警；显式选择失败并提示启用 `OMP_OFFLINE`。
-- **AND** offline 自动发现只读缓存，涵盖登录后同步、自动刷新、selector-miss 和扩展发现；仅 `omp models refresh` 或模型面板手动刷新可访问显式配置的发现或模型端点。凭据刷新遵守 [offline 运行规则](../fork-runtime/spec.md#requirement-安装与运行)。
+- **AND** 公司环境中的 CLI、SDK 和 Worker 共用模型目录发现规则：登录后同步、自动刷新、模型未命中及扩展触发的自动发现只读缓存。仅 `omp models refresh` 或模型面板手动刷新可访问显式配置的发现或模型端点；只刷新一个 Provider 时，顺带恢复的其他 Provider 仍只读缓存。此规则不限制正常模型调用；凭据刷新遵守[运行规则](../fork-runtime/spec.md#requirement-安装与运行)。
 
 独立模型命令（含 `models`、`bench`、`compress`、`commit`、Git AI 提交和 `dry-balance`）在注册或解析前复用适用的 offline 初始化、角色和缓存规则，不另要求 offline 参数。`usage` 的目录只读缓存，实际请求照常，不虚构公司接口或额度。本地文件 `read` 和已有会话 `render` 不启动公司认证或在线发现；图片问答按需初始化。如果公司配置无效，明确报因；已解析的显式非 `company` vision/default 可用，依赖 `company` 时失败、不回退。
 
 #### Scenario: 认证快照
 
-- **WHEN** offline 启动或独立命令、SDK 需要公司认证
+- **WHEN** 公司环境中的启动或独立命令、SDK 需要公司认证
 - **THEN** 异步读取 `settings.json`（`CLAUDE_CONFIG_DIR` 优先于 `~/.claude`），校验 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`，仅存内存；无须登录、额外凭据或 `models.yml`。
 - **AND** 每进程启动时只读一次（含失败）；Worker 等待并继承快照，不重读、不回退。凭据不入参数、环境变量、持久文件或日志；变更须重启。
 - **AND** 无效认证禁用 `company`，显式调用失败。脱敏原因通过 TUI 或独立模型命令 stderr 各报一次；共享 SDK、认证发现和会话创建只提供可查状态，不直写终端。
@@ -90,7 +94,7 @@ MUST 仅在 offline 读取公司认证；有效才注册 `company` 和允许向�
 
 ### Requirement: 保留 Provider ID 的运行时注册
 
-MUST 忽略并提示 `models.yml` 中的 `providers.codeagent`、`providers.company`；不阻启动或影响其他自定义 Provider，包括保留段本身配置无效时。
+MUST 忽略并提示 `models.yml` 中的 `providers.company` 和 `providers.codeagent`；不阻启动或影响其他自定义 Provider，包括保留段本身配置无效时。
 
 #### Scenario: 拒绝替换
 

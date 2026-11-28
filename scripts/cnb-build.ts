@@ -3,26 +3,26 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import {
+	CNB_ASSET_NAMES,
+	CNB_RELEASE_ARCH,
+	CNB_RELEASE_PLATFORMS,
+	type CnbAssetName,
+} from "../packages/coding-agent/src/cli/cnb-release-contract";
 import { releaseNativeEnvironment } from "./build-release-native";
 
-export const windowsBinary = "omp-windows-x64.exe";
-export const linuxBinary = "omp-linux-x64";
-export const windowsSdk = "omp-sdk-win32-x64.zip";
-export const linuxSdk = "omp-sdk-linux-x64.zip";
-export const assetNames = [windowsBinary, linuxBinary, windowsSdk, linuxSdk] as const;
-export type AssetName = (typeof assetNames)[number];
 export type Source = { commit: string; openwiki: string };
 
 type Digest = { size: number; sha256: string };
 type Viewer = Digest & { file: string };
-type Entry = { key: string; file: string; marker: string; name: AssetName };
+type Entry = { key: string; file: string; marker: string; name: CnbAssetName };
 type Build = {
 	stage: string;
 	cache: string;
 	source: Source;
 	releaseVersion: string;
 	updateRepository: string;
-	assets: readonly AssetName[];
+	assets: readonly CnbAssetName[];
 };
 
 const root = path.resolve(import.meta.dir, "..");
@@ -216,8 +216,7 @@ async function verifySource(env: NodeJS.ProcessEnv, source: Source): Promise<voi
 }
 
 async function buildCnbHost({ stage, cache, source, releaseVersion, updateRepository, assets }: Build): Promise<void> {
-	const binary = linux ? linuxBinary : windowsBinary;
-	const sdk = linux ? linuxSdk : windowsSdk;
+	const { binary, sdk, target: binaryTarget } = CNB_RELEASE_PLATFORMS[linux ? "linux" : "win32"];
 	if (!assets.length || assets.some(name => name !== binary && name !== sdk)) throw new Error(`Invalid ${host} asset selection.`);
 	const target = linux ? "linux-x64-baseline-glibc2.17" : "win32-x64-modern";
 	const nativeEnv = releaseNativeEnvironment();
@@ -263,7 +262,7 @@ async function buildCnbHost({ stage, cache, source, releaseVersion, updateReposi
 			await timed("native build", () => runBun(env, "scripts/build-release-native.ts"));
 			if (misses.some(entry => entry.name === binary)) {
 				await timed("binary packaging", () =>
-					runBun(env, "scripts/ci-release-build-binaries.ts", "--targets", linux ? "linux-x64" : "win32-x64"),
+					runBun(env, "scripts/ci-release-build-binaries.ts", "--targets", binaryTarget),
 				);
 			} else {
 				await timed("Export viewer verification", () => runBun(env, viewerScript, "--check"));
@@ -299,9 +298,9 @@ async function buildCnbHost({ stage, cache, source, releaseVersion, updateReposi
 
 if (import.meta.main) {
 	const [cache, stage, commit, openwiki, bun, revision, releaseVersion, updateRepository, ...names] = process.argv.slice(2);
-	if ((!linux && process.platform !== "win32") || process.arch !== "x64" || !cache || !stage || !commit ||
+	if ((!linux && process.platform !== "win32") || process.arch !== CNB_RELEASE_ARCH || !cache || !stage || !commit ||
 		!openwiki || !releaseVersion || !updateRepository ||
-		!names.every((name): name is AssetName => assetNames.some(asset => asset === name))) {
+		!names.every((name): name is CnbAssetName => CNB_ASSET_NAMES.some(asset => asset === name))) {
 		throw new Error(`Invalid CNB ${host} build parameters.`);
 	}
 	if (bun !== "-" && (Bun.version !== bun || Bun.revision !== revision)) throw new Error(`${host} Bun changed after preflight.`);

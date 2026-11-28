@@ -168,11 +168,8 @@ import { EVAL_STATE_CONTEXT_TYPE, formatEvalStateContext, isEvalStateContext } f
 import { WorkPoolRegistry } from "../task/workpool";
 import { type BashResult, drainAbortedShells, releaseShellSessions } from "../exec/bash-executor";
 import type { TtsrManager } from "../export/ttsr";
-import {
-	activeGoalAutopilotContextId,
-	buildGoalAutoOrchestrateMessage,
-	GoalAutopilotRequest,
-} from "../goals/request-context";
+import { GOAL_AUTOPILOT_ADMISSION_ENTRY, GoalAutopilotSession } from "../goals/autopilot-session";
+import { activeGoalAutopilotContextId } from "../goals/request-context";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { MCPLoadResult } from "../mcp";
@@ -208,7 +205,7 @@ import {
 } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand, loadSlashCommands } from "../extensibility/slash-commands";
 import { normalizeToolEventInput, resolveToolEventInput } from "../extensibility/tool-event-input";
-import { GoalAutopilotCompletionRequest, GoalRuntime } from "../goals/runtime";
+import { GoalRuntime } from "../goals/runtime";
 import { type GoalModeState, type GoalTokenUsage, type LocalGoalModeState, publicGoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import {
@@ -630,7 +627,6 @@ interface SuspendedInMemorySession {
 }
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
-const GOAL_AUTOPILOT_ADMISSION_ENTRY = "goal-autopilot-admission";
 /** Assistant thinking+reply words a deferred auto-title waits for before retitling from context. */
 const DEFERRED_TITLE_MIN_WORDS = 40;
 /** Cap on the forked title request itself (measured p90 2.3s). */
@@ -1249,19 +1245,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * command.
 	 */
 	readonly #queuedMessageRawText = new WeakMap<AgentMessage, string>();
-	/** Initial Goal provenance follows its original input, never the provider payload or restored history. */
-	readonly #goalAutoOrchestrateInitialSources = new WeakMap<
-		AgentMessage,
-		{ goalId: string; sessionId: string; sessionGeneration: number; manualResume: boolean }
-	>();
-	#autopilotRun?: GoalAutopilotRequest["run"];
-	/** Explicit resume can request initial delivery without authorizing another request. */
-	#autopilotResumeSource?: { goalId: string; sessionGeneration: number };
-	#autopilotAdmission?: {
-		run: GoalAutopilotRequest["run"];
-		promptGeneration: number;
-		awaitingResponse: boolean;
-	};
 
 	// Event subscription state
 	#unsubscribeAgent?: () => void;
@@ -1337,6 +1320,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#vibeModeState: VibeModeState | undefined;
 	#goalModeState: LocalGoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
+	readonly #goalAutopilot: GoalAutopilotSession;
 	readonly #advisors: SessionAdvisors;
 	/** Resolves once the resume-time advisor spend backfill settles. */
 	#advisorCostRestore: Promise<void> = Promise.resolve();
@@ -2720,14 +2704,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.agent.prepareQueuedMessages = this.#prepareQueuedUserMessages;
 		this.#detachUsageBeforeModelCall = this.agent.addBeforeModelCallHook(async (signal, context) => {
 			if (this.#agentKind === "main") {
-				context.captureToolRequestScope ??= acceptedSteering => {
-					if (
-						acceptedSteering &&
-						!acceptedSteering.some(message => this.#currentGoalAutoOrchestrateInitialSource(message))
-					)
-						return undefined;
-					return this.#captureAutopilotRequest(acceptedSteering ?? context.messages, signal);
-				};
+				context.captureToolRequestScope ??= acceptedSteering =>
+					this.#goalAutopilot.captureRequest(context.messages, acceptedSteering, signal);
 			}
 			if (!cfgRetryUsageAwareFallback.get(this.settings)) return;
 			// Usage/account health applies to registry credentials, not the host's
@@ -3196,10 +3174,25 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#syncAgentSessionId();
 		this.#todo.syncFromBranch();
 		this.#modelMentions.syncFromBranch();
+		this.#goalAutopilot = new GoalAutopilotSession({
+			getState: () => this.#goalModeState,
+			sessionId: () => this.sessionManager.getSessionId(),
+			sessionGeneration: () => this.#sessionGeneration,
+			promptGeneration: () => this.#promptGeneration,
+			isDisposed: () => this.#isDisposed,
+			isStreaming: () => this.agent.state.isStreaming,
+			isMain: () => this.#agentKind === "main",
+			branch: () => this.sessionManager.getBranchView(),
+			messages: () => this.agent.state.messages,
+			enabledTools: () => this.getEnabledToolNames(),
+			continuationPrompt: () => this.#goalRuntime.buildContinuationPrompt(),
+			isClassifierRefusal: message => this.#recovery.isClassifierRefusal(message),
+			flushUsage: () => this.#goalRuntime.flushUsage("allowed"),
+		});
 		this.#goalRuntime = new GoalRuntime({
 			getState: () => this.#goalModeState,
 			setState: state => this.setGoalModeState(state),
-			onAutopilotResumed: (goalId, source) => this.#resumeAutopilot(goalId, source),
+			onAutopilotResumed: (goalId, source) => this.#goalAutopilot.resume(goalId, source),
 			getCurrentUsage: () => this.#goalUsage(),
 			emit: event => {
 				if (event.type === "goal_updated") {
@@ -3369,9 +3362,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			drainStrandedQueuedMessages: () => this.#drainStrandedQueuedMessages(),
 			buildDisplaySessionContext: model => this.buildDisplaySessionContext(model),
 			replaceMessagesFromSessionContext: messages => this.replaceMessagesFromSessionContext(messages),
-			previewGoalAutoOrchestrateContext: () => this.#previewGoalAutoOrchestrateContext(),
+			previewGoalAutoOrchestrateContext: () => this.#goalAutopilot.previewCompactionNotice(),
 			restoreGoalAutoOrchestrateContext: (entryId, preview) =>
-				this.#appendGoalAutoOrchestrateContext(entryId, undefined, preview),
+				this.#appendGoalAutopilotNotice(this.#goalAutopilot.compactionNotice(entryId, preview)),
 			persistEvalStateContext: () => {
 				// The rewritten history carries no snapshot yet, so always build one.
 				const message = this.#buildEvalStateContextMessage([]);
@@ -4791,9 +4784,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// never revoke a foreground-control grant acquired by a later prompt.
 		const computerControlRevocation =
 			event.type === "agent_end" ? revokeComputerControlForOwner(this.#eval.getKernelOwnerId()) : undefined;
-		// Dequeue preparation can be rolled back before history delivery. Keep initial
-		// Goal provenance on the original input until Agent actually starts delivering it.
-		if (event.type === "message_start") this.#goalAutoOrchestrateInitialSources.delete(event.message);
+		if (event.type === "message_start") this.#goalAutopilot.messageStarted(event.message);
 		// Only the user's own prompt, steer or follow-up lifts the computer-use stop their Escape set;
 		// synthetic continues and agent-sent messages (subagent budget steers) never do.
 		if (
@@ -5118,7 +5109,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			return;
 		}
 		this.#persistSessionMessageIfMissing(message);
-		if (admittedAutopilotGoalId && this.#goalModeState?.goal.id === admittedAutopilotGoalId) {
+		if (admittedAutopilotGoalId && this.#goalAutopilot.canPersistAdmission(admittedAutopilotGoalId)) {
 			this.sessionManager.appendCustomEntry(GOAL_AUTOPILOT_ADMISSION_ENTRY, admittedAutopilotGoalId);
 		}
 	}
@@ -5425,28 +5416,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		if (event.type === "message_end" && event.message.role === "assistant") {
 			event.message.completedAt = Date.now();
 			this.#tools.bindReplyToCapturedPrompt(event.message);
-			const admission = this.#autopilotAdmission;
-			if (admission) {
-				if (
-					admission.run !== this.#autopilotRun ||
-					admission.run.sessionGeneration !== this.#sessionGeneration ||
-					admission.promptGeneration !== eventPromptGeneration
-				) {
-					this.#autopilotAdmission = undefined;
-				} else if (admission.awaitingResponse) {
-					admission.awaitingResponse = false;
-					// An error isn't proof of delivery. Leave admission pending so
-					// the next native provider attempt can confirm it instead.
-					if (
-						event.message.stopReason !== "error" &&
-						event.message.stopReason !== "aborted" &&
-						!this.#recovery.isClassifierRefusal(event.message)
-					) {
-						admittedAutopilotGoalId = admission.run.goalId;
-						this.#autopilotAdmission = undefined;
-					}
-				}
-			}
+			admittedAutopilotGoalId = this.#goalAutopilot.responseEnded(event.message, eventPromptGeneration);
 		}
 		// Turn-boundary maintenance awaits this commit before draining steering;
 		// extension notifications must not own or delay the persistence work.
@@ -9463,20 +9433,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	setGoalModeState(state: LocalGoalModeState | undefined): void {
-		const run = this.#autopilotRun;
-		if (run && state?.goal.id !== run.goalId) this.#autopilotRun = undefined;
-		else if (
-			run &&
-			(state?.enabled !== this.#goalModeState?.enabled || state?.goal.status !== this.#goalModeState?.goal.status)
-		)
-			this.#autopilotRun = {
-				goalId: run.goalId,
-				sessionGeneration: run.sessionGeneration,
-				...(state?.goal.status === "budget-limited" && state.enabled ? { review: run.review } : {}),
-			};
-		if (!state?.enabled || state.goal.id !== this.#autopilotResumeSource?.goalId) {
-			this.#autopilotResumeSource = undefined;
-		}
+		this.#goalAutopilot.stateChanged(this.#goalModeState, state);
 		this.#goalModeState = state;
 	}
 
@@ -9846,171 +9803,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		};
 	}
 
-	#hasGoalAutoOrchestrateContext(goalId: string, compactionEntryId?: string): boolean {
-		const belongsToEvent = (details: unknown): boolean =>
-			isRecord(details) &&
-			details.goalId === goalId &&
-			(compactionEntryId === undefined || details.compactionEntryId === compactionEntryId);
-		if (
-			this.sessionManager
-				.getBranch()
-				.some(
-					entry =>
-						entry.type === "custom_message" &&
-						entry.customType === "goal-auto-orchestrate-context" &&
-						belongsToEvent(entry.details),
-				)
-		) {
-			return true;
-		}
-		const isNotice = (message: AgentMessage): boolean =>
-			message.role === "custom" &&
-			message.customType === "goal-auto-orchestrate-context" &&
-			belongsToEvent(message.details);
-		return this.agent.state.messages.some(isNotice);
-	}
-
-	#previewGoalAutoOrchestrateContext(): CustomMessage | undefined {
-		const state = this.#goalModeState;
-		if (state?.autoOrchestrate !== true || this.#isDisposed) return undefined;
-		return buildGoalAutoOrchestrateMessage(state, this.getEnabledToolNames());
-	}
-
-	#resumeAutopilot(goalId: string, source: "explicit" | "restored"): void {
-		const state = this.#goalModeState;
-		if (
-			this.#agentKind !== "main" ||
-			this.#isDisposed ||
-			state?.autoOrchestrate !== true ||
-			!state.enabled ||
-			state.goal.id !== goalId
-		) {
-			return;
-		}
-		const sessionGeneration = this.#sessionGeneration;
-		const run = this.#autopilotRun;
-		const currentRun = run?.goalId === goalId && run.sessionGeneration === sessionGeneration;
-		if (source === "restored" && currentRun) return;
-		const hasReceipt = this.sessionManager
-			.getBranchView()
-			.some(
-				entry =>
-					entry.type === "custom" && entry.customType === GOAL_AUTOPILOT_ADMISSION_ENTRY && entry.data === goalId,
-			);
-		if (currentRun || hasReceipt) {
-			// Resuming creates a new run; no response from the earlier run is current.
-			this.#autopilotRun = { goalId, sessionGeneration };
-			this.#autopilotAdmission = hasReceipt
-				? undefined
-				: {
-						run: this.#autopilotRun,
-						promptGeneration: this.#promptGeneration,
-						awaitingResponse: false,
-					};
-			this.#autopilotResumeSource = undefined;
-		} else if (source === "explicit") {
-			this.#autopilotResumeSource = { goalId, sessionGeneration };
-		}
-	}
-
-	#pendingAutopilotResumeId(message?: AgentMessage): string | undefined {
-		const resume = this.#autopilotResumeSource;
-		if (resume?.sessionGeneration !== this.#sessionGeneration || resume.goalId !== this.#goalModeState?.goal.id)
-			return undefined;
-		if (
-			message &&
-			(!isUserAuthoredMessage(message) ||
-				(message.role === "user" && (message.synthetic || message.attribution === "agent")))
-		)
-			return undefined;
-		return resume.goalId;
-	}
-
-	#captureAutopilotRequest(
-		messages: readonly AgentMessage[],
-		signal?: AbortSignal,
-	): GoalAutopilotRequest | GoalAutopilotCompletionRequest | undefined {
-		const state = this.#goalModeState;
-		if (
-			signal?.aborted ||
-			this.#isDisposed ||
-			this.#agentKind !== "main" ||
-			!state?.autoOrchestrate ||
-			!state.enabled ||
-			(state.goal.status !== "active" && state.goal.status !== "budget-limited")
-		)
-			return;
-		const { id: goalId, status } = state.goal;
-		const generation = this.#promptGeneration;
-		const sessionGeneration = this.#sessionGeneration;
-		if (this.#autopilotRun?.goalId !== goalId || this.#autopilotRun.sessionGeneration !== sessionGeneration) {
-			if (state.goal.status !== "active") return;
-			if (!messages.some(message => this.#currentGoalAutoOrchestrateInitialSource(message))) return;
-			this.#autopilotResumeSource = undefined;
-			this.#autopilotRun = { goalId, sessionGeneration };
-			this.#autopilotAdmission = {
-				run: this.#autopilotRun,
-				promptGeneration: generation,
-				awaitingResponse: false,
-			};
-		}
-		const run = this.#autopilotRun;
-		if (state.goal.status === "budget-limited" && !run.review) return;
-		const admission = this.#autopilotAdmission;
-		if (admission?.run === run && admission.promptGeneration === generation) admission.awaitingResponse = true;
-		const isCurrent = (): boolean => {
-			const currentState = this.#goalModeState;
-			return (
-				!signal?.aborted &&
-				!this.#isDisposed &&
-				this.agent.state.isStreaming &&
-				this.#autopilotRun === run &&
-				run.currentRequest === request &&
-				this.#sessionGeneration === sessionGeneration &&
-				this.#promptGeneration === generation &&
-				currentState?.autoOrchestrate === true &&
-				currentState.enabled &&
-				currentState.goal.id === goalId &&
-				currentState.goal.status === status
-			);
-		};
-		const request =
-			status === "budget-limited"
-				? new GoalAutopilotCompletionRequest(run, isCurrent)
-				: new GoalAutopilotRequest(run, isCurrent, () => this.#goalRuntime.flushUsage("allowed"));
-		run.currentRequest = request;
-		return request;
-	}
-
-	#buildGoalAutoOrchestrateContext(compactionEntryId?: string, initialGoalId?: string): CustomMessage | undefined {
-		const state = this.#goalModeState;
-		if (
-			state?.autoOrchestrate !== true ||
-			this.#isDisposed ||
-			(compactionEntryId === undefined && (initialGoalId === undefined || initialGoalId !== state.goal.id)) ||
-			this.#hasGoalAutoOrchestrateContext(state.goal.id, compactionEntryId)
-		) {
-			return undefined;
-		}
-		const tools = this.getEnabledToolNames();
-		const notice = buildGoalAutoOrchestrateMessage(state, tools);
+	#appendGoalAutopilotNotice(notice: CustomMessage | undefined): CustomMessage | undefined {
 		if (!notice) return undefined;
-		if (compactionEntryId !== undefined) {
-			notice.details = { source: "goal-auto-orchestrate", goalId: state.goal.id, compactionEntryId };
-		}
-		return notice;
-	}
-
-	#appendGoalAutoOrchestrateContext(
-		compactionEntryId?: string,
-		initialGoalId?: string,
-		preview?: { notice: CustomMessage | undefined },
-	): CustomMessage | undefined {
-		const notice = preview ? preview.notice : this.#buildGoalAutoOrchestrateContext(compactionEntryId, initialGoalId);
-		if (!notice) return undefined;
-		if (preview && isRecord(notice.details)) {
-			notice.details = { ...notice.details, compactionEntryId };
-		}
 		this.agent.appendMessage(notice);
 		this.sessionManager.appendCustomMessageEntry(
 			notice.customType,
@@ -10020,33 +9814,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			notice.attribution,
 		);
 		return notice;
-	}
-
-	#rememberGoalAutoOrchestrateInitialSource(message: AgentMessage, goalId: string, manualResume = false): void {
-		// Stopping invalidates prompt setup but can return this same message to
-		// the queue. Its ownership lasts until delivery or the transcript changes.
-		this.#goalAutoOrchestrateInitialSources.set(message, {
-			goalId,
-			sessionId: this.sessionManager.getSessionId(),
-			sessionGeneration: this.#sessionGeneration,
-			manualResume,
-		});
-	}
-
-	#currentGoalAutoOrchestrateInitialSource(message: AgentMessage) {
-		const source = this.#goalAutoOrchestrateInitialSources.get(message);
-		return source?.sessionGeneration === this.#sessionGeneration &&
-			source.sessionId === this.sessionManager.getSessionId() &&
-			source.goalId === this.#goalModeState?.goal.id
-			? source
-			: undefined;
-	}
-
-	#buildGoalAutoOrchestrateInitialContext(message: AgentMessage): CustomMessage | undefined {
-		const source = this.#currentGoalAutoOrchestrateInitialSource(message);
-		return source && !source.manualResume
-			? this.#buildGoalAutoOrchestrateContext(undefined, source.goalId)
-			: undefined;
 	}
 
 	#buildVibeModeMessage(): CustomMessage | null {
@@ -10163,16 +9930,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const timestamp = Date.now();
 		if (beginTurnBudget) this.#beginTurnBudget(text);
 		const keywordNotices: CustomMessage[] = [];
-		const goalState = this.#goalModeState;
-		const sourceGoalId =
-			goalState?.autoOrchestrate === true && goalState.goal.id === goalAutoOrchestrateInitialId
-				? goalAutoOrchestrateInitialId
-				: undefined;
+		const autopilotOwnsOrchestrateNotice = this.#goalAutopilot.suppressesKeywordNotice(goalAutoOrchestrateInitialId);
 		let context: MagicKeywordContext | undefined;
 		for (const keyword of MAGIC_KEYWORDS) {
 			if (!this.#magicKeywordEnabled(keyword.id) || !containsMagicKeyword(text, keyword.word)) continue;
-			// Coordinate only this initial construction, never historical notices.
-			if (keyword.id === "orchestrate" && sourceGoalId !== undefined) continue;
+			if (keyword.id === "orchestrate" && autopilotOwnsOrchestrateNotice) continue;
 			context ??= {
 				tools: this.getEnabledToolNames(),
 				taskBatch: cfgTaskBatch.get(this.settings),
@@ -10733,14 +10495,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						.map(content => content.text)
 						.join("");
 		const goalAutoOrchestrateInitialId = options?.goalAutoOrchestrateInitialId;
-		const resumeGoalId = this.#pendingAutopilotResumeId();
-		const goalAutopilotResumeId =
-			goalAutoOrchestrateInitialId === undefined &&
-			message.customType === "goal-continuation" &&
-			resumeGoalId !== undefined &&
-			textContent === this.#goalRuntime.buildContinuationPrompt()
-				? resumeGoalId
-				: undefined;
+		const goalAutopilotResumeId = this.#goalAutopilot.continuationResumeId(
+			message.customType,
+			textContent,
+			goalAutoOrchestrateInitialId,
+		);
 
 		let keywordNotices: CustomMessage[] = [];
 		// Queued deliveries bypass the idle-turn notice injection, so a queued user
@@ -10854,12 +10613,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	): Promise<QueuedMessagePreparation | undefined> => {
 		const userMessages = messages.filter(isUserAuthoredQueuedMessage);
 		const first = userMessages[0];
-		const hasInitialSource = messages.some(message => this.#currentGoalAutoOrchestrateInitialSource(message));
-		const resumeMessage =
-			!hasInitialSource && this.#pendingAutopilotResumeId() !== undefined
-				? userMessages.find(message => this.#pendingAutopilotResumeId(message) !== undefined)
-				: undefined;
-		if (!first && !hasInitialSource) return undefined;
+		const goalDelivery = this.#goalAutopilot.prepareQueuedDelivery(messages, userMessages);
+		if (!first && !goalDelivery) return undefined;
 		const workspaceMessage = first ? await this.#buildWorkspaceModeMessage() : undefined;
 		const text: string[] = [];
 		const images: ImageContent[] = [];
@@ -10893,7 +10648,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const relaxed = preparation
 			? this.#commitOnDelivery(preparation, messages, promptText, collabFollowUpText)
 			: undefined;
-		if (!hasInitialSource && !workspaceMessage && !resumeMessage) return relaxed;
+		if (!goalDelivery && !workspaceMessage) return relaxed;
 		const generation = this.#promptGeneration;
 		const sessionGeneration = this.#sessionGeneration;
 		return Promise.resolve(relaxed).then(prepared => ({
@@ -10912,20 +10667,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					workspaceMessage && this.getWorkspaceModeState().enabled
 						? [...additional, workspaceMessage]
 						: additional;
-				if (resumeMessage) {
-					const resumeGoalId = this.#pendingAutopilotResumeId(resumeMessage);
-					if (resumeGoalId !== undefined) {
-						this.#rememberGoalAutoOrchestrateInitialSource(resumeMessage, resumeGoalId, true);
-					}
-				}
 				// Construct only after async preparation and Agent's delivery ownership check.
-				let notice: CustomMessage | undefined;
-				for (const message of messages) {
-					notice = this.#buildGoalAutoOrchestrateInitialContext(message);
-					if (notice) break;
-				}
-				const delivered = notice ? [...contextual, notice] : contextual;
-				return delivered;
+				const notice = this.#goalAutopilot.queuedNotice(messages, goalDelivery);
+				return notice ? [...contextual, notice] : contextual;
 			},
 		}));
 	};
@@ -11194,7 +10938,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const goalSourceId =
 				options?.goalAutoOrchestrateInitialId ??
 				options?.goalAutopilotResumeId ??
-				this.#pendingAutopilotResumeId(message);
+				this.#goalAutopilot.pendingResumeId(message);
 			if (userTask) await this.#prewalk.beginAutoTask(message);
 			if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 			// A capped session hands the prompt back without spending on judges or moving to a planner.
@@ -11392,10 +11136,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const previewToolCommandMountNotice = isUserQueuedMessage(message)
 				? this.#tools.peekPendingToolCommandMountNotice({ baseCatalogDelivered: baseToolCommandCatalogDelivered })
 				: undefined;
-			const previewGoalNotice = this.#buildGoalAutoOrchestrateContext(
-				undefined,
-				options?.goalAutoOrchestrateInitialId,
-			);
+			const previewGoalNotice = this.#goalAutopilot.initialNotice(options?.goalAutoOrchestrateInitialId);
 			const maintenanceMessages =
 				previewToolCommandMountNotice?.notice || previewGoalNotice ? [...messages] : messages;
 			if (previewToolCommandMountNotice?.notice) {
@@ -11468,7 +11209,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
 			// Recheck eligibility and deduplication: committed maintenance may
 			// already have restored the Goal context while its preview was pending.
-			this.#appendGoalAutoOrchestrateContext(undefined, options?.goalAutoOrchestrateInitialId);
+			this.#appendGoalAutopilotNotice(this.#goalAutopilot.initialNotice(options?.goalAutoOrchestrateInitialId));
 			const nonMessageTokens = computeNonMessageTokens(this, this.agent.tokenizer, this.settings.revision);
 			const contextWindow = this.model?.contextWindow ?? 0;
 			const breakdown = this.getContextBreakdown({ contextWindow, pendingMessages: messages });
@@ -11497,7 +11238,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 				options?.onPromptAdmitted?.();
 				if (goalSourceId)
-					this.#rememberGoalAutoOrchestrateInitialSource(
+					this.#goalAutopilot.rememberInitialSource(
 						message,
 						goalSourceId,
 						options?.goalAutoOrchestrateInitialId === undefined,
@@ -12116,7 +11857,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				? { role: "user", content, attribution, timestamp }
 				: { role: "user", content, steering: true, attribution, timestamp };
 		if (options?.goalAutoOrchestrateInitialId !== undefined) {
-			this.#rememberGoalAutoOrchestrateInitialSource(userMessage, options.goalAutoOrchestrateInitialId);
+			this.#goalAutopilot.rememberInitialSource(userMessage, options.goalAutoOrchestrateInitialId);
 		}
 		if (this.activeVoiceCall) markDuringLiveCall(userMessage);
 		this.#queuedMessageRawText.set(userMessage, rawText);
@@ -12649,9 +12390,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			return true;
 		}
 		if (options?.goalAutoOrchestrateInitialId !== undefined) {
-			this.#rememberGoalAutoOrchestrateInitialSource(normalizedAppMessage, options.goalAutoOrchestrateInitialId);
+			this.#goalAutopilot.rememberInitialSource(normalizedAppMessage, options.goalAutoOrchestrateInitialId);
 		} else if (options?.goalAutopilotResumeId !== undefined) {
-			this.#rememberGoalAutoOrchestrateInitialSource(normalizedAppMessage, options.goalAutopilotResumeId, true);
+			this.#goalAutopilot.rememberInitialSource(normalizedAppMessage, options.goalAutopilotResumeId, true);
 		}
 		this.#allowQueuedMessageDrainRetry();
 		// Keyword notices and their user message must enter the queue in one synchronous phase.

@@ -17,15 +17,7 @@ import type { JSXNode } from "@oh-my-pi/pi-tui";
 import { replaceTabs } from "@oh-my-pi/pi-tui/text/width";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { jobDisplayLabel } from "../../async/job-label";
-import { stripBashExitCodeNotice, stripBashWallTimeNotice } from "../../tools/details/bash";
 import type { AgentActivitySnapshot, CoordinationDetails, JobSnapshot } from "../../tools/details/wait";
-import {
-	formatArtifactErrorNotice,
-	formatFullOutputReference,
-	stripOutputNotice,
-	stripRawOutputNotice,
-	stripTrailingNotice,
-} from "../../tools/output-meta-format";
 import { ErrorText } from "./agent-common";
 import type { ToolPresenter, ToolResult, ToolView, ToolViewState } from "./contract";
 import { resultText } from "./default";
@@ -37,102 +29,16 @@ const TILES_SHOWN = 9;
 
 const STATUS_ORDER: Record<JobSnapshot["status"], number> = { running: 0, failed: 1, cancelled: 2, completed: 3 };
 
-const BASH_TIMEOUT_NOTICE =
-	/^(\[(?:timed out(?: after \d+s)?(?:; shell unresponsive, output may be incomplete)?|Command timed out(?: after \d+(?:\.\d+)? seconds(?:; the shell backend did not respond, so any output above may be incomplete)?)?)\])(?:\r?\n|$)/u;
-
 /** What the terminal draws a wait from. */
 export type WaitTerm =
-	| { readonly kind: "empty"; readonly text: string; readonly meta?: CoordinationDetails["meta"] }
+	| { readonly kind: "empty"; readonly text: string }
 	| { readonly kind: "interrupted" }
 	| {
 			readonly kind: "jobs";
 			readonly jobs: readonly JobSnapshot[];
 			readonly agents: readonly AgentActivitySnapshot[];
 			readonly meta?: CoordinationDetails["meta"];
-			readonly settledBashJobs?: ReadonlyMap<string, string>;
 	  };
-
-/** A displayed Bash card already owns this job's output; Wait still draws its own diagnostics. */
-export function duplicatesBashOutcome(job: JobSnapshot, settled: ReadonlyMap<string, string> | undefined): boolean {
-	return (
-		job.type === "bash" &&
-		settled?.get(job.id) === job.status &&
-		(job.structured === undefined || job.structured.status === "valid")
-	);
-}
-
-/** A failed job's visible output and diagnostics, without the generated output footers. */
-export function waitFailurePreview(
-	job: JobSnapshot,
-	expanded: boolean,
-	settled: ReadonlyMap<string, string> | undefined,
-): { lines: string[]; reason?: string; artifact?: string } {
-	if (job.status !== "failed") return { lines: [] };
-	const error = job.errorText ?? "";
-	const raw = stripOutputNotice(
-		job.type === "bash" && !error.trim() ? (job.resultText ?? "") : error,
-		job.meta ?? (job.artifactError ? { artifactError: job.artifactError } : undefined),
-	);
-	if (job.type !== "bash") {
-		const reason = raw
-			.split(/\r?\n/)
-			.find(line => line.trim())
-			?.trim();
-		return { lines: reason ? [plainText(reason)] : [] };
-	}
-	// The local sink prefixes its reason, while bridge and shaped output can carry it as a footer.
-	let trailingReason: string | undefined;
-	const rawFooter = stripRawOutputNotice(raw);
-	const withoutTimeout =
-		job.timedOut === true
-			? stripTrailingNotice(rawFooter.text, line => {
-					trailingReason = BASH_TIMEOUT_NOTICE.exec(line)?.[1];
-					return trailingReason !== undefined;
-				})
-			: rawFooter.text;
-	const wallTimeMs = job.wallTimeNoticeEmitted === true ? job.wallTimeMs : undefined;
-	const withoutWall = wallTimeMs === undefined ? withoutTimeout : stripBashWallTimeNotice(withoutTimeout, wallTimeMs);
-	const exitCode = job.exitCode;
-	const withoutExit =
-		exitCode === undefined || exitCode === 0 ? withoutWall : stripBashExitCodeNotice(withoutWall, exitCode, "trailing");
-	const outputWithArtifact = stripRawOutputNotice(withoutExit);
-	const output = outputWithArtifact.text;
-	const timeout = job.timedOut === true ? BASH_TIMEOUT_NOTICE.exec(output) : undefined;
-	const reason = timeout?.[1] ?? trailingReason;
-	if (!expanded && duplicatesBashOutcome(job, settled)) return { lines: [], reason };
-	const outputStart = timeout?.[0].length ?? 0;
-	const lines: string[] = [];
-	if (expanded) {
-		const body = output.slice(outputStart).trimEnd();
-		if (body) for (const line of body.split(/\r?\n/)) lines.push(plainText(line));
-	} else {
-		for (let end = output.length; end > outputStart && lines.length < 2;) {
-			const start = output.lastIndexOf("\n", end - 1);
-			const line = plainText(output.slice(start + 1, end)).trimEnd();
-			if (line.trim()) lines.unshift(line);
-			end = start;
-		}
-	}
-	const truncation = job.meta?.truncation;
-	const column = job.meta?.limits?.columnTruncated;
-	const artifactId =
-		job.meta?.minimized?.artifactId ??
-		rawFooter.artifactId ??
-		outputWithArtifact.artifactId ??
-		truncation?.artifactId ??
-		column?.artifactId;
-	const elidedBytes =
-		artifactId === truncation?.artifactId ? truncation?.artifactElidedBytes
-		: artifactId === column?.artifactId ? column?.artifactElidedBytes
-		: undefined;
-	return {
-		lines,
-		reason,
-		artifact: artifactId
-			? `${elidedBytes ? "Sample only · " : ""}${formatFullOutputReference(artifactId, elidedBytes)}`
-			: undefined,
-	};
-}
 
 /** Running first, then failed, cancelled, done; longest first within each. */
 export function sortJobs(jobs: readonly JobSnapshot[]): JobSnapshot[] {
@@ -210,14 +116,13 @@ function resultView(result: ToolResult<CoordinationDetails>, state: ToolViewStat
 	const jobs = details?.jobs ?? [];
 	const agents = details?.agents ?? [];
 	const spinning = state.isPartial;
-	const settledBashJobs = state.renderContext?.settledBashJobs as ReadonlyMap<string, string> | undefined;
 	if (result.isError) {
 		return {
 			label: waitHead(),
 			tone: "error",
 			body: <ErrorText message={resultText(result)} />,
 			inline: false,
-			term: { look: "wait", spinning, wait: jobsTerm(result, settledBashJobs) },
+			term: { look: "wait", spinning, wait: jobsTerm(result) },
 		};
 	}
 	if (details?.interrupted) {
@@ -231,14 +136,9 @@ function resultView(result: ToolResult<CoordinationDetails>, state: ToolViewStat
 		return {
 			label: waitHead(),
 			tone: "warning",
-			body: [
-				<text spans={[{ s: "dim", t: plainText(resultText(result) || "No jobs to process") }]} />,
-				details?.meta?.artifactError && (
-					<text spans={[{ s: "warning", t: formatArtifactErrorNotice(details.meta.artifactError) }]} wrap="word" />
-				),
-			],
+			body: <text spans={[{ s: "dim", t: plainText(resultText(result) || "No jobs to process") }]} />,
 			inline: false,
-			term: { look: "wait", spinning, wait: jobsTerm(result, settledBashJobs) },
+			term: { look: "wait", spinning, wait: jobsTerm(result) },
 		};
 	}
 	const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };
@@ -262,39 +162,6 @@ function resultView(result: ToolResult<CoordinationDetails>, state: ToolViewStat
 			sorted.length > 0 ? (
 				<JobTiles nodeKey="tiles" tiles={sorted.slice(0, TILES_SHOWN).map(job => jobTile(job, state.isPartial))} />
 			) : undefined,
-			...sorted.slice(0, TILES_SHOWN).flatMap(job => {
-				const { lines, reason, artifact } = waitFailurePreview(job, state.expanded, settledBashJobs);
-				const body: JSXNode[] = [];
-				if (reason)
-					body.push(
-						<text
-							spans={[{ s: "error", t: `${plainText(job.id)} · ${reason}` }]}
-							wrap={state.expanded ? "word" : undefined}
-							truncate={state.expanded ? undefined : "end"}
-						/>,
-					);
-				if (job.type === "bash" && lines.length > 0)
-					body.push(
-						<text
-							spans={[
-								{ s: "muted", t: `${plainText(job.id)} · ${state.expanded ? "Output:" : "Output tail:"}` },
-							]}
-							truncate="end"
-						/>,
-					);
-				for (const line of lines)
-					body.push(
-						<text
-							spans={[{ s: "error", t: job.type === "bash" ? line : `${plainText(job.id)} · ${line}` }]}
-							wrap={state.expanded ? "word" : undefined}
-							truncate={state.expanded ? undefined : "end"}
-						/>,
-					);
-				if (artifact) body.push(<text spans={[{ s: "warning", t: artifact }]} wrap="word" />);
-				const error = job.meta?.artifactError ?? job.artifactError;
-				if (error) body.push(<text spans={[{ s: "warning", t: formatArtifactErrorNotice(error) }]} wrap="word" />);
-				return body;
-			}),
 			rest > 0 ? (
 				<text
 					role="omp.wait.more"
@@ -302,23 +169,19 @@ function resultView(result: ToolResult<CoordinationDetails>, state: ToolViewStat
 				/>
 			) : undefined,
 			...agents.map(agent => <AgentRow agent={agent} live={state.isPartial} />),
-			details?.meta?.artifactError &&
-				!jobs.some(job => (job.meta?.artifactError ?? job.artifactError) === details.meta?.artifactError) && (
-					<text spans={[{ s: "warning", t: formatArtifactErrorNotice(details.meta.artifactError) }]} wrap="word" />
-				),
 		],
-		term: { look: "wait", spinning, wait: jobsTerm(result, settledBashJobs) },
+		term: { look: "wait", spinning, wait: jobsTerm(result) },
 	};
 }
 
 /** The snapshot the terminal draws (also for an error, whose rows still list its jobs). */
-function jobsTerm(result: ToolResult<CoordinationDetails>, settledBashJobs?: ReadonlyMap<string, string>): WaitTerm {
+function jobsTerm(result: ToolResult<CoordinationDetails>): WaitTerm {
 	const details = result.details;
 	const jobs = details?.jobs ?? [];
 	const agents = details?.agents ?? [];
 	if (jobs.length === 0 && agents.length === 0)
-		return { kind: "empty", text: resultText(result) || "No jobs to process", meta: details?.meta };
-	return { kind: "jobs", jobs, agents, meta: details?.meta, settledBashJobs };
+		return { kind: "empty", text: resultText(result) || "No jobs to process" };
+	return { kind: "jobs", jobs, agents, meta: details?.meta };
 }
 
 export const waitPresenter: ToolPresenter<Record<string, unknown>, CoordinationDetails> = {

@@ -149,7 +149,6 @@ esac
 			HOME: dir,
 			CNB_TOKEN: "",
 			OMP_CONFIG_ROOT: path.join(dir, "config"),
-			OMP_CACHE_DIR: "",
 			OMP_OFFLINE: "",
 			OMP_PROFILE: "",
 			PI_INSTALL_DIR: installDir,
@@ -194,14 +193,16 @@ async function installerLog(directory: string): Promise<string> {
 describe.skipIf(process.platform !== "linux")("fork installer routing", () => {
 	const testGlibc = test.skipIf(hostIsAlpine);
 
-	testGlibc("routes named-profile logs to the user cache root", async () => {
+	testGlibc("keeps named-profile logs under the config root when a retired cache override is set", async () => {
 		const fixture = await createFixture();
 		const root = path.join(fixture.env.HOME!, "cache-root");
 		fixture.env.OMP_CACHE_DIR = `  ${root}  `;
+		fixture.env.OMP_OFFLINE = "1";
+		fixture.env.OMP_LOG_LEVEL = "";
 		fixture.env.OMP_PROFILE = "work";
 		const result = await runInstallerWithFixture([], fixture);
 		expect(result.exitCode, result.stderr).toBe(0);
-		const log = await installerLog(path.join(root, String(process.getuid!()), "profiles", "work", "logs"));
+		const log = await installerLog(path.join(fixture.env.OMP_CONFIG_ROOT!, "profiles", "work", "logs"));
 		expect(log).toContain("event=install_completed");
 	});
 
@@ -538,7 +539,6 @@ sh scripts/install.sh --startup-log-prune-invalid-option
 			env: {
 				...process.env,
 				OMP_TEST_PRUNE_ROOT: root,
-				OMP_CACHE_DIR: "",
 				OMP_OFFLINE: "",
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
@@ -581,10 +581,10 @@ const metadataPowerShellHosts = [windowsPowerShell, process.platform === "win32"
 );
 
 for (const powerShell of metadataPowerShellHosts) {
-	test(`Windows installer uses the cache root and an invariant UTC date (${path.basename(powerShell)})`, async () => {
+	test(`Windows installer ignores the retired cache override and uses an invariant UTC date (${path.basename(powerShell)})`, async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-storage-"));
 		tempDirs.push(dir);
-		const root = path.join(dir, "cache-root");
+		const root = path.join(dir, "config");
 		const harness = path.join(dir, "culture.ps1");
 		await Bun.write(
 			harness,
@@ -612,9 +612,10 @@ try {
 				cwd: repoRoot,
 				env: {
 					...process.env,
-					OMP_CONFIG_ROOT: path.join(dir, "config"),
-					OMP_CACHE_DIR: root,
-					OMP_OFFLINE: "",
+					OMP_CONFIG_ROOT: root,
+					OMP_CACHE_DIR: path.join(dir, "ignored-cache"),
+					OMP_OFFLINE: "1",
+					OMP_LOG_LEVEL: "",
 					OMP_PROFILE: "work",
 					PI_PROFILE: "",
 					PI_INSTALL_DIR: path.join(dir, "install"),
@@ -643,6 +644,7 @@ try {
 			.trim()
 			.split(/\r?\n/)
 			.map(line => JSON.parse(line));
+		expect(records.find(record => record.event === "install_started")).toMatchObject({ level: "INFO" });
 		expect(records.find(record => record.event === "install_failed")).toMatchObject({ stage: "environment" });
 	});
 }
@@ -756,7 +758,6 @@ Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
 							env: {
 								...process.env,
 								OMP_CONFIG_ROOT: configRoot,
-								OMP_CACHE_DIR: "",
 								OMP_OFFLINE: "",
 								OMP_PROFILE: "default",
 								PI_PROFILE: "default",
@@ -1045,7 +1046,6 @@ try {
 				CNB_TOKEN: "",
 				PI_INSTALL_DIR: path.join(dir, "install 'quoted"),
 				OMP_CONFIG_ROOT: path.join(dir, "config"),
-				OMP_CACHE_DIR: "",
 				OMP_OFFLINE: "",
 				OMP_PROFILE: "default",
 				PI_PROFILE: "default",
@@ -1119,7 +1119,6 @@ try {
 				env: {
 					...process.env,
 					OMP_CONFIG_ROOT: path.join(dir, "config"),
-					OMP_CACHE_DIR: "",
 					OMP_PROFILE: "default",
 					PI_INSTALL_DIR: path.join(dir, "install"),
 					PROCESSOR_ARCHITECTURE: "AMD64",
@@ -1166,7 +1165,6 @@ try {
 					USERPROFILE: dir,
 					LOCALAPPDATA: path.join(dir, "local"),
 					OMP_CONFIG_ROOT: configRoot,
-					OMP_CACHE_DIR: "",
 					OMP_OFFLINE: "",
 					OMP_PROFILE: "default",
 					PI_PROFILE: "default",
@@ -1386,7 +1384,6 @@ try {
 						env: {
 							...process.env,
 							OMP_CONFIG_ROOT: path.join(dir, "config"),
-							OMP_CACHE_DIR: "",
 							OMP_OFFLINE: "",
 							OMP_PROFILE: "default",
 							PI_PROFILE: "default",
@@ -1487,7 +1484,6 @@ Save-InstallBinary -Uri "http://omp-download.invalid/omp.exe" -OutFile $env:TEST
 						env: {
 							...process.env,
 							OMP_CONFIG_ROOT: path.join(dir, "config"),
-							OMP_CACHE_DIR: "",
 							OMP_OFFLINE: "",
 							OMP_PROFILE: "default",
 							PI_PROFILE: "default",
@@ -1632,7 +1628,6 @@ if ([Net.ServicePointManager]::SecurityProtocol -ne $originalSecurityProtocol) {
 								...process.env,
 								OMP_CONFIG_ROOT: path.join(dir, "config"),
 								PI_INSTALL_DIR: path.join(dir, "install"),
-								OMP_CACHE_DIR: "",
 								OMP_OFFLINE: "",
 								OMP_PROFILE: "default",
 								PI_PROFILE: "default",

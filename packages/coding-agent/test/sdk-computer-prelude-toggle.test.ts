@@ -224,8 +224,8 @@ describe("AgentSession eval preludes", () => {
 	});
 
 	it.each([
-		{ backend: "available JS Eval", evalJs: true },
-		{ backend: "unprobed Python only", evalJs: false },
+		{ backend: "JS Eval only", evalJs: true },
+		{ backend: "Python Eval only before its first kernel launch", evalJs: false },
 	])("reconciles browser MCP filtering on live browser toggles with $backend", async ({ evalJs }) => {
 		const cwd = fs.mkdtempSync(path.join(registryDir, "browser-filter-"));
 		const discovery = vi.spyOn(MCPManager.prototype, "discoverAndConnect").mockResolvedValue({
@@ -234,7 +234,7 @@ describe("AgentSession eval preludes", () => {
 			connectedServers: [],
 			exaApiKeys: [],
 		});
-		const settings = Settings.isolated({ "browser.enabled": false, "eval.js": evalJs, "eval.py": true });
+		const settings = Settings.isolated({ "browser.enabled": false, "eval.js": evalJs, "eval.py": !evalJs });
 		const { session, mcpManager } = await createAgentSession({
 			cwd,
 			agentDir: registryDir,
@@ -256,8 +256,8 @@ describe("AgentSession eval preludes", () => {
 
 		cfgBrowserEnabled.override(settings, true);
 		await Promise.resolve();
-		// Only the available JS backend can replace browser MCP; Python has not been probed in this cwd.
-		expect(reconcile).toHaveBeenNthCalledWith(1, evalJs);
+		// The configured backend replaces browser MCP without launching a kernel just to probe it.
+		expect(reconcile).toHaveBeenNthCalledWith(1, true);
 		const enableReconcile = reconcile.mock.results[0];
 		if (!enableReconcile || enableReconcile.type !== "return") throw new Error("Expected browser MCP reconcile");
 		await enableReconcile.value;

@@ -401,11 +401,7 @@ export async function attemptEditAutoRepair(options: {
 				journal?.(attempt, builtPrompt);
 				return attempt;
 			},
-			{
-				signal,
-				provider: model.provider,
-				maxAttempts: model.provider === "codeagent" ? 1 : undefined,
-			},
+			{ signal, provider: model.provider },
 		);
 		if (response.stopReason === "error") {
 			throw new Error(response.errorMessage ?? "auto-repair completion failed");

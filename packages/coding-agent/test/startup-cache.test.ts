@@ -15,7 +15,7 @@ import { getCurrentThemeName, initTheme } from "../src/ui/theme/service";
 import { StartupCache } from "../src/modes/interactive/startup-cache";
 import { predictedStatusLine, type StatusPrediction } from "../src/modes/interactive/status-prediction";
 import { effectiveStatusSettings, segmentView } from "../src/ui/status/segments";
-import { createModeTerminal } from "./helpers/mode-terminal";
+import { createModeTerminal, type ModeTerminal } from "./helpers/mode-terminal";
 
 const prediction: StatusPrediction = {
 	settings: { preset: "custom", leftSegments: ["pi", "model"], rightSegments: ["context_pct"] },
@@ -96,9 +96,12 @@ describe("interactive mode status prediction", () => {
 	let authStorage: AuthStorage | undefined;
 	let session: AgentSession | undefined;
 	let mode: InteractiveMode | undefined;
+	let term: ModeTerminal | undefined;
 
 	afterEach(async () => {
 		mode?.stop();
+		await mode?.shell.stop();
+		term?.dispose();
 		vi.restoreAllMocks();
 		await session?.dispose();
 		authStorage?.close();
@@ -115,7 +118,7 @@ describe("interactive mode status prediction", () => {
 		await Settings.init({
 			inMemory: true,
 			cwd: dir.path(),
-			overrides: { "statusLine.segmentOptions": { model: { showProvider: true } } },
+			overrides: { "git.enabled": false, "statusLine.segmentOptions": { model: { showProvider: true } } },
 		});
 		authStorage = await AuthStorage.create(path.join(dir.path(), "auth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
@@ -124,12 +127,15 @@ describe("interactive mode status prediction", () => {
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(dir.path(), dir.path()),
-			settings: Settings.isolated(),
+			settings: Settings.isolated({ "git.enabled": false }),
 			modelRegistry,
 		});
-		const term = createModeTerminal();
+		vi.spyOn(session, "prewarmModelConnection").mockImplementation(() => {});
+		term = createModeTerminal();
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, term.frame);
-		await mode.init();
+		const ready = Promise.withResolvers<void>();
+		await mode.init({ suppressWelcomeIntro: true, startupBackgroundWork: ready.resolve });
+		await ready.promise;
 
 		const predicted = cache.read(getProjectDir()).status;
 		expect(predicted?.facts.model?.id).toBe("claude-sonnet-4-5");

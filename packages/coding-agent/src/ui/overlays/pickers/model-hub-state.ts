@@ -1016,9 +1016,9 @@ export class ModelHubState {
 		this.#sync();
 	}
 
-	async #refreshProvider(providerId: string, refreshCommandCredentials = false): Promise<void> {
+	async #refreshProvider(providerId: string, explicitRefresh = false): Promise<void> {
 		try {
-			if (refreshCommandCredentials)
+			if (explicitRefresh)
 				await this.registry.refreshProvider(providerId, "online", { refreshCommandCredentials: true });
 			else await this.registry.refreshProvider(providerId, "online");
 			await this.#afterRegistryRefresh(providerId);

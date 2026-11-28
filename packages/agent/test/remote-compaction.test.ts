@@ -5,7 +5,6 @@ import {
 	compact,
 	createCustomMessage,
 	DEFAULT_COMPACTION_SETTINGS,
-	generateSummary,
 	NativeCompactionError,
 	prepareCompaction,
 	type SessionEntry,
@@ -2898,44 +2897,6 @@ describe("compact() remote compaction failure handling", () => {
 			settings: { ...DEFAULT_COMPACTION_SETTINGS, remoteStreamingV2Enabled: false },
 		};
 	}
-
-	test.each(["codeagent"])(
-		"%s summary context rejection never replays through the window-reduction fallback",
-		async provider => {
-			const model = buildModel({
-				id: "transport-owned-replay",
-				name: "Transport-owned replay",
-				api: "openai-completions",
-				provider,
-				baseUrl: "https://transport.example/v1",
-				reasoning: true,
-				input: ["text"],
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 200_000,
-				maxTokens: 32_768,
-			});
-			let requests = 0;
-			await expect(
-				generateSummary(
-					[{ role: "user", content: "history paragraph ".repeat(40_000), timestamp: 1 }],
-					model,
-					16_384,
-					"test-key",
-					undefined,
-					undefined,
-					undefined,
-					{
-						oneshotRetry: false,
-						completeImpl: async () => {
-							requests++;
-							throw new AIError.ProviderHttpError("400 prompt is too long: context window exceeded", 400);
-						},
-					},
-				),
-			).rejects.toThrow("context window exceeded");
-			expect(requests).toBe(1);
-		},
-	);
 
 	test("V1 compact drops mixed-provider Anthropic state and keeps unrelated preserve data", async () => {
 		const compactionItem = { type: "compaction", encrypted_content: "enc-current-v1" };

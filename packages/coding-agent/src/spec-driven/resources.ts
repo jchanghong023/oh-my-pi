@@ -2,8 +2,7 @@ import * as crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
-import { extractArchive } from "@oh-my-pi/pi-utils/ar";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { getAgentExecutableCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
@@ -13,36 +12,18 @@ import { DEFAULT_NPM_REGISTRY } from "../cli/npm-registry";
 import type { Skill } from "../extensibility/skills";
 import bundledArchive from "./resource-archive";
 import { specDrivenOpenSpecInputs, specDrivenSourceFingerprint } from "./resource-fingerprint";
-import { isPathInside, resolveSpecDrivenResourcePath } from "./resource-path";
+import {
+	bundledSpecDrivenSkills,
+	type SpecDrivenArchiveKind,
+	specDrivenArchiveNames,
+	type SpecDrivenResourceManifest,
+} from "./resource-manifest";
+import { resolveSpecDrivenResourcePath, resolveSpecDrivenResourceTarget } from "./resource-path";
 
 export { resolveSpecDrivenResourcePath };
 
-export type SpecDrivenResourceSource = "openspec" | "superpowers" | "jch";
-export interface SpecDrivenSkillEntry {
-	source: SpecDrivenResourceSource;
-	name: string;
-	path: string;
-}
-export interface SpecDrivenResourceManifest {
-	runtimeFormat: 2;
-	sourceFingerprint?: string;
-	openspec: {
-		version: string;
-		revision: string;
-		/** SHA-256 of the sorted OpenSpec runtime file records (path, byte hash, executable flag). */
-		runtimeSha256: string;
-	};
-	superpowers: { version: string; revision: string };
-	jch: { revision: string };
-	skills: readonly SpecDrivenSkillEntry[];
-	files: readonly { path: string; sha256: string; executable: boolean }[];
-}
-
-export interface SpecDrivenResources {
+interface SpecDrivenResources {
 	root: string;
-	openspecRoot: string;
-	superpowersRoot: string;
-	jchRoot: string;
 	manifest: SpecDrivenResourceManifest;
 }
 export interface SpecDrivenProcessResult {
@@ -54,63 +35,21 @@ export interface SpecDrivenProcessResult {
 /** Capture for SDK calls, inherit output for streaming, or also inherit terminal input. */
 export type SpecDrivenProcessIO = "capture" | "stream" | "terminal";
 
-// Keep URL ownership available even if the resource archive or its cache cannot be opened.
-// Extraction checks this pinned index against the archive manifest.
-const bundledSkillNames = new Set([
-	"big-review-scan",
-	"big-review-verify",
-	"brainstorming",
-	"diagnosing-superpowers",
-	"dispatching-parallel-agents",
-	"executing-plans",
-	"finishing-a-development-branch",
-	"jch-codebase-design",
-	"jch-grill-me",
-	"jch-grill-todo",
-	"openspec-apply-change",
-	"openspec-archive-change",
-	"openspec-bulk-archive-change",
-	"openspec-continue-change",
-	"openspec-explore",
-	"openspec-ff-change",
-	"openspec-new-change",
-	"openspec-onboard",
-	"openspec-propose",
-	"openspec-sync-specs",
-	"openspec-update-change",
-	"openspec-verify-change",
-	"receiving-code-review",
-	"requesting-code-review",
-	"subagent-driven-development",
-	"systematic-debugging",
-	"test-driven-development",
-	"using-git-worktrees",
-	"using-superpowers",
-	"verification-before-completion",
-	"writing-plans",
-	"writing-skills",
-]);
+const extractions: Partial<Record<SpecDrivenArchiveKind, Promise<SpecDrivenResources>>> = {};
 
-export function hasBundledSpecDrivenSkill(name: string): boolean {
-	return bundledSkillNames.has(name);
+export function ensureSpecDrivenSkillResources(): Promise<SpecDrivenResources> {
+	return ensureResources("skills");
 }
 
-let extraction: Promise<SpecDrivenResources> | undefined;
-export function ensureSpecDrivenResources(): Promise<SpecDrivenResources> {
-	extraction ??= extractResources().catch(error => {
-		extraction = undefined;
+function ensureResources(kind: SpecDrivenArchiveKind): Promise<SpecDrivenResources> {
+	return (extractions[kind] ??= extractResources(kind).catch(error => {
+		delete extractions[kind];
 		throw error;
-	});
-	return extraction;
+	}));
 }
 
-async function hasExtractedFiles(
-	root: string,
-	files: SpecDrivenResourceManifest["files"],
-	prefix?: string,
-): Promise<boolean> {
+async function hasExtractedFiles(root: string, files: SpecDrivenResourceManifest["files"]): Promise<boolean> {
 	for (const file of files) {
-		if (prefix !== undefined && !file.path.startsWith(prefix)) continue;
 		try {
 			const target = await resolveSpecDrivenResourcePath(root, file.path);
 			if (!(await fs.stat(target)).isFile()) return false;
@@ -122,33 +61,34 @@ async function hasExtractedFiles(
 	return true;
 }
 
-async function extractResources(): Promise<SpecDrivenResources> {
+async function extractResources(kind: SpecDrivenArchiveKind): Promise<SpecDrivenResources> {
 	const compiled = process.env.PI_COMPILED === "true" || process.env.PI_BUNDLED === "true";
 	const packageRoot = path.resolve(import.meta.dir, "../..");
 	// Source and SDK imports use the same archive as npm and binary builds.
 	let bytes: Uint8Array;
 	let expectedFingerprint: string | undefined;
 	if (compiled) {
-		if (!bundledArchive) throw new Error("Bundled resource archive asset is missing");
-		expectedFingerprint = bundledArchive.sourceFingerprint;
+		const asset = bundledArchive?.[kind];
+		if (!asset) throw new Error(`Bundled ${kind} archive asset is missing`);
+		expectedFingerprint = asset.sourceFingerprint;
 		const assetPath =
-			path.isAbsolute(bundledArchive.path) || path.win32.isAbsolute(bundledArchive.path)
-				? bundledArchive.path
-				: path.resolve(import.meta.dir, bundledArchive.path);
+			path.isAbsolute(asset.path) || path.win32.isAbsolute(asset.path)
+				? asset.path
+				: path.resolve(import.meta.dir, asset.path);
 		bytes = await Bun.file(assetPath).bytes();
-		if (crypto.createHash("sha256").update(bytes).digest("hex") !== bundledArchive.sha256) {
+		if (crypto.createHash("sha256").update(bytes).digest("hex") !== asset.sha256) {
 			throw new Error(
 				"Stale or damaged bundled spec-driven archive; rebuild with bun run gen:spec-driven-resources.",
 			);
 		}
 	} else {
-		const archivePath = path.join(packageRoot, "dist/spec-driven-resources.tar.gz");
+		const archivePath = path.join(packageRoot, "dist", specDrivenArchiveNames[kind]);
 		try {
 			bytes = await Bun.file(archivePath).bytes();
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
 			throw new Error(
-				`OpenSpec runtime resources are not prepared (${archivePath}). From ${packageRoot}, run bun run gen:spec-driven-resources. Resources are never installed or built automatically at runtime.`,
+				`Bundled ${kind} resources are not prepared (${archivePath}). From ${packageRoot}, run bun run gen:spec-driven-resources. Resources are never installed or built automatically at runtime.`,
 				{ cause: error },
 			);
 		}
@@ -156,7 +96,7 @@ async function extractResources(): Promise<SpecDrivenResources> {
 			existsSync(path.resolve(packageRoot, "../../.git")) ||
 			existsSync(path.resolve(packageRoot, specDrivenOpenSpecInputs.directory, specDrivenOpenSpecInputs.packageManifest))
 		) {
-			expectedFingerprint = await specDrivenSourceFingerprint(packageRoot);
+			expectedFingerprint = await specDrivenSourceFingerprint(kind, packageRoot);
 		}
 	}
 	const archiveFiles = await new Bun.Archive(bytes).files().catch(error => {
@@ -169,7 +109,7 @@ async function extractResources(): Promise<SpecDrivenResources> {
 	const manifest = (await manifestFile.json().catch(error => {
 		throw new Error("Invalid spec-driven manifest; run bun run gen:spec-driven-resources.", { cause: error });
 	})) as SpecDrivenResourceManifest;
-	if (manifest.runtimeFormat !== 2) {
+	if (manifest.format !== 3 || manifest.kind !== kind) {
 		throw new Error(
 			"Unsupported spec-driven resource archive; run bun run gen:spec-driven-resources to prepare it again.",
 		);
@@ -181,29 +121,24 @@ async function extractResources(): Promise<SpecDrivenResources> {
 	) {
 		throw new Error("Stale spec-driven resource archive; run bun run gen:spec-driven-resources to prepare it again.");
 	}
-	if (!Array.isArray(manifest.files) || !Array.isArray(manifest.skills)) {
+	if (!Array.isArray(manifest.files)) {
 		throw new Error("Incomplete spec-driven manifest; run bun run gen:spec-driven-resources.");
 	}
 	const declaredPaths = new Set(manifest.files.map(file => file.path));
-	for (const required of [
-		"openspec/bin/openspec.js",
-		"openspec/dist/cli/index.js",
-		"openspec/package.json",
-		"openspec/schemas/spec-driven/schema.yaml",
-	]) {
-		if (!declaredPaths.has(required)) {
-			throw new Error(`Incomplete spec-driven archive (${required}); run bun run gen:spec-driven-resources.`);
+	const required =
+		kind === "skills"
+			? Array.from(bundledSpecDrivenSkills.values(), skill => skill.path)
+			: [
+					"openspec/bin/openspec.js",
+					"openspec/dist/cli/index.js",
+					"openspec/package.json",
+					"openspec/schemas/spec-driven/schema.yaml",
+				];
+	for (const relative of required) {
+		if (!declaredPaths.has(relative)) {
+			throw new Error(`Incomplete ${kind} archive (${relative}); run bun run gen:spec-driven-resources.`);
 		}
 	}
-	const unmatchedSkills = new Set(bundledSkillNames);
-	for (const skill of manifest.skills) {
-		if (!unmatchedSkills.delete(skill.name)) throw new Error(`Unexpected bundled skill in manifest: ${skill.name}`);
-		if (!declaredPaths.has(skill.path)) {
-			throw new Error(`Incomplete spec-driven skill (${skill.path}); run bun run gen:spec-driven-resources.`);
-		}
-	}
-	if (unmatchedSkills.size > 0)
-		throw new Error(`Missing bundled skills in manifest: ${[...unmatchedSkills].join(", ")}`);
 	for (const file of manifest.files) {
 		const archived = archiveFiles.get(file.path);
 		if (
@@ -217,7 +152,7 @@ async function extractResources(): Promise<SpecDrivenResources> {
 		}
 	}
 	const digest = crypto.createHash("md5").update(JSON.stringify(manifest)).digest("hex");
-	const cache = path.join(getAgentExecutableCacheDir(), "spec-driven");
+	const cache = path.join(getAgentExecutableCacheDir(), "spec-driven", kind);
 	const root = path.join(cache, digest);
 	await fs.mkdir(cache, { recursive: true });
 	await withFileLock(
@@ -231,7 +166,11 @@ async function extractResources(): Promise<SpecDrivenResources> {
 			if (marker === digest && (await hasExtractedFiles(root, manifest.files))) return;
 			const temporary = await fs.mkdtemp(path.join(path.dirname(cache), ".spec-driven-"));
 			try {
-				await extractArchive({ bytes, format: "tar.gz" }, temporary);
+				// Bun's parsed view contains only regular files; the manifest selects what is published.
+				for (const file of manifest.files) {
+					const target = resolveSpecDrivenResourceTarget(temporary, file.path);
+					await Bun.write(target, archiveFiles.get(file.path)!);
+				}
 				for (const file of manifest.files) {
 					const target = await resolveSpecDrivenResourcePath(temporary, file.path);
 					if (
@@ -241,9 +180,9 @@ async function extractResources(): Promise<SpecDrivenResources> {
 							.digest("hex") !== file.sha256
 					)
 						throw new Error(`Bundled resource digest mismatch: ${file.path}`);
-					if (file.executable) await fs.chmod(target, 0o755);
+					await fs.chmod(target, file.executable ? 0o755 : 0o644);
 				}
-				await fs.writeFile(path.join(temporary, ".omp-complete"), digest);
+				await fs.writeFile(path.join(temporary, ".omp-complete"), digest, { flag: "wx" });
 				// Other digests may still back resource paths held by live sessions.
 				await fs.rm(root, { recursive: true, force: true });
 				await fs.rename(temporary, root);
@@ -256,37 +195,24 @@ async function extractResources(): Promise<SpecDrivenResources> {
 	const canonicalRoot = await fs.realpath(root);
 	return {
 		root: canonicalRoot,
-		openspecRoot: path.join(canonicalRoot, "openspec"),
-		superpowersRoot: path.join(canonicalRoot, "superpowers"),
-		jchRoot: path.join(canonicalRoot, "jch"),
 		manifest,
 	};
 }
 
-export async function loadSpecDrivenSkill(source: SpecDrivenResourceSource, name: string): Promise<Skill> {
-	const resources = await ensureSpecDrivenResources();
-	const entry = resources.manifest.skills.find(skill => skill.source === source && skill.name === name);
-	if (!entry) throw new Error(`Unknown bundled ${source} skill: ${name}`);
-	const containRoot = {
-		openspec: resources.openspecRoot,
-		superpowers: resources.superpowersRoot,
-		jch: resources.jchRoot,
-	}[source];
-	const filePath = await resolveSpecDrivenResourcePath(resources.root, entry.path);
-	if (!isPathInside(await fs.realpath(containRoot), filePath)) throw new Error("Bundled skill escapes source root");
-	const content = await fs.readFile(filePath, "utf8");
-	const digest = resources.manifest.files.find(file => file.path === entry.path)?.sha256;
-	if (!digest || crypto.createHash("sha256").update(content).digest("hex") !== digest)
-		throw new Error(`Bundled resource digest mismatch: ${entry.path}`);
-	const parsed = parseFrontmatter(content, { source: filePath, repair: false, level: "off" });
+/** Resolve the reserved name without granting access or bypassing normal overrides. */
+export async function findBundledSpecDrivenSkill(name: string): Promise<Skill | undefined> {
+	const entry = bundledSpecDrivenSkills.get(name);
+	if (!entry) return undefined;
+	const { root } = await ensureSpecDrivenSkillResources();
+	const filePath = path.join(root, entry.path);
 	return {
 		name,
-		description: typeof parsed.frontmatter.description === "string" ? parsed.frontmatter.description : "",
+		description: "",
 		filePath,
 		baseDir: path.dirname(filePath),
-		source: `bundled-${source}`,
-		hide: parsed.frontmatter.hide === true || parsed.frontmatter.disableModelInvocation === true,
-		containRoot,
+		source: `bundled-${entry.source}`,
+		hide: true,
+		containRoot: path.join(root, entry.source),
 	};
 }
 
@@ -354,13 +280,14 @@ export async function runOpenSpec(
 	signal?: AbortSignal,
 	io: SpecDrivenProcessIO = "capture",
 ): Promise<SpecDrivenProcessResult> {
-	const previous = extraction;
-	let resources = await ensureSpecDrivenResources();
-	if (previous && !(await hasExtractedFiles(resources.root, resources.manifest.files, "openspec/"))) {
-		if (previous === extraction) extraction = undefined;
-		resources = await ensureSpecDrivenResources();
+	signal?.throwIfAborted();
+	const previous = extractions.runtime;
+	let resources = await ensureResources("runtime");
+	if (previous && !(await hasExtractedFiles(resources.root, resources.manifest.files))) {
+		if (previous === extractions.runtime) delete extractions.runtime;
+		resources = await ensureResources("runtime");
 	}
-	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "bin/openspec.js");
+	const entry = await resolveSpecDrivenResourcePath(path.join(resources.root, "openspec"), "bin/openspec.js");
 	const extraEnv: Record<string, string> = { BUN_BE_BUN: "1", OMP_OPENSPEC_REGISTRY_ORIGIN: "" };
 	if (offlineFromEnv()) {
 		const registry = URL.parse(process.env.npm_config_registry?.trim() ?? "");
@@ -405,11 +332,11 @@ export async function runSuperpowersScript(
 	signal?: AbortSignal,
 	io: SpecDrivenProcessIO = "capture",
 ): Promise<SpecDrivenProcessResult> {
-	const resources = await ensureSpecDrivenResources();
+	const resources = await ensureSpecDrivenSkillResources();
 	const inventory = resources.manifest.files.find(file => file.path === `superpowers/${relativePath}`);
 	if (!inventory || !relativePath.startsWith("skills/"))
 		throw new Error(`Not a bundled skill script: ${relativePath}`);
-	const script = await resolveSpecDrivenResourcePath(resources.superpowersRoot, relativePath);
+	const script = await resolveSpecDrivenResourcePath(path.join(resources.root, "superpowers"), relativePath);
 	const bytes = await fs.readFile(script);
 	if (crypto.createHash("sha256").update(bytes).digest("hex") !== inventory.sha256)
 		throw new Error(`Bundled resource digest mismatch: ${inventory.path}`);

@@ -150,7 +150,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		// Also refreshes `src/.../extension.generated.json`, which SDK consumers of `src` read.
 		const files = await embeddedRelayExtensionFiles();
 		files[openWikiResourceFile] = openWikiText;
-		const { plugins, specDrivenArchive } = await createBundlePlugins();
+		const plugins = await createBundlePlugins(outDir);
 		plugins.push(inlineNativeNoticesPlugin);
 		// Build in-process: the docs embed payload is far larger than Linux's
 		// 128KiB per-argv-string cap, so it can never be passed as a CLI
@@ -180,7 +180,6 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		await ensureShebang(cliPath);
 		await Bun.write(path.join(outDir, "docs-index.generated.txt"), docsPayload.payload);
 		await Bun.write(path.join(outDir, exportViewerDistName), exportViewer);
-		await Bun.write(path.join(outDir, "spec-driven-resources.tar.gz"), specDrivenArchive);
 		// npm SDK imports run from src/ without the CLI's build-time archive plugin.
 		await fs.cp(developerTestAgentSourceRoot(), path.join(outDir, "developer-test-agent"), { recursive: true });
 		await Bun.write(path.join(outDir, "openwiki-resources.generated.txt"), openWikiText);

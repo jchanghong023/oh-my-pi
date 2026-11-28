@@ -2,17 +2,18 @@ import * as path from "node:path";
 import { registerProvider } from "../capability";
 import { type Skill, skillCapability } from "../capability/skill";
 import type { LoadContext, LoadResult } from "../capability/types";
-import { ensureSpecDrivenResources } from "../spec-driven/resources";
+import { bundledSpecDrivenSkills } from "../spec-driven/resource-manifest";
+import { ensureSpecDrivenSkillResources } from "../spec-driven/resources";
 import { SPEC_DRIVEN_SKILL_PROVIDER } from "../spec-driven/skill-policy";
 import { scanSkillsFromDir } from "./helpers";
 
 /** Low-priority bundled skills use the ordinary catalog collision and visibility rules. */
 export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
-	const resources = await ensureSpecDrivenResources();
+	const { root } = await ensureSpecDrivenSkillResources();
 	const items: Skill[] = [];
 	const warnings: string[] = [];
-	for (const entry of resources.manifest.skills) {
-		const filePath = path.resolve(resources.root, entry.path);
+	for (const entry of bundledSpecDrivenSkills.values()) {
+		const filePath = path.resolve(root, entry.path);
 		const result = await scanSkillsFromDir(ctx, {
 			dir: path.dirname(filePath),
 			includeSelf: true,
@@ -28,11 +29,7 @@ export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult
 			items.push({
 				...skill,
 				name: entry.name,
-				containRoot: {
-					openspec: resources.openspecRoot,
-					superpowers: resources.superpowersRoot,
-					jch: resources.jchRoot,
-				}[entry.source],
+				containRoot: path.join(root, entry.source),
 			});
 		}
 	}

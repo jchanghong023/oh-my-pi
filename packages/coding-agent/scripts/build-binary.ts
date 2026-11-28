@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import * as path from "node:path";
+import { CNB_DEFAULT_UPDATE_REPOSITORY } from "../src/cli/cnb-release-contract";
 import { compileCodingAgent } from "./compile-binary";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -39,8 +40,6 @@ function resolveCrossBuild(value: string | undefined): CrossBuild | null {
 	}
 }
 
-// Match the default `bun run cnb` distribution without overriding the package version.
-const updateRepository = "jchanghong/bin@omp";
 async function runCommand(command: string[]): Promise<void> {
 	const proc = Bun.spawn(command, {
 		cwd: packageDir,
@@ -82,7 +81,7 @@ async function main(): Promise<void> {
 			outfile: outputPath,
 			native: crossBuild ?? { platform: process.platform, arch: process.arch },
 			target: crossBuild?.target,
-			updateRepository,
+			updateRepository: CNB_DEFAULT_UPDATE_REPOSITORY,
 			executablePath: Bun.env.BUN_COMPILE_EXECUTABLE_PATH || undefined,
 			skipBuiltinCodesign: shouldAdhocSign,
 		});

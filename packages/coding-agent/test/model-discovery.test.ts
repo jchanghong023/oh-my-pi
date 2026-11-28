@@ -2929,7 +2929,7 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.getProviderDiscoveryState("vllm-long")?.status).toBe("ok");
 	});
 
-	test("offline startup replay never fetches; explicit refresh only fetches the configured discovery URL", async () => {
+	test("offline discovery only fetches the explicit target and replays another provider's stale cache", async () => {
 		using _offline = withEnv("OMP_OFFLINE", "1");
 		const provider = "intranet-discovery";
 		const baseUrl = "http://gateway.intranet.test/v1";
@@ -2946,17 +2946,42 @@ describe("ModelRegistry runtime discovery", () => {
 			requests.push({ url: String(input), redirect: init?.redirect });
 			return Response.json({ data: [{ id: "intranet-model" }] });
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch });
+		const runtimeProvider = "runtime-sibling";
+		const runtimeBaseUrl = "https://runtime.invalid/v1";
+		const bundled = getBundledModels("openai")[0];
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch, cacheDbPath });
+		const fetchRuntime = vi.fn(async () => []);
+		registry.registerProvider(runtimeProvider, {
+			api: "openai-completions",
+			baseUrl: runtimeBaseUrl,
+			apiKey: "test-key",
+			fetchDynamicModels: fetchRuntime,
+		});
 		const hydrate = registry.createStartupModelCacheHydrator();
 		registry.refreshInBackgroundAfterStartup(() => hydrate());
 		await registry.awaitBackgroundRefresh();
+		await registry.refreshDiscoverableProviders([provider], "online");
 		await registry.refreshProvider(provider, "online");
 		expect(requests).toEqual([]);
 		expect(registry.find(provider, "intranet-model")).toBeUndefined();
 
+		// Make the stale row available only after the automatic passes, so it
+		// must come from the sibling replay triggered by this scoped refresh.
+		writeModelCache(
+			runtimeProvider,
+			Date.now() - 48 * 60 * 60 * 1000,
+			[{ ...bundled, provider: runtimeProvider, baseUrl: runtimeBaseUrl, id: "cached-sibling" }],
+			true,
+			"",
+			cacheDbPath,
+		);
+		expect(registry.find(runtimeProvider, "cached-sibling")).toBeUndefined();
+
 		await registry.refreshProvider(provider, "online", { refreshCommandCredentials: true });
 		expect(requests).toEqual([{ url: `${baseUrl}/models`, redirect: "error" }]);
 		expect(registry.find(provider, "intranet-model")?.baseUrl).toBe(baseUrl);
+		expect(fetchRuntime).not.toHaveBeenCalled();
+		expect(registry.find(runtimeProvider, "cached-sibling")?.baseUrl).toBe(runtimeBaseUrl);
 	});
 
 	test.each([true, false])("preserves the proxy offline roster (advertisedReasoning=%s)", advertisedReasoning => {

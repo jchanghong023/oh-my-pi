@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { orderedSettings } from "@oh-my-pi/pi-coding-agent/config/all-settings";
+import {
+	FORK_OFFLINE_SETTING_DEFAULTS,
+	FORK_SETTING_DEFAULTS,
+} from "@oh-my-pi/pi-coding-agent/config/fork-setting-defaults";
 import { all, bindEffects, combine, effect, lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
@@ -50,6 +54,35 @@ function withEnv(vars: Record<string, string | undefined>, fn: () => void): void
 }
 
 describe("settings registry", () => {
+	it("applies each fork fallback to a registered setting without configuring it", () => {
+		const settings = Settings.isolated();
+		for (const [id, value] of FORK_SETTING_DEFAULTS) {
+			const setting = lookup(id);
+			expect(setting?.layered(settings)).toBe(value);
+			expect(setting && settings.isConfigured(setting)).toBe(false);
+		}
+		for (const [id, value] of FORK_OFFLINE_SETTING_DEFAULTS) {
+			expect(lookup(id)?.accepts(value)).toBe(true);
+		}
+	});
+
+	it("uses the fork display and composer defaults only where settings do not override them", () => {
+		const settings = Settings.isolated();
+		const shape = lookup("composer.shape")!;
+		const display = lookup("display.toolActivity")!;
+		expect(shape.get(settings)).toBe("box");
+		expect(display.get(settings)).toBe("compact");
+		shape.set(settings, "band");
+		display.set(settings, "detailed");
+		expect(shape.get(settings)).toBe("band");
+		expect(display.get(settings)).toBe("detailed");
+		shape.unset(settings);
+		display.unset(settings);
+		expect(shape.get(settings)).toBe("box");
+		expect(display.get(settings)).toBe("compact");
+		expect(settings.getGlobalSettings()).toEqual({});
+	});
+
 	it("ranks a runtime override over an override env, that env over persisted layers, and a fallback env only over the default", () => {
 		withEnv({ PI_EDIT_FUZZY: "0", SEARXNG_ENDPOINT: "https://env.example" }, () => {
 			const settings = Settings.isolated();

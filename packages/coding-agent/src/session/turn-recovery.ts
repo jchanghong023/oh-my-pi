@@ -727,13 +727,11 @@ export class TurnRecovery {
 
 	/** Handles empty terminal assistant turns and schedules bounded recovery. */
 	handleEmptyAssistantStop(message: AssistantMessage): Promise<"continue" | "terminal" | undefined> {
-		if (message.provider === "codeagent") return Promise.resolve(undefined);
 		return this.#handleEmptyAssistantStop(message);
 	}
 
 	/** Classifies suspicious terminal stops and schedules bounded recovery. */
 	handleUnexpectedAssistantStop(message: AssistantMessage): Promise<boolean> {
-		if (message.provider === "codeagent") return Promise.resolve(false);
 		return this.#handleUnexpectedAssistantStop(message);
 	}
 
@@ -749,7 +747,6 @@ export class TurnRecovery {
 	 * prompt; past the cap the error surfaces as before.
 	 */
 	handleMalformedFunctionCallStop(message: AssistantMessage): boolean {
-		if (message.provider === "codeagent") return false;
 		if (message.stopReason !== "error") return false;
 		const id = this.#classifyRetryMessage(message);
 		if (!AIError.is(id, AIError.Flag.MalformedFunctionCall)) {
@@ -811,7 +808,6 @@ export class TurnRecovery {
 	 * own `response.steer`, and the rejected steer drains as ordinary input next.
 	 */
 	handleCommittedTextStreamStall(message: AssistantMessage): boolean {
-		if (message.provider === "codeagent") return false;
 		const id = this.#classifyRetryMessage(message);
 		const socketClosed =
 			message.stopReason === "error" &&
@@ -900,9 +896,6 @@ export class TurnRecovery {
 
 	/** Applies automatic retry, credential rotation, and model fallback policy. */
 	handleRetryableError(message: AssistantMessage, options?: RetryPolicyOptions): Promise<boolean> {
-		// CodeAgent 已在流层完成唯一的换 Token 重试，禁止会话层再次发送同一任务。
-		if (message.provider === "codeagent" || this.#host.model()?.provider === "codeagent")
-			return Promise.resolve(false);
 		return this.#handleRetryableError(message, options);
 	}
 
@@ -975,7 +968,7 @@ export class TurnRecovery {
 	/** Prompts after transient overlap with a prior agent run. `onClaimed` fires synchronously
 	 *  right after a successful `agent.prompt` claim (before the run is awaited), letting the
 	 *  caller mark the exact moment its own run went live. */
-	async promptAgentWithIdleRetry(
+	promptAgentWithIdleRetry(
 		messages: AgentMessage[],
 		options?: { toolChoice?: ToolChoice },
 		onClaimed?: () => void,
@@ -1640,7 +1633,6 @@ export class TurnRecovery {
 	 * their own marker, not the generic sentinel, so they never match here.
 	 */
 	isRetryableReasonlessAbort(message: AssistantMessage): boolean {
-		if (message.provider === "codeagent") return false;
 		if (
 			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
 			// A `fallback` boundary is bookkeeping, not output: a stream aborted
@@ -1712,7 +1704,6 @@ export class TurnRecovery {
 	 * Context overflow is NOT retryable (handled by compaction instead).
 	 */
 	isRetryableError(message: AssistantMessage): boolean {
-		if (message.provider === "codeagent") return false;
 		if (message.stopReason !== "error") return false;
 		if (this.#isUsagePreflightBlocked(message)) return false;
 		if (AIError.isResponsesRequestBodyReadTimeout(message)) return false;
@@ -1813,7 +1804,6 @@ export class TurnRecovery {
 	 * unexecuted call must be reissued.
 	 */
 	classifyResolvedInterruptedToolTurn(message: AssistantMessage): "reasonless-abort" | "stream-stall" | undefined {
-		if (message.provider === "codeagent") return undefined;
 		const id = this.#classifyRetryMessage(message);
 		const genericAbort =
 			message.errorMessage !== undefined && Object.hasOwn(GENERIC_ABORT_MESSAGES, message.errorMessage);

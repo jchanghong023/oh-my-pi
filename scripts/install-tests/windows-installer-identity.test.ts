@@ -27,7 +27,6 @@ async function runHarness(host: string, root: string, source: string, extraEnv: 
 			...process.env,
 			CNB_TOKEN: "",
 			OMP_CONFIG_ROOT: path.join(root, "config"),
-			OMP_CACHE_DIR: "",
 			OMP_OFFLINE: "",
 			OMP_PROFILE: "",
 			PI_PROFILE: "",

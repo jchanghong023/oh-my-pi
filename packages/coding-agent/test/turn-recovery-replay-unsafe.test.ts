@@ -2,16 +2,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentMessage, type AgentTool, type SyntheticToolResultDetails } from "@oh-my-pi/pi-agent-core";
 import { TERMINAL_TOOL_RESULT_ABORT_REASON } from "@oh-my-pi/pi-agent-core/agent-loop";
-import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, streamSimple, type ToolResultMessage } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Model, Usage } from "@oh-my-pi/pi-catalog/types";
-import {
-	CodeAgentTokenCache,
-	getCodeAgentModels,
-	streamCodeAgent,
-} from "@oh-my-pi/pi-coding-agent/config/codeagent-provider";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -148,7 +143,7 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 		tempDir.removeSync();
 	});
 
-	it("accepts busy CodeAgent input once and executes its forced yield through the real provider", async () => {
+	it("accepts busy input once and executes its forced yield through the real provider", async () => {
 		const firstStarted = Promise.withResolvers<void>();
 		const releaseFirst = Promise.withResolvers<void>();
 		const requests: Array<{ tool_choice?: { function?: { name?: string } } }> = [];
@@ -196,19 +191,21 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 				);
 			},
 		});
-		const codeagent = { ...getCodeAgentModels()[0]!, baseUrl: server.url.origin };
-		const cache = new CodeAgentTokenCache(() => "synthetic-token");
+		const chatModel = {
+			...getBundledModel("openai", "gpt-4o-mini")!,
+			api: "openai-completions" as const,
+			baseUrl: server.url.origin,
+		};
 		const agent: Agent = new Agent({
 			getApiKey: () => "synthetic-token",
-			streamFn: (_model, context, options) =>
-				streamCodeAgent(codeagent, context, { ...options, apiKey: undefined, fetch }, cache),
+			streamFn: streamSimple,
 			afterToolCall: () => {
 				agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 				return undefined;
 			},
-			initialState: { model: codeagent, tools: [yieldTool] },
+			initialState: { model: chatModel, tools: [yieldTool] },
 		});
-		const host = createHost(codeagent, modelRegistry);
+		const host = createHost(chatModel, modelRegistry);
 		host.agent = agent;
 		const recovery = new TurnRecovery(host);
 		let first: Promise<void> | undefined;

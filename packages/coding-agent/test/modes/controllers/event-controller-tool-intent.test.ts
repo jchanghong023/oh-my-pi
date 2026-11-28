@@ -27,7 +27,7 @@ describe("EventController tool intent", () => {
 	function fixture() {
 		const pendingTools = new Map<string, PendingTool>();
 		const ctx = createInteractiveModeContext({
-			settings: Settings.isolated({ "display.mode": "detailed" }),
+			settings: Settings.isolated({ "display.toolActivity": "detailed" }),
 			pendingTools,
 			session: { isStreaming: true },
 			viewSession: { isStreaming: true, hasBuiltInTool: () => true, getToolByName: () => undefined },

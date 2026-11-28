@@ -65,6 +65,7 @@ describe("display rebuilds during idle user execution", () => {
 				stdinRequested: false,
 			};
 			const session = createSessionStub(manager, settings, {
+				attachSubagentObservers() {},
 				executeBash: async (command, onChunk, options) => {
 					appendOutput = onChunk;
 					await completion.promise;
@@ -94,6 +95,7 @@ describe("display rebuilds during idle user execution", () => {
 				appendOutput!("STREAMED_EXECUTION_OUTPUT\n");
 				for (const display of ["clean", "compact", "detailed"] as const) {
 					cfgDisplayMode.set(settings, display);
+					mode.syncDisplayMode(display);
 					mode.rebuildChatFromMessages();
 					expect(render().match(/STREAMED_EXECUTION_OUTPUT/g)).toHaveLength(1);
 				}

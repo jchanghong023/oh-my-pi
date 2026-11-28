@@ -41,7 +41,6 @@ async function fixture(
 		TEMP: home,
 		TMP: home,
 		OMP_CONFIG_ROOT: configRoot,
-		OMP_CACHE_DIR: path.join(home, "cache"),
 		CLAUDE_CONFIG_DIR: claudeDir,
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_CONFIG_GLOBAL: path.join(home, "gitconfig"),

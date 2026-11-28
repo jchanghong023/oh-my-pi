@@ -469,7 +469,7 @@ describe("InteractiveMode re-keys a streamed tool card when its id changes mid-s
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "display.mode": "detailed" }),
+			settings: Settings.isolated({ "display.toolActivity": "detailed" }),
 			modelRegistry,
 		});
 		// The session is constructed with no tools; bash is a built-in in real

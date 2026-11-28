@@ -15,7 +15,6 @@ import { asyncJobState, isSettledJobFrame } from "../session/transcript/tool-exe
 import type { CompactPreviewActivity } from "./compact-tool-output-preview";
 import { type CompactFileSummary, summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
-import { cfgDisplayMode } from "./settings";
 import type { InteractiveModeContext } from "./types";
 
 const THINKING_LABEL_WIDTH = 14;
@@ -235,7 +234,7 @@ export class CompactThinkingPreview {
 	constructor(
 		private readonly ctx: Pick<
 			InteractiveModeContext,
-			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "settings"
+			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "displayMode"
 		>,
 		private readonly asyncWaitRow?: () => string | undefined,
 		private readonly compactActivity?: (width: number) => CompactPreviewActivity | undefined,
@@ -396,7 +395,7 @@ export class CompactThinkingPreview {
 		return rows;
 	}
 	render(width: number): readonly string[] {
-		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
+		if (this.ctx.displayMode !== "compact") {
 			this.clear();
 			return [];
 		}

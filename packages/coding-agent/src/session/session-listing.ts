@@ -868,7 +868,7 @@ async function pickerListing(
 	// touch the process-wide history.db.
 	const useIndex = storage instanceof FileSessionStorage;
 	const titles = useIndex ? listSessionTitles() : new Map<string, string>();
-	const sessions = await indexedSessions(files, titles, storage, cwdMatcherForFile);
+	const sessions = await indexedSessions(files, titles, cwdMatcherForFile ? { storage, cwdMatcherForFile } : undefined);
 	// Start the scan only now: its reads would otherwise queue ahead of the stats above.
 	const complete = scan().then(scanned => {
 		if (useIndex) indexScannedTitles(scanned, titles);
@@ -886,8 +886,10 @@ async function pickerListing(
 async function indexedSessions(
 	files: readonly string[],
 	titles: ReadonlyMap<string, string>,
-	storage: SessionStorage,
-	cwdMatcherForFile?: (file: string) => ((recordedCwd: string) => boolean) | undefined,
+	scope?: {
+		storage: SessionStorage;
+		cwdMatcherForFile: (file: string) => ((recordedCwd: string) => boolean) | undefined;
+	},
 ): Promise<SessionInfo[]> {
 	if (titles.size === 0) return [];
 	const titled = new Map<string, { file: string; title: string }>();
@@ -903,12 +905,14 @@ async function indexedSessions(
 			let cwd = "";
 			try {
 				stat = await fs.promises.stat(file);
-				const matchesCwd = cwdMatcherForFile?.(file);
-				if (matchesCwd) {
-					const [content] = await storage.readTextSlices(file, SESSION_LIST_PREFIX_BYTES, 0);
-					const header = parseSessionListHeader(content, parseJsonlLenient<Record<string, unknown>>(content));
-					if (!header || header.origin !== undefined || !matchesCwd(header.cwd ?? "")) return undefined;
-					cwd = header.cwd ?? "";
+				if (scope) {
+					const matchesCwd = scope.cwdMatcherForFile(file);
+					if (matchesCwd) {
+						const [content] = await scope.storage.readTextSlices(file, SESSION_LIST_PREFIX_BYTES, 0);
+						const header = parseSessionListHeader(content, parseJsonlLenient<Record<string, unknown>>(content));
+						if (!header || header.origin !== undefined || !matchesCwd(header.cwd ?? "")) return undefined;
+						cwd = header.cwd ?? "";
+					}
 				}
 			} catch {
 				return undefined;

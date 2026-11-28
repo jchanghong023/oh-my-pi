@@ -12,7 +12,7 @@
  */
 import type { UiNode } from "@oh-my-pi/pi-tui";
 import { type Block, type Cell, defineRolePainter, EMPTY_BLOCK, type PaintContext } from "@oh-my-pi/pi-tui/term/paint";
-import { caretOf, type EditorProps, setTerminalCompletionLayout } from "@oh-my-pi/pi-tui/term/painters/editor";
+import { caretOf, type EditorProps } from "@oh-my-pi/pi-tui/term/painters/editor";
 import { visibleWidth } from "@oh-my-pi/pi-tui/text/width";
 import { fgSgr } from "@oh-my-pi/pi-tui/theme/color";
 import { type ComposerChromeContext, type ComposerStatus, caretOverflow, composerShape } from "./shapes";
@@ -144,9 +144,6 @@ function paintComposer(node: UiNode, cx: PaintContext): Block {
 	const bottom = shape.bottom?.(chrome);
 	if (bottom !== undefined) rows.push(bottom);
 
-	const rowsFromCaret = rows.length - (cursor?.row ?? 0);
-	if (field && cursor) setTerminalCompletionLayout(field, cx, rowsFromCaret);
-
 	// The popup covers the transcript above the composer rather than taking room from it.
 	const popup = node.children().find(child => {
 		if (child.kind === "overlay") return true;
@@ -154,9 +151,7 @@ function paintComposer(node: UiNode, cx: PaintContext): Block {
 		const childProps = child.props();
 		return "modal" in childProps && childProps.modal === false;
 	});
-	const viewportHeight = popup && cursor ? cx.viewportHeight : undefined;
-	const popupRows = viewportHeight === undefined ? undefined : Math.max(0, viewportHeight - rowsFromCaret);
-	const covering = popup && popupRows !== 0 ? cx.paint(popup, cx.width, popupRows).rows : [];
+	const covering = popup ? cx.paint(popup, cx.width).rows : [];
 	rows.push(...covering);
 	return {
 		rows: term.faint ? rows.map(faint) : rows,

@@ -49,14 +49,18 @@ import type { MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { CompactFileDiff } from "../../src/modes/compact-file-diff";
 import { CompactThinkingPreview } from "../../src/modes/compact-thinking-preview";
 import { CompactToolOutputPreview } from "../../src/modes/compact-tool-output-preview";
+import { mountCompactDock } from "../../src/modes/interactive/compact-dock-view";
 import { AppFrame } from "../../src/modes/interactive/frame";
 import { TranscriptPresenter } from "../../src/modes/interactive/transcript";
 import { OAuthManualInputManager } from "@oh-my-pi/pi-coding-agent/modes/oauth-manual-input";
 import {
 	cfgDisplayMode,
 	cfgMotionResolved,
+	type DisplayMode,
+	isCleanTranscript,
 	cfgTerminalShowImages,
 	type ToolActivityMode,
+	transcriptToolActivity,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type {
 	InteractiveModeContext,
@@ -335,6 +339,7 @@ export function createInteractiveModeContext(
 	shell.setHome(frame.composer.field);
 	shell.focus(frame.composer.field);
 	const display = createDisplay();
+	let mode: DisplayMode | undefined;
 	const input: ContextInput = { interceptors: [], globalKeys: [] };
 	let working: WorkingKind | undefined;
 	const statusLine: StatusLineModel = {
@@ -445,6 +450,21 @@ export function createInteractiveModeContext(
 		},
 		set hideToolActivity(hidden: boolean) {
 			display.toolActivity.set(hidden ? "hidden" : "detailed");
+			display.cleanTranscript.set(hidden);
+		},
+		get displayMode() {
+			return mode ?? cfgDisplayMode.get(contextSettings);
+		},
+		get cleanTranscript() {
+			return display.cleanTranscript();
+		},
+		syncDisplayMode(next: DisplayMode) {
+			if (mode === next) return false;
+			mode = next;
+			display.toolActivity.set(transcriptToolActivity(next));
+			display.cleanTranscript.set(isCleanTranscript(next));
+			display.toolOutputExpanded.set(false);
+			return true;
 		},
 		get hideThinkingBlock() {
 			return display.hideThinkingBlock();
@@ -525,10 +545,10 @@ export function createInteractiveModeContext(
 		rebuildChatFromMessages: vi.fn(),
 		renderInitialMessages: vi.fn(async () => {}),
 		refreshCompactPresentation: () => {
-			const compact = cfgDisplayMode.get(contextSettings) === "compact";
+			const compact = ctx.displayMode === "compact";
 			compactActive.set(compact);
 			if (compact) output.restore();
-			frame.invalidateCompactPresentation();
+			invalidateCompact();
 		},
 		updatePendingMessagesDisplay: vi.fn(),
 		updateEditorBorderColor: vi.fn(),
@@ -539,7 +559,7 @@ export function createInteractiveModeContext(
 			activity.clear();
 			output.clear();
 			fileDiff?.clear();
-			frame.invalidateCompactPresentation();
+			invalidateCompact();
 		}),
 		prepareSessionSwitch: vi.fn(async () => {}),
 		clearOptimisticUserMessage: vi.fn(),
@@ -551,12 +571,13 @@ export function createInteractiveModeContext(
 		setTodos: vi.fn(),
 	} satisfies ContextOverrides;
 	layer(ctx, overrides, RESOLVED_AHEAD);
+	if (cfgDisplayMode.isConfigured(contextSettings)) ctx.syncDisplayMode(cfgDisplayMode.get(contextSettings));
 	if (overrides.hideToolActivity !== undefined) ctx.hideToolActivity = overrides.hideToolActivity;
 	displays.set(ctx, display);
 	inputs.set(ctx, input);
 	const built = ctx as unknown as InteractiveModeContext;
-	const compactActive = signal(cfgDisplayMode.get(contextSettings) === "compact");
-	const invalidateCompact = () => frame.invalidateCompactPresentation();
+	const compactActive = signal(ctx.displayMode === "compact");
+	const invalidateCompact = () => invalidateDock();
 	const fileDiff = fileDiffRows && new CompactFileDiff(built, fileDiffRows, invalidateCompact);
 	const output = new CompactToolOutputPreview(
 		built,
@@ -569,7 +590,8 @@ export function createInteractiveModeContext(
 		() => built.eventController?.asyncWaitLabel,
 		width => output.compactActivity(width),
 	);
-	frame.mountCompactPresentation(
+	const invalidateDock = mountCompactDock(
+		shell,
 		compactActive,
 		width => activity.rows(width),
 		width => output.render(width),
@@ -589,6 +611,7 @@ export function createInteractiveModeContext(
 			display: {
 				toolOutputExpanded: display.toolOutputExpanded,
 				toolActivity: display.toolActivity,
+				cleanTranscript: display.cleanTranscript,
 				hideThinking: display.hideThinkingBlock,
 				proseOnlyThinking: display.proseOnlyThinking,
 				expandThinkingBlocks: display.expandThinkingBlocks,
@@ -628,6 +651,7 @@ export function createInteractiveModeContext(
 export interface ContextDisplay {
 	readonly toolOutputExpanded: Signal<boolean>;
 	readonly toolActivity: Signal<ToolActivityMode>;
+	readonly cleanTranscript: Signal<boolean>;
 	readonly hideThinkingBlock: Signal<boolean>;
 	readonly proseOnlyThinking: Signal<boolean>;
 	readonly expandThinkingBlocks: Signal<boolean>;
@@ -639,6 +663,7 @@ function createDisplay(): ContextDisplay {
 	return {
 		toolOutputExpanded: signal(false),
 		toolActivity: signal<ToolActivityMode>("detailed"),
+		cleanTranscript: signal(false),
 		hideThinkingBlock: signal(false),
 		proseOnlyThinking: signal(true),
 		expandThinkingBlocks: signal(false),

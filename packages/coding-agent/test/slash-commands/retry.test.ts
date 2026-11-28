@@ -14,7 +14,7 @@ function createRuntime(didRetry: boolean) {
 		setText,
 		runtime: {
 			ctx: {
-				session: { retry } as unknown as InteractiveModeContext["session"],
+				viewSession: { retry } as unknown as InteractiveModeContext["viewSession"],
 				composer: { setText } as unknown as InteractiveModeContext["composer"],
 				showStatus,
 			} as unknown as InteractiveModeContext,

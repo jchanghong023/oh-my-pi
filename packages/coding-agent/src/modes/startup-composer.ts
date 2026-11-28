@@ -11,8 +11,10 @@ import { getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import { exitProcess } from "@oh-my-pi/pi-utils/postmortem";
 import { isRecord } from "@oh-my-pi/pi-utils/type-guards";
 import { configOverlayPaths, readConfigOverlay } from "../config/config-overlays";
+import { FORK_COMPOSER_SHAPE, FORK_DISPLAY_MODE } from "../config/fork-setting-defaults";
 import { initTheme } from "../ui/theme/service";
 import { composerBorderColor } from "./interactive/border-color";
+import { mountCompactDock } from "./interactive/compact-dock-view";
 import { AppFrame } from "./interactive/frame";
 import { type StartupCache, type StartupPreferences, sharedStartupCache } from "./interactive/startup-cache";
 import { predictedStatusLine, type StatusPrediction } from "./interactive/status-prediction";
@@ -22,8 +24,8 @@ import type { ComposerThemePreferences } from "./view-model/prompt/composer-cach
 /** The preferences a frame starts with when nothing is cached. */
 const STARTUP_DEFAULTS: StartupPreferences = {
 	quiet: false,
-	composerShape: "band",
-	displayMode: "compact",
+	composerShape: FORK_COMPOSER_SHAPE,
+	displayMode: FORK_DISPLAY_MODE,
 	resizeScrollback: "rebuild",
 	autocompleteMaxVisible: 5,
 	vim: false,
@@ -112,17 +114,8 @@ function startFrame(options: PrepaintComposerOptions) {
 		imeSafeCursor: preferences.imeSafeCursor,
 	});
 	const compactActive = signal(preferences.displayMode === "compact");
-	const empty = () => [];
 	// The live compact dock replaces these idle rows when it adopts the frame.
-	frame.mountCompactPresentation(
-		compactActive,
-		empty,
-		empty,
-		empty,
-		() => false,
-		() => "disabled",
-		() => {},
-	);
+	mountCompactDock(frame.shell, compactActive);
 	frame.screen.set(preferences.screen);
 	// Nothing would submit yet: the interactive mode lifts this once its pipeline exists.
 	frame.composer.setDisableSubmit(true);

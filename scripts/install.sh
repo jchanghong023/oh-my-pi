@@ -12,7 +12,16 @@ set -e
 #   --uninstall    Remove omp; keep state unless confirmed interactively
 #   --purge        Uninstall and delete omp's state without asking
 
-CNB_RELEASES="https://cnb.cool/jchanghong/bin/-/releases"
+# BEGIN GENERATED CNB CONTRACT
+# Regenerate: bun scripts/cnb-generate-installers.ts (verify with --check)
+CNB_RELEASES='https://cnb.cool/jchanghong/bin/-/releases'
+CNB_HOST='cnb.cool'
+CNB_DEFAULT_TAG='omp'
+CNB_BINARY='omp-linux-x64'
+CNB_PLATFORM='linux-x64'
+CNB_TITLE_PATTERN=' \[omp:v[^][]*\]$'
+CNB_TITLE_OFFSET=6
+# END GENERATED CNB CONTRACT
 VERSION_PATTERN='v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'
 INSTALL_DIR="${PI_INSTALL_DIR:-$HOME/.local/bin}"
 PACKAGE="@oh-my-pi/pi-coding-agent"
@@ -46,16 +55,11 @@ normalized_log_setting() (
     printf '%s' "$value" | LC_ALL=C tr '[:upper:]' '[:lower:]'
 )
 
-INSTALL_OFFLINE=false
-case "$(normalized_log_setting "${OMP_OFFLINE:-}")" in
-    1|true|yes|on) INSTALL_OFFLINE=true ;;
-esac
 case "$(normalized_log_setting "${OMP_LOG_LEVEL:-}")" in
     error) INSTALL_LOG_THRESHOLD=0 ;;
     warn) INSTALL_LOG_THRESHOLD=1 ;;
     info) INSTALL_LOG_THRESHOLD=2 ;;
-    debug) INSTALL_LOG_THRESHOLD=3 ;;
-    *) if [ "$INSTALL_OFFLINE" = true ]; then INSTALL_LOG_THRESHOLD=1; else INSTALL_LOG_THRESHOLD=3; fi ;;
+    *) INSTALL_LOG_THRESHOLD=3 ;;
 esac
 
 install_log_emit() (
@@ -123,34 +127,6 @@ normalize_absolute_path() (
     printf '%s' "${normalized:-/}"
 )
 
-# Walk without following symlinks. Each ancestor must be owned by a trusted UID
-# and, if writable by other users, sticky so they cannot replace our entries.
-prepare_linux_cache_log_dir() (
-    entry="/"
-    components="${1#/}"
-    while :; do
-        info="$(stat -c '%u %f' -- "$entry")" || exit 1
-        owner="${info%% *}"
-        mode=$((0x${info#* }))
-        [ "$((mode & 0170000))" -eq "$((0040000))" ] || exit 1
-        if [ -z "$components" ]; then
-            [ "$owner" = "$2" ] && [ "$((mode & 077))" -eq 0 ]
-            exit "$?"
-        fi
-        { [ "$owner" = 0 ] || [ "$owner" = "$2" ]; } || exit 1
-        [ "$((mode & 022))" -eq 0 ] || [ "$((mode & 01000))" -ne 0 ] || exit 1
-        entry="${entry%/}/${components%%/*}"
-        if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
-            # An installer racing to create the same directory must pass the same checks.
-            mkdir -m 700 -- "$entry" || :
-        fi
-        case "$components" in
-            */*) components="${components#*/}" ;;
-            *) components="" ;;
-        esac
-    done
-)
-
 explicit_config_root() {
     configured_root="$(printf '%s' "${OMP_CONFIG_ROOT:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     case "${HOME:-}" in
@@ -197,46 +173,13 @@ install_log_init() {
             esac
             ;;
     esac
-    cache_root="$(printf '%s' "${OMP_CACHE_DIR:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    case "${HOME:-}" in
-        /*)
-            case "$cache_root" in
-                "~") cache_root="$HOME" ;;
-                "~/"*|"~\\"*) cache_root="$HOME${cache_root#?}" ;;
-            esac
-            ;;
-    esac
-    case "$cache_root" in /*) ;; *) cache_root="" ;; esac
-    cache_uid=""
-    cache_log_dir=""
     log_fallback=false
-    if { [ -n "$cache_root" ] || [ "$INSTALL_OFFLINE" = true ]; } && [ "$(uname -s 2>/dev/null)" = Linux ]; then
-        if cache_uid="$(id -u 2>/dev/null)" && [ -n "$cache_uid" ]; then
-            if [ -n "$cache_root" ]; then
-                cache_root="${cache_root%/}/$cache_uid"
-            else
-                cache_root="/dev/shm/omp-$cache_uid"
-            fi
-        else
-            cache_root=""
-            log_fallback=true
-        fi
-    fi
     log_name="omp.install.$(date -u +%Y-%m-%d 2>/dev/null).${INSTALL_STARTED_MS}.$$.log"
-    if [ -n "$cache_root" ]; then
-        cache_log_dir="$(normalize_absolute_path "$cache_root$profile_suffix/logs")"
-    fi
-    for root in "$cache_root" "$log_root" "$platform_root"; do
+    for root in "$log_root" "$platform_root"; do
         case "$root" in /*) ;; *) continue ;; esac
         log_dir="$(normalize_absolute_path "$root$profile_suffix/logs")"
         log_path="$log_dir/$log_name"
-        if {
-            if [ -n "$cache_uid" ] && [ "$log_dir" = "$cache_log_dir" ]; then
-                prepare_linux_cache_log_dir "$log_dir" "$cache_uid"
-            else
-                mkdir -p "$log_dir"
-            fi
-        } 2>/dev/null && (
+        if mkdir -p "$log_dir" 2>/dev/null && (
             umask 077
             set -C
             [ ! -e "$log_path" ] && [ ! -L "$log_path" ] && : > "$log_path"
@@ -489,7 +432,8 @@ report_path_hint() {
 # Read only top-level release fields and the named asset in the top-level
 # assets array. Scan JSON tokens so nested fields cannot spoof them.
 release_asset_metadata() {
-    VERSION_PATTERN="$VERSION_PATTERN" LC_ALL=C awk -v binary="$1" '
+    VERSION_PATTERN="$VERSION_PATTERN" CNB_TITLE_PATTERN="$CNB_TITLE_PATTERN" CNB_TITLE_OFFSET="$CNB_TITLE_OFFSET" \
+        LC_ALL=C awk -v binary="$1" '
         function next_token(    first) {
             sub(/^[ \t\r\n]+/, "", json)
             first = substr(json, 1, 1)
@@ -580,8 +524,9 @@ release_asset_metadata() {
             exact = "^" ENVIRON["VERSION_PATTERN"] "$"
             if (tag ~ exact) version = tag
             if (title ~ exact) titled_version = title
-            else if (match(title, / \[omp:v[^][]*\]$/)) {
-                titled_version = substr(title, RSTART + 6, RLENGTH - 7)
+            else if (match(title, ENVIRON["CNB_TITLE_PATTERN"])) {
+                offset = ENVIRON["CNB_TITLE_OFFSET"] + 0
+                titled_version = substr(title, RSTART + offset, RLENGTH - offset - 1)
                 if (titled_version !~ exact) version = ""
             }
             if (titled_version ~ exact) {
@@ -823,15 +768,15 @@ install_binary() {
         exit 1
     fi
 
-    BINARY=omp-linux-x64
-    INSTALL_PLATFORM=linux-x64
+    BINARY="$CNB_BINARY"
+    INSTALL_PLATFORM="$CNB_PLATFORM"
     INSTALL_STAGE=release_metadata
     INSTALL_STAGE_MS="$(install_now_ms)"
     if [ -d "${INSTALL_DIR}/omp" ]; then
         echo "Refusing to replace a directory at ${INSTALL_DIR}/omp" >&2
         exit 1
     fi
-    RELEASE_TAG="${REF:-omp}"
+    RELEASE_TAG="${REF:-$CNB_DEFAULT_TAG}"
     case "$RELEASE_TAG" in
         .|*..*|*[!A-Za-z0-9._+/-]*) echo "Invalid release tag: $RELEASE_TAG" >&2; exit 1 ;;
     esac
@@ -839,7 +784,7 @@ install_binary() {
     RELEASE_URL="$CNB_RELEASES/tags/$REF_PATH"
     RELEASE_ENDPOINT=release_tag
     echo "Fetching CNB release $RELEASE_TAG..."
-    install_log INFO http_request_started "method=GET host=cnb.cool endpoint=$RELEASE_ENDPOINT timeout_ms=60000 attempt=1"
+    install_log INFO http_request_started "method=GET host=$CNB_HOST endpoint=$RELEASE_ENDPOINT timeout_ms=60000 attempt=1"
     # Strict TLS; do not follow redirects or inherit settings from .curlrc.
     if RELEASE_RESPONSE=$(curl -q -fgsS --proto '=https' --connect-timeout 10 --max-time 60 \
         --header 'Accept: application/vnd.cnb.api+json' --write-out '\n%{http_code}' "$RELEASE_URL"); then
@@ -850,7 +795,7 @@ install_binary() {
             echo "Failed to fetch release metadata (expected HTTP 200, got $RELEASE_HTTP_STATUS)." >&2
             exit 1
         fi
-        install_log INFO http_request_completed "result=success host=cnb.cool endpoint=$RELEASE_ENDPOINT http_status=$RELEASE_HTTP_STATUS"
+        install_log INFO http_request_completed "result=success host=$CNB_HOST endpoint=$RELEASE_ENDPOINT http_status=$RELEASE_HTTP_STATUS"
     else
         release_exit="$?"
         RELEASE_HTTP_STATUS="${RELEASE_RESPONSE##*
@@ -922,7 +867,7 @@ install_binary() {
     # certificate checks for the checksum-verified binary itself.
     INSTALL_STAGE=download_url
     INSTALL_STAGE_MS="$(install_now_ms)"
-    install_log INFO http_request_started 'method=GET host=cnb.cool endpoint=release_asset_url timeout_ms=60000 attempt=1'
+    install_log INFO http_request_started "method=GET host=$CNB_HOST endpoint=release_asset_url timeout_ms=60000 attempt=1"
     if ASSET_RESPONSE=$(curl -q -fgsS --proto '=https' --connect-timeout 10 --max-time 60 \
         --output /dev/null --write-out '%{http_code}\n%{redirect_url}' "$CNB_RELEASES/download/$REF_PATH/$BINARY"); then
         ASSET_HTTP_STATUS="${ASSET_RESPONSE%%[!0-9]*}"
@@ -945,7 +890,7 @@ install_binary() {
             exit 1
             ;;
     esac
-    install_log INFO http_request_completed 'result=success host=cnb.cool endpoint=release_asset_url http_status=302'
+    install_log INFO http_request_completed "result=success host=$CNB_HOST endpoint=release_asset_url http_status=302"
 
     # Keep compatibility flags on the asset download only. --ssl-no-revoke
     # requires curl 7.44 or newer and only applies to Schannel.

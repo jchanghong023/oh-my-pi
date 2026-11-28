@@ -170,12 +170,25 @@ export interface TuiSlashCommandRuntime {
 	/** Submitted with the follow-up key from this conversation position: queue behind the active run
 	 *  rather than interrupt it. */
 	followUp?: ConversationPosition;
+	/** Releases the follow-up submission slot once the command has claimed its operation. */
+	admitFollowUp?: () => void;
+}
+
+export interface TuiSlashInputPolicy {
+	/** `before-hooks` also keeps private command arguments out of extension input hooks. */
+	detachDraft?: "before-hooks" | "before-dispatch";
+	/** Applies to follow-ups only; Enter already dispatches before queueing. */
+	followUpDuringCompaction?: "direct" | "active-only";
+	/** Let a local submission reach the guest session that finished joining while it was waiting. */
+	followUpAfterGuestJoin?: true;
+	restoreGuestDraft?: (command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime) => void;
 }
 
 /** Unified slash-command spec consumed by both TUI and ACP dispatchers. */
 export interface SlashCommandSpec extends BuiltinSlashCommand {
 	/** Controls whether the TUI dispatcher accepts arguments. */
 	allowArgs?: boolean;
+	tuiInput?: TuiSlashInputPolicy;
 	/**
 	 * ACP-specific override for `description`: text/ACP contexts get
 	 * mode-appropriate copy (e.g. `/dump` advertises "Return full transcript as

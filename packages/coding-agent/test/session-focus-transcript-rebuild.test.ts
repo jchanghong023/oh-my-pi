@@ -296,7 +296,7 @@ function createFixture(main = makeSession([danglingWait], true), worker = makeSe
 	});
 	const lifecycle = new AgentLifecycleManager(registry);
 	const ctx = createInteractiveModeContext({
-		settings: Settings.isolated({ "display.mode": compact ? "compact" : "detailed" }),
+		settings: Settings.isolated({ "display.toolActivity": compact ? "compact" : "detailed" }),
 		hideToolActivity: compact,
 		session: main.session,
 		initialChatRendered: false,

@@ -24,7 +24,11 @@ import { isLocalAgentSession } from "../../session/agent-session-handle";
 import type { DequeuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { cfgHideThinkingBlock } from "../../session/settings";
-import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+import {
+	executeBuiltinSlashCommand,
+	lookupBuiltinSlashCommand,
+	tuiSlashInputPolicy,
+} from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
 import { isLoopCommand } from "../types";
@@ -73,7 +77,6 @@ import {
 	applyDisplayPreset,
 	cfgBareExitOnEmptySession,
 	cfgBareSlashCommands,
-	cfgDisplayMode,
 	cfgDoubleEscapeAction,
 	cfgEmojiAutocomplete,
 	cfgImagesAutoResize,
@@ -185,22 +188,6 @@ const FOCUSED_VIEW_COMMANDS: Record<string, (args: string) => boolean> = {
 const FOCUSED_VIEW_COMMAND_LIST = Object.keys(FOCUSED_VIEW_COMMANDS)
 	.map(name => `/${name}`)
 	.join(", ");
-
-/** Commands whose handler owns the submitted draft, images included: Enter takes it out of the editor first. */
-const DETACHED_DRAFT_COMMANDS = new Set([
-	"plan",
-	"workspace",
-	"vibe",
-	"goal",
-	"goal-autopilot",
-	"collab2",
-	"guided-goal",
-	"tan",
-	"btw",
-	"omfg",
-	"handoff",
-	"cleanse",
-]);
 
 function looksLikePastedShellPrompt(code: string): boolean {
 	const firstLine = code.split("\n", 1)[0]?.trimStart() ?? "";
@@ -549,7 +536,7 @@ export class InputController {
 		}
 		// An open completion popup takes Esc first (#1655), and Vim takes it to leave Insert or
 		// Visual mode; only then is Esc the interrupt.
-		if (km.matches(key, "app.interrupt") && !this.ctx.composer.completionVisible() && !this.#vimHoldsEscape()) {
+		if (km.matches(key, "app.interrupt") && !this.ctx.composer.completing() && !this.#vimHoldsEscape()) {
 			this.handleInterrupt();
 			return true;
 		}
@@ -1310,7 +1297,7 @@ export class InputController {
 				this.ctx.composer.pendingImageLinks.length > 0 ? [...this.ctx.composer.pendingImageLinks] : undefined;
 			let hasInputImages = (inputImages?.length ?? 0) > 0;
 			const submittedImages = inputImages;
-			const detachedBeforeHooks = parseSlashCommand(text)?.name === "collab2";
+			const detachedBeforeHooks = tuiSlashInputPolicy(parseSlashCommand(text))?.detachDraft === "before-hooks";
 			if (detachedBeforeHooks) this.#dropSubmittedPending(submittedImages);
 
 			// Input hooks pass in submission order with the follow-up key's (see `#submissionHookOrder`):
@@ -1334,9 +1321,9 @@ export class InputController {
 			} finally {
 				hooksDone.resolve();
 			}
-			const submittedMode = parseSlashCommand(text)?.name;
-			const draftDetached =
-				detachedBeforeHooks || (submittedMode !== undefined && DETACHED_DRAFT_COMMANDS.has(submittedMode));
+			const submittedCommand = parseSlashCommand(text);
+			const submittedMode = submittedCommand?.name;
+			const draftDetached = detachedBeforeHooks || tuiSlashInputPolicy(submittedCommand)?.detachDraft !== undefined;
 			if (draftDetached && !detachedBeforeHooks) this.#dropSubmittedPending(submittedImages);
 
 			if (!text && !hasInputImages) return;
@@ -2336,7 +2323,8 @@ export class InputController {
 			try {
 				await earlier;
 				if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
-				if (parseSlashCommand(text)?.name !== "collab2" && this.ctx.session.extensionRunner?.hasHandlers("input")) {
+				const skipHooks = tuiSlashInputPolicy(parseSlashCommand(text))?.detachDraft === "before-hooks";
+				if (!skipHooks && this.ctx.session.extensionRunner?.hasHandlers("input")) {
 					try {
 						const input = await this.#runInputHandlers(text, images, imageLinks);
 						if (!input) return;
@@ -2367,9 +2355,12 @@ export class InputController {
 	): Promise<void> {
 		const command = parseSlashCommand(text);
 		const commandName = command?.name;
-		const leave = command?.name === "leave" && command.args === "";
+		const inputPolicy = tuiSlashInputPolicy(command);
 		// A join may have installed the guest session while /leave waited for input hooks.
-		if (!continuesConversation(this.ctx.sessionManager, origin) && !(leave && this.ctx.collabGuest)) {
+		if (
+			!continuesConversation(this.ctx.sessionManager, origin) &&
+			!(inputPolicy?.followUpAfterGuestJoin && this.ctx.collabGuest)
+		) {
 			restoreDetachedDraft(this.ctx.composer, text, images, imageLinks);
 			const label = commandName ? `/${commandName}` : "the follow-up";
 			this.ctx.showWarning(`Conversation changed before ${label} ran; returned it to the editor`);
@@ -2387,16 +2378,12 @@ export class InputController {
 		// queued text into a user-attributed skill invocation before delivery.
 		// Side commands answer now instead: the queue would deliver them as a
 		// main-turn prompt. Builtins keep precedence, as in the dispatch below.
-		// Goal Autopilot dispatches directly to its owner even when compaction
-		// is queued. Ordinary Goal only bypasses active compaction.
 		this.releaseStaleYieldCompaction();
 		const compacting = this.ctx.session.isCompacting;
 		const direct =
 			this.ctx.collabGuest !== undefined ||
-			commandName === "collab2" ||
-			leave ||
-			commandName === "goal-autopilot" ||
-			(compacting && commandName === "goal");
+			inputPolicy?.followUpDuringCompaction === "direct" ||
+			(compacting && inputPolicy?.followUpDuringCompaction === "active-only");
 		if (!direct && (compacting || this.ctx.yieldCompaction)) {
 			const builtin = this.#matchesBuiltinSlashCommand(text);
 			if (text.startsWith("/") && !builtin && (await this.#runSideFileCommand(text, restoreSideDraft))) return;
@@ -2424,10 +2411,8 @@ export class InputController {
 					input,
 					draftDetached: true,
 					followUp: origin,
+					admitFollowUp: admitted,
 				});
-				// Collab2 claims the operation before its first await. A later stop
-				// or leave must reach that owner while the operation is pending.
-				if (commandName === "collab2") admitted();
 				// Reloading tools does not own the conversation's input queue.
 				if (commandName === "mcp" && parseCommandArgs(text)[1]?.toLowerCase() === "reload") admitted();
 				// Foreground /compact now owns admission; later submissions belong in its
@@ -3442,13 +3427,13 @@ export class InputController {
 	}
 
 	toggleToolOutputExpansion(): void {
-		if (cfgDisplayMode.get(this.ctx.settings) === "compact") {
+		if (this.ctx.displayMode === "compact") {
 			this.ctx.toggleCompactDetails();
 			return;
 		}
 		if (this.ctx.hideToolActivity) {
 			const visibilityKey = actionKey("app.tools.toggleVisibility", this.ctx.keybindings);
-			const visibilityHint = visibilityKey ? `${visibilityKey} or /display` : "/display";
+			const visibilityHint = visibilityKey ? `${visibilityKey} or /settings` : "/settings";
 			this.ctx.showStatus(`Tool activity is hidden — show it with ${visibilityHint} before expanding`);
 			return;
 		}
@@ -3457,8 +3442,7 @@ export class InputController {
 	}
 
 	toggleToolActivityVisibility(): void {
-		const settings = this.ctx.settings;
-		void applyDisplayPreset(settings, nextDisplayMode(settings), this.ctx);
+		applyDisplayPreset(nextDisplayMode(this.ctx.displayMode), this.ctx);
 	}
 
 	setToolsExpanded(expanded: boolean): void {
@@ -3484,8 +3468,8 @@ export class InputController {
 		// An explicit display gesture: rebuild terminal history so the change also applies to rows
 		// already retired from the viewport (#10177).
 		this.ctx.shell.host?.replayHistory();
-		if (cfgDisplayMode.get(this.ctx.settings) === "clean") {
-			this.ctx.showStatus("Thinking blocks: hidden in clean mode — use /display detailed to view them");
+		if (this.ctx.displayMode === "clean") {
+			this.ctx.showStatus("Thinking blocks: hidden in this display mode — use /display detailed to view them");
 			return;
 		}
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);

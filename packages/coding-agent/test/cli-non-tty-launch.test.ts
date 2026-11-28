@@ -75,8 +75,8 @@ async function writeFlagExtension(
 	tempDir: TempDir,
 	name: string,
 	type: "string" | "boolean" = "string",
+	extensionPath = tempDir.join(`${name}-extension.ts`),
 ): Promise<string> {
-	const extensionPath = tempDir.join(`${name}-extension.ts`);
 	await Bun.write(
 		extensionPath,
 		[
@@ -147,10 +147,12 @@ describe("launch without a terminal on stdin", () => {
 		expect(run.stderr).toContain("EXT_FLAG=reviewer");
 	}, 30_000);
 
-	it("reuses one extension binding and treats a file-looking flag value as data in print mode", async () => {
+	it("discovers and binds a project extension once by default in print mode", async () => {
 		using tempDir = TempDir.createSync("@omp-non-tty-ext-prompt-");
-		const extensionPath = await writeFlagExtension(tempDir, "spawn-peer");
-		const run = await launchWithoutTerminal(tempDir, ["-e", extensionPath, "--spawn-peer", "@missing.md", "say ok"]);
+		await writeFlagExtension(tempDir, "spawn-peer", "string", tempDir.join(".omp", "extensions", "spawn-peer.ts"));
+		const run = await launchWithoutTerminal(tempDir, ["--spawn-peer", "@missing.md", "say ok"], {
+			extensionDiscovery: true,
+		});
 
 		expect(run.stderr).not.toContain(TTY_ERROR);
 		expect(run.stderr).toContain(NO_API_KEY);

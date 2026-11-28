@@ -29,7 +29,6 @@ it("keeps the native loader and grammar installer on the same effective cache ro
 		await fs.mkdir(home);
 		const root = path.join(tempRoot, "root");
 		const cache = path.join(tempRoot, "cache");
-		const selectedCache = process.platform === "linux" ? path.join(cache, String(process.getuid!())) : cache;
 		const data = path.join(tempRoot, "data");
 		const shared = path.join(tempRoot, "shared");
 		const migrated = "migrated";
@@ -58,8 +57,8 @@ it("keeps the native loader and grammar installer on the same effective cache ro
 		const cases: Array<[Record<string, string>, string, string?]> = [
 			[
 				{ OMP_CONFIG_ROOT: root, OMP_CACHE_DIR: cache, TEST_SET_PROFILE: unmigrated },
-				path.join(selectedCache, "natives"),
-				path.join(selectedCache, "profiles", unmigrated, "natives"),
+				path.join(root, "natives"),
+				path.join(root, "profiles", unmigrated, "natives"),
 			],
 			[
 				{ OMP_CONFIG_ROOT: root, OMP_PROFILE: migrated, XDG_CACHE_HOME: cache },

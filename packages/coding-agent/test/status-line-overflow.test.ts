@@ -4,7 +4,7 @@
  * option, and a bar too narrow for every segment drops the model before the
  * working directory.
  */
-import { afterAll, beforeAll, describe, expect, it, setSystemTime } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, setSystemTime } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SessionStatusLine } from "@oh-my-pi/pi-coding-agent/modes/interactive/status-line";
 import type { StatusLineSettings } from "@oh-my-pi/pi-coding-agent/modes/view-model/status-line/types";
@@ -28,12 +28,16 @@ import { createStatusLine, shapePlacement } from "../src/ui/status/status-line";
 import { segmentText, statusFacts, statusRows, statusSession, statusText } from "./helpers/session-status-line";
 
 const theme = loadThemeSync("dark", { symbolPreset: "unicode" });
-const savedTheme = currentTheme();
+let savedTheme: ReturnType<typeof currentTheme>;
 
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	ensureTheme();
+	savedTheme = currentTheme();
+});
+
+beforeEach(() => {
 	setCurrentTheme(theme);
 });
 

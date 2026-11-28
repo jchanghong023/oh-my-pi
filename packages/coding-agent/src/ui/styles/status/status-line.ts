@@ -14,6 +14,7 @@
 import type { UiNode } from "@oh-my-pi/pi-tui";
 import { type Block, defineRolePainter, EMPTY_BLOCK, type PaintContext } from "@oh-my-pi/pi-tui/term/paint";
 import { stack } from "@oh-my-pi/pi-tui/term/painters/layout";
+import { spinnerIndex } from "@oh-my-pi/pi-tui/term/painters/spinner";
 import { fitStatus, statusRow } from "@oh-my-pi/pi-tui/term/painters/status";
 import { truncate, truncateStart, visibleWidth } from "@oh-my-pi/pi-tui/text/width";
 import { FG_DEFAULT, fgSgr } from "@oh-my-pi/pi-tui/theme/color";
@@ -56,7 +57,7 @@ class LookPainter {
 	 */
 	#brandStyle(tokens: string, fadeFrom: string | undefined, fadeAt: number | undefined): string {
 		if (fadeFrom === undefined || fadeAt === undefined || this.#cx.reduceMotion) return tokens;
-		const t = (this.#cx.now("brand") - fadeAt) / BRAND_FADE_MS;
+		const t = (this.#cx.now() - fadeAt) / BRAND_FADE_MS;
 		if (t >= 1) return tokens;
 		const from = this.#hex(fadeFrom);
 		const to = this.#hex(tokens);
@@ -138,14 +139,13 @@ class LookPainter {
 		const tag = (glyph: string) => (profile ? (glyph ? `${glyph}-${profile}` : profile) : glyph);
 		if (since === null) return this.style(tokens, tag(this.#theme.symbols.icon("omp")));
 		const cx = this.#cx;
+		const now = cx.now();
 		let glyph = this.#theme.symbols.symbol("cmd.question") || "?";
 		if (!awaiting) {
 			const frames = this.#theme.symbols.activityFrames;
-			const interval = cx.spinnerInterval;
-			const index = interval > 0 && frames.length > 0 ? Math.floor(cx.now("brand") / interval) % frames.length : 0;
-			glyph = frames[index] ?? "";
+			glyph = frames[spinnerIndex(cx, frames.length)] ?? "";
 		}
-		const seconds = Math.max(0, Math.floor((cx.now("decoration") - since) / 1000));
+		const seconds = Math.max(0, Math.floor((now - since) / 1000));
 		const timer =
 			seconds < 60
 				? `${seconds}s`

@@ -28,6 +28,7 @@ import { staticEnvironment } from "@oh-my-pi/pi-tui/term/paint";
 import { renderBlock } from "@oh-my-pi/pi-tui/term/render";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import type { TspNode } from "@oh-my-pi/pi-wire";
+import { mountCompactDock } from "../src/modes/interactive/compact-dock-view";
 import { AppFrame } from "../src/modes/interactive/frame";
 import { initTheme } from "../src/ui/theme/service";
 import {
@@ -43,7 +44,8 @@ function nativeDockRows(width: number, view: CompactThinkingPreview | CompactToo
 	if (activity && activity.render(width).length === 0) return [];
 	const frame = new AppFrame({ version: "test", shape: "box", quiet: true });
 	vi.spyOn(frame.shell, "size").mockReturnValue({ columns: width, rows: 40 });
-	frame.mountCompactPresentation(
+	mountCompactDock(
+		frame.shell,
 		() => true,
 		columns => activity?.rows(columns) ?? [],
 		columns => output?.render(columns) ?? [],

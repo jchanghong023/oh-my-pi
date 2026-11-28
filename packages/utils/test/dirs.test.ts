@@ -185,7 +185,6 @@ describe("dated log path", () => {
 it("keeps profile data, caches, and shared runtime state under the explicit root despite initialized XDG paths", () => {
 	const keys = [
 		"OMP_CONFIG_ROOT",
-		"OMP_CACHE_DIR",
 		"OMP_OFFLINE",
 		"PI_CODING_AGENT_DIR",
 		"OMP_PROFILE",
@@ -201,7 +200,6 @@ it("keeps profile data, caches, and shared runtime state under the explicit root
 		const xdg = path.join(fixture, "xdg");
 		fs.mkdirSync(path.join(xdg, "omp", "profiles", "work"), { recursive: true });
 		process.env.OMP_CONFIG_ROOT = root;
-		delete process.env.OMP_CACHE_DIR;
 		delete process.env.OMP_OFFLINE;
 		delete process.env.PI_CODING_AGENT_DIR;
 		process.env.OMP_PROFILE = "";

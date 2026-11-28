@@ -33,7 +33,7 @@ import { handleSecurityCommand } from "./helpers/security";
 import type { SlashCommandSpec } from "./types";
 import { cfgComputerEnabled, cfgRatchetEnabled } from "../tools/settings";
 import { cfgPrewalkFrom, cfgPrewalkInto, cfgSkillful } from "../session/settings";
-import { applyDisplayPreset, nextDisplayMode } from "../modes/settings";
+import { applyDisplayPreset, isDisplayMode, nextDisplayMode } from "../modes/settings";
 import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
@@ -52,6 +52,7 @@ export const workspaceCommand = {
 	description: "Toggle workspace write reminders (not a sandbox)",
 	inlineHint: "[prompt]",
 	allowArgs: true,
+	tuiInput: { detachDraft: "before-dispatch" },
 	getTuiAutocompleteDescription: runtime => `Workspace: ${runtime.ctx.workspaceModeEnabled ? "on" : "off"}`,
 	handleTui: async (command, runtime) => {
 		await runWithDetachedDraft(command, runtime, () =>
@@ -285,6 +286,7 @@ const GOAL_MODE_SLASH_COMMAND: SlashCommandSpec = {
 	],
 	inlineHint: "[objective]",
 	allowArgs: true,
+	tuiInput: { detachDraft: "before-dispatch", followUpDuringCompaction: "active-only" },
 	getTuiAutocompleteDescription: runtime => {
 		if (!cfgGoalEnabled.get(runtime.ctx.settings)) return "Goal: disabled in settings";
 		if (runtime.ctx.planModeEnabled) return "Goal: blocked by plan mode";
@@ -445,27 +447,27 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "display",
 		icon: "settings",
-		description: "Switch between clean, compact, and detailed display modes",
+		description: "Cycle detailed, concise, clean, and compact display modes",
 		allowArgs: true,
 		subcommandOptional: true,
 		subcommands: [
+			{ name: "detailed", description: "Show full tool cards" },
+			{ name: "concise", description: "Show one status row per tool call" },
 			{ name: "clean", description: "Hide thinking and tool activity" },
 			{
 				name: "compact",
 				description:
 					"Hide tool history cards; show this turn's file diffs, two activity lines, and recent tool output above the composer",
 			},
-			{ name: "detailed", description: "Show full thinking and tool activity" },
 		],
-		handleTui: async (command, runtime) => {
-			const { settings } = runtime.ctx;
-			const mode = command.args.trim() || nextDisplayMode(settings);
-			if (mode !== "clean" && mode !== "compact" && mode !== "detailed") {
-				runtime.ctx.showWarning("Usage: /display [clean|compact|detailed]");
+		handleTui: (command, runtime) => {
+			const mode = command.args.trim() || nextDisplayMode(runtime.ctx.displayMode);
+			if (!isDisplayMode(mode)) {
+				runtime.ctx.showWarning("Usage: /display [detailed|concise|clean|compact]");
 				clearSubmittedText(runtime);
 				return;
 			}
-			await applyDisplayPreset(settings, mode, runtime.ctx);
+			applyDisplayPreset(mode, runtime.ctx);
 			clearSubmittedText(runtime);
 		},
 	},
@@ -494,6 +496,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Toggle plan mode (agent plans before executing)",
 		inlineHint: "[prompt]",
 		allowArgs: true,
+		tuiInput: { detachDraft: "before-dispatch" },
 		getTuiAutocompleteDescription: runtime => {
 			if (!cfgPlanEnabled.get(runtime.ctx.settings)) return "Plan: disabled in settings";
 			if (runtime.ctx.planModeEnabled) {
@@ -526,6 +529,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Toggle vibe mode (direct persistent fast/good worker sessions; read-only toolset)",
 		inlineHint: "[prompt]",
 		allowArgs: true,
+		tuiInput: { detachDraft: "before-dispatch" },
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.vibeModeEnabled) return "Vibe: on";
 			if (runtime.ctx.planModeEnabled) return "Vibe: blocked by plan mode";
@@ -544,6 +548,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "goal-autopilot",
 		description:
 			"Manage a persistent goal with unattended orchestration saved in history and restored after compaction",
+		tuiInput: { detachDraft: "before-dispatch", followUpDuringCompaction: "direct" },
 		handleTui: async (command, runtime) => {
 			await runWithDetachedDraft(command, runtime, () =>
 				runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input, {
@@ -559,6 +564,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Have the agent interview you in chat, then set up goal mode",
 		inlineHint: "[rough objective]",
 		allowArgs: true,
+		tuiInput: { detachDraft: "before-dispatch" },
 		handleTui: async (command, runtime) => {
 			await runWithDetachedDraft(command, runtime, () =>
 				runtime.ctx.handleGuidedGoalCommand(command.args || undefined, runtime.input),

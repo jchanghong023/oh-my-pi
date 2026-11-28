@@ -212,8 +212,8 @@ pub(super) fn require_owned_filter_success(repo: &mut gix::Repository) -> Result
 		return Ok(());
 	}
 	let mut config = repo.config_snapshot_mut();
-	// gitoxide builds a driver from each section and selects the first matching
-	// one. Updating by driver name would change only the last section.
+	// Keep every section strict: gitoxide merges duplicate driver sections,
+	// with later values overriding earlier values for each key.
 	for id in sections {
 		config
 			.section_mut_by_id(id)
@@ -2921,18 +2921,24 @@ mod tests {
 		fs::write(&config, &content).expect("write config");
 		let git = repo(temp.path());
 		let owned = owned_repository(&git).expect("configure owned filters");
+		let config_snapshot = owned.config_snapshot();
+		let required: Vec<_> = config_snapshot
+			.sections_by_name("filter")
+			.into_iter()
+			.flatten()
+			.filter(|section| section.header().subsection_name().is_some_and(|name| name == "duplicate"))
+			.map(|section| section.value("required").is_some_and(|value| value == "true"))
+			.collect();
+		assert_eq!(required, [true, true]);
+
 		let options = gix::filter::Pipeline::options(&owned).expect("filter options");
-		let drivers: Vec<_> = options
+		let driver = options
 			.drivers
 			.iter()
-			.filter(|driver| driver.name.as_slice() == b"duplicate")
-			.collect();
-		assert_eq!(drivers.len(), 2);
-		assert!(drivers.iter().all(|driver| driver.required));
-		assert_eq!(
-			drivers[0].smudge.as_ref().map(|command| command.as_slice()),
-			Some(b"cat".as_slice())
-		);
+			.find(|driver| driver.name.as_slice() == b"duplicate")
+			.expect("merged filter driver");
+		assert!(driver.required);
+		assert_eq!(driver.smudge.as_ref().map(|command| command.as_slice()), Some(b"cat".as_slice()));
 		assert_eq!(fs::read_to_string(config).expect("read config"), content);
 	}
 

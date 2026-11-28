@@ -1,5 +1,5 @@
 import { request } from "node:http";
-import { isIP } from "node:net";
+import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
 import { ROOM_KEY_BYTES, WRITE_TOKEN_BYTES } from "@oh-my-pi/pi-wire";
 import type { ParsedCollabLink } from "./protocol";
 
@@ -21,11 +21,8 @@ export class NumberedRoomClient {
 	readonly #authority: string;
 
 	constructor() {
-		const ip = Bun.env.OMP_COLLAB2_IP ?? (Bun.env.OMP_OFFLINE === undefined ? "127.0.0.1" : "10.239.93.104");
-		const family = isIP(ip);
-		if (family === 0 || ip.includes("%")) throw new NumberedRoomError("OMP_COLLAB2_IP must be an IP literal");
-		this.#ip = ip;
-		this.#authority = `${family === 6 ? `[${ip}]` : ip}:${PORT}`;
+		this.#ip = offlineFromEnv() ? "10.239.93.104" : "127.0.0.1";
+		this.#authority = `${this.#ip}:${PORT}`;
 	}
 
 	socketUrl(roomId: string): string {

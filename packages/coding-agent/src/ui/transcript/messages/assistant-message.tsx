@@ -53,6 +53,7 @@ import {
 import { resolveAssistantErrorPresentation } from "../../../session/transcript/transcript-render-helpers";
 import type { AssistantTextRenderer, AssistantThinkingRenderer } from "../../../extensibility/extensions/render-types";
 import { extensionTheme, renderExtension } from "../../extensions/render-output";
+import { actionKey } from "../../keys/hints";
 import { type EmbedHost, EmbedFigure, parseEmbed } from "../figures/embed";
 import { figureSegments, mightHaveFigures, SvgFence } from "../figures/figure-markdown";
 import type { FigureCell } from "../figures/svg";
@@ -947,13 +948,14 @@ function FailedTurn(props: { error: () => ErrorPart | undefined }): JSXNode {
 			/>
 			{() => {
 				const actions = failed()?.actions;
+				const modelKey = actions === true ? actionKey("app.model.selectTemporary") : "";
 				return (
 					actions && (
 						<row key="actions" gap="sm" role="omp.error.actions">
 							{actions === true && button("retry", "Retry", ["F5"], "Retry the failed turn")}
 							{button("copy-error", "Copy error", [], "Copy the error message")}
 							{actions === true &&
-								button("switch-model", "Switch model", ["⌥P"], "Pick another model for this session")}
+								button("switch-model", "Switch model", modelKey ? [modelKey] : [], "Pick another model for this session")}
 						</row>
 					)
 				);

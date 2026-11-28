@@ -596,29 +596,6 @@ describe("remote compaction setting", () => {
 		expect(result.shortSummary).toBe("Local short summary");
 	});
 
-	it.each([404, 429])(
-		"does not start a CodeAgent turn-prefix request when the history endpoint returns %d",
-		async status => {
-			const model: Model = { ...openaiChatModel, provider: "codeagent" };
-			const preparation = createSplitPreparation({
-				remoteEndpoint: "https://compaction.example.test/summarize",
-			});
-			const fetchHandler = vi.fn(() => new Response(null, { status }));
-			const completeImpl = vi.fn(async () => createAssistantMessage("Unused prefix summary"));
-
-			await expect(
-				compact(preparation, model, "test-api-key", undefined, undefined, {
-					fetch: mockFetch(fetchHandler),
-					completeImpl,
-					oneshotRetry: false,
-				}),
-			).rejects.toThrow(`Remote compaction failed (${status}`);
-
-			expect(fetchHandler).toHaveBeenCalledTimes(1);
-			expect(completeImpl).not.toHaveBeenCalled();
-		},
-	);
-
 	it("preserves prior compaction items and encrypted reasoning for OpenAI remote compaction", async () => {
 		const model = openaiResponsesModel;
 

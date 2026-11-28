@@ -206,13 +206,14 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 		const created = createHarness([]);
 		const providerSlot = captureAutocompleteProvider(created.mode);
 
+		created.session.setSlowMode(false);
 		await created.mode.refreshSlashCommandState(tempDir.path());
-		const offFast = (await fetchSlashItems(providerSlot.current!, "/fast")).find(item => item.value === "fast");
-		expect(offFast?.description).toBe("Fast: off");
+		const offSlow = (await fetchSlashItems(providerSlot.current!, "/slow")).find(item => item.value === "slow");
+		expect(offSlow?.description).toBe("Slow mode: off");
 
-		created.session.setFastMode(true);
-		const onFast = (await fetchSlashItems(providerSlot.current!, "/fast")).find(item => item.value === "fast");
-		expect(onFast?.description).toBe("Fast: on");
+		created.session.setSlowMode(true);
+		const onSlow = (await fetchSlashItems(providerSlot.current!, "/slow")).find(item => item.value === "slow");
+		expect(onSlow?.description).toBe("Slow mode: on");
 	});
 
 	it("normalizes file-command hints before autocomplete renders them", async () => {

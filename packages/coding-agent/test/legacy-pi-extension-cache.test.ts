@@ -26,7 +26,6 @@ async function runProbe(
 		"OMP_PROFILE",
 		"PI_PROFILE",
 		"PI_CONFIG_DIR",
-		"OMP_CACHE_DIR",
 		"OMP_OFFLINE",
 	]) {
 		delete env[key];

@@ -603,11 +603,11 @@ describe("live geometry (§2.6, Theorem 4.2)", () => {
 			{ dock: () => <rows key="dock" lines={lines("d", 4)} /> },
 		);
 		expect(driver.history).toEqual([]);
-		expect(driver.viewport).toEqual(lines("d", 4).slice(-2));
+		expect(driver.viewport).toEqual(["d2", "d3"]);
 		for (const node of surface.main()) settle(node);
 		backend.renderNow();
 		expect(driver.history).toEqual([...lines("a", 3), ...lines("b", 2)]);
-		expect(driver.viewport).toEqual(lines("d", 4).slice(-2));
+		expect(driver.viewport).toEqual(["d2", "d3"]);
 		backend.stop();
 	});
 });

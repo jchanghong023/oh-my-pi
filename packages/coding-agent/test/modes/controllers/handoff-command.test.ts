@@ -74,7 +74,7 @@ async function startHarness(): Promise<Harness> {
 		}),
 		sessionManager: manager,
 		settings: Settings.isolated({
-			"display.mode": "detailed",
+			"display.toolActivity": "detailed",
 			"compaction.enabled": false,
 			"compaction.keepRecentTokens": 1,
 		}),

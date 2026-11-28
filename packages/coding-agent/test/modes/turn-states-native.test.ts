@@ -63,7 +63,7 @@ describe("turn states", () => {
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "display.mode": "detailed" }),
+			settings: Settings.isolated({ "display.toolActivity": "detailed" }),
 			modelRegistry,
 		});
 		term = createModeTerminal({ columns: 120, rows: 32 });

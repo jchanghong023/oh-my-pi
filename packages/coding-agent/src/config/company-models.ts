@@ -2,7 +2,14 @@ import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import type { Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
-import { COMPANY_PROVIDER_ID, getCompanyConfig } from "./company-provider";
+import {
+	COMPANY_PROVIDER_ID,
+	getCompanyConfig,
+	getCompanyConfigError,
+	setCompanyOfflineEnabled,
+} from "./company-provider";
+import { cfgDisabledProviders } from "./model-settings";
+import type { Settings } from "./settings";
 
 // These are retrieval models, not Anthropic Messages models or tool-calling agents.
 export const COMPANY_RETRIEVAL_MODELS = [
@@ -41,6 +48,18 @@ export function setCompanyChatContextWindow(contextWindow: number): void {
 	if (getEnvironmentData(contextWindowKey) === contextWindow) return;
 	setEnvironmentData(contextWindowKey, contextWindow);
 	chatModels = undefined;
+}
+
+/** Prepare the shared snapshot and context window before any model registry consumes them. */
+export async function initializeCompanyModelLane(offline: boolean): Promise<string | undefined> {
+	await setCompanyOfflineEnabled(offline);
+	if (!offline) return undefined;
+	setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
+	return getCompanyConfigError();
+}
+
+export function canUseCompanyModels(settings: Settings): boolean {
+	return getCompanyConfig() !== undefined && !cfgDisabledProviders.get(settings).includes(COMPANY_PROVIDER_ID);
 }
 
 export function getCompanyChatModelIds(): string[] {

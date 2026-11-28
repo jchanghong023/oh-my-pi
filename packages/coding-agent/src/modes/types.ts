@@ -39,7 +39,7 @@ import type { AgentSession } from "../session/agent-session";
 import type { AgentViewSession } from "../session/agent-session-handle";
 import type { DroppedPrompt } from "../session/agent-session-types";
 import type { CompactMode } from "../session/compact-modes";
-import type { ToolActivityMode } from "./settings";
+import type { DisplayMode, ToolActivityMode } from "./settings";
 import type { ForeignSessionSource } from "../session/foreign-session-store";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext } from "../session/session-context";
@@ -667,6 +667,12 @@ export interface InteractiveModeContext {
 	hideToolActivity: boolean;
 	/** How model-initiated tools are projected into the transcript (reactive). */
 	readonly toolActivity: ToolActivityMode;
+	/** Current view, which explicit display gestures can change independently of a settings override. */
+	readonly displayMode: DisplayMode;
+	/** The clean transcript projection shared by clean and compact. */
+	readonly cleanTranscript: boolean;
+	/** Apply the effective display mode; true when terminal history needs a replay. */
+	syncDisplayMode(mode: DisplayMode): boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
 	vibeModeEnabled: boolean;

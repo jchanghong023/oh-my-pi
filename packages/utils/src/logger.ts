@@ -23,6 +23,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isPromise } from "node:util/types";
 import { APP_NAME, getActiveProfile, getLogPath, getLogsDir, localDay, VERSION } from "./dirs";
+import { offlineFromEnv } from "./env";
 import { RotatingFileSink } from "./logger/rotating-file";
 import { isPidAlive } from "./pid";
 import { sanitizeText } from "./sanitize-text";
@@ -398,20 +399,15 @@ const scheduledPruneDirs = new Set<string>();
 
 /** Run shared retention only after the sink has opened a file. */
 function schedulePruneStaleProcessLogs(dir: string): void {
-	if (scheduledPruneDirs.has(dir)) return;
-	if (exiting) {
-		pruneStaleProcessLogs(dir);
-		return;
-	}
+	if (exiting || scheduledPruneDirs.has(dir)) return;
 	scheduledPruneDirs.add(dir);
-	const immediate = setImmediate(async () => {
+	setImmediate(async () => {
 		try {
 			await pruneStaleProcessLogs(dir);
 		} finally {
 			scheduledPruneDirs.delete(dir);
 		}
 	});
-	immediate.unref();
 }
 
 /** Platform-standard user state directory, independent of relocated application data. */
@@ -588,13 +584,14 @@ function flushOnExit(code: number): void {
 	exiting = true;
 	shutdownDiagnosticLogging(process.exitCode ?? code);
 	flush();
-	for (const dir of scheduledPruneDirs) pruneStaleProcessLogs(dir);
-	scheduledPruneDirs.clear();
 }
 
 function installExitFlush(): void {
 	if (exitFlushInstalled) return;
 	exitFlushInstalled = true;
+	// A short-lived process may open its first log only during its final flush.
+	// Do that before natural exit so the scheduled retention scan can finish.
+	process.on("beforeExit", flush);
 	process.on("exit", flushOnExit);
 }
 
@@ -656,10 +653,6 @@ const LOG_LEVEL_RANK: Record<LogLevel, number> = { error: 0, warn: 1, info: 2, d
 /** `warn` and `error` records are written at once, with everything buffered before them. */
 const IMMEDIATE_FLUSH_RANK = LOG_LEVEL_RANK.warn;
 
-function isOffline(): boolean {
-	return /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
-}
-
 /**
  * Rank of the most verbose level the local transports (file and console)
  * write. Explicit `OMP_LOG_LEVEL` wins; offline defaults to warn, other
@@ -669,14 +662,14 @@ function resolveLevelRank(): number {
 	const requested = process.env.OMP_LOG_LEVEL?.trim().toLowerCase();
 	return requested && Object.hasOwn(LOG_LEVEL_RANK, requested)
 		? LOG_LEVEL_RANK[requested as LogLevel]
-		: isOffline()
+		: offlineFromEnv()
 			? LOG_LEVEL_RANK.warn
 			: LOG_LEVEL_RANK.debug;
 }
 
 /** Drop filtered offline records before context serialization or sink delivery. */
 function isOfflineLevelFiltered(level: LogLevel): boolean {
-	return isOffline() && LOG_LEVEL_RANK[level] > resolveLevelRank();
+	return offlineFromEnv() && LOG_LEVEL_RANK[level] > resolveLevelRank();
 }
 
 /**

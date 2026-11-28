@@ -59,7 +59,7 @@ describe("InteractiveMode native dock activity line", () => {
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "display.mode": "detailed" }),
+			settings: Settings.isolated({ "display.toolActivity": "detailed" }),
 			modelRegistry,
 		});
 		mode = new InteractiveMode(

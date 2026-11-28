@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, spyOn, vi } fro
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type {
 	ExtensionActions,
 	ExtensionCommandContextActions,
@@ -26,8 +26,8 @@ import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controlle
 import {
 	cfgDisplayCollapseCompacted,
 	cfgDisplayMode,
+	cfgTerminalShowImages,
 	type ToolActivityMode,
-	transcriptToolActivity,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -36,6 +36,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { normalizeCustomMessagePayload } from "@oh-my-pi/pi-coding-agent/session/transcript/messages";
 import { currentTheme, setCurrentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { TranscriptPresenter } from "../../../src/modes/interactive/transcript";
 import { contextDisplay, createInteractiveModeContext, renderTranscript } from "../../helpers/interactive-mode-context";
 
 const restoreTheme = currentTheme();
@@ -111,7 +112,15 @@ interface RenderHarness {
 /** A context over `transcript` whose replay methods run through one real {@link UiHelpers}. */
 function makeRenderCtx(
 	transcript: SessionContext,
-	{ showImages = true, toolActivity = "detailed" }: { showImages?: boolean; toolActivity?: ToolActivityMode } = {},
+	{
+		showImages = true,
+		toolActivity = "detailed",
+		getMessageRenderer,
+	}: {
+		showImages?: boolean;
+		toolActivity?: ToolActivityMode;
+		getMessageRenderer?: ExtensionRunner["getMessageRenderer"];
+	} = {},
 ): RenderHarness {
 	const transcriptSpy = vi.fn((_options?: { collapseCompactedHistory?: boolean }) => transcript);
 	const ctx = createInteractiveModeContext({
@@ -119,6 +128,7 @@ function makeRenderCtx(
 		session: {
 			buildTranscriptSessionContext: transcriptSpy,
 			getQueuedMessages: () => ({ steering: [], followUp: [], liveSteered: 0 }),
+			...(getMessageRenderer ? { extensionRunner: { getMessageRenderer } } : {}),
 		},
 	});
 	contextDisplay(ctx).toolActivity.set(toolActivity);
@@ -194,15 +204,15 @@ describe("UiHelpers.renderInitialMessages — transcript source", () => {
 		const persisted = JSON.stringify(manager.getEntries());
 		const llmContext = JSON.stringify(manager.buildSessionContext());
 		h.transcriptSpy.mockImplementation(options => manager.buildSessionContext({ transcript: true, ...options }));
-		for (const mode of ["clean", "compact", "detailed"] as const) {
+		for (const mode of ["clean", "compact", "concise", "detailed"] as const) {
 			cfgDisplayMode.set(h.ctx.settings, mode);
-			contextDisplay(h.ctx).toolActivity.set(transcriptToolActivity(mode));
-			cfgDisplayCollapseCompacted.set(h.ctx.settings, true);
+			h.ctx.syncDisplayMode(mode);
+			cfgDisplayCollapseCompacted.set(settings, true);
 			await h.helpers.renderInitialMessages();
 			expect(h.text()).toContain("KEPT_REQUEST");
 			expect(h.text()).toContain("CURRENT_REQUEST");
 			expect(h.text()).not.toContain("PRE_COMPACTION_REQUEST");
-			cfgDisplayCollapseCompacted.set(h.ctx.settings, false);
+			cfgDisplayCollapseCompacted.set(settings, false);
 			await h.helpers.renderInitialMessages();
 			expect(h.text()).toContain("PRE_COMPACTION_REQUEST");
 			expect(JSON.stringify(manager.getEntries())).toBe(persisted);
@@ -251,6 +261,7 @@ describe("UiHelpers.renderInitialMessages — Cursor exec-channel tool calls", (
 				},
 			]),
 		);
+		const presentReadGroup = spyOn(harness.ctx, "presentReadGroup");
 
 		await harness.helpers.renderInitialMessages();
 
@@ -267,6 +278,10 @@ describe("UiHelpers.renderInitialMessages — Cursor exec-channel tool calls", (
 		// the pairing signal: the read call appears with its path, only reachable
 		// when the toolResult attaches.
 		expect(rendered).toContain("Read src/foo.ts");
+		expect(rendered.indexOf("Read src/foo.ts")).toBeGreaterThan(rendered.indexOf("BASH_RESULT_MARKER"));
+		expect(presentReadGroup).toHaveBeenCalledTimes(1);
+		const group = presentReadGroup.mock.results[0];
+		expect(group?.type === "return" && group.value.group?.entries()).toMatchObject([{ id: "tc-read", timestamp: 2 }]);
 	});
 });
 
@@ -473,6 +488,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 	});
 
 	it("does not show read images while terminal images are off", async () => {
+		cfgTerminalShowImages.set(settings, false);
 		const harness = makeRenderCtx(
 			transcriptWith([
 				assistantToolCall("read-hidden", "read", { path: "hidden.png" }),
@@ -480,7 +496,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 					role: "toolResult",
 					toolCallId: "read-hidden",
 					toolName: "read",
-					content: [{ type: "text", text: "Read image: hidden.png" }, pngImage],
+					content: [pngImage],
 					isError: false,
 					timestamp: 2,
 				},
@@ -491,6 +507,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 		await harness.helpers.renderInitialMessages();
 
 		expect(harness.text()).not.toContain(IMAGE_LABEL);
+		expect(harness.text()).toContain("Read hidden.png");
 	});
 
 	it("preserves tool-result images while tool activity is hidden so revealing it can replay the image", async () => {
@@ -507,13 +524,13 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 		]);
 		const original = structuredClone(transcript.messages);
 		const harness = makeRenderCtx(transcript, { toolActivity: "hidden" });
-		for (const mode of ["compact", "clean", "detailed", "compact", "detailed"] as const) {
+		for (const mode of ["compact", "clean", "concise", "detailed", "compact", "detailed"] as const) {
 			cfgDisplayMode.set(harness.ctx.settings, mode);
-			contextDisplay(harness.ctx).toolActivity.set(transcriptToolActivity(mode));
+			harness.ctx.syncDisplayMode(mode);
 			await harness.helpers.renderInitialMessages();
 			const rendered = harness.text();
-			if (mode === "detailed") {
-				expect(rendered).toContain(IMAGE_LABEL);
+			if (mode === "detailed" || mode === "concise") {
+				expect(countOccurrences(rendered, IMAGE_LABEL)).toBe(1);
 				expect(rendered).toContain("tool-hidden.png");
 			} else {
 				expect(rendered).not.toContain(IMAGE_LABEL);
@@ -531,7 +548,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 			role: "toolResult",
 			toolCallId: "read-reopened",
 			toolName: "read",
-			content: [{ type: "text", text: "Read image: reopened.png" }, pngImage],
+			content: [pngImage],
 			isError: false,
 			timestamp: 2,
 		});
@@ -558,7 +575,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 
 		const rendered = harness.text();
 		expect(countOccurrences(rendered, IMAGE_LABEL)).toBe(2);
-		expect(rendered).toContain("reopened.png");
+		expect(rendered).not.toContain("reopened.png");
 		expect(harness.commitSpy.mock.calls.map(([options]) => options?.history)).toEqual([true]);
 	});
 });
@@ -649,18 +666,69 @@ describe("UiHelpers.renderInitialMessages — hidden tool activity", () => {
 			},
 		]);
 
-		const harness = makeRenderCtx(transcript, { toolActivity: "hidden" });
+		const harness = makeRenderCtx(transcript);
+		harness.ctx.syncDisplayMode("clean");
 		await harness.helpers.renderInitialMessages();
 		const hiddenRender = harness.text();
 		expect(hiddenRender).not.toContain("ASYNC_JOB_MARKER");
 		expect(hiddenRender).not.toContain("LATE_DIAGNOSTIC_MARKER");
 		expect(hiddenRender).not.toContain("LAUNCH_COMPLETION_MARKER");
 
-		contextDisplay(harness.ctx).toolActivity.set("detailed");
+		contextDisplay(harness.ctx).toolActivity.set("concise");
+		expect(harness.text()).not.toContain("ASYNC_JOB_MARKER");
+		expect(harness.text()).toContain("LATE_DIAGNOSTIC_MARKER");
+		expect(harness.text()).not.toContain("LAUNCH_COMPLETION_MARKER");
+		harness.ctx.syncDisplayMode("concise");
 		const visibleRender = harness.text();
 		expect(visibleRender).toContain("ASYNC_JOB_MARKER");
 		expect(visibleRender).toContain("LATE_DIAGNOSTIC_MARKER");
 		expect(visibleRender).toContain("LAUNCH_COMPLETION_MARKER");
+	});
+
+	it("suppresses completion cards even with a custom renderer, compact presenter, or expanded fold", async () => {
+		spyOn(TranscriptPresenter.prototype, "presentationOf").mockImplementation(block =>
+			block.type === "message" && "customType" in block.message && block.message.customType === "launch-completion"
+				? { compact: { rows: ["EXTENSION_COMPLETION_ROW"] } }
+				: undefined,
+		);
+		const harness = makeRenderCtx(
+			transcriptWith([
+				{
+					role: "custom",
+					customType: "async-result",
+					content: "",
+					display: true,
+					details: { jobId: "PRESENTED_JOB_MARKER", type: "bash" },
+					timestamp: 1,
+				},
+				{
+					role: "custom",
+					customType: "launch-completion",
+					content: "PRESENTED_LAUNCH_MARKER",
+					display: true,
+					timestamp: 2,
+				},
+			]),
+			{ getMessageRenderer: type => (type === "async-result" ? () => "EXTENSION_ASYNC_CARD" : undefined) },
+		);
+		await harness.helpers.renderInitialMessages();
+		expect(harness.text()).toContain("EXTENSION_COMPLETION_ROW");
+		expect(harness.text()).toContain("EXTENSION_ASYNC_CARD");
+
+		const display = contextDisplay(harness.ctx);
+		harness.ctx.syncDisplayMode("compact");
+		expect(harness.text()).not.toContain("EXTENSION_COMPLETION_ROW");
+		expect(harness.text()).not.toContain("EXTENSION_ASYNC_CARD");
+		display.toolOutputExpanded.set(true);
+		display.toolActivity.set("detailed");
+		expect(harness.text()).not.toContain("PRESENTED_JOB_MARKER");
+		expect(harness.text()).not.toContain("EXTENSION_ASYNC_CARD");
+		expect(harness.text()).not.toContain("PRESENTED_LAUNCH_MARKER");
+
+		harness.ctx.syncDisplayMode("detailed");
+		display.toolOutputExpanded.set(true);
+		expect(harness.text()).toContain("EXTENSION_ASYNC_CARD");
+		expect(harness.text()).toContain("PRESENTED_LAUNCH_MARKER");
 	});
 
 	it("keeps normal warnings visible and hides warnings tied to tool activity", () => {

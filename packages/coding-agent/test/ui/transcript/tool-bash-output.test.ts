@@ -41,9 +41,9 @@ test("the shell presentation carries the run's output verbatim", () => {
 });
 
 test.each([
-	{ label: "current", wall: "[took 0.02s]", exit: "[exit code 23]" },
-	{ label: "legacy", wall: "Wall time: 0.02 seconds", exit: "Command exited with code 23" },
-])("keeps raw artifact references and folds $label execution notices into the Bash footer", ({ wall, exit }) => {
+	{ label: "current", wall: "[took 0.02s]", exit: "[exit code 23]", foldsNotices: true },
+	{ label: "legacy", wall: "Wall time: 0.02 seconds", exit: "Command exited with code 23", foldsNotices: false },
+])("displays $label Bash output using the card's notice format", ({ wall, exit, foldsNotices }) => {
 	createRoot(dispose => {
 		try {
 			const call = new ToolCall({
@@ -55,10 +55,17 @@ test.each([
 			call.setArgsComplete();
 			call.setExecutionStarted();
 			const raw = `diagnostic\n\n[raw output: local://195.log]\n\n${wall}\n\n${exit}\n`;
+			const shown = foldsNotices ? "diagnostic" : raw.trimEnd();
 			call.updateResult(
 				{
 					content: [{ type: "text", text: raw }],
-					details: { exitCode: 23, wallTimeMs: 20, wallTimeNoticeEmitted: true, timeoutSeconds: 300 },
+					details: {
+						exitCode: 23,
+						wallTimeMs: 20,
+						wallTimeNoticeEmitted: true,
+						timeoutSeconds: 300,
+						...(foldsNotices ? { meta: { completePage: true } } : {}),
+					},
 					isError: true,
 				},
 				false,
@@ -71,9 +78,16 @@ test.each([
 				const terminal = Bun.stripANSI(paintNode(env, tree, 120).rows.join("\n"));
 				const footer = terminal.trimEnd().split("\n").at(-1);
 				expect(terminal).toContain("diagnostic");
-				expect(terminal).not.toContain(exit);
-				expect(terminal).not.toContain(wall);
-				expect(footer).toContain("local://195.log");
+				if (foldsNotices) {
+					expect(terminal).not.toContain(exit);
+					expect(terminal).not.toContain(wall);
+					expect(footer).toContain("local://195.log");
+				} else {
+					expect(terminal).toContain(exit);
+					expect(terminal).toContain(wall);
+					expect(terminal).toContain("[raw output: local://195.log]");
+					expect(footer).not.toContain("local://195.log");
+				}
 				expect(footer).toContain("20ms/5m");
 				expect(footer).toContain("23");
 				// Tern gets the capture on its command node, but draws the separate output and footer segments.
@@ -84,13 +98,15 @@ test.each([
 							p: { role: "omp.run" },
 							c: [
 								{ k: "shell", p: { role: "omp.tool.bash.command", presentation: { output: raw } } },
-								{ k: "ansi", p: { role: "omp.tool.bash.output", text: "diagnostic" } },
+								{ k: "ansi", p: { role: "omp.tool.bash.output", text: shown } },
 								{
 									p: { role: "omp.run.foot" },
 									c: [
 										{ p: { role: "omp.run.state", spans: [{ t: "exit 23" }] } },
 										{ p: { role: "omp.run.time", stopped: 20 } },
-										{ p: { role: "omp.run.facts", spans: [{ t: "Artifact 195" }] } },
+										...(foldsNotices
+											? [{ p: { role: "omp.run.facts", spans: [{ t: "Artifact 195" }] } }]
+											: []),
 									],
 								},
 							],

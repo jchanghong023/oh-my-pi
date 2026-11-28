@@ -621,7 +621,7 @@ describe("TernTab", () => {
 			/got a function .*page\.waitForFunction\(fn\)/,
 		);
 		await expect(tab.waitForSelector(null as never, { timeout: 50 })).rejects.toThrow(
-			/Browser selector must be a string; got null\./,
+			/Browser selector must be a string; got no selector \(null\/undefined passed\)\./,
 		);
 		expect(fake.requests.length).toBe(before);
 	});

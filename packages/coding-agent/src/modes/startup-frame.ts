@@ -1,5 +1,6 @@
 /** The lifecycle of an already-started prepaint frame, without loading the interactive UI. */
 import type { Signal } from "@oh-my-pi/pi-tui/reactive";
+import { FORK_DISPLAY_MODE } from "../config/fork-setting-defaults";
 import type { AppFrame } from "./interactive/frame";
 import type { StartupCache, StartupPreferences } from "./interactive/startup-cache";
 import type { ComposerThemePreferences } from "./view-model/prompt/composer-cache";
@@ -90,6 +91,6 @@ export function applyStartupComposerPreferences(update: PrepaintComposerPreferen
 	frame.setImeSafeCursor(preferences.imeSafeCursor);
 	// A stale cached mode switches live: the commit frontier keeps every block written once.
 	frame.screen.set(preferences.screen);
-	current.compactActive.set((preferences.displayMode ?? "compact") === "compact");
+	current.compactActive.set((preferences.displayMode ?? FORK_DISPLAY_MODE) === "compact");
 	current.cache?.write(current.cwd, preferences, theme);
 }

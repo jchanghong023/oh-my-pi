@@ -21,16 +21,20 @@ import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { $ } from "bun";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 import { BUILD_DOWNLOAD_TIMEOUT_MS, currentBuildHost, downloadBuildFile, type Fetch } from "./build-service";
+import {
+	CNB_DEFAULT_RELEASE,
+	CNB_DEFAULT_RELEASE_URL,
+	CNB_RELEASE_ARCH,
+	CNB_RELEASE_PLATFORMS,
+	CNB_TITLE_VERSION_PATTERN_PREFIX,
+	CNB_WEB_ORIGIN,
+	cnbReleasePath,
+} from "./cnb-release-contract";
 import { managedInstallName } from "./managed-install";
 
-const DEFAULT_REPOSITORY = "jchanghong/bin";
-const DEFAULT_TAG = "omp";
-const CNB_API = "https://api.cnb.cool";
-const CNB_WEB = "https://cnb.cool";
-const CNB_RELEASES_PAGE = `${CNB_WEB}/${DEFAULT_REPOSITORY}/-/releases`;
 const CNB_MEDIA_TYPE = "application/vnd.cnb.api+json";
-const CNB_AUTH_HELP = "Set CNB_TOKEN to a CNB access token with repo-release:r permission.";
 const METADATA_TIMEOUT_MS = 30_000;
+const annotatedVersionPattern = new RegExp(String.raw`${CNB_TITLE_VERSION_PATTERN_PREFIX}(v[^\]]+)\]$`);
 
 export type UpdateProgress =
 	| { phase: "downloading"; version: string; received: number; total: number }
@@ -81,7 +85,7 @@ export function parseCnbRelease(body: unknown, tag: string, binaryName: string):
 		throw new Error("CNB returned a mismatched, draft, or prerelease release.");
 	}
 	const name = typeof body.name === "string" ? body.name : "";
-	const annotated = / \[omp:(v[^\]]+)\]$/.exec(name)?.[1];
+	const annotated = annotatedVersionPattern.exec(name)?.[1];
 	const titleVersion = semver(annotated ?? name);
 	const tagVersion = semver(tag);
 	const version = titleVersion ?? tagVersion;
@@ -123,8 +127,8 @@ interface CnbReleaseSource {
 }
 
 function releaseSource(): CnbReleaseSource {
-	const [repo = DEFAULT_REPOSITORY, tag = DEFAULT_TAG, extra] = (
-		process.env.PI_UPDATE_REPOSITORY || DEFAULT_REPOSITORY
+	const [repo = CNB_DEFAULT_RELEASE.repo, tag = CNB_DEFAULT_RELEASE.tag, extra] = (
+		process.env.PI_UPDATE_REPOSITORY || CNB_DEFAULT_RELEASE.repo
 	).split("@");
 	if (
 		extra !== undefined ||
@@ -140,51 +144,24 @@ function releaseSource(): CnbReleaseSource {
 	return { repo, tag };
 }
 
-interface CnbReleaseRoute {
-	base: string;
-	token?: string;
-}
-
-async function fetchCnbReleaseRoute(route: CnbReleaseRoute, endpoint: string): Promise<Response> {
-	const headers: Record<string, string> = { Accept: CNB_MEDIA_TYPE };
-	if (route.token) headers.Authorization = `Bearer ${route.token}`;
+function fetchCnbRelease(base: string, endpoint: string): Promise<Response> {
 	const init: BunFetchRequestInit = {
-		headers,
+		headers: { Accept: CNB_MEDIA_TYPE },
 		redirect: "manual",
 		signal: withTimeoutSignal(METADATA_TIMEOUT_MS),
 		tls: { rejectUnauthorized: true },
 	};
-	const response = await fetch(`${route.base}/${endpoint}`, init);
-	if (route.token && (response.status === 401 || response.status === 403)) {
-		throw new Error(`CNB rejected access (HTTP ${response.status}). ${CNB_AUTH_HELP}`);
-	}
-	return response;
+	return fetch(`${base}/${endpoint}`, init);
 }
 
-interface RoutedCnbRelease {
-	asset: CnbReleaseAsset;
-	route: CnbReleaseRoute;
-}
-
-async function fetchRelease({ repo, tag }: CnbReleaseSource, binaryName: string): Promise<RoutedCnbRelease> {
-	const releasePath = `/${repo}/-/releases`;
-	const endpoint = `tags/${encodeURIComponent(tag)}`;
-	let route: CnbReleaseRoute = { base: `${CNB_WEB}${releasePath}` };
-	let response = await fetchCnbReleaseRoute(route, endpoint);
-	// A private repository may return 404 to anonymous callers.
-	if (repo !== DEFAULT_REPOSITORY && (response.status === 401 || response.status === 403 || response.status === 404)) {
-		const token = process.env.CNB_TOKEN?.trim();
-		if (token) {
-			route = { base: `${CNB_API}${releasePath}`, token };
-			response = await fetchCnbReleaseRoute(route, endpoint);
-		}
-	}
+async function fetchRelease(base: string, tag: string, binaryName: string): Promise<CnbReleaseAsset> {
+	const response = await fetchCnbRelease(base, `tags/${encodeURIComponent(tag)}`);
 	if (!response.ok) throw new Error(`CNB release metadata request failed (HTTP ${response.status}).`);
-	return { asset: parseCnbRelease(await response.json(), tag, binaryName), route };
+	return parseCnbRelease(await response.json(), tag, binaryName);
 }
 
-async function resolveDownload(route: CnbReleaseRoute, tag: string, binaryName: string): Promise<string> {
-	const response = await fetchCnbReleaseRoute(route, `download/${encodeURIComponent(tag)}/${binaryName}`);
+async function resolveDownload(base: string, tag: string, binaryName: string): Promise<string> {
+	const response = await fetchCnbRelease(base, `download/${encodeURIComponent(tag)}/${binaryName}`);
 	if (response.status !== 302) {
 		throw new Error(`CNB asset request did not return a download redirect (HTTP ${response.status}).`);
 	}
@@ -197,9 +174,11 @@ async function resolveDownload(route: CnbReleaseRoute, tag: string, binaryName: 
 }
 
 async function binaryNameForHost(): Promise<string | undefined> {
-	if (process.arch !== "x64") return undefined;
-	if (process.platform === "win32") return "omp-windows-x64.exe";
-	if (process.platform === "linux" && (await currentBuildHost()).asset === "linux-x64") return "omp-linux-x64";
+	if (process.arch !== CNB_RELEASE_ARCH) return undefined;
+	if (process.platform === "win32") return CNB_RELEASE_PLATFORMS.win32.binary;
+	if (process.platform === "linux" && (await currentBuildHost()).asset === CNB_RELEASE_PLATFORMS.linux.target) {
+		return CNB_RELEASE_PLATFORMS.linux.binary;
+	}
 	return undefined;
 }
 
@@ -343,7 +322,7 @@ export async function installCnbBinary(targetPath: string, opts: InstallCnbOptio
 	try {
 		await downloadBuildFile({
 			// Keep the short-lived signed URL out of downloader errors and diagnostics.
-			url: CNB_RELEASES_PAGE,
+			url: CNB_DEFAULT_RELEASE_URL,
 			targetPath: candidate,
 			size,
 			sha256,
@@ -394,7 +373,7 @@ export async function installCnbBinary(targetPath: string, opts: InstallCnbOptio
 function unsupported(reason: string, suggestInstaller = true): UpdateOutcome {
 	console.log(chalk.yellow(reason));
 	if (suggestInstaller)
-		console.log(chalk.dim(`Use this fork's installer for a standalone binary: ${CNB_RELEASES_PAGE}`));
+		console.log(chalk.dim(`Use this fork's installer for a standalone binary: ${CNB_DEFAULT_RELEASE_URL}`));
 	return { kind: "unsupported", reason };
 }
 
@@ -418,16 +397,16 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 		const currentVersion = await reportedVersion(target);
 		if (!currentVersion) return unsupported(`The update target ${target} does not report an OMP version.`);
 		console.log(chalk.dim(`Current version: ${currentVersion}`));
-		const source = releaseSource();
-		let release: RoutedCnbRelease;
+		const { repo, tag } = releaseSource();
+		const base = `${CNB_WEB_ORIGIN}${cnbReleasePath(repo)}`;
+		let asset: CnbReleaseAsset;
 		try {
-			release = await fetchRelease(source, binaryName);
+			asset = await fetchRelease(base, tag, binaryName);
 		} catch (error) {
 			throw new Error(`Failed to check for updates: ${error instanceof Error ? error.message : String(error)}`, {
 				cause: error,
 			});
 		}
-		const { asset, route } = release;
 		const comparison = compareUpdateVersions(asset.version, currentVersion);
 		if (comparison < 0 || (comparison === 0 && (!opts.force || opts.check))) return alreadyCurrent();
 		console.log(
@@ -438,7 +417,7 @@ export async function runUpdateCommand(opts: UpdateOptions): Promise<UpdateOutco
 		if (opts.check) return { kind: "available", version: asset.version };
 
 		await sweepStaleUpdateArtifacts(target);
-		const url = await resolveDownload(route, source.tag, binaryName);
+		const url = await resolveDownload(base, tag, binaryName);
 		if (!(await installCnbBinary(target, { ...opts, asset, url }))) return alreadyCurrent();
 		const active = $which(APP_NAME, { cache: WhichCachePolicy.Fresh }) ?? undefined;
 		const activePath = active ? await physicalPath(active) : undefined;

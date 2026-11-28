@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import * as path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore, type UsageReport } from "@oh-my-pi/pi-ai";
+import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { runUsageCommand } from "@oh-my-pi/pi-coding-agent/cli/usage-cli";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
@@ -116,6 +117,7 @@ test("omp usage fetches extension quota for a models.yml-only credential", async
 		]);
 		expect(output.accountsWithoutUsage).toEqual([]);
 	} finally {
+		closeModelCache();
 		utils.setAgentDir(previousAgentDir);
 		if (previousAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDirEnv;

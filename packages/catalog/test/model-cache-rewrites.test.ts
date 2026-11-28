@@ -83,7 +83,7 @@ describe("model cache write churn", () => {
 		}
 	});
 
-	it("uses the selected performance root without reading or rewriting the old default cache", async () => {
+	it("keeps the default model cache when a retired override is set", async () => {
 		const keys = [
 			"OMP_CONFIG_ROOT",
 			"OMP_CACHE_DIR",
@@ -96,8 +96,6 @@ describe("model cache write churn", () => {
 		const persistent = path.join(tempDir, "persistent");
 		const legacyPath = path.join(persistent, "agent", "models.db");
 		const cache = path.join(tempDir, "cache");
-		const selected = process.platform === "linux" ? path.join(cache, String(process.getuid!())) : cache;
-		const selectedPath = path.join(selected, "agent", "models.db");
 		const now = () => 2_000;
 		await fs.mkdir(path.dirname(legacyPath), { recursive: true });
 		try {
@@ -114,12 +112,8 @@ describe("model cache write churn", () => {
 
 			process.env.OMP_CACHE_DIR = cache;
 			__resetDirsFromEnvForTests();
-			expect(readModelCache("rewrite-test", TTL_MS, now)).toBeNull();
-			expect(writeModelCache("rewrite-test", 2_000, [model("selected")], true, "fp")).toBe("written");
-			expect(payloadRow(selectedPath, "rewrite-test")?.updated_at).toBe(2_000);
-			expect(readModelCache("rewrite-test", TTL_MS, now)?.models.map(m => m.id)).toEqual(["selected"]);
+			expect(readModelCache("rewrite-test", TTL_MS, now)?.models.map(m => m.id)).toEqual(["legacy"]);
 			expect(payloadRow(legacyPath, "rewrite-test")).toEqual(legacy);
-			expect(readModelCache("rewrite-test", TTL_MS, now, legacyPath)?.models.map(m => m.id)).toEqual(["legacy"]);
 		} finally {
 			closeModelCache();
 			for (const [key, value] of saved) {

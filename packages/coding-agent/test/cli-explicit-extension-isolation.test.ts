@@ -33,19 +33,19 @@ test.each([
 	{ flag: "--hook", settings: { "lsp.enabled": true }, args: ["--no-lsp"], expectLsp: false },
 	{ flag: "--trusted-extension", settings: {}, args: [], expectLsp: false },
 ])(
-	"default CLI startup preserves $flag, skips ambient extensions, and respects LSP settings and flags",
+	"explicit --no-extensions preserves $flag, skips ambient extensions, and respects LSP settings and flags",
 	async ({ flag, settings: overrides, args, expectLsp }) => {
-		const cwd = tempDir.join(`default-startup-${flag.replaceAll("-", "")}`);
+		const cwd = tempDir.join(`explicit-only-${flag.replaceAll("-", "")}`);
 		const extensionPath = path.join(cwd, "explicit.ts");
 		await Bun.write(
 			path.join(cwd, ".omp", "extensions", "ambient.ts"),
-			'throw new Error("Ambient extension must not run during default CLI startup");',
+			'throw new Error("Ambient extension must not run with --no-extensions");',
 		);
 		await Bun.write(
 			extensionPath,
 			'export default function (pi) { pi.registerCommand("startup-fixture", { handler: async () => {} }); }',
 		);
-		const parsed = parseArgs([flag, extensionPath, ...args]);
+		const parsed = parseArgs(["--no-extensions", flag, extensionPath, ...args]);
 		const settings = Settings.isolated({ ...overrides, "lsp.lazy": true });
 		const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
 		const options = await buildSessionOptions(parsed, [], SessionManager.inMemory(cwd), modelRegistry, settings);
@@ -91,20 +91,17 @@ test.each([
 	{ name: "print", argv: ["--print"] },
 	{ name: "RPC", argv: ["--mode", "rpc"] },
 	{ name: "ACP", argv: ["--mode", "acp"] },
-	{ name: "ACP subcommand", argv: [], forcedMode: "acp" as const },
 ])(
-	"first parse and extension-aware reparse retain extension defaults for $name",
-	async ({ name, argv, forcedMode }) => {
+	"first parse and extension-aware reparse do not disable discovery for $name",
+	({ argv }) => {
 		const explicit = tempDir.join("reparse-fixture.ts");
 		const raw = [...argv, "--extension", explicit, "--probe-option", "value", "hello"];
 		const flags = new Map([["probe-option", { type: "string" as const }]]);
-		const first = parseArgs(raw, undefined, forcedMode);
-		const reparsed = parseArgs(raw, flags, forcedMode);
+		const first = parseArgs(raw);
+		const reparsed = parseArgs(raw, flags);
 		for (const parsed of [first, reparsed]) {
 			expect(parsed.noLsp).toBeUndefined();
-			const isAcp = name.startsWith("ACP");
-			if (isAcp) expect(parsed.mode).toBe("acp");
-			expect(parsed.noExtensions).toBe(isAcp ? undefined : true);
+			expect(parsed.noExtensions).toBeUndefined();
 			expect(parsed.extensions).toEqual([explicit]);
 			expect(parsed.noSkills).toBeUndefined();
 			expect(parsed.noRules).toBeUndefined();

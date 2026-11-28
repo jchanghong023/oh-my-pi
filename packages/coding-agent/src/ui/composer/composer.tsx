@@ -43,12 +43,10 @@ import {
 import {
 	type EditorTerm,
 	type EditorTermRange,
-	hasTerminalCompletionRoom,
 	lastLayout,
 	lastWrapWidth,
 	layoutText,
 	rowOf,
-	terminalCompletionRows,
 } from "@oh-my-pi/pi-tui/term/painters/editor";
 import { lineStart, nextBoundary } from "@oh-my-pi/pi-tui/term/widgets/editor";
 import { flattenLine, stripControl } from "@oh-my-pi/pi-tui/text/sanitize";
@@ -535,11 +533,6 @@ export class Composer {
 		return this.#completion() !== null;
 	}
 
-	/** Whether completion currently takes up space and can receive selection keys. */
-	completionVisible(): boolean {
-		return this.completing() && hasTerminalCompletionRoom(this.field);
-	}
-
 	/** Replace the draft (caret at its end; a new undo step). */
 	setText(text: string): void {
 		if (text !== this.#text()) this.#draftGeneration.set(this.#draftGeneration.peek() + 1);
@@ -1012,10 +1005,7 @@ export class Composer {
 		}
 		this.#spaceHold ??= new SpaceHoldGesture(
 			count => this.deleteBeforeCursor(count),
-			() =>
-				!this.#jump &&
-				(!this.completing() || !hasTerminalCompletionRoom(this.field)) &&
-				(this.vimMode() === null || this.vimMode() === "insert"),
+			() => !this.#jump && !this.completing() && (this.vimMode() === null || this.vimMode() === "insert"),
 		);
 		this.#spaceHold.keys = keys;
 		this.#spaceHold.handler = handler;
@@ -1498,7 +1488,7 @@ export class Composer {
 	/** Accept the displayed item. Only Enter can submit; Tab and pointer picks complete in place. */
 	#accept(open: Completion, via: "enter" | "complete", index = open.selected): void {
 		const item = open.items[index];
-		if (this.#completion() !== open || !item || !hasTerminalCompletionRoom(this.field)) return;
+		if (this.#completion() !== open || !item) return;
 		const value = item.value;
 		const replacing = this.#replacing;
 		if (replacing) {
@@ -1577,11 +1567,7 @@ export class Composer {
 		// kept), and typing after cycling to one enters it: `@` + `o` → `@m:o`.
 		const pick = insert === " ";
 		const entered =
-			!deleted &&
-			previous &&
-			hasTerminalCompletionRoom(this.field) &&
-			isCategoryList(previous) &&
-			(pick || (previous.chosen && !/\s/.test(insert)))
+			!deleted && previous && isCategoryList(previous) && (pick || (previous.chosen && !/\s/.test(insert)))
 				? previous.items[previous.selected]
 				: undefined;
 		if (isMentionItem(entered) && at.before.endsWith(`@${insert}`)) {
@@ -1697,7 +1683,7 @@ export class Composer {
 
 	/** With Shift+Enter as submit, backslash + newline-Enter submits even from a legacy terminal. */
 	#backslashSubmit(key: KeyEvent): boolean {
-		if (key.id !== "enter" || this.#disableSubmit() || this.#options.dictating?.()) return false;
+		if (key.id !== "enter" || this.completing() || this.#disableSubmit() || this.#options.dictating?.()) return false;
 		const kb = getKeybindings();
 		const cursor = this.#cursor();
 		if (
@@ -1754,14 +1740,13 @@ export class Composer {
 				return true;
 			}
 		}
+		if (this.#backslashSubmit(key)) return true;
 		const bindings = getKeybindings();
 		const submit = bindings.matches(key, "tui.input.submit");
 		const tab = bindings.matches(key, "tui.input.tab");
 		const right = bindings.matches(key, "tui.editor.cursorRight");
 		const open = this.#completion();
-		const completionRows = open ? terminalCompletionRows(this.field) : 0;
-		// A short terminal only hides the popup; edits and caret moves invalidate it as usual.
-		if (open && completionRows > 0) {
+		if (open) {
 			if (bindings.matches(key, "tui.select.cancel")) {
 				this.#closeCompletion();
 				return true;
@@ -1796,9 +1781,9 @@ export class Composer {
 			if (bindings.matches(key, "tui.select.up")) selected = (open.selected + count - 1) % count;
 			else if (bindings.matches(key, "tui.select.down")) selected = (open.selected + 1) % count;
 			else if (bindings.matches(key, "tui.select.pageUp"))
-				selected = Math.max(0, open.selected - Math.min(completionRows, this.#autocompleteMaxVisible()));
+				selected = Math.max(0, open.selected - this.#autocompleteMaxVisible());
 			else if (bindings.matches(key, "tui.select.pageDown"))
-				selected = Math.min(count - 1, open.selected + Math.min(completionRows, this.#autocompleteMaxVisible()));
+				selected = Math.min(count - 1, open.selected + this.#autocompleteMaxVisible());
 			else {
 				if (submit || key.raw === "\n") {
 					this.#accept(open, "enter");
@@ -1817,7 +1802,6 @@ export class Composer {
 			this.#completion.set({ ...open, selected, chosen: true, effortOverride: undefined });
 			return true;
 		}
-		if (this.#backslashSubmit(key)) return true;
 		if (submit && key.raw !== "\n") {
 			this.submit();
 			return true;

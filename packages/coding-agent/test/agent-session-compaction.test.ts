@@ -13,14 +13,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { CompactionPreparation } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import {
-	CodeAgentTokenCache,
-	getCodeAgentModels,
-	streamCodeAgent,
-} from "@oh-my-pi/pi-coding-agent/config/codeagent-provider";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type LocalAgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -193,7 +188,7 @@ describe.skipIf(!e2eApiKey("ASCEND_API_KEY"))("AgentSession compaction e2e", () 
 	}, 120000);
 });
 
-describe("AgentSession CodeAgent terminal context maintenance", () => {
+describe("AgentSession compaction provenance and output limits", () => {
 	let session: AgentSession | undefined;
 	let authStorage: AuthStorage | undefined;
 
@@ -205,22 +200,20 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 		vi.restoreAllMocks();
 	});
 
-	async function createTerminalSession(
-		stopReason: "length" | "error",
+	async function createCompactionSession(
+		stopReason: "length" | "stop",
 		inputTokens: number,
-		content: AssistantMessage["content"] = [{ type: "text", text: "Delivered partial result." }],
 		maintenanceOutcome: "success" | "cancel" | "error" = "success",
 		sessionDir?: string,
 	) {
-		const model = getCodeAgentModels()[0]!;
+		const model = { ...getBundledModel("openai", "gpt-4o-mini")!, contextWindow: 200000 };
 		const message: AssistantMessage = {
 			role: "assistant",
-			content,
+			content: [{ type: "text", text: "Delivered partial result." }],
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
 			stopReason,
-			...(stopReason === "error" ? { errorMessage: "prompt is too long: 250000 tokens > 200000 maximum" } : {}),
 			usage: {
 				input: inputTokens,
 				output: 20,
@@ -237,7 +230,6 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 			...message,
 			content: [{ type: "text", text: "Previous completed work." }],
 			stopReason: "stop",
-			errorMessage: undefined,
 			usage: { ...message.usage, input: 100, totalTokens: 120 },
 			timestamp: message.timestamp - 1000,
 		});
@@ -250,18 +242,17 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: message });
-					if (stopReason === "error") stream.push({ type: "error", reason: "error", error: message });
-					else stream.push({ type: "done", reason: "length", message });
+					stream.push({ type: "done", reason: stopReason, message });
 				});
 				return stream;
 			},
 			initialState: { model, tools: [], messages: manager.buildSessionContext().messages },
 		});
 		authStorage = await AuthStorage.create(":memory:");
-		authStorage.keys.setRuntime("codeagent", "test-key");
+		authStorage.keys.setRuntime(model.provider, "test-key");
 		const settings = Settings.isolated({
 			"compaction.enabled": true,
-			"compaction.autoContinue": true,
+			"compaction.autoContinue": false,
 			"compaction.methodOrder": ["soft"],
 			"compaction.keepRecentTokens": 1,
 			"compaction.thresholdTokens": 160000,
@@ -290,7 +281,6 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 			emitBeforeAgentStart: async () => undefined,
 		};
 		const modelRegistry = new ModelRegistry(authStorage);
-		// This synthetic provider is deliberately absent from the Linux catalog.
 		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([model]);
 		session = new AgentSession({
 			agent,
@@ -303,22 +293,6 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 		session.subscribeLocal(event => {
 			events.push(event);
 		});
-		// An active goal makes a successful maintenance pass eligible to continue;
-		// terminal CodeAgent output must not turn that into another provider request.
-		const now = Date.now();
-		session.setGoalModeState({
-			enabled: true,
-			mode: "active",
-			goal: {
-				id: "codeagent-terminal",
-				objective: "finish the current request",
-				status: "active",
-				tokensUsed: 0,
-				timeUsedSeconds: 0,
-				createdAt: now,
-				updatedAt: now,
-			},
-		});
 		return { session, manager, events, maintenanceError, providerCalls: () => calls };
 	}
 
@@ -327,10 +301,9 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 		async outcome => {
 			const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omp-compaction-identity-"));
 			try {
-				const { manager, events, maintenanceError } = await createTerminalSession(
+				const { manager, events, maintenanceError } = await createCompactionSession(
 					"length",
 					100,
-					undefined,
 					outcome === "post-error" ? "success" : outcome,
 					directory,
 				);
@@ -402,7 +375,7 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 	it("restores automatic compaction provenance without inventing legacy provenance", async () => {
 		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omp-auto-compaction-identity-"));
 		try {
-			const fixture = await createTerminalSession("length", 190000, undefined, "success", directory);
+			const fixture = await createCompactionSession("stop", 190000, "success", directory);
 			await fixture.session.prompt("current request");
 			await fixture.session.waitForIdle();
 			const live = fixture.manager.getBranch().findLast(entry => entry.type === "compaction");
@@ -429,8 +402,8 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 		}
 	});
 
-	it("warns about CodeAgent truncation below threshold and retains delivered output", async () => {
-		const fixture = await createTerminalSession("length", 100);
+	it("warns about output truncation below threshold and retains delivered output", async () => {
+		const fixture = await createCompactionSession("length", 100);
 		await fixture.session.prompt("current request");
 		await fixture.session.waitForIdle();
 		expect(fixture.events.filter(event => event.type === "notice" && event.level === "warning")).toEqual([
@@ -444,98 +417,6 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 		});
 		expect(fixture.providerCalls()).toBe(1);
 	});
-
-	it("warns about thinking-only CodeAgent length stops without replaying the request", async () => {
-		const fixture = await createTerminalSession("length", 100, [
-			{ type: "thinking", thinking: "Partial reasoning." },
-		]);
-		await fixture.session.prompt("current request");
-		await fixture.session.waitForIdle();
-		expect(
-			fixture.events.some(
-				event => event.type === "notice" && event.level === "warning" && event.message.includes("truncated"),
-			),
-		).toBe(true);
-		expect(fixture.providerCalls()).toBe(1);
-		expect(fixture.session.messages.findLast(message => message.role === "assistant")).toMatchObject({
-			stopReason: "length",
-		});
-	});
-
-	it("compacts exhausted CodeAgent context without discarding truncated output or continuing the goal", async () => {
-		const fixture = await createTerminalSession("length", 190000);
-		await fixture.session.prompt("current request");
-		await fixture.session.waitForIdle();
-		expect(
-			fixture.events.some(
-				event => event.type === "notice" && event.level === "warning" && event.message.includes("truncated"),
-			),
-		).toBe(true);
-		expect(fixture.manager.getBranch().filter(entry => entry.type === "compaction")).toHaveLength(1);
-		expect(fixture.session.messages.some(message => message.role === "compactionSummary")).toBe(true);
-		expect(fixture.session.messages.findLast(message => message.role === "assistant")).toMatchObject({
-			stopReason: "length",
-			content: [{ type: "text", text: "Delivered partial result." }],
-		});
-		expect(fixture.providerCalls()).toBe(1);
-		expect(fixture.events.filter(event => event.type === "agent_end")).toHaveLength(1);
-	});
-
-	it("maintains CodeAgent overflow context without replaying the failed request", async () => {
-		const fixture = await createTerminalSession("error", 250000);
-		await fixture.session.prompt("current request");
-		await fixture.session.waitForIdle();
-		expect(fixture.manager.getBranch().filter(entry => entry.type === "compaction")).toHaveLength(1);
-		// A failed turn is a durable transcript event, not provider replay context.
-		// Consumers obtain the terminal result through the public result accessor.
-		expect(fixture.session.getLastAssistantMessage()).toMatchObject({
-			stopReason: "error",
-			errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
-			content: [{ type: "text", text: "Delivered partial result." }],
-		});
-		expect(
-			fixture.manager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant"),
-		).toMatchObject({
-			type: "message",
-			message: {
-				stopReason: "error",
-				errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
-				content: [{ type: "text", text: "Delivered partial result." }],
-			},
-		});
-		expect(
-			fixture.session.messages.some(message => message.role === "assistant" && message.stopReason === "error"),
-		).toBe(false);
-		expect(fixture.providerCalls()).toBe(1);
-		expect(fixture.events.filter(event => event.type === "agent_end")).toHaveLength(1);
-	});
-
-	it.each([
-		["length", "cancel"],
-		["length", "error"],
-		["error", "cancel"],
-		["error", "error"],
-	] as const)(
-		"retains CodeAgent %s output without goal continuation when maintenance ends with %s",
-		async (stopReason, outcome) => {
-			const fixture = await createTerminalSession(stopReason, 250000, undefined, outcome);
-			await fixture.session.prompt("current request");
-			await fixture.session.waitForIdle();
-			expect(fixture.manager.getBranch().filter(entry => entry.type === "compaction")).toHaveLength(0);
-			expect(fixture.session.messages.findLast(message => message.role === "assistant")).toMatchObject({
-				stopReason,
-				content: [{ type: "text", text: "Delivered partial result." }],
-			});
-			expect(fixture.providerCalls()).toBe(1);
-			expect(fixture.events.filter(event => event.type === "agent_end")).toHaveLength(1);
-			expect(fixture.events.some(event => event.type === "auto_compaction_end" && event.willRetry)).toBe(false);
-			if (stopReason === "length") {
-				expect(fixture.events.some(event => event.type === "notice" && event.message.includes("truncated"))).toBe(
-					true,
-				);
-			}
-		},
-	);
 });
 
 describe("AgentSession explicit context exhaustion recovery", () => {
@@ -659,136 +540,6 @@ describe("AgentSession explicit context exhaustion recovery", () => {
 			await session.dispose();
 			auth.close();
 			vi.restoreAllMocks();
-		}
-	});
-});
-
-describe("AgentSession compaction provider replay policy", () => {
-	function isOpenAICompletionsModel(model: Model): model is Model<"openai-completions"> {
-		return model.api === "openai-completions";
-	}
-
-	afterEach(() => {
-		vi.restoreAllMocks();
-	});
-
-	it.each([
-		["codeagent", "compact", "http"],
-		["codeagent", "compact", "stream"],
-		["codeagent", "compact", "auth"],
-		["codeagent", "handoff", "http"],
-		["codeagent", "handoff", "stream"],
-		["codeagent", "handoff", "auth"],
-		["codeagent", "auto", "http"],
-		["codeagent", "auto", "stream"],
-		["codeagent", "auto", "auth"],
-	] as const)("does not replay a failed %s %s after %s failure", async (provider, operation, failure) => {
-		let requests = 0;
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch() {
-				requests++;
-				if (failure === "http") return new Response("service unavailable", { status: 503 });
-				if (failure === "auth") return new Response("unauthorized", { status: 401 });
-				const partial = JSON.stringify({
-					choices: [{ index: 0, delta: { content: "Partial summary." }, finish_reason: null }],
-				});
-				return new Response(`data: ${partial}\n\nevent: error\ndata: {"error":{"message":"timeout"}}\n\n`, {
-					headers: { "content-type": "text/event-stream" },
-				});
-			},
-		});
-		const model = {
-			...getCodeAgentModels()[0]!,
-			provider,
-			api: "openai-completions" as const,
-			baseUrl: server.url.origin,
-		};
-		const fallback = { ...model, id: "fallback-summary", contextWindow: 300000 };
-		const cache = new CodeAgentTokenCache(() => "synthetic-token");
-		const auth = await AuthStorage.create(":memory:");
-		const manager = SessionManager.inMemory();
-		for (const [question, answer] of [
-			["first question", "first answer"],
-			["second question", "second answer"],
-		]) {
-			manager.appendMessage({ role: "user", content: question!, timestamp: Date.now() });
-			manager.appendMessage({
-				role: "assistant",
-				content: [{ type: "text", text: answer! }],
-				api: model.api,
-				provider,
-				model: model.id,
-				stopReason: "stop",
-				usage: {
-					input: 100,
-					output: 20,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 120,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-				timestamp: Date.now(),
-			});
-		}
-		// Keep a user boundary so one summary is required, not parallel history/turn-prefix requests.
-		manager.appendMessage({ role: "user", content: "pending request", timestamp: Date.now() });
-		const registry = new ModelRegistry(auth);
-		vi.spyOn(registry, "getAvailable").mockReturnValue([model, fallback]);
-		vi.spyOn(registry, "getApiKey").mockResolvedValue("synthetic-token");
-		const agent = new Agent({
-			convertToLlm,
-			initialState: { model, tools: [], messages: manager.buildSessionContext().messages },
-		});
-		const session = new AgentSession({
-			agent,
-			sessionManager: manager,
-			modelRegistry: registry,
-			settings: Settings.isolated({
-				"compaction.methodOrder": operation === "auto" ? ["handoff", "soft"] : ["soft", "remote"],
-				"compaction.remoteEndpoint": `${server.url.origin}/compact`,
-				"compaction.keepRecentTokens": 1,
-				"compaction.thresholdTokens": 160000,
-				"compaction.asyncEnabled": false,
-			}),
-			sideStreamFn: (requestModel, context, options) => {
-				if (!isOpenAICompletionsModel(requestModel)) {
-					throw new Error(`Unexpected CodeAgent summary API: ${requestModel.api}`);
-				}
-				return streamCodeAgent(requestModel, context, { ...options, apiKey: undefined, fetch }, cache);
-			},
-		});
-		try {
-			if (operation === "auto") {
-				const completion = Promise.withResolvers<void>();
-				const events: LocalAgentSessionEvent[] = [];
-				session.subscribeLocal(event => {
-					events.push(event);
-					if (event.type === "auto_compaction_end") completion.resolve();
-				});
-				const previous = agent.state.messages.findLast(message => message.role === "assistant") as AssistantMessage;
-				const message: AssistantMessage = {
-					...previous,
-					usage: { ...previous.usage, input: 190000, totalTokens: 190020 },
-					timestamp: Date.now(),
-				};
-				agent.emitExternalEvent({ type: "message_end", message });
-				agent.emitExternalEvent({ type: "agent_end", messages: [message] });
-				await completion.promise;
-				await session.waitForIdle();
-				expect(events.some(event => event.type === "auto_compaction_end" && event.errorMessage)).toBe(true);
-			} else {
-				await expect(
-					operation === "compact" ? session.compact() : session.compact(undefined, { mode: "handoff" }),
-				).rejects.toBeInstanceOf(Error);
-			}
-			expect(requests).toBe(1);
-			expect(manager.getBranch().filter(entry => entry.type === "compaction")).toHaveLength(0);
-		} finally {
-			await session.dispose();
-			auth.close();
-			server.stop(true);
 		}
 	});
 });

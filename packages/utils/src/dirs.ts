@@ -23,8 +23,8 @@ import {
 	normalizeProfileName,
 	prepareLinuxPrivateCacheDirectory,
 	preparePrivateCacheDirectory,
-	resolveAbsoluteDir as resolveFullyQualifiedDir,
 	resolveCacheRoot,
+	resolveConfigRootOverride,
 	resolveLinuxPrivateCacheRoot,
 	resolveNativesDirOverride,
 	resolvePersistentRoot,
@@ -352,7 +352,6 @@ class DirResolver {
 	readonly configRoot: string;
 	readonly agentDir: string;
 	readonly cacheRoot: string | undefined;
-	readonly explicitCacheRoot: string | undefined;
 	readonly executableCacheRoot: string;
 	readonly agentExecutableCacheDir: string;
 
@@ -369,7 +368,6 @@ class DirResolver {
 		const profile = normalizeProfileName(options.profile);
 		this.configRoot = getProfileConfigRoot(profile);
 		this.cacheRoot = resolveCacheRoot(profile);
-		this.explicitCacheRoot = resolveFullyQualifiedDir(process.env.OMP_CACHE_DIR) ? this.cacheRoot : undefined;
 
 		const defaultAgent = path.join(this.configRoot, "agent");
 		const agentDirOverride = profile ? undefined : options.agentDirOverride;
@@ -393,8 +391,7 @@ class DirResolver {
 		let xdgCache: string | undefined;
 		// An explicit OMP root owns data, cache, and runtime paths even when XDG is set.
 		const xdgPlatform =
-			(process.platform === "linux" || process.platform === "darwin") &&
-			!resolveFullyQualifiedDir(process.env.OMP_CONFIG_ROOT);
+			(process.platform === "linux" || process.platform === "darwin") && !resolveConfigRootOverride();
 		if (xdgPlatform && isDefault) {
 			const resolveIf = (envVar: string) => resolveXdgRoot(process.env[envVar], profile);
 			xdgData = resolveIf("XDG_DATA_HOME");
@@ -424,10 +421,8 @@ class DirResolver {
 			cache: this.cacheRoot ?? xdgCache ?? this.configRoot,
 		};
 		// The implicit Linux cache lives on /dev/shm, which may be mounted noexec.
-		this.executableCacheRoot = this.explicitCacheRoot ?? xdgCache ?? this.configRoot;
-		this.agentExecutableCacheDir = this.explicitCacheRoot
-			? path.join(this.explicitCacheRoot, "agent", "cache")
-			: path.join(xdgCache ?? this.agentDir, "cache");
+		this.executableCacheRoot = xdgCache ?? this.configRoot;
+		this.agentExecutableCacheDir = path.join(xdgCache ?? this.agentDir, "cache");
 		// XDG flattens the agent/ prefix: ~/.omp/agent/sessions → $XDG_DATA_HOME/omp/sessions
 		this.#agentDirs = {
 			data: xdgData ?? this.agentDir,
@@ -681,7 +676,8 @@ export function getTestTempDir(prefix: string): string {
  */
 export function getLogsDir(): string {
 	if (dirs.cacheRoot) return path.join(dirs.cacheRoot, "logs");
-	if (isBunTestRuntime() && !resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT)) {
+	// Preserve the test log routing for Windows paths rooted on the current drive.
+	if (isBunTestRuntime() && !resolveConfigRootOverride(process.env, { allowCurrentDriveRoot: true })) {
 		return getTestTempDir("omp-test-logs");
 	}
 	return dirs.rootSubdir("logs", "state");
@@ -852,14 +848,12 @@ export function getPuppeteerDir(): string {
 }
 
 /**
- * Get the WebKit engine's host executable. Explicit OMP roots keep the engine
- * under `lib/abkit` in the selected cache/profile root; without relocation,
+ * Get the WebKit engine's host executable. An explicit OMP config root keeps
+ * the engine under `lib/abkit` in the selected config/profile root; otherwise
  * retain upstream's `~/.o2/lib/abkit` location shared with Tern.
  */
 export function getWebKitHostPath(platform: NodeJS.Platform = process.platform): string {
-	const root =
-		dirs.explicitCacheRoot ??
-		(resolveFullyQualifiedDir(process.env.OMP_CONFIG_ROOT) ? dirs.configRoot : path.join(os.homedir(), ".o2"));
+	const root = resolveConfigRootOverride() ? dirs.configRoot : path.join(os.homedir(), ".o2");
 	return path.join(root, "lib", "abkit", platform === "win32" ? "ABHost.exe" : "ABHost");
 }
 
@@ -1000,8 +994,7 @@ export function getStatsDbPath(): string {
 }
 
 /**
- * Create or verify a private directory in the implicit Linux offline cache.
- * Explicit cache roots use the caller's normal filesystem path.
+ * Create or verify a private directory in the Linux offline cache.
  */
 export function preparePerformanceCacheDirectory(directory: string, create = true): boolean {
 	const root = dirs.cacheRoot;
@@ -1108,9 +1101,7 @@ export function prepareModelCacheDirectory(dbPath: string): void {
 
 /** Cache directory for managed JS environments; the implicit Linux cache may be noexec. */
 export function getAgentCacheDir(agentDir?: string): string {
-	return dirs.explicitCacheRoot
-		? path.join(dirs.explicitCacheRoot, "agent", "cache")
-		: path.join(agentDir ?? dirs.agentDir, "cache");
+	return path.join(agentDir ?? dirs.agentDir, "cache");
 }
 
 /** Agent cache for installed executables and native libraries, honoring explicit and XDG paths. */

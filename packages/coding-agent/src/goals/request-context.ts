@@ -8,12 +8,17 @@ import type { GoalAutopilotCompletionRequest } from "./runtime";
 import type { LocalGoalModeState } from "./state";
 
 export const GOAL_AUTO_ORCHESTRATE_CONTEXT_SOURCE = "goal-auto-orchestrate";
+export const GOAL_AUTO_ORCHESTRATE_CONTEXT_TYPE = "goal-auto-orchestrate-context";
 const orchestrateKeyword = MAGIC_KEYWORDS.find(keyword => keyword.id === "orchestrate")!;
 const renderGoalAutoOrchestrate = prompt.compile(goalAutoOrchestratePrompt.trim());
 
 /** The persisted notice is live only while this specific Autopilot goal is active. */
 export function activeGoalAutopilotContextId(state: LocalGoalModeState | undefined): string | null {
 	return state?.autoOrchestrate === true && state.enabled && state.goal.status === "active" ? state.goal.id : null;
+}
+
+export function canBuildGoalAutoOrchestrateNotice(state: LocalGoalModeState | undefined): state is LocalGoalModeState {
+	return state?.autoOrchestrate === true && state.enabled && state.mode === "active" && state.goal.status === "active";
 }
 
 /**
@@ -25,7 +30,7 @@ export function buildGoalAutoOrchestrateMessage(
 	state: LocalGoalModeState | undefined,
 	tools: readonly string[],
 ): CustomMessage | undefined {
-	if (state?.autoOrchestrate !== true || !state.enabled || state.mode !== "active" || state.goal.status !== "active") {
+	if (!canBuildGoalAutoOrchestrateNotice(state)) {
 		return undefined;
 	}
 	const orchestrateRules = orchestrateKeyword.requires.every(tool => tools.includes(tool))
@@ -33,7 +38,7 @@ export function buildGoalAutoOrchestrateMessage(
 		: undefined;
 	return {
 		role: "custom",
-		customType: "goal-auto-orchestrate-context",
+		customType: GOAL_AUTO_ORCHESTRATE_CONTEXT_TYPE,
 		// Preserve the saved objective verbatim, including whitespace and templates.
 		content: renderGoalAutoOrchestrate({
 			objective: state.goal.objective,

@@ -26,7 +26,7 @@ import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "./builtin-magic-keywords";
 import { BUILTIN_MARKETPLACE_SLASH_COMMANDS, reloadTuiPluginState } from "./builtin-marketplace";
 import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
-import { BUILTIN_SKETCH_SLASH_COMMANDS, restoreSketchDraft } from "./builtin-sketch";
+import { BUILTIN_SKETCH_SLASH_COMMANDS } from "./builtin-sketch";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
 import { parseSlashCommand } from "./helpers/parse";
 import type {
@@ -35,6 +35,7 @@ import type {
 	SlashCommandResult,
 	SlashCommandRuntime,
 	SlashCommandSpec,
+	TuiSlashInputPolicy,
 	TuiSlashCommandRuntime,
 } from "./types";
 
@@ -195,9 +196,8 @@ export async function executeBuiltinSlashCommand(
 	// host-only; the allowlist covers purely local/read-only commands.
 	if (runtime.ctx.collabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
 		runtime.ctx.showStatus(`/${command.name} is host-only during a collab session`);
-		// A sketch stays local even when disallowed, but its images must stay in the draft.
-		if (command.name === "sketch" && imageCount > 0) {
-			restoreSketchDraft(parsed, runtime);
+		if (imageCount > 0 && command.tuiInput?.restoreGuestDraft) {
+			command.tuiInput.restoreGuestDraft(parsed, runtime);
 		} else if (runtime.draftDetached) {
 			restoreDetachedDraft(runtime.ctx.composer, parsed.text, runtime.input?.images, runtime.input?.imageLinks);
 		} else {
@@ -239,6 +239,13 @@ export async function executeBuiltinSlashCommand(
 		return true;
 	}
 	return false;
+}
+
+/** Look up submission policy without running a handler or changing the draft. */
+export function tuiSlashInputPolicy(parsed: ParsedSlashCommand | null): TuiSlashInputPolicy | undefined {
+	if (!parsed) return undefined;
+	const spec = lookupBuiltinSlashCommand(parsed.name);
+	return spec && (spec.allowArgs || !parsed.args) ? spec.tuiInput : undefined;
 }
 
 /** Look up a unified spec by name or alias. Used by the ACP dispatcher. */

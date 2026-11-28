@@ -10,6 +10,12 @@ OpenSpec 随包交付、其他内置技能、[Codex 用户技能发现](#require
 
 包内技能 MUST 接入原生发现、`/skill:<name>` 和同名覆盖；发现／读取不授权执行。
 
+#### Scenario: 发现随包资源
+
+- **WHEN** 从源码、npm 包或独立可执行文件发现技能，或调用 `omp superpowers`
+- **THEN** OpenSpec 技能、JCH、Superpowers 和 Developer Test Agent 随 OMP 交付，复用原生发现及现有权限，不走插件安装、升级或启停，不需要网络。Superpowers 不自动加载包内 hook。
+- **AND** 发现、读取技能或调用 Superpowers 脚本不读取、校验或解包 OpenSpec CLI 运行时；仅 `omp openspec` 调用才准备独立归档的运行时，继续使用 OMP 自带 Bun。
+
 #### Scenario: 使用内置 OpenSpec
 
 - **WHEN** 用户在本地项目使用 OpenSpec
@@ -59,7 +65,7 @@ OMP MUST 仅注册 `/goal-autopilot`、无旧别名；`/goal` 默认非本模式
 - **WHEN** TUI 调用 `/goal-autopilot`
 - **THEN** 提供注册/目录/补全；`[set] <目标正文>` 创建/替换 Orchestrate 无人值守目标（夜间可用、状态可见）；子命令 `show/pause/resume/drop`、`budget <N|off>`。
 
-`/goal-autopilot` 直投所属会话的原生 Goal 控制器（含 busy），不强排 fork 队列，不在出队／显式提升时重解析，不发 slash 原文给模型。正文沿用上游 prompt／steering 准入和输入传递规则。
+`/goal-autopilot` 直投所属会话的原生 Goal 控制器（含 busy）；Enter 与 follow-up 均不因压缩已排队或正在运行而扣留该命令。普通 `/goal` 不继承此特例。不在出队／显式提升时重解析，不发 slash 原文给模型。正文沿用上游 prompt／steering 准入和输入传递规则。
 
 ### Requirement: 2. 模式归属与持久化
 
@@ -118,7 +124,7 @@ OMP MUST 复用模板、`renderOrchestrateNotice` 及工具可用性判定，不
 启动即授 §5 权限；OMP MUST 保留后续输入/暂停/停止/取消及管理确认（含删除）。
 #### Scenario: 6. 无人值守与权限边界的核心行为
 - **WHEN** 初始正文实际进入主代理请求
-- **THEN** 绑定会话/目标 ID/内存运行代次，仅该响应派生工具继承。暂停/停止/替换/切会话使旧调用失效且不复活；自动批/超时回执前查 Goal 账本用量。
+- **THEN** Autopilot 请求归属绑定会话/目标 ID/内存运行代次，仅该响应派生工具继承。只有实际交付的有效响应才确认首次准入，失败后的原生重试不重复记；压缩重建通知或读取旧历史不恢复授权。暂停/停止/替换/切会话使旧调用失效且不复活；自动批/超时回执前查 Goal 账本用量。
 
 - 本地审批（含 Eval prelude）：按实际执行参数解析，显式拒绝优先；需 `prompt`（含 `guarded`）则依授权批一次，记录 `goal-autopilot`，无等待事件、审批缓存写入或全局模式改动。`cfg://` 独立审批、Provider 强制检查、需单独授权的前台控制不继承，原等待点报阻塞原因；不改认证、不授可复用前台权限。
 - 原生终端／桌面的有效归属 `ask` 用静默表单，输入重置 60 秒，无终端／语音／宿主提醒。超时仅在初始有可提交的显式推荐、当前全部控件通过提交校验时返回完整值及备注／图片，标超时非用户提交；否则只返下文。失效按取消，附图处理后复核归属。

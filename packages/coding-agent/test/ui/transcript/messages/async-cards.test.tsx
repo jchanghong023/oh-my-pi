@@ -136,7 +136,7 @@ screenSuite("parent-irc", corpusCase => {
 	};
 });
 
-test("shows background diagnostics without automatic success or task status rows", () => {
+test("shows one upstream completion row per delivered job and retains artifact warnings", () => {
 	const message = {
 		customType: "async-result",
 		content: "results",
@@ -169,23 +169,19 @@ test("shows background diagnostics without automatic success or task status rows
 				JSON.stringify(describeTree(node, env)),
 			]) {
 				for (const marker of [
-					"Background job failed",
-					"bash-failed",
-					"compile project",
-					"Background job cancelled",
-					"eval-cancelled",
-					"task-failed: Full output was not saved completely (artifact write failed)",
-					"task-failed: Structured output invalid: invalid output",
-				])
-					expect(output).toContain(marker);
-				expect(output.match(/task-failed/g)).toHaveLength(2);
-				for (const marker of [
 					"Background job completed",
 					"bash-complete",
+					"bash-failed",
+					"eval-cancelled",
 					"eval-running",
+					"task-failed",
 					"task-complete",
 					"task-cancelled",
+					"Full output was not saved completely (artifact write failed)",
 				])
+					expect(output).toContain(marker);
+				expect(output.match(/Background job completed/g)).toHaveLength(message.details.jobs.length);
+				for (const marker of ["compile project", "Background job failed", "Structured output invalid"])
 					expect(output).not.toContain(marker);
 			}
 			visible.set(false);
@@ -202,8 +198,8 @@ test("shows background diagnostics without automatic success or task status rows
 					visible={true}
 				/>,
 			)();
-			expect(paintNode(env, legacy, 160).rows).toEqual([]);
-			expect(JSON.stringify(describeTree(legacy, env))).not.toContain("single-task");
+			expect(paintNode(env, legacy, 160).rows.join("\n")).toContain("Background job completed");
+			expect(JSON.stringify(describeTree(legacy, env))).toContain("single-task");
 		} finally {
 			dispose();
 		}
@@ -232,9 +228,17 @@ test("process exit details survive replay and the tool activity visibility toggl
 				const rows = () => Bun.stripANSI(paintNode(env, node, 200).rows.join("\n"));
 				const native = () => JSON.stringify(describeTree(node, env));
 				for (const output of [rows(), native()]) {
-					for (const marker of ["failed-state", "nonzero", "exit 7", "unknown-exit", "failed-unknown"])
+					for (const marker of [
+						"Supervised process completed",
+						"Supervised process failed",
+						"healthy",
+						"failed-state",
+						"nonzero",
+						"exit 7",
+						"unknown-exit",
+						"failed-unknown",
+					])
 						expect(output).toContain(marker);
-					expect(output).not.toContain("healthy");
 				}
 				visible.set(false);
 				expect(rows()).toBe("");

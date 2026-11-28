@@ -23,7 +23,6 @@
  * focused kind's widget (an editor turns them into `edit` events); clicks
  * resolve through the last frame's hit regions.
  */
-import { offlineFromEnv } from "@oh-my-pi/pi-utils/env";
 import { segmentGraphemes } from "@oh-my-pi/pi-utils/graphemes";
 import type {
 	FramePlan,
@@ -60,7 +59,6 @@ import {
 	type Cell,
 	DEFAULT_SPINNER_INTERVAL_MS,
 	type Hit,
-	type PaintCadence,
 	type PaintEnvironment,
 	type PaintImages,
 	paintNode,
@@ -74,9 +72,6 @@ import "./painters";
 
 /** Tick of a block drawing smooth motion (a shimmer sweep), ms. */
 const SMOOTH_TICK_MS = 1000 / 20;
-const OFFLINE_FRAME_MS = 100;
-const OFFLINE_BRAND_MS = 250;
-const OFFLINE_DECORATION_MS = 1_000;
 
 /**
  * Where a session draws: `inline` on the normal screen (settled blocks retire into terminal
@@ -388,21 +383,6 @@ function lowerBound(values: readonly number[], value: number): number {
 	return lo;
 }
 
-/** Count covering rows in the part of a dock block that survives clipping. */
-function coveringRows(block: Block, start: number, end: number): number {
-	if (end <= start) return 0;
-	const total = Math.min(block.covering ?? 0, block.rows.length);
-	if (!block.coveringRanges || total === block.rows.length) {
-		return Math.max(0, end - Math.max(start, block.rows.length - total));
-	}
-	let count = 0;
-	for (const range of block.coveringRanges) {
-		if (range.start >= end) break;
-		count += Math.max(0, Math.min(end, range.end) - Math.max(start, range.start));
-	}
-	return count;
-}
-
 /** See the module docs. */
 export class TermBackend {
 	readonly #surface: Surface;
@@ -416,15 +396,11 @@ export class TermBackend {
 	readonly #hover: Signal<PointerHover | null> = signal<PointerHover | null>(null);
 	readonly #hyperlinks: Signal<boolean>;
 	readonly #textSizing: Signal<boolean>;
-	readonly #viewportHeight = signal(1);
-	readonly #offlineLinux = process.platform === "linux" && offlineFromEnv();
 	#tick: Timer | undefined;
 	#tickDelay = 0;
 	#inTick = false;
 	#frameRequested = false;
 	#frame: Timer | undefined;
-	#frameDue = Number.POSITIVE_INFINITY;
-	#handlingInput = false;
 	#lastFrame = 0;
 	/** Main nodes whose rows are in terminal history: always a prefix of `main` (the commit frontier). */
 	#committed = new Set<UiNode>();
@@ -492,13 +468,13 @@ export class TermBackend {
 		this.#textSizing = signal(options.driver.capabilities.textSizing);
 		const terminalTextSizing = this.#textSizing;
 		const allowTextSizing = options.textSizing;
-		const clock = (cadence?: PaintCadence): number => this.#animationTime(cadence);
 		this.#env = {
 			theme: options.theme,
-			clock,
-			clockCadence: clock,
+			clock: smooth => {
+				this.#scheduleTick(smooth === true);
+				return (options.clock ?? this.#clock)();
+			},
 			focus: options.surface.focused,
-			viewportHeight: this.#viewportHeight,
 			reduceMotion: options.reduceMotion ?? (() => false),
 			spinnerInterval: () => read(options.spinnerInterval ?? DEFAULT_SPINNER_INTERVAL_MS),
 			hover: this.#hover,
@@ -518,10 +494,7 @@ export class TermBackend {
 		if (this.#committed.size > 0 || this.#emitted.size > 0) this.#requestReplay();
 		this.#unsubscribe.push(
 			this.#driver.onInput(event => this.#routeInput(event, true)),
-			this.#driver.onResize((_columns, rows) => {
-				this.#viewportHeight.set(Math.max(1, rows));
-				this.requestRender();
-			}),
+			this.#driver.onResize(() => this.requestRender()),
 			this.#driver.onCapabilities(capabilities => {
 				this.#hyperlinks.set(capabilities.hyperlinks);
 				this.#textSizing.set(capabilities.textSizing);
@@ -547,7 +520,6 @@ export class TermBackend {
 		clearTimeout(this.#tick);
 		this.#frame = undefined;
 		this.#tick = undefined;
-		this.#frameDue = Number.POSITIVE_INFINITY;
 		this.#frameRequested = false;
 		for (const off of this.#unsubscribe.splice(0)) off();
 		this.#disposeWatch?.();
@@ -704,17 +676,12 @@ export class TermBackend {
 
 	/** Schedule a frame (coalesced, at most one per frame interval). */
 	requestRender(): void {
-		if (!this.#running || (this.#frameRequested && !this.#handlingInput)) return;
+		if (!this.#running || this.#frameRequested) return;
 		this.#frameRequested = true;
-		if (this.#inTick && !this.#offlineLinux) return;
-		const configured = untrack(() => read(this.#options.frameInterval ?? 16));
-		const interval = this.#offlineLinux && !this.#handlingInput ? Math.max(OFFLINE_FRAME_MS, configured) : configured;
-		const now = performance.now();
-		const due = Math.max(now, this.#lastFrame + interval);
-		if (this.#frame && due >= this.#frameDue) return;
-		clearTimeout(this.#frame);
-		this.#frameDue = due;
-		this.#frame = setTimeout(() => this.renderNow(), due - now);
+		if (this.#inTick) return;
+		const interval = untrack(() => read(this.#options.frameInterval ?? 16));
+		const wait = Math.max(0, this.#lastFrame + interval - performance.now());
+		this.#frame = setTimeout(() => this.renderNow(), wait);
 	}
 
 	/** Paint and present a frame now. */
@@ -736,7 +703,6 @@ export class TermBackend {
 		this.#frameRequested = false;
 		clearTimeout(this.#frame);
 		this.#frame = undefined;
-		this.#frameDue = Number.POSITIVE_INFINITY;
 		this.#lastFrame = performance.now();
 		let plan = this.#composeWatched();
 		// An image budget change after painting means the rows it painted are stale.
@@ -779,7 +745,6 @@ export class TermBackend {
 	 */
 	#composeWatched(): FramePlan {
 		this.#disposeWatch?.();
-		this.#viewportHeight.set(Math.max(1, this.#driver.rows));
 		let plan: FramePlan | undefined;
 		createRoot(dispose => {
 			this.#disposeWatch = dispose;
@@ -791,26 +756,11 @@ export class TermBackend {
 		return plan!;
 	}
 
-	#animationTime(cadence: PaintCadence | undefined): number {
-		if (this.#options.clock) return this.#options.clock();
-		const interval =
-			cadence === true
-				? SMOOTH_TICK_MS
-				: Math.min(untrack(this.#env.spinnerInterval) || DEFAULT_SPINNER_INTERVAL_MS, DEFAULT_SPINNER_INTERVAL_MS);
-		const floor = !this.#offlineLinux
-			? 0
-			: cadence === "brand"
-				? OFFLINE_BRAND_MS
-				: cadence === "decoration"
-					? OFFLINE_DECORATION_MS
-					: OFFLINE_FRAME_MS;
-		this.#scheduleTick(Math.max(interval, floor));
-		const now = this.#clock();
-		return floor > OFFLINE_FRAME_MS ? Math.floor(now / floor) * floor : now;
-	}
-
-	#scheduleTick(delay: number): void {
-		if (!this.#running) return;
+	#scheduleTick(smooth: boolean): void {
+		if (!this.#running || this.#options.clock) return;
+		const delay = smooth
+			? SMOOTH_TICK_MS
+			: Math.min(untrack(this.#env.spinnerInterval) || DEFAULT_SPINNER_INTERVAL_MS, DEFAULT_SPINNER_INTERVAL_MS);
 		if (this.#tick !== undefined) {
 			if (this.#tickDelay <= delay) return;
 			clearTimeout(this.#tick);
@@ -828,7 +778,7 @@ export class TermBackend {
 		} finally {
 			this.#inTick = false;
 		}
-		if (this.#frameRequested && !this.#offlineLinux) this.#present();
+		if (this.#frameRequested) this.#present();
 	};
 
 	#paint(node: UiNode, width: number, height?: number): Block {
@@ -955,7 +905,7 @@ export class TermBackend {
 
 	#compose(): FramePlan {
 		const width = Math.max(1, this.#driver.columns);
-		const height = this.#viewportHeight.peek();
+		const height = Math.max(1, this.#driver.rows);
 		const flush = this.#flushing;
 		const hits: { hit: Hit; top: number; left: number }[] = [];
 		let cursor: Cell | null = null;
@@ -1043,16 +993,17 @@ export class TermBackend {
 			dockRows += block.rows.length;
 			covering += Math.min(block.covering ?? 0, block.rows.length);
 		}
-		// Prefer the bottom of the dock, but never crop out the focused field's cursor.
+		// Prefer the bottom of the dock, but keep the focused input row visible.
 		const dockStart = Math.min(Math.max(0, dockRows - height), dockCursor?.row ?? dockRows);
 		const dockEnd = Math.min(dockRows, dockStart + height);
 		const visibleDockRows = dockEnd - dockStart;
 		if (visibleDockRows < dockRows) {
 			covering = 0;
 			for (const { block, top } of dock) {
-				const start = Math.max(0, dockStart - top);
+				const firstCovering = block.rows.length - Math.min(block.covering ?? 0, block.rows.length);
+				const start = Math.max(firstCovering, dockStart - top);
 				const end = Math.min(block.rows.length, dockEnd - top);
-				covering += coveringRows(block, start, end);
+				covering += Math.max(0, end - start);
 			}
 		}
 
@@ -1353,14 +1304,7 @@ export class TermBackend {
 			// The rows from the viewport's top down: a shrunk viewport keeps its top (only a dock pads it down).
 			const held = !fresh && pin.bottom ? Math.min(height, pin.span - written) : 0;
 			const span = Math.max(viewport.length + visibleDockRows, held);
-			this.#nextPin = {
-				width,
-				height,
-				below: below + written,
-				bottom,
-				rows: viewport.length + visibleDockRows,
-				span,
-			};
+			this.#nextPin = { width, height, below: below + written, bottom, rows: viewport.length + visibleDockRows, span };
 			// The screen rows above the viewport: everything written so far, or (at the bottom) what it leaves.
 			const above = bottom ? Math.max(0, height - span) : below + written;
 			if (joinedEnd > 0) dropCutImages(viewport, 0, joinedEnd, above);
@@ -1611,18 +1555,10 @@ export class TermBackend {
 			(!this.#pointerFocused || this.#options.screen?.() !== "fullscreen")
 		)
 			return;
-		const input = this.#handlingInput;
-		this.#handlingInput =
-			this.#offlineLinux && (event.type === "key" || event.type === "paste" || event.type === "mouse");
-		try {
-			if (!this.#searchInput(event) && !(intercept && this.#options.intercept?.(event))) this.#onInput(event);
-		} finally {
-			this.#handlingInput = input;
-		}
+		if (!this.#searchInput(event) && !(intercept && this.#options.intercept?.(event))) this.#onInput(event);
 	}
 
 	#onInput(event: InputEvent): void {
-		const hover = this.#offlineLinux && event.type === "mouse" ? this.#hover.peek() : null;
 		batch(() => {
 			switch (event.type) {
 				case "key":
@@ -1642,19 +1578,7 @@ export class TermBackend {
 					break;
 			}
 		});
-		// After the first invalidation the watcher is disarmed until the queued frame paints.
-		// Keys, paste and scrolling can still promote it; unchanged pointer motion must not.
-		if (
-			!this.#offlineLinux ||
-			(this.#frameRequested &&
-				(event.type === "paste" ||
-					(event.type === "key" && event.key.kind !== "release") ||
-					(event.type === "mouse" &&
-						((event.mouse.action === "press" &&
-							(event.mouse.button === "wheel-up" || event.mouse.button === "wheel-down")) ||
-							this.#hover.peek() !== hover))))
-		)
-			this.requestRender();
+		this.requestRender();
 	}
 
 	#onKey(key: KeyEvent): void {

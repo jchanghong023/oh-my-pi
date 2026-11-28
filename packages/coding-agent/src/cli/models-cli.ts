@@ -332,8 +332,6 @@ export interface RunModelsListingOptions {
 	disabledExtensionIds?: string[];
 	/** When true, exclude ambient factories and resolve only `additionalExtensionPaths`. */
 	disableExtensionDiscovery?: boolean;
-	/** Company environment: extension catalog discovery stays cache-only. */
-	offline?: boolean;
 }
 
 export async function runModelsListing(options: RunModelsListingOptions): Promise<void> {
@@ -348,7 +346,6 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		settingsExtensions = [],
 		disabledExtensionIds = [],
 		disableExtensionDiscovery = false,
-		offline = false,
 	} = options;
 
 	const eventBus = new EventBus();
@@ -387,9 +384,7 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		}
 		extensionsResult.runtime.pendingProviderRegistrations = [];
 		// Discover runtime (extension) provider catalogs now that they are registered.
-		await modelRegistry.refreshRuntimeProviders(
-			offline ? "offline" : action === "refresh" ? "online" : "online-if-uncached",
-		);
+		await modelRegistry.refreshRuntimeProviders(action === "refresh" ? "online" : "online-if-uncached");
 
 		for (const warning of modelRegistry.drainConfigWarnings()) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
@@ -472,8 +467,10 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 
 				const cwd = getProjectDir();
 				const offline = offlineFromEnv();
-				const strategy = action === "refresh" ? "online" : offline ? "offline" : "online-if-uncached";
-				const cacheOnly = strategy === "offline";
+				const explicitRefresh = action === "refresh";
+				const strategy = explicitRefresh ? "online" : "online-if-uncached";
+				const cacheOnly = offline && !explicitRefresh;
+				const diagnosticStrategy = cacheOnly ? "offline" : strategy;
 				stage = "lane";
 				const laneStarted = performance.now();
 				logger.info("models.lane.started", {
@@ -527,7 +524,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 						elapsed_ms: performance.now() - initStarted,
 					});
 
-					if (action === "refresh" && !json && process.stderr.isTTY) {
+					if (explicitRefresh && !json && process.stderr.isTTY) {
 						process.stderr.write(
 							offline
 								? "Refreshing configured intranet model catalogs…\n"
@@ -540,7 +537,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 						...commandFields,
 						event: cacheOnly ? "offline_model_refresh" : "models_refresh",
 						stage,
-						strategy,
+						strategy: diagnosticStrategy,
 						cache_only: cacheOnly,
 					};
 					logger.info("models.refresh.started", {
@@ -551,7 +548,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 					try {
 						await modelRegistry.refresh(
 							strategy,
-							action === "refresh" ? { refreshCommandCredentials: true } : undefined,
+							explicitRefresh ? { refreshCommandCredentials: true } : undefined,
 						);
 						logger.info("models.refresh.completed", {
 							...refreshFields,
@@ -582,7 +579,6 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 						pattern,
 						json,
 						kind,
-						offline,
 						additionalExtensionPaths: cliExtensionPaths,
 						settingsExtensions: cfgExtensions.get(settings),
 						disabledExtensionIds: cfgDisabledExtensions.get(settings),
@@ -598,7 +594,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 					...commandFields,
 					stage,
 					result: "completed",
-					strategy,
+					strategy: diagnosticStrategy,
 					cache_only: cacheOnly,
 					elapsed_ms: performance.now() - started,
 				});

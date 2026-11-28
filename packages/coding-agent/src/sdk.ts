@@ -80,16 +80,12 @@ import { offlineFromEnv } from "./cli/args";
 import { type OAuthAccountPools, SessionAccountPoolScope } from "./config/account-pools";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import {
-	COMPANY_OFFLINE_CONTEXT_WINDOW,
+	canUseCompanyModels,
 	COMPANY_OFFLINE_ROLE_DEFAULTS,
-	setCompanyChatContextWindow,
+	initializeCompanyModelLane,
 } from "./config/company-models";
-import {
-	COMPANY_PROVIDER_ID,
-	getCompanyConfigError,
-	isCompanyLaneActive,
-	setCompanyOfflineEnabled,
-} from "./config/company-provider";
+import { COMPANY_PROVIDER_ID, getCompanyConfigError, isCompanyLaneActive } from "./config/company-provider";
+import { FORK_ASYNC_JOB_LIMIT } from "./config/fork-setting-defaults";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { type HydrateStartupModelCaches, isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
@@ -1248,13 +1244,7 @@ export {
 
 // Discovery Functions
 
-/** Flip the company lane before registry construction; return its credential-free diagnostic. */
-export async function initializeCompanyModelLane(offline: boolean): Promise<string | undefined> {
-	await setCompanyOfflineEnabled(offline);
-	if (!offline) return undefined;
-	setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
-	return getCompanyConfigError();
-}
+export { initializeCompanyModelLane };
 
 const restoreCompanyRoleDefaults = new WeakMap<Settings, () => void>();
 
@@ -1275,11 +1265,7 @@ export async function initializeOfflineModelCommand(
 	}
 	if (companyError) {
 		onWarning?.(companyError);
-	} else if (
-		settings &&
-		!restoreCompanyRoleDefaults.has(settings) &&
-		!disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)
-	) {
+	} else if (settings && !restoreCompanyRoleDefaults.has(settings) && canUseCompanyModels(settings)) {
 		restoreCompanyRoleDefaults.set(settings, settings.installModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS));
 	}
 	return true;
@@ -1351,8 +1337,7 @@ export async function loadCliExtensionProviders(
 ): Promise<void> {
 	await initializeOfflineModelCommand(settings, options.offline);
 	// A prebuilt registry may still project the lane that preceded this command.
-	const companyEnabled =
-		isCompanyLaneActive() && !getCompanyConfigError() && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID);
+	const companyEnabled = canUseCompanyModels(settings);
 	if (modelRegistry.hasProvider(COMPANY_PROVIDER_ID) !== companyEnabled) {
 		await modelRegistry.reapplyModelPolicies();
 	}
@@ -1366,11 +1351,7 @@ export async function loadCliExtensionProviders(
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
 	if (options.discoverModels !== false) {
-		// `offline` CLI runs (omp bench) must stay cache-only here too, matching the
-		// `omp models` path: no automatic online discovery, regardless of TTL.
-		await modelRegistry.refreshRuntimeProviders(
-			(options.offline ?? (offlineFromEnv() || isCompanyLaneActive())) ? "offline" : undefined,
-		);
+		await modelRegistry.refreshRuntimeProviders(options.offline ? "offline" : undefined);
 	}
 }
 
@@ -2085,7 +2066,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		companyLane = initializeCompanyModelLane(true);
 		// Runtime identity or settings may fail before the lane barrier is reached.
 		void companyLane.catch(() => {});
-		options = { ...options, offline: true };
 	}
 	registerLocalInferenceApi();
 	const extensionRoots = options.extensionRoots?.();
@@ -2121,6 +2101,8 @@ async function createAgentSessionScoped(
 	if (releaseSettings) startupCleanup.defer(() => settings.flush().finally(releaseSettings));
 	await companyLane;
 	await initializeOfflineModelCommand(settings);
+	const cacheOnlyStartup = companyLane !== undefined || options.offline === true;
+	const discoveryStrategy = cacheOnlyStartup ? "offline" : "online-if-uncached";
 	// Discovery provider toggles and process-wide setting effects (theme, request limits, …)
 	// follow the newest holder: each top-level session holds both on its settings until disposed,
 	// then hands them back to the previous holder. Subagents and helper sessions never take them,
@@ -2207,13 +2189,7 @@ async function createAgentSessionScoped(
 		}
 	});
 	startupCleanup.defer(unsubscribeCredentialDisabled);
-	if (
-		options.modelRegistry &&
-		isCompanyLaneActive() &&
-		!getCompanyConfigError() &&
-		!disabledProviderIds(settings).has(COMPANY_PROVIDER_ID) &&
-		!modelRegistry.hasProvider(COMPANY_PROVIDER_ID)
-	) {
+	if (options.modelRegistry && canUseCompanyModels(settings) && !modelRegistry.hasProvider(COMPANY_PROVIDER_ID)) {
 		await modelRegistry.reapplyModelPolicies();
 	}
 	const deferredModelPatterns = Array.isArray(options.modelPattern)
@@ -2833,7 +2809,7 @@ async function createAgentSessionScoped(
 	const asyncJobManager = !options.parentTaskPrefix
 		? new AsyncJobManager({
 				// Re-read per capacity check so `async.maxJobs` resizes the cap live.
-				maxRunningJobs: () => Math.min(32, cfgAsyncMaxJobs.get(settings)),
+				maxRunningJobs: () => Math.min(FORK_ASYNC_JOB_LIMIT, cfgAsyncMaxJobs.get(settings)),
 			})
 		: undefined;
 	const scopedAsyncJobManager = asyncJobManager ?? options.asyncJobManager;
@@ -3256,7 +3232,7 @@ async function createAgentSessionScoped(
 			nativeJudgeAbsence.revision === settings.revision &&
 			nativeJudgeAbsence.generation === authStorage.credentials.generation;
 		if (!stillRulesOutNativeJudge()) await hydrateFullStartupModelCaches();
-		if (!options.modelRegistry) modelRegistry.refreshInBackground(options.offline ? "offline" : undefined);
+		if (!options.modelRegistry) modelRegistry.refreshInBackground(discoveryStrategy);
 		// Auto-find normally reads the ordered, cross-provider judge chain.
 		// A negative proof makes that read unnecessary, not a later roster fixup.
 		await logger.time(
@@ -3597,7 +3573,6 @@ async function createAgentSessionScoped(
 		// because they await it below; normal UI startup receives a one-shot
 		// starter in CreateAgentSessionResult and calls it after mode.init paints.
 		let runtimeDiscoveryPromise: Promise<void> | undefined;
-		const discoveryStrategy = options.offline ? "offline" : "online-if-uncached";
 		const startRuntimeDiscovery = (): Promise<void> => {
 			runtimeDiscoveryPromise ??= modelRegistry.refreshRuntimeProviders(discoveryStrategy).catch(error => {
 				logger.warn("runtime provider discovery failed", {
@@ -3606,7 +3581,7 @@ async function createAgentSessionScoped(
 			});
 			return runtimeDiscoveryPromise;
 		};
-		if (!options.offline && (!options.hasUI || deferredModelPatterns.length > 0)) {
+		if (!cacheOnlyStartup && (!options.hasUI || deferredModelPatterns.length > 0)) {
 			void startRuntimeDiscovery();
 		}
 
@@ -3658,10 +3633,7 @@ async function createAgentSessionScoped(
 					// strategy: a cold catalog falls back to the default role rather
 					// than fetching from the provider's discovery endpoint.
 					await logger.time("restoreSessionModelDiscoveryFallback", () =>
-						modelRegistry.refreshDiscoverableProviders(
-							candidateProviders,
-							options.offline ? "offline" : "online-if-uncached",
-						),
+						modelRegistry.refreshDiscoverableProviders(candidateProviders, discoveryStrategy),
 					);
 					restoreSessionModel();
 				}
@@ -4011,7 +3983,7 @@ async function createAgentSessionScoped(
 				// Online, keep the upstream no-match fallback. An offline cache miss
 				// must not dispatch to a parent outside the resolved candidate chain.
 				const parentFallback =
-					!options.offline && options.modelPatternParentFallback
+					!cacheOnlyStartup && options.modelPatternParentFallback
 						? resolveDeferredPattern(options.modelPatternParentFallback, availableModels)
 						: undefined;
 				if (parentFallback?.model) {
@@ -4175,9 +4147,7 @@ async function createAgentSessionScoped(
 				) {
 					// Offline processes resolve this fallback from the cache only; the
 					// discovery endpoint is never fetched automatically.
-					await logger.time("resolveModelDiscoveryFallback", () =>
-						modelRegistry.refresh(options.offline ? "offline" : "online-if-uncached"),
-					);
+					await logger.time("resolveModelDiscoveryFallback", () => modelRegistry.refresh(discoveryStrategy));
 					if (!(await tryResolveDefaultRole()) && !model) {
 						fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
 						pick = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth), provider =>
@@ -4234,7 +4204,7 @@ async function createAgentSessionScoped(
 				disabledProviderIds(settings),
 				{
 					beforeRefresh: discoveryInFlight ? () => discoveryInFlight : undefined,
-					offline: options.offline === true,
+					offline: cacheOnlyStartup,
 					settings,
 					roleLookup: deferredPrewalk.roleLookup,
 				},

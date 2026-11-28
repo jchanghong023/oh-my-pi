@@ -144,7 +144,6 @@ async function probe(env: Record<string, string>): Promise<ProbeResult> {
 	for (const key of [
 		"PI_NATIVES_DIR",
 		"OMP_CONFIG_ROOT",
-		"OMP_CACHE_DIR",
 		"OMP_OFFLINE",
 		"OMP_PROFILE",
 		"PI_CONFIG_DIR",

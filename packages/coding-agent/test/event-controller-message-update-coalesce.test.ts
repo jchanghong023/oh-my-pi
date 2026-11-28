@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import type { DisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "../src/ui/theme/service";
 import type { LocalAgentSessionEvent as AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { vocalizer } from "@oh-my-pi/pi-coding-agent/tts/vocalizer";
@@ -39,7 +40,7 @@ function messageUpdate(text: string): Extract<AgentSessionEvent, { type: "messag
 	} as unknown as Extract<AgentSessionEvent, { type: "message_update" }>;
 }
 
-function createStreamingFixture() {
+function createStreamingFixture(mode: DisplayMode = "detailed") {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const ctx = createInteractiveModeContext({
 		session: {
@@ -50,6 +51,7 @@ function createStreamingFixture() {
 			},
 		},
 	});
+	ctx.syncDisplayMode(mode);
 	ctx.streaming = ctx.presentAssistant();
 	// One streaming rebuild per handled update.
 	const draws = vi.spyOn(ctx, "noteDisplayableThinkingContent");
@@ -105,14 +107,16 @@ describe("EventController message_update coalescing", () => {
 	});
 
 	it.each([
-		["0", 50],
-		[" YeS ", 100],
-	] as const)("uses the selected coalescing window (OMP_OFFLINE=%s)", async (offline, interval) => {
+		["detailed", "0", 33],
+		["concise", " YeS ", 33],
+		["compact", "0", 50],
+		["compact", " YeS ", 100],
+	] as const)("uses the selected coalescing window (%s, OMP_OFFLINE=%s)", async (mode, offline, interval) => {
 		const previousOffline = process.env.OMP_OFFLINE;
 		let fixture: ReturnType<typeof createStreamingFixture>;
 		try {
 			process.env.OMP_OFFLINE = offline;
-			fixture = createStreamingFixture();
+			fixture = createStreamingFixture(mode);
 		} finally {
 			restoreEnvValue("OMP_OFFLINE", previousOffline);
 		}

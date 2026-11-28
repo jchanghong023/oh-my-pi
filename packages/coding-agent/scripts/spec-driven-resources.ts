@@ -11,6 +11,7 @@ import {
 	specDrivenSourceFingerprint,
 } from "../src/spec-driven/resource-fingerprint";
 import { collectSpecDrivenResources } from "../src/spec-driven/resource-inventory";
+import { type SpecDrivenArchiveKind, specDrivenArchiveNames } from "../src/spec-driven/resource-manifest";
 import { resolveSpecDrivenResourcePath } from "../src/spec-driven/resource-path";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
@@ -128,18 +129,35 @@ interface SpecDrivenArchive {
 	sourceFingerprint: string;
 }
 
-/** Prepare once per build invocation; npm, binary and source preparation share this packer. */
-export async function buildSpecDrivenArchive(): Promise<SpecDrivenArchive> {
-	const sourceFingerprint = await specDrivenSourceFingerprint();
+type SpecDrivenArchives = Record<SpecDrivenArchiveKind, SpecDrivenArchive>;
+
+/** npm, binary and source preparation share the same independently loadable assets. */
+export async function buildSpecDrivenArchives(): Promise<SpecDrivenArchives> {
+	const [skillsFingerprint, runtimeFingerprint] = await Promise.all([
+		specDrivenSourceFingerprint("skills"),
+		specDrivenSourceFingerprint("runtime"),
+	]);
 	await using runtime = await prepareOpenSpecRuntime();
-	await using staging = await TempDir.create("@omp-spec-driven-staging-");
-	await fs.rename(runtime.path(), staging.join("openspec"));
+	await using runtimeStaging = await TempDir.create("@omp-openspec-staging-");
+	await using skillStaging = await TempDir.create("@omp-skills-staging-");
+	await fs.rename(runtime.path(), runtimeStaging.join("openspec"));
+	await fs.cp(path.join(openSpecSource, "skills"), skillStaging.join("openspec", "skills"), { recursive: true });
 	for (const [entry, source] of Object.entries(specDrivenPassthroughDirectories)) {
-		await fs.cp(path.join(packageRoot, source), staging.join(entry), { recursive: true });
+		await fs.cp(path.join(packageRoot, source), skillStaging.join(entry), { recursive: true });
 	}
-	await assertOpenSpecRuntime(staging.join("openspec"));
-	const { manifest, entries } = await collectSpecDrivenResources(staging.path(), sourceFingerprint);
-	if ((await specDrivenSourceFingerprint()) !== sourceFingerprint) {
+	await assertOpenSpecRuntime(runtimeStaging.join("openspec"));
+	const skills = await buildArchive(skillStaging.path(), "skills", skillsFingerprint);
+	const cliRuntime = await buildArchive(runtimeStaging.path(), "runtime", runtimeFingerprint);
+	return { skills, runtime: cliRuntime };
+}
+
+async function buildArchive(
+	staging: string,
+	kind: SpecDrivenArchiveKind,
+	sourceFingerprint: string,
+): Promise<SpecDrivenArchive> {
+	const { manifest, entries } = await collectSpecDrivenResources(staging, kind, sourceFingerprint);
+	if ((await specDrivenSourceFingerprint(kind)) !== sourceFingerprint) {
 		throw new Error(
 			"Spec-driven build inputs changed during preparation; run bun run gen:spec-driven-resources again.",
 		);
@@ -176,9 +194,12 @@ export async function buildSpecDrivenArchive(): Promise<SpecDrivenArchive> {
 	return { bytes: Bun.gzipSync(tar, { level: 9 }), sourceFingerprint };
 }
 
-/** Bun's file loader emits a real asset for npm bundles and embeds it in executables. */
-export function createSpecDrivenArchivePlugin({ bytes, sourceFingerprint }: SpecDrivenArchive): BunPlugin {
-	const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+/** Bun's file loader emits real assets for npm bundles and embeds them in executables. */
+export function createSpecDrivenArchivePlugin(archives: SpecDrivenArchives): BunPlugin {
+	const metadata = (kind: SpecDrivenArchiveKind) => ({
+		sha256: crypto.createHash("sha256").update(archives[kind].bytes).digest("hex"),
+		sourceFingerprint: archives[kind].sourceFingerprint,
+	});
 	return {
 		name: "omp-spec-driven-archive",
 		target: "bun",
@@ -188,24 +209,36 @@ export function createSpecDrivenArchivePlugin({ bytes, sourceFingerprint }: Spec
 				return { path: "resource-module", namespace: "omp-spec-driven-module" };
 			});
 			build.onLoad({ filter: /.*/, namespace: "omp-spec-driven-module" }, () => ({
-				contents: `import path from "omp:spec-driven-archive"; export default { path, sha256: ${JSON.stringify(sha256)}, sourceFingerprint: ${JSON.stringify(sourceFingerprint)} };`,
+				contents:
+					`import skills from "omp:spec-driven-skills"; import runtime from "omp:spec-driven-runtime"; ` +
+					`export default { skills: { path: skills, ...${JSON.stringify(metadata("skills"))} }, ` +
+					`runtime: { path: runtime, ...${JSON.stringify(metadata("runtime"))} } };`,
 				loader: "js",
 			}));
-			build.onResolve({ filter: /^omp:spec-driven-archive$/ }, () => ({
-				path: "spec-driven-resources.tar.gz",
-				namespace: "omp-spec-driven-archive",
-			}));
-			build.onLoad({ filter: /.*/, namespace: "omp-spec-driven-archive" }, () => ({
-				contents: bytes,
-				loader: "file",
-			}));
+			for (const kind of ["skills", "runtime"] as const) {
+				build.onResolve({ filter: new RegExp(`^omp:spec-driven-${kind}$`) }, () => ({
+					path: specDrivenArchiveNames[kind],
+					namespace: `omp-spec-driven-${kind}`,
+				}));
+				build.onLoad({ filter: /.*/, namespace: `omp-spec-driven-${kind}` }, () => ({
+					contents: archives[kind].bytes,
+					loader: "file",
+				}));
+			}
 		},
 	};
 }
 
+export async function writeSpecDrivenArchives(outputDir: string, archives: SpecDrivenArchives): Promise<void> {
+	await Promise.all(
+		(["skills", "runtime"] as const).map(kind =>
+			Bun.write(path.join(outputDir, specDrivenArchiveNames[kind]), archives[kind].bytes),
+		),
+	);
+}
+
 if (import.meta.main) {
-	const { bytes } = await buildSpecDrivenArchive();
-	const output = path.resolve(import.meta.dir, "../dist/spec-driven-resources.tar.gz");
-	await Bun.write(output, bytes);
-	process.stdout.write(`Prepared spec-driven resources: ${output}\n`);
+	const outputDir = path.resolve(packageRoot, "dist");
+	await writeSpecDrivenArchives(outputDir, await buildSpecDrivenArchives());
+	process.stdout.write(`Prepared spec-driven resources in ${outputDir}\n`);
 }

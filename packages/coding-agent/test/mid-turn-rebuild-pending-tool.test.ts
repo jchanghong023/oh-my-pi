@@ -68,7 +68,7 @@ const danglingAssistant = {
 
 function createFixture(opts: { isStreaming: boolean; compact?: boolean }) {
 	const ctx = createInteractiveModeContext({
-		settings: Settings.isolated({ "display.mode": opts.compact ? "compact" : "detailed" }),
+		settings: Settings.isolated({ "display.toolActivity": opts.compact ? "compact" : "detailed" }),
 		hideToolActivity: opts.compact ?? false,
 		session: { isStreaming: opts.isStreaming },
 	});
@@ -240,6 +240,8 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 					isError: false,
 				});
 				expect(imageMarks(ctx)).toHaveLength(1);
+				// A read placed before a following assistant segment keeps its settled row.
+				expect(renderTranscript(ctx).join("\n").match(/pixel\.png/g)).toHaveLength(1);
 				expect(ctx.pendingTools.size).toBe(0);
 			} finally {
 				cfgTerminalShowImages.set(ctx.settings, showImages);
@@ -290,7 +292,7 @@ describe("InteractiveMode rebuild renders each tool call once", () => {
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "display.mode": "detailed" }),
+			settings: Settings.isolated({ "display.toolActivity": "detailed" }),
 			modelRegistry,
 		});
 		mode = new InteractiveMode(

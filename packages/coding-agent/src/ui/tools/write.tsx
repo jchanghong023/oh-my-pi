@@ -6,17 +6,13 @@
  * `agent://`, `proc://` and `cfg://` URLs are a peer message, process input
  * or a setting change instead.
  *
- * Terminal looks: `write` (files), `write-card` (URL writes), and the
- * shared `edit` diff card for successful conflict resolutions.
+ * Terminal looks: `write` (files) and `write-card` (URL writes).
  */
 import * as path from "node:path";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { JSXNode } from "@oh-my-pi/pi-tui";
-import { parseCompactDiff } from "@oh-my-pi/pi-tui/text/diff";
 import { shortenHome } from "@oh-my-pi/pi-tui/text/sanitize";
 import { formatDuration } from "@oh-my-pi/pi-utils";
-import type { EditToolPerFileResult } from "../../tools/details/edit";
-import "../styles/tools/edit";
 import type {
 	ToolActivity,
 	ToolFigure,
@@ -28,7 +24,6 @@ import type {
 } from "./contract";
 import { cleanText, ErrorText, NoteText } from "./agent-common";
 import { resultText } from "./default";
-import type { EditBodyPart, EditTerm } from "./edit";
 import {
 	countLines,
 	DiagnosticsSection,
@@ -56,7 +51,6 @@ export interface WriteDetails {
 	readonly diagnostics?: FileDiagnostics;
 	readonly madeExecutable?: boolean;
 	readonly resolvedPath?: string;
-	readonly conflictChanges?: readonly EditToolPerFileResult[];
 	readonly message?: {
 		readonly to?: string;
 		/** Session title of a recipient in another omp instance, shown in place of its pid `to`. */
@@ -523,51 +517,6 @@ export const writePresenter: ToolPresenter<WriteArgs, WriteDetails> = {
 			...(result.details?.resolvedPath ? { link: result.details.resolvedPath } : {}),
 			executable: head.badges?.some(b => b.text === "executable"),
 		};
-		const conflicts = result.details?.conflictChanges;
-		if (conflicts?.length && !partial) {
-			const body: JSXNode[] = [];
-			const parts: EditBodyPart[] = [];
-			for (const change of conflicts) {
-				const target = cleanText(displayPath(change.path));
-				body.push(
-					<section key={change.path} head={[{ s: "path", t: target }]}>
-						<diff path={change.path} hunks={parseCompactDiff(change.diff)} />
-					</section>,
-				);
-				parts.push({ k: "note", text: target }, { k: "diff", path: change.path, diff: change.diff });
-			}
-			if (diagnostics) {
-				body.push(<DiagnosticsSection diagnostics={diagnostics} />);
-				parts.push({ k: "diagnostics", diagnostics });
-			}
-			const error = result.isError ? resultText(result) : undefined;
-			if (error) {
-				body.unshift(<ErrorText message={error} />);
-				parts.unshift({ k: "error", text: error });
-			}
-			return {
-				head: { ...head, meta: undefined },
-				...(result.isError ? { tone: "error" as const } : {}),
-				body,
-				preview: "children",
-				term: {
-					look: "edit",
-					edit: {
-						cards: [
-							{
-								kind: "card",
-								title: "Write",
-								path: raw,
-								icon: "edit",
-								body: parts,
-								phase: result.isError ? "error" : "success",
-								...(result.details?.resolvedPath ? { link: { path: result.details.resolvedPath } } : {}),
-							},
-						],
-					} satisfies EditTerm,
-				},
-			};
-		}
 		if (result.isError)
 			return {
 				head,

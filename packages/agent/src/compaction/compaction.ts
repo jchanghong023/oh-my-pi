@@ -734,15 +734,7 @@ const completeCompaction: typeof instrumentedCompleteSimple = async (model, cont
 			};
 			logger.info("Compaction summary request started", { ...fields, result: "started" });
 			try {
-				// CodeAgent's transport may replay only after a credential change.
-				const response = await instrumentedCompleteSimple(
-					model,
-					context,
-					options,
-					model.provider === "codeagent" && telemetryOptions.retry
-						? { ...telemetryOptions, retry: undefined }
-						: telemetryOptions,
-				);
+				const response = await instrumentedCompleteSimple(model, context, options, telemetryOptions);
 				const cancelled = options.signal?.aborted || response.stopReason === "aborted";
 				const truncated = response.stopReason === "length";
 				const failed = !cancelled && (truncated || response.stopReason === "error");
@@ -1104,8 +1096,7 @@ export async function generateSummary(
 				options,
 			);
 		} catch (error) {
-			// CodeAgent's transport owns replay policy, but a remote summary endpoint bypasses it.
-			if (signal?.aborted || (model.provider === "codeagent" && !options?.remoteEndpoint)) throw error;
+			if (signal?.aborted) throw error;
 			// The catalog window can overstate what the provider actually accepts:
 			// `claude-sonnet-4-5` advertises 1M but is beta-gated to 200k on OAuth
 			// credentials (see `anthropic.ts` — the 1M beta is never advertised).
@@ -1337,8 +1328,6 @@ export interface HandoffFromContextOptions {
 	telemetry?: AgentTelemetry;
 	/** See {@link HandoffOptions.thinkingLevel}. */
 	thinkingLevel?: ThinkingLevel;
-	/** False disables whole-request and tool-choice retries when the host transport owns replay policy. */
-	oneshotRetry?: OneshotRetryOptions | false;
 }
 
 /**
@@ -1376,18 +1365,13 @@ export async function generateHandoffFromContext(
 		reasoning: resolveCompactionEffort(model, options.thinkingLevel),
 		toolChoice: "none" as const,
 	};
-	const retry = options.oneshotRetry === false ? undefined : (options.oneshotRetry ?? {});
 	let response = await completeCompaction(model, context, requestOptions, {
 		telemetry: options.telemetry,
 		oneshotKind: "handoff",
 		completeImpl: options.completeImpl,
-		retry,
+		retry: {},
 	});
-	if (
-		options.oneshotRetry !== false &&
-		response.stopReason === "error" &&
-		shouldRetryHandoffWithAutoToolChoice(response)
-	) {
+	if (response.stopReason === "error" && shouldRetryHandoffWithAutoToolChoice(response)) {
 		logger.warn("Compaction handoff retrying with auto tool choice", {
 			component: "compaction",
 			event: "compaction_handoff_fallback",
@@ -1399,7 +1383,7 @@ export async function generateHandoffFromContext(
 			model,
 			context,
 			{ ...requestOptions, toolChoice: "auto" },
-			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry },
+			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry: {} },
 		);
 	}
 
@@ -2785,10 +2769,14 @@ export async function compact(
 					const inputTokens = getCompactionV2PreserveData(preserveData)?.usedTokens ?? 0;
 					summary = formatRemoteCompactionSummary(inputTokens);
 				} else if (isSplitTurn && turnPrefixMessages.length > 0) {
-					// Stop and drain both summaries before exposing a failure to the caller.
+					// Generate both summaries in parallel. The first failure aborts the other
+					// request with that failure as the reason, and compaction throws it only
+					// after both requests have stopped, so no summary request outlives the
+					// compaction that started it. The caller's signal, with its own reason,
+					// still reaches both requests.
 					const splitAbort = new AbortController();
 					const summarySignal = signal ? AbortSignal.any([signal, splitAbort.signal]) : splitAbort.signal;
-					const history =
+					const requests = [
 						messagesToSummarize.length > 0 || previousSummaryForCompaction
 							? generateSummary(
 									messagesToSummarize,
@@ -2800,8 +2788,7 @@ export async function compact(
 									previousSummaryForCompaction,
 									summaryOptions,
 								)
-							: Promise.resolve("No prior history.");
-					const summarizePrefix = () =>
+							: Promise.resolve("No prior history."),
 						generateTurnPrefixSummary(
 							turnPrefixMessages,
 							model,
@@ -2809,18 +2796,8 @@ export async function compact(
 							apiKey,
 							summarySignal,
 							summaryOptions,
-						);
-					// A separate endpoint may fail or be retried independently. Do not
-					// start a CodeAgent request that would be wasted on endpoint failure
-					// and that an outer retry might otherwise inadvertently replay.
-					const prefix =
-						model.provider === "codeagent" && summaryOptions.remoteEndpoint
-							? history.then(() => {
-									summarySignal.throwIfAborted();
-									return summarizePrefix();
-								})
-							: summarizePrefix();
-					const requests = [history, prefix] as const;
+						),
+					] as const;
 					const [historyResult, turnPrefixResult] = await Promise.all(requests).catch(async (error: unknown) => {
 						splitAbort.abort(error);
 						await Promise.allSettled(requests);

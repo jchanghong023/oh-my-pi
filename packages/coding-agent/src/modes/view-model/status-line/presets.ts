@@ -1,24 +1,11 @@
+import { FORK_STATUS_LINE_GROUPS } from "../../../config/fork-ui-defaults";
 import { CUSTOM_STATUS_LINE_DEFAULTS } from "../../../config/status-line-schema";
 import type { PresetDef } from "./types";
 import type { StatusLinePreset } from "../../../config/status-line-schema";
 
 export const STATUS_LINE_PRESETS: Record<StatusLinePreset, PresetDef> = {
 	default: {
-		leftSegments: [
-			"pi",
-			"model",
-			"mode",
-			"collab",
-			"stream",
-			"path",
-			"git",
-			"subagents",
-			"token_rate",
-			"cache_hit",
-			"context_pct",
-			"time_spent",
-		],
-		rightSegments: [],
+		...FORK_STATUS_LINE_GROUPS,
 		separator: "powerline-thin",
 		segmentOptions: {
 			model: { showThinkingLevel: true },

@@ -380,6 +380,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Compact in the background with a handoff summary (alias for /compact handoff)",
 		inlineHint: "[focus instructions]",
 		allowArgs: true,
+		tuiInput: { detachDraft: "before-dispatch" },
 		handle: handleCompact,
 		handleTui: handleCompactTui,
 	},
@@ -455,6 +456,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Ask a side question, or browse this session's BTW history",
 		inlineHint: "[question]",
 		allowArgs: true,
+		tuiInput: { detachDraft: "before-dispatch" },
 		handleTui: async (command, runtime) => {
 			const question = command.text.slice(`/${command.name}`.length).trim();
 			await runWithDetachedDraft(
@@ -471,6 +473,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Run a full background agent on tangential work",
 		inlineHint: "<work>",
 		allowArgs: true,
+		tuiInput: { detachDraft: "before-dispatch" },
 		handleTui: async (command, runtime) => {
 			const work = command.text.slice(`/${command.name}`.length).trim();
 			await runWithDetachedDraft(command, runtime, () => runtime.ctx.handleTanCommand(work, runtime.input?.images), {
@@ -484,6 +487,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Forge a TTSR rule from a complaint to stop a recurring behavior",
 		inlineHint: "<complaint>",
 		allowArgs: true,
+		tuiInput: { detachDraft: "before-dispatch" },
 		handleTui: async (command, runtime) => {
 			if (refuseImages(command, runtime)) return;
 			const complaint = command.text.slice(`/${command.name}`.length).trim();
@@ -497,6 +501,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Detect and fix project diagnostics with weighted parallel subagents",
 		inlineHint: "[request] [--all]",
 		allowArgs: true,
+		tuiInput: { detachDraft: "before-dispatch" },
 		handleTui: async (command, runtime) => {
 			if (refuseImages(command, runtime)) return;
 			const args = command.text.slice(`/${command.name}`.length).trim();

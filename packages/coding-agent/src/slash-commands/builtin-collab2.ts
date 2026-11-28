@@ -8,6 +8,7 @@ export const BUILTIN_COLLAB2_SLASH_COMMAND: SlashCommandSpec = {
 	description: "Host or join collaboration by room number",
 	inlineHint: "<room-number> | join <room-number> | stop",
 	allowArgs: true,
+	tuiInput: { detachDraft: "before-hooks", followUpDuringCompaction: "direct" },
 	async handleTui(command, runtime) {
 		if (refuseImages(command, runtime)) return;
 		const ctx = runtime.ctx;
@@ -24,13 +25,15 @@ export const BUILTIN_COLLAB2_SLASH_COMMAND: SlashCommandSpec = {
 		}
 		try {
 			if (stopping) {
-				const stopped = await ctx.collabController.stopNumberedRoom();
+				const pendingStop = ctx.collabController.stopNumberedRoom();
+				runtime.admitFollowUp?.();
+				const stopped = await pendingStop;
 				ctx.showStatus(stopped ? "Collab2 room stopped" : "No hosted Collab2 room to stop");
 			} else if (roomNumber) {
 				if (joining) {
-					await ctx.collabController.joinNumberedRoom(roomNumber);
+					await ctx.collabController.joinNumberedRoom(roomNumber, runtime.admitFollowUp);
 				} else {
-					const host = await ctx.collabController.startNumberedRoom(roomNumber);
+					const host = await ctx.collabController.startNumberedRoom(roomNumber, runtime.admitFollowUp);
 					if (ctx.collabController.host === host && host.relayConnected) ctx.showStatus("Collab2 room opened");
 				}
 			}

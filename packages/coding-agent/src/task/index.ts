@@ -16,7 +16,6 @@
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import { isTaskToolDetails } from "./task-details";
 import * as path from "node:path";
-import { type } from "@oh-my-pi/omptype";
 import type {
 	AgentTool,
 	AgentToolResult,
@@ -1046,18 +1045,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		this.#launchSessions.delete(toolCallId);
 		try {
 			return await this.#dispatch(toolCallId, rawParams, launchSession, signal, onUpdate);
-		} catch (error) {
-			if (error instanceof Error) {
-				try {
-					const diagnostics = this.parameters(rawParams);
-					if (diagnostics instanceof type.errors) {
-						error.message += `\nTask argument schema diagnostics: ${diagnostics.summary}`;
-					}
-				} catch {
-					// Preserve the original error if diagnostic validation itself fails.
-				}
-			}
-			throw error;
 		} finally {
 			// No-op once dispatch adopted; otherwise nothing launched early may outlive the call.
 			launchSession?.discard("task call settled without adopting speculative launches");
@@ -1089,7 +1076,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const { params } = plan;
 		const spawnItems = plan.items;
 		const normalizedSpawnParams = spawnItems.map(item => spawnParamsFor(params, item, defaultAgent));
-		const resolvedAgents = normalizedSpawnParams.map(spawn => spawn.agent ?? defaultAgent);
 		const evalToolNames = spawnItems.flatMap(item => item.tools ?? []);
 		if (evalToolNames.length > 0) {
 			if (this.session.getPlanModeState?.()?.enabled === true) {
@@ -1103,6 +1089,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				);
 			}
 		}
+		const resolvedAgents = normalizedSpawnParams.map(spawn => spawn.agent ?? defaultAgent);
 		// Resolve every item before choosing an execution path. No executor or
 		// job manager may observe a batch unless every effective policy is valid.
 		const preflights = await Promise.all(

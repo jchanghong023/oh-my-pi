@@ -81,123 +81,66 @@ function setup(main: () => unknown) {
 
 const lines = (prefix: string, count: number): string[] => Array.from({ length: count }, (_, i) => `${prefix}${i}`);
 
-describe("TermBackend frame priority", () => {
-	it.each([
-		["linux", "1", 30, 100],
-		["linux", "1", 250, 250],
-		["linux", "0", 30, 30],
-		["win32", "1", 30, 30],
-	] as const)(
-		"coalesces only the configured background frames (%s offline=%s cap=%dms)",
-		(platform, offline, cap, due) => {
-			const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-			const previousOffline = process.env.OMP_OFFLINE;
-			Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-			process.env.OMP_OFFLINE = offline;
-			vi.useFakeTimers({ now: 0 });
-			const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-			const driver = new FakeDriver();
-			const rows = signal(["start"]);
-			const surface = createSurface(() => ({ dock: <rows lines={rows} /> }));
-			const backend = new TermBackend({ surface, driver, theme: () => PLAIN_THEME, frameInterval: cap });
-			try {
-				backend.start();
-				vi.advanceTimersByTime(10);
-				for (let i = 0; i < 20; i++) rows.set([`background ${i}`]);
-				vi.advanceTimersByTime(due - 11);
-				expect(driver.frames).toHaveLength(1);
-				vi.advanceTimersByTime(1);
-				expect(driver.frames).toHaveLength(2);
-				expect(driver.viewport).toEqual(["background 19"]);
-			} finally {
-				backend.stop();
-				surface.dispose();
-				clock.mockRestore();
-				vi.useRealTimers();
-				Object.defineProperty(process, "platform", platformDescriptor);
-				if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
-				else process.env.OMP_OFFLINE = previousOffline;
-			}
-		},
-	);
-
-	it("accelerates input that changes the display, but not an intercepted key", () => {
-		const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-		const offline = process.env.OMP_OFFLINE;
-		Object.defineProperty(process, "platform", { ...platform, value: "linux" });
-		process.env.OMP_OFFLINE = "1";
+describe("TermBackend frame scheduling", () => {
+	it.each([30, 250])("coalesces background updates at the configured %dms frame interval", interval => {
 		vi.useFakeTimers({ now: 0 });
 		const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-		const rows = signal(["start"]);
 		const driver = new FakeDriver();
+		const rows = signal(["start"]);
+		const surface = createSurface(() => ({ dock: <rows lines={rows} /> }));
+		const backend = new TermBackend({ surface, driver, theme: () => PLAIN_THEME, frameInterval: interval });
+		try {
+			backend.start();
+			vi.advanceTimersByTime(10);
+			for (let i = 0; i < 20; i++) rows.set([`background ${i}`]);
+			vi.advanceTimersByTime(interval - 11);
+			expect(driver.frames).toHaveLength(1);
+			vi.advanceTimersByTime(1);
+			expect(driver.frames).toHaveLength(2);
+			expect(driver.viewport).toEqual(["background 19"]);
+		} finally {
+			backend.stop();
+			surface.dispose();
+			clock.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("coalesces input with a queued frame without routing intercepted keys", () => {
+		vi.useFakeTimers({ now: 0 });
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+		const driver = new FakeDriver();
+		const rows = signal(["start"]);
 		const surface = createSurface(() => ({ dock: <rows lines={rows} /> }));
 		const backend = new TermBackend({
-			driver,
 			surface,
+			driver,
 			theme: () => PLAIN_THEME,
 			frameInterval: 30,
 			intercept: event => event.type === "key" && event.key.id === "x",
-			onKey: () => {
-				rows.set(["input"]);
+			onKey: key => {
+				rows.set([key.id]);
 				return true;
 			},
 		});
-		const key = (id: string) => driver.input!({ type: "key", key: { id, kind: "press", raw: id, text: id } });
+		const press = (id: string) => driver.input!({ type: "key", key: { id, kind: "press", raw: id, text: id } });
 		try {
 			backend.start();
 			vi.advanceTimersByTime(10);
 			rows.set(["background"]);
-			key("x");
-			vi.advanceTimersByTime(40);
+			press("x");
+			expect(rows()).toEqual(["background"]);
+			press("y");
+			vi.advanceTimersByTime(19);
 			expect(driver.frames).toHaveLength(1);
-			key("y");
 			vi.advanceTimersByTime(1);
-			expect(driver.viewport).toEqual(["input"]);
-			vi.advanceTimersByTime(100);
 			expect(driver.frames).toHaveLength(2);
+			expect(driver.viewport).toEqual(["y"]);
 		} finally {
 			backend.stop();
 			surface.dispose();
 			clock.mockRestore();
 			vi.useRealTimers();
-			Object.defineProperty(process, "platform", platform);
-			if (offline === undefined) delete process.env.OMP_OFFLINE;
-			else process.env.OMP_OFFLINE = offline;
-		}
-	});
-
-	it("uses a one-second clock for offline decorations and stops it when the backend detaches", () => {
-		const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-		const offline = process.env.OMP_OFFLINE;
-		Object.defineProperty(process, "platform", { ...platform, value: "linux" });
-		process.env.OMP_OFFLINE = "1";
-		vi.useFakeTimers({ now: 0 });
-		const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-		defineRolePainter("text", "test.offline-decoration", (_node, cx) => ({ rows: [`tick ${cx.now("decoration")}`] }));
-		const driver = new FakeDriver();
-		const surface = createSurface(() => ({ dock: <text role="test.offline-decoration" /> }));
-		const backend = new TermBackend({ surface, driver, theme: () => PLAIN_THEME });
-		try {
-			backend.start();
-			vi.advanceTimersByTime(999);
-			expect(driver.frames).toHaveLength(1);
-			vi.advanceTimersByTime(2);
-			expect(driver.frames).toHaveLength(2);
-			expect(driver.viewport).toEqual(["tick 1000"]);
-			vi.advanceTimersByTime(1002);
-			expect(driver.frames).toHaveLength(3);
-			expect(driver.viewport).toEqual(["tick 2000"]);
-			backend.stop();
-			vi.advanceTimersByTime(2000);
-			expect(driver.frames).toHaveLength(3);
-		} finally {
-			backend.stop();
-			surface.dispose();
-			clock.mockRestore();
-			vi.useRealTimers();
-			Object.defineProperty(process, "platform", platform);
-			if (offline === undefined) delete process.env.OMP_OFFLINE;
-			else process.env.OMP_OFFLINE = offline;
 		}
 	});
 });
@@ -222,6 +165,9 @@ describe("TermBackend animation", () => {
 			vi.advanceTimersByTime(80);
 			expect(driver.frames.length).toBe(2);
 			expect(driver.frames.at(-1)?.cursor).toEqual({ row: 0, col: 1 });
+			backend.stop();
+			vi.advanceTimersByTime(160);
+			expect(driver.frames).toHaveLength(2);
 		} finally {
 			backend.stop();
 			surface.dispose();

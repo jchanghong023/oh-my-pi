@@ -203,7 +203,7 @@ export class CollabController {
 			throw new NumberedRoomError("Already hosting or starting a collab session");
 	}
 
-	async startNumberedRoom(roomNumber: string): Promise<CollabHost> {
+	async startNumberedRoom(roomNumber: string, onClaimed?: () => void): Promise<CollabHost> {
 		this.#assertNumberedRoomAvailable();
 		if (this.#numberedStart || this.#numberedLookup) throw new NumberedRoomError("Collab2 is already starting");
 		const client = new NumberedRoomClient();
@@ -221,13 +221,14 @@ export class CollabController {
 			() => {},
 		);
 		try {
+			onClaimed?.();
 			return await started;
 		} finally {
 			this.#numberedStart = undefined;
 		}
 	}
 
-	async joinNumberedRoom(roomNumber: string): Promise<void> {
+	async joinNumberedRoom(roomNumber: string, onClaimed?: () => void): Promise<void> {
 		this.#assertNumberedRoomAvailable();
 		if (this.#numberedStart || this.#numberedLookup) throw new NumberedRoomError("Collab2 is already starting");
 		const client = new NumberedRoomClient();
@@ -236,6 +237,7 @@ export class CollabController {
 		this.#numberedLookup = lookup;
 		const sessionId = this.#ctx.sessionManager.getSessionId();
 		try {
+			onClaimed?.();
 			const room = await client.lookup(roomNumber, lookup.signal);
 			const host = this.#host;
 			if (host?.stopped) await this.#stopHost(host, "joining another session");

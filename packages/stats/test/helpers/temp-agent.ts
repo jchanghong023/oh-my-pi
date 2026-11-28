@@ -20,7 +20,7 @@ import {
 	TempDir,
 } from "@oh-my-pi/pi-utils";
 
-const ENV_KEYS = ["OMP_CONFIG_ROOT", "OMP_CACHE_DIR", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
+const ENV_KEYS = ["OMP_CONFIG_ROOT", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
 
 export interface StatsTestIsolation {
 	/** Active per-test `TempDir`. Null between tests. */
@@ -41,7 +41,6 @@ export function installStatsTestIsolation(prefix: string): StatsTestIsolation {
 		}
 		tempDir = TempDir.createSync(prefix);
 		process.env.OMP_CONFIG_ROOT = tempDir.join("config");
-		process.env.OMP_CACHE_DIR = tempDir.join("cache");
 		setAgentDir(tempDir.join("config", "agent"));
 	});
 

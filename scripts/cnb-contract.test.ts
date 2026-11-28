@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { artifactDigest, cachedArtifact, linuxBinary, linuxSdk, viewerDigest, windowsBinary } from "./cnb-build";
+import { CNB_RELEASE_PLATFORMS } from "../packages/coding-agent/src/cli/cnb-release-contract";
+import { artifactDigest, cachedArtifact, viewerDigest } from "./cnb-build";
 import { publicationTitle, releaseVersionFrom } from "./cnb-version";
+
+const { binary: linuxBinary, sdk: linuxSdk } = CNB_RELEASE_PLATFORMS.linux;
+const { binary: windowsBinary } = CNB_RELEASE_PLATFORMS.win32;
 
 describe("CNB publication version contract", () => {
 	const old = "0.9.0+fork.1";

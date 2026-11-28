@@ -85,6 +85,13 @@ describe("native Goal user follow-up delivery", () => {
 				}
 				await tui("expect", "text", "GOAL_KEYS_FINISHED", "--timeout", "30000");
 				expect(provider.requests.filter(isGoalRequest).map(feedbackCount)).toEqual([0, 1, 1]);
+				for (const request of provider.requests.filter(isGoalRequest)) {
+					const userText = request.messages
+						.filter(message => message.role === "user")
+						.map(message => contentText(message.content))
+						.join("\n");
+					expect(userText.split("MUST 全自动无人值守完成完整目标。")).toHaveLength(2);
+				}
 				expect(await Bun.file(path.join(cwd, "batch-proof.txt")).text()).toBe("COMPLETE_BATCH");
 				expect(await Bun.file(path.join(cwd, "changed-work.txt")).text()).toBe("FOLLOWUP_CHANGED_REAL_WORK");
 			},

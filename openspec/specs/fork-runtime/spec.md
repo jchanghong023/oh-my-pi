@@ -57,8 +57,8 @@ OMP MUST 按以下优先级解析运行配置；安装或更新失败时保留�
 | 项目 | 规则 |
 |---|---|
 | 文件补全 | `@` 重扫间隔 30000ms，显式 `FS_SCAN_CACHE_TTL_MS`（含 0）优先。 |
-| Linux TUI | 后台 ≤10 FPS；回显和取消优先，保留终刷、反压和自适应。渐变 250ms，活动计时 1000ms，Git 状态 TTL 60s；HEAD、cwd 或显式失效照旧，不依赖写通知或修改 Git 配置。 |
-| 显示 | 流式 100ms，保留边界冲刷、逐增量语音、实时思考及输入调度。设 `tui.autoGraph=off`、`tui.titleState=false`、`title.refreshOnReplan=false`；保留首 scout 标题、手命名及其他显示和工具能力。 |
+| Linux TUI | Git 状态 TTL 60s；HEAD、cwd 或显式失效照旧，不依赖写通知或修改 Git 配置。 |
+| 显示 | `clean`／`compact` 的流式刷新间隔为 100ms，保留边界冲刷、逐增量语音、实时思考及输入调度。设 `tui.autoGraph=off`、`tui.titleState=false`、`title.refreshOnReplan=false`；保留首 scout 标题、手命名及其他显示和工具能力。 |
 | 工具与目录 | CLI 和直接 SDK 均禁用外部搜索工具（`web_search.enabled=false`）及浏览器工具（`browser.enabled=false`，含 `/crawl`）。HTTP 读取仍按 `fetch.enabled` 和审批。保留 AST 编辑，缺包只用显式源、不退 GitHub；内网模型及本地工具照用。启动不读更新日志；offline 禁止手动和自动检查或更新 OMP。`/changelog` 照旧。`omp openspec version --check` 只使用显式非默认 HTTPS npm 镜像。 |
 | 模型 | `company/Qwen3.8-27B` 上下文 262144，其余 company 聊天 204800；KDL 专限和 `maxTokens` 不变。仅在 company 可用时为未配置角色补默认，显式配置（含 `null`）及 CLI 优先，不锁定手动选模或写回配置。 |
 
@@ -79,7 +79,7 @@ Python Eval：显式解释器不可用或不兼容即失败。Linux offline 优�
 | 项目 | 规则 |
 |---|---|
 | Windows 本地构建 | `bun run local` 只编译和替换 `omp.exe`，占用时让位、不杀，失败恢复；不跑测试、冒烟、worker 或加载探测（`--skip-load-probe`）。CNB 发布版嵌入 fork 版本及更新源，本地版只嵌入更新源。构建可报阶段进度，最终换入成功才报安装实路径及总耗时。 |
-| 更新源 | 安装和更新均只用 CNB，默认取 `jchanghong/bin` 的 `omp` 发布，不回退其他平台。公开源匿名读取元数据并下载，不需要或发送 `CNB_TOKEN`；自定义私有更新源可用具有 `repo-release:r` 权限的 `CNB_TOKEN` 访问 CNB API，不将凭据转发给附件下载地址。SHA-256 取发布资产元数据。版本先按 SemVer、再按同基线 `+fork.N` 排序（缺省 0）。 |
+| 更新源 | 安装和更新均只用 CNB，默认取 `jchanghong/bin` 的 `omp` 发布，不回退其他平台。默认及自定义更新源均须公开，匿名读取元数据并下载。SHA-256 取发布资产元数据。版本先按 SemVer、再按同基线 `+fork.N` 排序（缺省 0）。 |
 | `omp update` | 仅非 offline 可手动执行；offline 拒绝且不联网。原位替换独立二进制并验证 PATH，成功后由已验启动器同步已安装的 Browser Relay；同步失败记警告，不撤回二进制更新。包管理安装只提示 fork 安装器；TTY 才显示进度，不支持 canary。 |
 | 安装门禁 | 仅安装 CNB 发布的 Linux glibc x64／Windows x64 二进制；联网前拒 macOS、源码安装和目录目标。同版不下载，仍查 PATH。元数据严格 TLS；仅二进制下载可放宽。Windows 支持 PowerShell 5.1 x64，优先 `curl.exe`，失败或不可用时回退 `Invoke-WebRequest`；遵守代理边界。updater 不依赖 PowerShell。 |
 | 校验和换入 | 同目录唯一临时文件，先验同名资产 SHA-256，再实跑完整版本号；任一校验失败不换入。Linux 原子换入，不[结束运行会话](#requirement-posix-安装器对运行中会话的检测)；Windows 先唯一改名让位，失败才[按身份回退](#requirement-windows-安装器强杀回退的身份校验)。 |
@@ -109,6 +109,7 @@ CNB 发布须明确授权。CNB MUST 验证 Export viewer 精确字节元数据�
 - **THEN** 本次使用的 Windows／Ubuntu-24.04 WSL2（`/root/oh-my-pi`）工作区须父仓和 OpenWiki 子模块干净，经 Git 快进并检出固定子模块。若双端并行构建，先核对提交、Bun 版本及 revision 一致；WSL 只经 Git 远端同步，不覆盖或清用户文件。
 - **AND** 成品按宿主复用。仅在源码及固定子模块、目标、Bun 版本及 revision、实际构建工具链与产物相关设置、发布版本和更新源均匹配，且本次所需产物非空并有成功校验记录时命中。记录须能核对产物摘要及 Export viewer 精确字节元数据；命中不重生成 viewer，输入或记录不符才重建。失败或缺件不登记成功、不上传该产物。SDK 使用同次宿主 addon，解包编译免 Rust；不含 CLI 二进制、已装依赖或个人设置。
 - **AND** 默认向既有 `jchanghong/bin@omp` 发布 Windows／Linux 二进制及两份 SDK ZIP；用 `--asset` 选择附件，`--repo`／`--tag` 指定目标。只覆盖本次授权的同名附件并逐一确认，不传或推源码。同一 tag 的二进制版本须一致；单平台不同版本用独立版本 tag。分宿主报告缓存及构建、打包和上传耗时。
+- **AND** 发布、安装与自更新使用同一套平台和附件名。安装／更新只选本机二进制，SDK ZIP 不作安装候选；滚动发布可用标题末尾的 `[omp:v<版本>]` 声明完整版本。两个安装器均可直接运行，不要求预装 Bun。
 
 ### Requirement: 默认设置
 
@@ -121,21 +122,22 @@ CNB 发布须明确授权。CNB MUST 验证 Export viewer 精确字节元数据�
 |设置|值|
 |---|---|
 |`recap.enabled`, `statusLine.compactThinkingLevel`, `commit.enabled`, `providers.thinkingProbe`|`false`；默认关闭 `/commit`/eval `commit`、未知模型探测（含内网/自有/自定义）。|
-|`composer.shape`, `display.showTurnTime`, `mnemopi.embeddingVariant`|`box` (Rounded Box), `true`, `multilingual`|
+|`composer.shape`|普通／offline 均默认 `box`（Rounded Box），无缓存的交互式启动首帧也使用 `box`；显式形状设置仍优先。|
+|`display.showTurnTime`, `mnemopi.embeddingVariant`|`true`, `multilingual`|
 |`async.maxJobs`, `startup.setupWizard`, `marketplace.autoUpdate`|`32`, `false`, `off`|
 |`composer.predictions`|offline 仍用上游缺省 `true`；显式 `false` 优先。|
-|界面|`compact` [契约及验收](../personal-commands/spec.md#requirement-1-三种显示模式)。|
+|`display.toolActivity`|`compact` [契约及验收](../personal-commands/spec.md#requirement-四种显示模式)。|
 |`terminal.programStatus`|offline 缺省关闭交互式 OSC 7501 探测/报告；显式优先、不落盘。|
 |`lsp.enabled`|普通/offline `false`；验收 `--no-lsp` 覆盖已保存值、仅本次关；非 CLI 不变。|
 |`stt.language`|`zh-CN`；本地 Whisper/云端转基语言（`zh`）。|
 
-### Requirement: CLI 默认轻量启动参数
+### Requirement: 受限 SDK 禁用自定义命令
 
-交互、print、RPC MUST 默认 `--no-extensions`，含扩展参数重解析；ACP 沿用[原规则](../../../docs/cli-reference.md)。
+受限 SDK MUST 禁用文件式和可执行自定义命令。
 
-#### Scenario: 内置命令仍启用
-- **WHEN** CLI 禁用自动扩展发现
-- **THEN** 内置 TS 命令照常可见、补全和调用，不遍历用户或项目命令。显式扩展、hook、可信来源及 Skills、规则、MCP 不变，不写配置。受限 SDK 禁全部自定义命令；非受限 SDK 保持原发现和冲突规则。
+#### Scenario: 创建受限 SDK 会话
+- **WHEN** 调用方限制 SDK 会话的工具范围
+- **THEN** 不发现或加载文件式和可执行自定义命令。
 
 ### Requirement: Claude 插件发现默认关闭
 
@@ -193,7 +195,7 @@ offline MUST 只允许手动更新市场。
 - **WHEN** 安装器运行（同 PID 不复用）
 - **THEN** `omp.install.<UTC 日期>.<epoch 毫秒>.<PID>.log`（`YYYY-MM-DD`）； `operation_id`, `stage`, `elapsed_ms`, `platform`, `target_version`、级别/事件/有界结果；版本 `v?` + 三段数字 + 可选 `+fork.<数字>`，否则 `redacted`。
 
-先选有效绝对根，再派生 profile 日志目录：性能根优先，其次显式配置根；Linux 无显式根且已有 `<XDG_STATE_HOME>/omp` 时用该根。不可写时回退 Linux `~/.local/state/omp` 或 Windows `%LOCALAPPDATA%\omp` 并记 WARN。仅清同类，留 20 次/5 天，跳活 PID；写败 stderr 一行，不改退出码。
+安装器沿用普通模式的日志规则，`OMP_LOG_LEVEL` 可覆盖默认 DEBUG 级别。优先用有效的显式配置根，再派生 profile 日志目录。Linux 无显式根且对应 XDG 状态目录已存在时使用该目录，否则按原有用户配置目录规则选根。不可写时回退 Linux `~/.local/state/omp` 或 Windows `%LOCALAPPDATA%\omp` 并记 WARN。仅清同类，留 20 次/5 天，跳活 PID；写败 stderr 一行，不改退出码。
 
 ### Requirement: POSIX 安装器对运行中会话的检测
 
@@ -247,21 +249,20 @@ Windows 内嵌 addon 换入或加载失败，MUST NOT 回退到缺当前 shell t
 
 ### Requirement: 可选性能数据根
 
-`OMP_CACHE_DIR` MUST NOT 迁持久数据。
+性能数据根 MUST NOT 迁移持久数据。
 
 #### Scenario: 选根
 - **WHEN** 解析性能根
-- **THEN** 分流 Cache/统计及配套/运行安装日志/默认 native；保布局/`profiles/<name>/`，无哈希/持久根/SDK 身份目录；保 `PI_NATIVES_DIR`/显式模型库等覆盖。
+- **THEN** 分流 Cache/统计及配套/运行日志/默认 native；保布局/`profiles/<name>/`，无哈希/持久根/SDK 身份目录；保 `PI_NATIVES_DIR`/显式模型库等覆盖。
 
-|顺序（空/相对不按 cwd 解析）|路径|
+|环境|路径|
 |---|---|
-|`OMP_CACHE_DIR` trim/展开 `~` 后绝对|Linux `<OMP_CACHE_DIR>/<UID>`（当前数字 UID）；Windows 原路径|
-|否则 Linux offline|`/dev/shm/omp-<UID>`，不再加 UID|
-|否则|原路由/XDG|
+|Linux offline|`/dev/shm/omp-<UID>`|
+|其他环境|原路由/XDG|
 
 #### Scenario: Linux offline 默认性能根
-- **WHEN** 隐式 `/dev/shm`
-- **THEN** 无可执行挂载要求/探测；编译版 JS eval `cache/bun-stub`/执行映射 addon 绕性能根（已初始化且适用 XDG cache > 配置根，保 profile），grammar 等照用。WebKit 主程序：显式性能根 > 显式配置根 > 上游共享。
+- **WHEN** 使用 `/dev/shm` 性能根
+- **THEN** 无可执行挂载要求/探测；编译版 JS eval `cache/bun-stub`/执行映射 addon 绕性能根（已初始化且适用 XDG cache > 配置根，保 profile），grammar 等照用。WebKit 主程序优先使用显式配置根，其次使用上游共享路径。
 
 选根包含适用的运行依赖。持久配置/认证/会话/用户及项目数据、日志级别/回退/错误、非内嵌资源缺失/下载不变。清/切仅可丢性能数据；禁迁/并/删旧、预检/测速/新配置/层级/后台/双写/备份恢复；无实测速益承诺。
 

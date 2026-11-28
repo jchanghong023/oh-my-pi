@@ -2,14 +2,16 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import manifest from "../package.json" with { type: "json" };
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 
 /**
- * Regression for #14027: the package ships `src/` and consumers import it from
- * `node_modules`, where Bun tries `.js`/`.mjs`/`.cjs`/`.jsx` before `.ts`. A module
- * sharing its basename with a JavaScript asset (e.g. a text-imported eval prelude)
- * then resolves to the asset for every extensionless importer.
+ * Regression for #14027: Bun prefers JavaScript siblings over TypeScript
+ * when resolving the published source from `node_modules`. An intentional
+ * replacement is valid only if the TypeScript variant is excluded from the
+ * package (as for the developer-test-agent shim); all shipped TS modules
+ * must still resolve to themselves.
  */
 test("every src module resolves to itself when the package is installed under node_modules", async () => {
 	using tempDir = TempDir.createSync("@omp-installed-source-resolution-");
@@ -17,11 +19,16 @@ test("every src module resolves to itself when the package is installed under no
 	await fs.mkdir(path.dirname(installedRoot), { recursive: true });
 	await fs.symlink(packageRoot, installedRoot, "dir");
 
+	const excluded = new Set(manifest.files.filter(entry => entry.startsWith("!")).map(entry => entry.slice(1)));
 	const misresolved: string[] = [];
 	for await (const rel of new Bun.Glob("**/*.{ts,tsx}").scan({ cwd: path.join(packageRoot, "src") })) {
-		const specifier = `./src/${rel.slice(0, rel.lastIndexOf("."))}`;
+		const source = `src/${rel.replaceAll("\\", "/")}`;
+		const specifier = `./${source.slice(0, source.lastIndexOf("."))}`;
+		const expected = excluded.has(source) ? `${specifier.slice(2)}.js` : source;
 		const resolved = Bun.resolveSync(specifier, installedRoot);
-		if (resolved !== path.join(packageRoot, "src", rel)) misresolved.push(`${specifier} -> ${resolved}`);
+		if (excluded.has(expected) || resolved !== path.join(packageRoot, expected)) {
+			misresolved.push(`${specifier} -> ${resolved} (expected ${expected})`);
+		}
 	}
 
 	expect(misresolved).toEqual([]);

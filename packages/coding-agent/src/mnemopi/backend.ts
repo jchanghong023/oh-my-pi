@@ -635,7 +635,6 @@ async function resolveMnemopiProviderOptions(
 
 			for (const { model, thinkingLevel } of resolveCandidates()) {
 				if (signal?.aborted) return null;
-				const replayForbidden = model.provider === "codeagent";
 				if (cfgOffline.get(settings) && session.model?.provider !== model.provider) continue;
 				try {
 					if (model.api === "local-inference") {
@@ -703,19 +702,10 @@ async function resolveMnemopiProviderOptions(
 								),
 							);
 						},
-						{ provider: model.provider, signal, maxAttempts: replayForbidden ? 1 : undefined },
+						{ provider: model.provider, signal },
 					);
 					if (message.stopReason === "aborted" || signal?.aborted) return null;
 					if (message.stopReason === "error") {
-						if (replayForbidden) {
-							logger.warn("Mnemopi: memory completion failed; replay and model fallback disabled.", {
-								provider: model.provider,
-								model: model.id,
-								stop_reason: message.stopReason,
-								status: message.errorStatus,
-							});
-							return null;
-						}
 						logger.warn("Mnemopi: memory completion model failed; trying the next configured fallback.", {
 							provider: model.provider,
 							model: model.id,
@@ -733,14 +723,6 @@ async function resolveMnemopiProviderOptions(
 						.trim();
 				} catch (error) {
 					if (signal?.aborted) return null;
-					if (replayForbidden) {
-						logger.warn("Mnemopi: memory completion threw; replay and model fallback disabled.", {
-							provider: model.provider,
-							model: model.id,
-							...logger.diagnosticError(error),
-						});
-						return null;
-					}
 					logger.warn("Mnemopi: memory completion model threw; trying the next configured fallback.", {
 						provider: model.provider,
 						model: model.id,

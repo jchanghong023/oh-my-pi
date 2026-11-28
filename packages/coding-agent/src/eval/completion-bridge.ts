@@ -452,11 +452,9 @@ async function executeCompletion(
 	let retriesUsed = 0;
 	let completed = false;
 	let attempt: CompletionAttempt | undefined;
-	// CodeAgent failures are terminal, even inside an ordinary model's fallback chain.
 	for (const [index, candidate] of candidates.entries()) {
 		if (index > 0 && retriesUsed >= maxRetries) break;
 		model = candidate.model;
-		const terminalFailure = model.provider === "codeagent";
 		// The session's cost cap covers completions a cell makes, attempt by attempt.
 		const refusal = session.costGate?.check();
 		if (refusal) throw new ToolError(refusal.message);
@@ -475,7 +473,6 @@ async function executeCompletion(
 				lastError = new ToolError(
 					`completion() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another model.`,
 				);
-				if (terminalFailure) throw lastError;
 				continue;
 			}
 			if (index > 0) retriesUsed += 1;
@@ -506,9 +503,9 @@ async function executeCompletion(
 			session.costGate?.record(response.usage.cost.total);
 			journal?.(response, prompt);
 		} catch (error) {
-			if (attempt.outcome !== "no-credentials") failAttempt(attempt, error, signal);
+			failAttempt(attempt, error, signal);
 			lastError = error;
-			if (terminalFailure || signal.aborted || index === candidates.length - 1) throw error;
+			if (signal.aborted || index === candidates.length - 1) throw error;
 			continue;
 		}
 		if (response.stopReason === "aborted") {
@@ -518,7 +515,7 @@ async function executeCompletion(
 		if (response.stopReason === "error") {
 			lastError = new ToolError(response.errorMessage ?? "completion() request failed.");
 			failAttempt(attempt, lastError, signal);
-			if (!terminalFailure && !signal.aborted && index < candidates.length - 1) continue;
+			if (!signal.aborted && index < candidates.length - 1) continue;
 			throw lastError;
 		}
 		completed = true;

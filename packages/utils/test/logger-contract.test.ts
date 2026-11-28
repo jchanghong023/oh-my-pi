@@ -60,7 +60,6 @@ async function runScenario(
 				LOCALAPPDATA: path.join(root, "local"),
 				PI_CONFIG_DIR: ".omp",
 				OMP_CONFIG_ROOT: "",
-				OMP_CACHE_DIR: "",
 				OMP_OFFLINE: "0",
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
@@ -497,7 +496,7 @@ async function runDiagnosticConsumer(
 	options: {
 		setup?: (root: string) => Promise<void>;
 		configRoot?: (root: string) => string;
-		cacheRoot?: (root: string) => string;
+		isolatedProfile?: boolean;
 		exitCode?: number;
 		offline?: string;
 		logLevel?: string;
@@ -508,6 +507,10 @@ async function runDiagnosticConsumer(
 	roots.push(root);
 	await fs.mkdir(path.join(root, "home"));
 	await options.setup?.(root);
+	const profile = options.isolatedProfile ? path.basename(root).toLowerCase() : "";
+	if (profile && options.offline === "1" && process.platform === "linux") {
+		roots.push(path.join("/dev/shm", `omp-${process.getuid!()}`, "profiles", profile));
+	}
 	const moduleUrl = pathToFileURL(path.resolve(import.meta.dir, "../src/logger.ts")).href;
 	const child = Bun.spawn(
 		[
@@ -534,8 +537,7 @@ async function runDiagnosticConsumer(
 				XDG_CACHE_HOME: path.join(root, "cache"),
 				PI_CONFIG_DIR: ".omp",
 				OMP_CONFIG_ROOT: options.configRoot?.(root) ?? path.join(root, "primary"),
-				OMP_CACHE_DIR: options.cacheRoot?.(root) ?? "",
-				OMP_PROFILE: "",
+				OMP_PROFILE: profile,
 				PI_PROFILE: "",
 				OMP_OFFLINE: options.offline ?? "0",
 				OMP_LOG_LEVEL: options.logLevel ?? "",
@@ -1173,18 +1175,19 @@ describe("diagnostic consumer contracts", () => {
 	});
 
 	test("flushes a single natural-exit lifecycle and does not copy arbitrary run mode", async () => {
-		const cacheRoot = (root: string) => path.join(root, "offline-cache");
 		const result = await runDiagnosticConsumer(
 			`
 			logger.initializeDiagnosticLogging("sensitive-mode-canary");
 			logger.initializeDiagnosticLogging("cli");
 			logger.debug("natural_exit_record");
 		`,
-			{ offline: "1", logLevel: "debug", cacheRoot },
+			{ offline: "1", logLevel: "debug", isolatedProfile: true },
 		);
-		const cache = cacheRoot(result.root);
-		const logsDir =
-			process.platform === "linux" ? path.join(cache, String(process.getuid!()), "logs") : path.join(cache, "logs");
+		const root =
+			process.platform === "linux"
+				? path.join("/dev/shm", `omp-${process.getuid!()}`)
+				: path.join(result.root, "primary");
+		const logsDir = path.join(root, "profiles", path.basename(result.root).toLowerCase(), "logs");
 		const log = await readSingleLog(logsDir);
 		expect(log.text).not.toContain("sensitive-mode-canary");
 		expect(parseLogLines(log.text).map(entry => entry.message)).toEqual([
