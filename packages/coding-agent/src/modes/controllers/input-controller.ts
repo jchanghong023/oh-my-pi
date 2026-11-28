@@ -20,6 +20,7 @@ import { parseFileSlashInvocation, renderFileSlashCommand } from "../../extensib
 import { InternalUrlRouter, resolveLocalRoot } from "../../internal-urls";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
+import { isLocalAgentSession } from "../../session/agent-session-handle";
 import type { DequeuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { cfgHideThinkingBlock } from "../../session/settings";
@@ -84,9 +85,15 @@ import {
 } from "../settings";
 import { type ConversationPosition, continuesConversation, conversationPosition } from "../utils/conversation-position";
 import { materializeImageChipLinks } from "../utils/ui-helpers";
-import { compactImageMarkers, formatVisionMarker, shiftImageMarkers } from "../view-model/prompt/composer-attachments";
+import {
+	compactImageMarkers,
+	formatVisionMarker,
+	shiftImageMarkers,
+	visionMarkerRanges,
+} from "../view-model/prompt/composer-attachments";
 import { extractImagePastePathsFromText, extractImagePathFromText } from "../view-model/prompt/custom-editor";
 import { formatQueueShorthand, parseQueueShorthand, splitQueuedMessages } from "../view-model/prompt/queue-input";
+import { enhancePrompt } from "./prompt-enhancement";
 
 /** Bare words that quit (as `/<word>`) when typed alone into a session with no messages. */
 const BARE_EXIT_WORDS: Record<string, true> = { exit: true, quit: true, q: true };
@@ -303,6 +310,7 @@ export class InputController {
 	/** Apple's spelling service behind the composer's typo marks, autocorrect and suggestions. */
 	#spelling?: MacOSSpellingProvider;
 	#draftText: string | undefined;
+	#promptEnhancement?: AbortController;
 	/** Removals of the key, input and draft hooks {@link setupKeyHandlers} installed. */
 	#keyHooks: (() => void)[] = [];
 	/** Extension shortcuts by canonical key id; the composer consults them after the app bindings. */
@@ -400,6 +408,7 @@ export class InputController {
 	 * earlier wiring.
 	 */
 	setupKeyHandlers(): void {
+		this.cancelPromptEnhancement();
 		for (const remove of this.#keyHooks.splice(0)) remove();
 		const composer = this.ctx.composer;
 		this.#draftText ??= composer.text();
@@ -416,7 +425,12 @@ export class InputController {
 			createRoot(dispose => {
 				effect(() => {
 					const text = composer.text();
-					untrack(() => this.#onDraftChange(text));
+					// A reset can discard a draft even when the new text happens to match.
+					void composer.draftGeneration;
+					untrack(() => {
+						this.cancelPromptEnhancement(true);
+						this.#onDraftChange(text);
+					});
 				});
 				return dispose;
 			}),
@@ -687,7 +701,59 @@ export class InputController {
 			this.toggleToolOutputExpansion();
 			return true;
 		}
+		// Run after the focus path and all app bindings; never steal an existing shortcut.
+		if (key.id === "alt+u" && this.#composerFocused()) {
+			if (key.kind === "press") void this.#togglePromptEnhancement();
+			return true;
+		}
 		return false;
+	}
+
+	cancelPromptEnhancement(notify = false): void {
+		const request = this.#promptEnhancement;
+		if (!request) return;
+		this.#promptEnhancement = undefined;
+		request.abort();
+		if (notify) this.ctx.showStatus("Prompt optimization canceled", { key: "prompt-enhancement" });
+	}
+
+	async #togglePromptEnhancement(): Promise<void> {
+		if (this.#promptEnhancement) {
+			this.cancelPromptEnhancement(true);
+			return;
+		}
+		const { composer, viewSession } = this.ctx;
+		if (!composer.text().trim()) return;
+		const draft = composer.expandedText();
+		if (!draft.trim()) return;
+		if (visionMarkerRanges(draft, composer.pendingImages.length).length > 0) {
+			this.ctx.showStatus("Prompt optimization only supports drafts without image or video attachments");
+			return;
+		}
+		const request = new AbortController();
+		const status = { key: "prompt-enhancement" };
+		this.#promptEnhancement = request;
+		this.ctx.showStatus("Optimizing prompt… Press Alt+U again to cancel", status);
+		try {
+			const result = await enhancePrompt(viewSession, draft, request.signal, provider =>
+				isLocalAgentSession(viewSession) ? viewSession.agent.metadataForProvider(provider) : undefined,
+			);
+			if (this.#promptEnhancement !== request || this.ctx.viewSession !== viewSession) return;
+			// Deleted chips remain available to Undo; the rewrite must not resurrect them.
+			if (visionMarkerRanges(result, composer.pendingImages.length).length > 0) {
+				this.ctx.showStatus("Prompt optimization failed: the rewrite referred to a removed attachment.", status);
+				return;
+			}
+			this.#promptEnhancement = undefined;
+			if (result !== draft) composer.setText(result);
+			this.ctx.showStatus(result === draft ? "Prompt unchanged" : "Prompt optimized", status);
+		} catch (error) {
+			if (this.#promptEnhancement !== request || this.ctx.viewSession !== viewSession) return;
+			const detail = error instanceof Error ? sanitizeText(error.message).split("\n", 1)[0] : "";
+			this.ctx.showStatus(detail ? `Prompt optimization failed: ${detail}` : "Prompt optimization failed", status);
+		} finally {
+			if (this.#promptEnhancement === request) this.#promptEnhancement = undefined;
+		}
 	}
 
 	/**

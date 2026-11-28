@@ -1401,6 +1401,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	clearTransientSessionUi(options?: { viewOnly?: boolean; clearCompactToolHistory?: boolean }): void {
+		this.#inputController.cancelPromptEnhancement();
 		if (options?.viewOnly) suspendTodoLoopView(this);
 		this.#hideSessionInfo();
 		this.#working.clear();
