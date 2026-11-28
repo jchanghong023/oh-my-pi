@@ -52,9 +52,6 @@ export class CodeAgentTokenCache {
 let cache: CodeAgentTokenCache | undefined;
 let models: Model<"openai-completions">[] | undefined;
 const codeAgentSeed = seedModels<"openai-completions">(CODEAGENT_PROVIDER_ID);
-const gatewayBaseUrl = codeAgentSeed[0]?.baseUrl;
-// Capture the built-in destination independently of mutable request models.
-const gatewayChatUrl = gatewayBaseUrl && `${gatewayBaseUrl.replace(/\/+$/, "")}/chat/completions`;
 
 export function getCodeAgentModels(): Model<"openai-completions">[] {
 	return (models ??= codeAgentSeed.map(spec => buildModel(spec)));
@@ -95,7 +92,7 @@ export function streamCodeAgent(
 				headers.delete("x-api-key");
 				headers.delete("api-key");
 				headers.delete("x-auth-token");
-				if (token && input === gatewayChatUrl) headers.set("x-auth-token", token);
+				if (token) headers.set("x-auth-token", token);
 				return baseFetch(input, { ...init, headers, redirect: "error" });
 			},
 		});

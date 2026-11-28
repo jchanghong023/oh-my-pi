@@ -9,25 +9,8 @@ import type { Lexer, Token, TokenizerExtension, TokenizerStartFromFunction, Toke
 // at `lastIndex`.
 const TOKEN_START_CHAR = /[\\`<[!*_~\n]/g;
 const BARE_URL_SCHEME = /https?:\/\/|ftp:\/\/|www\./gi;
-/** Whether an e-mail domain starts at exactly `from`, without searching past it. */
-function dottedDomainAt(source: string, from: number): boolean {
-	let at = from;
-	while (isDomainChar(source.charCodeAt(at))) at++;
-	if (at === from || source.charCodeAt(at) !== 0x2e /* . */) return false;
-	const label = ++at;
-	while (isDomainChar(source.charCodeAt(at))) at++;
-	return at > label;
-}
-
-function isDomainChar(code: number): boolean {
-	return (
-		(code >= 0x61 && code <= 0x7a) ||
-		(code >= 0x41 && code <= 0x5a) ||
-		(code >= 0x30 && code <= 0x39) ||
-		code === 0x5f ||
-		code === 0x2d
-	);
-}
+// What the bare-URL rule's e-mail alternative requires after its "@", sticky to test one offset.
+const DOTTED_DOMAIN = /[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+/iy;
 /** A stop not searched for yet lies before every search offset. */
 const UNSEARCHED = -1;
 
@@ -226,7 +209,8 @@ export class TextStops {
 		const mailAt = root.mailAt - this.#start;
 		if (this.#domainAt !== mailAt) {
 			this.#domainAt = mailAt;
-			this.#dottedDomain = dottedDomainAt(this.#src, mailAt + 1);
+			DOTTED_DOMAIN.lastIndex = mailAt + 1;
+			this.#dottedDomain = DOTTED_DOMAIN.test(this.#src);
 		}
 		return this.#dottedDomain;
 	}
@@ -307,7 +291,7 @@ export class TextRun {
 	/** Appends the source text from `start` to `end`. */
 	append(tokens: Token[], start: number, end: number): void {
 		if (end <= start) return;
-		const previous = tokens[tokens.length - 1];
+		const previous = tokens.at(-1);
 		if (previous?.type === "text" && previous.tokens === undefined && previous.escaped === false) {
 			// An extension may have rewritten this token; then append by concatenation as marked does.
 			if (

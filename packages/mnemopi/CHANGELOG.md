@@ -4,21 +4,17 @@
 
 ### Added
 
-- Expose reusable reciprocal rank fusion and a cancellable API-only embedding entry point with optional strict response validation.
-- Added correlated embedding API configuration, authentication, HTTP, response-validation, and degradation diagnostics.
+- Added correlated embedding API configuration, authentication, HTTP, and degradation diagnostics.
 
 ### Changed
 
-- Support independent per-attempt embedding deadlines and fixed retry policies for bulk imports without extending search deadlines or retrying user cancellation.
-- Ordinary HTTP embedding requests make at most three attempts. Company embedding requests keep four attempts; bulk imports retain their separate policy.
+- Ordinary HTTP embedding requests make at most three attempts. Company embedding requests keep four attempts.
 
 - Keep Linux offline memory databases, banks, blobs, plugins and checkpoints inside the active shm domain without automatically adopting legacy disk data.
 
 ### Fixed
 
-- Cancelled embedding requests report cancellation, and strict embeddings reject dimension changes between batches.
 - Company embeddings honor provider disabling and private CAs. Offline embedding requests do not forward memory text through redirects.
-- Embedding requests can retry when a transient HTTP error returns headers but its body stalls.
 - OpenRouter embeddings prefer the stored OpenRouter credential over environment fallbacks and do not use an unrelated OpenAI key.
 
 ### Removed
@@ -94,7 +90,7 @@
 
 - Fixed embedding rebuilds failing on hosted APIs that cap the inputs per request: `embed()` now splits large lists into requests of at most `MNEMOPI_EMBEDDING_BATCH_SIZE` texts (default 64; set `10` for DashScope) or the `embeddings.batchSize` runtime option, and returns `null` when the API returns a different number of vectors than texts ([#18278](https://github.com/can1357/oh-my-pi/pull/18278) by [@aleister1102](https://github.com/aleister1102))
 - Fixed an embedding model change deleting every stored vector when the new provider had no key, did not answer, or rejected a batch partway through: the store now embeds the whole corpus with the new model before replacing anything, keeps the old vectors if any request fails, and tries again on the next open ([#18278](https://github.com/can1357/oh-my-pi/pull/18278) by [@aleister1102](https://github.com/aleister1102))
-- Retained redacted, correlated embedding rejection diagnostics instead of logging provider response bodies; embedding-model migration failures also use safe diagnostic fields.
+- Fixed rejected embedding API requests leaving no trace: the status and the first 300 characters of the response body now go to the log at `debug`, or at `warn` when runtime debug is on ([#18278](https://github.com/can1357/oh-my-pi/pull/18278) by [@aleister1102](https://github.com/aleister1102))
 
 ## [18.17.0] - 2026-11-06
 

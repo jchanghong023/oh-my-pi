@@ -125,19 +125,18 @@ CNB 发布须明确授权。CNB MUST 验证 Export viewer 精确字节元数据�
 |`composer.shape`|普通／offline 均默认 `box`（Rounded Box），无缓存的交互式启动首帧也使用 `box`；显式形状设置仍优先。|
 |`display.showTurnTime`, `mnemopi.embeddingVariant`|`true`, `multilingual`|
 |`async.maxJobs`, `startup.setupWizard`, `marketplace.autoUpdate`|`32`, `false`, `off`|
-|`composer.predictions`|offline 仍用上游缺省 `true`；显式 `false` 优先。|
 |`display.toolActivity`|`compact` [契约及验收](../personal-commands/spec.md#requirement-四种显示模式)。|
 |`terminal.programStatus`|offline 缺省关闭交互式 OSC 7501 探测/报告；显式优先、不落盘。|
-|`lsp.enabled`|普通/offline `false`；验收 `--no-lsp` 覆盖已保存值、仅本次关；非 CLI 不变。|
+|`lsp.enabled`|普通/offline `false`。|
 |`stt.language`|`zh-CN`；本地 Whisper/云端转基语言（`zh`）。|
 
-### Requirement: 受限 SDK 禁用自定义命令
+### Requirement: 受限 SDK 禁用文件式斜杠命令
 
-受限 SDK MUST 禁用文件式和可执行自定义命令。
+受限 SDK MUST 禁用文件式斜杠命令。
 
 #### Scenario: 创建受限 SDK 会话
 - **WHEN** 调用方限制 SDK 会话的工具范围
-- **THEN** 不发现或加载文件式和可执行自定义命令。
+- **THEN** 不发现或加载文件式斜杠命令，包括调用方显式传入的文件式命令。
 
 ### Requirement: Claude 插件发现默认关闭
 

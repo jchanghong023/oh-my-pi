@@ -112,17 +112,8 @@ export interface ResolvedMnemopiEmbeddingRuntimeOptions {
 	provider?: MnemopiEmbeddingProvider;
 	maxInputChars?: number;
 	batchSize?: number;
-	/** Optional strict HTTP mode for derived indexes that require exact model and row identity. */
-	strictApi?: boolean;
-	/** HTTP timeout in milliseconds; defaults to 30 seconds. */
-	requestTimeoutMs?: number;
 	/** Total HTTP attempts, including the initial request; defaults to three. */
 	requestMaxAttempts?: number;
-	/** Optional fixed delay between HTTP attempts, overriding server hints. */
-	requestRetryDelayMs?: number;
-	/** Give each HTTP retry a fresh timeout, including reading its response body. Caller cancellation still stops all attempts. */
-	retryTimeouts?: boolean;
-	signal?: AbortSignal;
 	queryPrefix?: string;
 	inputType?: boolean;
 	onRequestFailed?: (failure: EmbeddingRequestFailure) => void;

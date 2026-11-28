@@ -6,17 +6,6 @@
 
 ## Requirements
 
-### Requirement: 沿用上游 Provider 目录
-
-MUST 沿用上游 Provider 目录，不另设 fork 聊天 allowlist。
-
-#### Scenario: 目录准入
-
-- **WHEN** 合并目录、注册模型或列出登录入口
-- **THEN** 沿用上游准入，不增加选择器语法或 SDK 拦截，不迁移或删除用户数据。
-
-Ascend 和 `company` 的凭据不写配置或日志，也不自动发现或回退到厂商公网 API。CodeAgent 和 Ascend 支持推理与工具，`maxTokens=32768`。
-
 ### Requirement: CodeAgent 内置模型
 
 OMP MUST 仅在 Windows 非 `OMP_OFFLINE` 环境注册内置模型 `codeagent/deepseek-v4.1-flash-1017`，且不参与自动默认选模。
@@ -25,7 +14,7 @@ OMP MUST 仅在 Windows 非 `OMP_OFFLINE` 环境注册内置模型 `codeagent/de
 
 - **WHEN** 使用 CodeAgent
 - **THEN** 模型使用 `https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2` 的 `openai-completions`，上下文 409600 tokens，不发送网关不支持的工具 `strict` 字段。
-- **AND** 思考参数由目录中的兼容声明处理。
+- **AND** 思考参数由目录中的兼容声明处理。模型支持推理与工具，`maxTokens=32768`。
 
 ### Requirement: CodeAgent 认证失败后刷新令牌
 
@@ -53,7 +42,7 @@ MUST 内置下列模型，不改默认模型或角色，无须 `models.yml` 或�
 | `qwen-aw-35b` | 是 | 200000 |
 | `qwen3.8-flash-next` | 是 | 256000 |
 
-均支持文本。`qwen3.8-*` 用 `anthropic-budget-effort`：`low`／`medium`／`high`／`xhigh`（默认）；`high` 向服务端发 `xhigh`。无计费数据，零值为占位，不表示免费。
+均支持文本、推理与工具，`maxTokens=32768`。凭据不写配置或日志，不自动发现或回退到厂商公网 API。`qwen3.8-*` 用 `anthropic-budget-effort`：`low`／`medium`／`high`／`xhigh`（默认）；`high` 向服务端发 `xhigh`。无计费数据，零值为占位，不表示免费。
 
 ### Requirement: 公司内网模型（仅 `OMP_OFFLINE`）
 
@@ -71,7 +60,7 @@ MUST 仅在 `OMP_OFFLINE` 标记的公司内部网络环境读取公司认证；
 
 - **WHEN** 公司环境中的启动或独立命令、SDK 需要公司认证
 - **THEN** 异步读取 `settings.json`（`CLAUDE_CONFIG_DIR` 优先于 `~/.claude`），校验 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`，仅存内存；无须登录、额外凭据或 `models.yml`。
-- **AND** 每进程启动时只读一次（含失败）；Worker 等待并继承快照，不重读、不回退。凭据不入参数、环境变量、持久文件或日志；变更须重启。
+- **AND** 每进程启动时只读一次（含失败）；Worker 等待并继承快照，不重读、不回退。凭据不入参数、环境变量、持久文件或日志；变更须重启。不自动发现或回退到厂商公网 API。
 - **AND** 无效认证禁用 `company`，显式调用失败。脱敏原因通过 TUI 或独立模型命令 stderr 各报一次；共享 SDK、认证发现和会话创建只提供可查状态，不直写终端。
 
 聊天只用快照，经 Anthropic Messages + Bearer；均支持文本，`maxTokens=81920`。下表列出目录种子容量，offline 生效容量及角色默认见[运行规则](../fork-runtime/spec.md#requirement-安装与运行)。
@@ -109,15 +98,6 @@ MUST 忽略并提示 `models.yml` 中的 `providers.company` 和 `providers.code
 
 - **WHEN** 重试或回退复制模型 ID（含通配项）
 - **THEN** 只在跨 Provider 时去掉路由后缀 `@upstream`。
-
-### Requirement: Anthropic 思考块保真
-
-Anthropic 兼容流 MUST 保留无增量的 `redacted_thinking`。
-
-#### Scenario: 无增量块
-
-- **WHEN** 重建 assistant 消息时只有块首尾事件
-- **THEN** 仍原位原样持久化并回传，不改写或伪造签名。
 
 ### Requirement: 补全层级的模型角色解析
 

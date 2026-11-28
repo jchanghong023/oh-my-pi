@@ -9,7 +9,6 @@ import {
 	extractHttpStatusFromError,
 	fetchWithRetry,
 	getFastembedCacheDir,
-	isRetryableStatus,
 	logger,
 	resolveExtraCa,
 	withExtraCaInit,
@@ -179,7 +178,7 @@ export function embeddingsDisabled(): boolean {
  * `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS`, then the bundled `8192` default. `0`
  * disables the cap entirely.
  */
-export function effectiveMaxInputChars(): number {
+function effectiveMaxInputChars(): number {
 	const override = activeEmbeddingOptions()?.maxInputChars;
 	if (override !== undefined) return Math.max(0, Math.trunc(override));
 	const envValue = Number.parseInt($env.MNEMOPI_EMBEDDING_MAX_INPUT_CHARS ?? "", 10);
@@ -224,7 +223,7 @@ function capInputs(texts: readonly string[]): readonly string[] {
 }
 
 /** Resolve the environment fallback without sending a generic OpenAI key to OpenRouter. */
-export function embeddingEnvApiKey(baseUrl = DEFAULT_EMBEDDING_API_URL): string {
+function embeddingEnvApiKey(baseUrl = DEFAULT_EMBEDDING_API_URL): string {
 	return (
 		$env.MNEMOPI_EMBEDDING_API_KEY ||
 		$env.OPENROUTER_API_KEY ||
@@ -390,13 +389,6 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 	}
 }
 
-/** API-only entry point: never starts or downloads a local model. */
-export async function embedConfiguredApi(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
-	if (texts.length === 0 || embeddingsDisabled()) return null;
-	activeEmbeddingOptions()?.signal?.throwIfAborted();
-	return embedApi(capInputs(texts));
-}
-
 const DEFAULT_LOCAL_EMBEDDING_BATCH_SIZE = 8;
 const DEFAULT_EMBEDDING_BATCH_SIZE = 64;
 
@@ -430,30 +422,23 @@ function reportRequestFailure(baseUrl: string, status: number | undefined, messa
 	}
 }
 
-async function embedApi(texts: readonly string[], role: EmbeddingRole = "document"): Promise<EmbeddingMatrix | null> {
+async function embedApi(texts: readonly string[], role: EmbeddingRole): Promise<EmbeddingMatrix | null> {
 	const size = embeddingBatchSize();
 	if (texts.length <= size) {
 		return embedApiBatch(texts, role);
 	}
 	const matrix: EmbeddingMatrix = [];
-	const strict = activeEmbeddingOptions()?.strictApi === true;
-	let expectedDimension: number | undefined;
 	for (let offset = 0; offset < texts.length; offset += size) {
-		const part = await embedApiBatch(texts.slice(offset, offset + size), role, expectedDimension);
+		const part = await embedApiBatch(texts.slice(offset, offset + size), role);
 		if (part === null) {
 			return null;
 		}
-		if (strict) expectedDimension ??= part[0]?.length;
 		matrix.push(...part);
 	}
 	return matrix;
 }
 
-async function embedApiBatch(
-	texts: readonly string[],
-	role: EmbeddingRole,
-	expectedDimension?: number,
-): Promise<EmbeddingMatrix | null> {
+async function embedApiBatch(texts: readonly string[], role: EmbeddingRole): Promise<EmbeddingMatrix | null> {
 	const inherited = logger.getLogContext();
 	return logger.withLogContext(
 		{
@@ -462,13 +447,8 @@ async function embedApiBatch(
 		},
 		async () => {
 			const startedAt = performance.now();
-			const strict = activeEmbeddingOptions()?.strictApi === true;
-			const callerSignal = activeEmbeddingOptions()?.signal;
-			const timeoutMs = activeEmbeddingOptions()?.requestTimeoutMs ?? 30_000;
+			const timeoutMs = 30_000;
 			const maxAttempts = activeEmbeddingOptions()?.requestMaxAttempts ?? 3;
-			const fixedDelayMs = activeEmbeddingOptions()?.requestRetryDelayMs;
-			const retryTimeouts = activeEmbeddingOptions()?.retryTimeouts === true;
-			callerSignal?.throwIfAborted();
 			const baseUrl = embeddingBaseUrl();
 			const allowRemote = activeEmbeddingOptions()?.allowRemote;
 			const requestRedirect = activeEmbeddingOptions()?.requestRedirect;
@@ -478,26 +458,20 @@ async function embedApiBatch(
 			const fields = {
 				component: "mnemopi.embeddings",
 				item_count: texts.length,
-				...(strict ? {} : { model: /^[A-Za-z0-9_./:[\]-]{1,160}$/.test(model) ? model : "[custom]" }),
+				model: /^[A-Za-z0-9_./:[\]-]{1,160}$/.test(model) ? model : "[custom]",
 				...logger.diagnosticUrl(url),
 				timeout_ms: timeoutMs,
 				max_attempts: maxAttempts,
-				retry_delay_ms: fixedDelayMs,
 			};
 			let stage = "configuration";
 			let authAttempt = 0;
 			let remainingAttempts = maxAttempts;
 			let status: number | undefined;
-			let requestSignal: AbortSignal | undefined =
-				strict && !retryTimeouts
-					? callerSignal
-						? AbortSignal.any([callerSignal, AbortSignal.timeout(timeoutMs)])
-						: AbortSignal.timeout(timeoutMs)
-					: undefined;
+			let requestSignal: AbortSignal | undefined;
 			const degraded = (reason: string, error?: unknown, detail?: string): null => {
-				logger[strict && !mnemopiDebugEnabled() ? "debug" : "warn"]("Embedding API degraded to null", {
+				logger.warn("Embedding API degraded to null", {
 					...fields,
-					...(strict || error === undefined ? {} : logger.diagnosticError(error)),
+					...(error === undefined ? {} : logger.diagnosticError(error)),
 					event: "embedding_api_degraded",
 					stage,
 					result: "degraded",
@@ -505,7 +479,6 @@ async function embedApiBatch(
 					auth_attempt: authAttempt,
 					status,
 					elapsed_ms: performance.now() - startedAt,
-					timeout: requestSignal?.aborted === true && requestSignal.reason?.name === "TimeoutError",
 				});
 				if (stage !== "configuration" && allowRemote?.(baseUrl) !== false) {
 					reportRequestFailure(
@@ -559,25 +532,14 @@ async function embedApiBatch(
 							headers.Authorization = `Bearer ${key}`;
 						}
 						stage = "fetch";
-						if (!strict && !retryTimeouts) {
-							const timeout = AbortSignal.timeout(timeoutMs);
-							requestSignal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
-						}
-						const init = { method: "POST", headers, body, signal: retryTimeouts ? callerSignal : requestSignal };
+						requestSignal = AbortSignal.timeout(timeoutMs);
+						const init = { method: "POST", headers, body, signal: requestSignal };
 						const extraCa = new URL(url).protocol === "https:" ? resolveExtraCa() : undefined;
 						const res = await logger.withLogContext({ auth_attempt: authAttempt }, () =>
 							fetchWithRetry(url, {
 								...(extraCa ? withExtraCaInit(init, extraCa) : init),
 								maxAttempts: remainingAttempts,
 								defaultDelayMs: [1000, 2000, 4000],
-								fixedDelayMs,
-								prepareInit: retryTimeouts
-									? () => {
-											const timeout = AbortSignal.timeout(timeoutMs);
-											requestSignal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
-											return { signal: requestSignal };
-										}
-									: undefined,
 								fetch: async (input, requestInit) => {
 									if (allowRemote?.(baseUrl) === false)
 										throw new Error("Remote embedding provider is not allowed");
@@ -590,16 +552,7 @@ async function embedApiBatch(
 											? requestInit
 											: { ...requestInit, redirect: redirect === "error" ? "manual" : redirect },
 									);
-									const { status } = response;
-									const readsRetryHint = fixedDelayMs === undefined && isRetryableStatus(status);
-									if (!retryTimeouts || (!response.ok && !readsRetryHint) || status === 204 || status === 205)
-										return response;
-									// Read both successful bodies and retry hints under the attempt's deadline.
-									return new Response(await response.arrayBuffer(), {
-										status: response.status,
-										statusText: response.statusText,
-										headers: response.headers,
-									});
+									return response;
 								},
 							}),
 						);
@@ -625,7 +578,6 @@ async function embedApiBatch(
 								elapsed_ms: performance.now() - startedAt,
 							});
 							const detail = (await res.text().catch(() => "")).trim();
-							callerSignal?.throwIfAborted();
 							throw new ProviderHttpError(detail || "mnemopi embedding request unauthorized (401)", 401, {
 								headers: res.headers,
 							});
@@ -633,13 +585,12 @@ async function embedApiBatch(
 						return res;
 					},
 					{
-						signal: retryTimeouts ? callerSignal : (requestSignal ?? callerSignal),
+						signal: requestSignal,
 						isAuthError: error => remainingAttempts > 0 && isAuthRetryableError(error),
 					},
 				);
 				if (!response.ok) {
 					const detail = await response.text().catch(() => "");
-					callerSignal?.throwIfAborted();
 					return degraded("http_error", undefined, detail);
 				}
 				stage = "response_decode";
@@ -657,38 +608,7 @@ async function embedApiBatch(
 					if (rows.length !== texts.length) {
 						return degraded("row_count", undefined, "the response did not carry one embedding per input");
 					}
-					let matrix: EmbeddingMatrix;
-					if (strict) {
-						if (data.model !== undefined && data.model !== model) return degraded("model_mismatch");
-						if (!Array.isArray(rows)) return degraded("row_count");
-						const dimension = expectedDimension ?? rows[0]?.embedding?.length;
-						matrix = new Array<Vector>(rows.length);
-						for (const row of rows) {
-							if (
-								!row ||
-								!Number.isInteger(row.index) ||
-								(row.index as number) < 0 ||
-								(row.index as number) >= rows.length ||
-								matrix[row.index as number] ||
-								!Array.isArray(row.embedding) ||
-								row.embedding.length === 0 ||
-								row.embedding.some(value => typeof value !== "number")
-							) {
-								return degraded("invalid_row");
-							}
-							const vector = new Float32Array(row.embedding);
-							if (
-								vector.length !== dimension ||
-								vector.some(value => !Number.isFinite(value)) ||
-								!vector.some(value => value !== 0)
-							) {
-								return degraded("invalid_vector");
-							}
-							matrix[row.index as number] = vector;
-						}
-					} else {
-						matrix = rows.map(row => new Float32Array(row.embedding));
-					}
+					const matrix: EmbeddingMatrix = rows.map(row => new Float32Array(row.embedding));
 					logger.info("Embedding API schema received", {
 						...fields,
 						event: "embedding_api_schema",
@@ -713,7 +633,6 @@ async function embedApiBatch(
 					return matrix;
 				});
 			} catch (error) {
-				callerSignal?.throwIfAborted();
 				status = extractHttpStatusFromError(error) ?? status;
 				return degraded("exception", error);
 			}
